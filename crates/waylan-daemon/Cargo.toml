@@ -26,4 +26,4 @@ fern = "0.7"
 chrono = "0.4"
 zbus = "4"
 egui = "0.36"
-eframe = { version = "0.36", default-features = false, features = ["wayland", "x11", "wgpu", "default_fonts"] }
+eframe = { version = "0.36", default-features = false, features = ["wayland", "x11", "glow", "default_fonts"] }

@@ -1,0 +1,15 @@
+[Unit]
+Description=WayLan Input Method Daemon
+Documentation=https://github.com/waylan/waylan
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/waylan
+Restart=on-failure
+RestartSec=2s
+Slice=session.slice
+
+[Install]
+WantedBy=graphical-session.target

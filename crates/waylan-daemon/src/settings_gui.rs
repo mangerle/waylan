@@ -686,11 +686,18 @@ impl eframe::App for SettingsApp {
 
 /// 运行偏好设置图形界面弹窗
 pub fn run_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
+    // 若系统无物理显卡设备 (/dev/dri 不存在)，自动回退到 CPU 软光栅渲染模式
+    if !std::path::Path::new("/dev/dri").exists() {
+        std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        std::env::set_var("GALLIUM_DRIVER", "llvmpipe");
+    }
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([540.0, 700.0])
             .with_min_inner_size([460.0, 520.0])
             .with_title("微澜输入法 · 偏好设置"),
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
 

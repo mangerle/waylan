@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=WayLan
+Name[zh_CN]=微澜输入法
+Comment=Modern Lightweight Pure-Rust Chinese Input Method for Wayland
+Comment[zh_CN]=专为 Wayland 打造的现代轻量纯 Rust 中文输入法
+Exec=waylan
+Icon=waylan
+Terminal=false
+Type=Application
+Categories=Utility;InputMethod;
+StartupNotify=false
+X-GNOME-Autostart-Phase=Applications
+X-KDE-autostart-phase=1

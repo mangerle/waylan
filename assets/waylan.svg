@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="128" height="128">
+  <defs>
+    <linearGradient id="waylanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#waylanGrad)"/>
+  <!-- 微澜双重流线波纹（融合 Wayland 首字母 W 与起伏涟漪） -->
+  <path d="M6 13.5 C9 9.5 12 17.5 16 13.5 C20 9.5 23 17.5 26 13.5" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M7 19 C10 15 13 23 16 19 C19 15 22 23 25 19" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.85"/>
+</svg>
