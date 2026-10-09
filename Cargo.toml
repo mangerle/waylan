@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/waylan-core",
+    "crates/waylan-algo",
+    "crates/waylan-ui",
+    "crates/waylan-wayland",
+    "crates/waylan-daemon",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["WayLan Contributors"]
+license = "MIT OR Apache-2.0"
+description = "微澜 (WayLan) - 专为 Wayland 打造的现代轻量纯 Rust 中文输入法"

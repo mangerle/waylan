@@ -1,0 +1,29 @@
+[package]
+name = "waylan-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "微澜 (WayLan) 输入法主守护进程服务"
+default-run = "waylan"
+
+[[bin]]
+name = "waylan"
+path = "src/main.rs"
+
+[[bin]]
+name = "waylan-settings"
+path = "src/bin/settings.rs"
+
+[dependencies]
+waylan-core = { path = "../waylan-core" }
+waylan-algo = { path = "../waylan-algo" }
+waylan-ui = { path = "../waylan-ui" }
+waylan-wayland = { path = "../waylan-wayland" }
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+fern = "0.7"
+chrono = "0.4"
+zbus = "4"
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["wayland", "x11", "wgpu", "default_fonts"] }
