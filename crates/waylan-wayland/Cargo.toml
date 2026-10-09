@@ -1,0 +1,19 @@
+[package]
+name = "waylan-wayland"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "微澜 (WayLan) Wayland 协议客户端通信模块"
+
+[dependencies]
+waylan-core = { path = "../waylan-core" }
+waylan-algo = { path = "../waylan-algo" }
+waylan-ui = { path = "../waylan-ui" }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-scanner = "0.31"
+wayland-backend = "0.3"
+tempfile = "3"
+log = "0.4"
