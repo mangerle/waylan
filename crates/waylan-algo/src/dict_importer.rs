@@ -1,3 +1,4 @@
+use crate::error::AlgoError;
 use std::fs;
 use std::path::Path;
 
@@ -14,7 +15,7 @@ pub struct DictImporter;
 
 impl DictImporter {
     /// 自动根据文件后缀解析导入词库文件
-    pub fn import_file(path: &Path) -> Result<Vec<ImportedDictEntry>, Box<dyn std::error::Error>> {
+    pub fn import_file(path: &Path) -> Result<Vec<ImportedDictEntry>, AlgoError> {
         let extension = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -23,23 +24,35 @@ impl DictImporter {
 
         match extension.as_str() {
             "scel" => {
-                let data = fs::read(path)?;
+                let data = fs::read(path).map_err(|e| AlgoError::DictionaryIo {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
                 Self::parse_sogou_scel(&data)
             }
             "yaml" | "yml" => {
-                let content = fs::read_to_string(path)?;
+                let content = fs::read_to_string(path).map_err(|e| AlgoError::DictionaryIo {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
                 Self::parse_rime_yaml(&content)
             }
             "txt" => {
-                let content = fs::read_to_string(path)?;
+                let content = fs::read_to_string(path).map_err(|e| AlgoError::DictionaryIo {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
                 Self::parse_plain_text(&content)
             }
-            _ => Err("不支持的词库文件格式，仅支持 .scel, .yaml, .txt".into()),
+            _ => Err(AlgoError::UnsupportedDictFormat {
+                path: path.to_path_buf(),
+                format: extension,
+            }),
         }
     }
 
     /// 解析 Rime 词典 YAML 格式
-    pub fn parse_rime_yaml(content: &str) -> Result<Vec<ImportedDictEntry>, Box<dyn std::error::Error>> {
+    pub fn parse_rime_yaml(content: &str) -> Result<Vec<ImportedDictEntry>, AlgoError> {
         let mut entries = Vec::new();
         let mut past_header = false;
 
@@ -83,7 +96,7 @@ impl DictImporter {
     }
 
     /// 解析纯文本格式（词条 拼音 [权重] 或 词条\t拼音）
-    pub fn parse_plain_text(content: &str) -> Result<Vec<ImportedDictEntry>, Box<dyn std::error::Error>> {
+    pub fn parse_plain_text(content: &str) -> Result<Vec<ImportedDictEntry>, AlgoError> {
         let mut entries = Vec::new();
         for line in content.lines() {
             let line = line.trim();
@@ -117,10 +130,12 @@ impl DictImporter {
     }
 
     /// 解析搜狗细胞词库二进制格式 (.scel)
-    pub fn parse_sogou_scel(data: &[u8]) -> Result<Vec<ImportedDictEntry>, Box<dyn std::error::Error>> {
+    pub fn parse_sogou_scel(data: &[u8]) -> Result<Vec<ImportedDictEntry>, AlgoError> {
         // 校验基本文件长度
         if data.len() < 0x2628 {
-            return Err("无效或损坏的搜狗细胞词库文件 (体积过小)".into());
+            return Err(AlgoError::DictParseFailed {
+                reason: "无效或损坏的搜狗细胞词库文件 (体积过小)".to_string(),
+            });
         }
 
         // 1. 解析拼音映射表（起始偏移 0x1540）
@@ -200,7 +215,7 @@ impl DictImporter {
     /// 从数据切片中提取搜狗拼音索引表
     fn read_scel_pinyin_table(
         slice: &[u8],
-    ) -> Result<std::collections::HashMap<usize, String>, Box<dyn std::error::Error>> {
+    ) -> Result<std::collections::HashMap<usize, String>, AlgoError> {
         let mut map = std::collections::HashMap::new();
         let mut cursor = 0;
 

@@ -44,6 +44,14 @@ pub enum AlgoError {
         current_len: usize,
         target_pos: usize,
     },
+
+    /// 不支持的第三方词库文件格式
+    #[error("不支持的词库文件格式，路径: {path}，格式: {format}")]
+    UnsupportedDictFormat { path: PathBuf, format: String },
+
+    /// 词库解析格式损坏或内容非法
+    #[error("解析第三方词库失败，详情: {reason}")]
+    DictParseFailed { reason: String },
 }
 
 #[cfg(test)]
@@ -58,5 +66,11 @@ mod tests {
         };
         assert!(err.to_string().contains("除数不能为零"));
         assert!(err.to_string().contains("1/0"));
+
+        let format_err = AlgoError::UnsupportedDictFormat {
+            path: PathBuf::from("test.doc"),
+            format: "doc".to_string(),
+        };
+        assert!(format_err.to_string().contains("不支持的词库文件格式"));
     }
 }
