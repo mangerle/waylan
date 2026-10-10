@@ -28,14 +28,13 @@ fn test_bigram_mmap_end_to_end_typing() {
 
     println!("词典与转移矩阵载入耗时: {:?}", load_duration);
     assert!(table.compact_bigram.is_some(), "必须自动挂载同级 bigram.table.bin");
-    assert!(table.vocab.is_some(), "必须自动挂载同级 vocab.bin");
+    let compact = table.compact_mmap.as_ref().expect("必须成功挂载一体化底库");
 
     let bigram = table.compact_bigram.as_ref().unwrap();
-    let vocab = table.vocab.as_ref().unwrap();
     println!("高密度 CSR Bigram 规格: 词表总数 = {}, 有效二元词对数 = {}", 
         bigram.vocab_size, bigram.total_pairs);
     assert!(bigram.total_pairs > 3_000_000, "正式大语料模型收录词对数应超过 300 万");
-    assert_eq!(bigram.vocab_size, vocab.len(), "CSR 模型词表容量应与 vocab.bin 词条数保持一致");
+    assert_eq!(bigram.vocab_size, compact.vocab_size, "CSR 模型词表容量应与一体化底库词表容量保持一致");
 
     // 2. 验证底层转移亲和度检索
     let test_pairs = vec![
@@ -53,8 +52,8 @@ fn test_bigram_mmap_end_to_end_typing() {
     for (w1, w2) in test_pairs {
         let affinity = table.get_bigram_affinity(w1, w2);
         if let Some(score) = affinity {
-            let id1 = vocab.get_id(w1).unwrap_or(0);
-            let id2 = vocab.get_id(w2).unwrap_or(0);
+            let id1 = compact.get_id(w1).unwrap_or(0);
+            let id2 = compact.get_id(w2).unwrap_or(0);
             println!("命中搭配: [{}] (ID:{}) -> [{}] (ID:{}), 亲和度量化得分 = {}", w1, id1, w2, id2, score);
         } else {
             println!("未命中搭配: [{}] -> [{}] (回退规则平滑)", w1, w2);
@@ -72,6 +71,10 @@ fn test_bigram_mmap_end_to_end_typing() {
         ("ziranyuyanchuli", "自然语言处理"),
         ("women", "我们"),
         ("qingfengfumian", "清风拂面"),
+        ("jintianxingqitian", "今天星期天"),
+        ("xi'an", "西安"),
+        ("fangan", "方案"),
+        ("nihso", "你好"),
     ];
 
     println!("\n--- [阶段二] 端到端整句击键打字解码实测 ---");
@@ -98,10 +101,15 @@ fn test_bigram_mmap_end_to_end_typing() {
         let top3_desc: Vec<String> = cands.iter().take(3).map(|c| format!("{}({})", c.text, c.score)).collect();
         println!("   Top-3 候选列表: {}", top3_desc.join("  |  "));
 
-        // 验证首选词是否符合预期
+        // 验证候选词列表中是否命中目标预期（正常词首选命中，容错词前 3 位备选命中）
+        let is_hit = if input_pinyin == "nihso" {
+            cands.iter().take(3).any(|c| c.text.starts_with(expected_prefix))
+        } else {
+            top1.text.starts_with(expected_prefix) || top1.text == expected_prefix
+        };
         assert!(
-            top1.text.starts_with(expected_prefix) || top1.text == expected_prefix,
-            "输入拼音 [{}] 首选词应包含 [{}], 实际首选为 [{}]",
+            is_hit,
+            "输入拼音 [{}] 候选列表应包含 [{}], 实际首选为 [{}]",
             input_pinyin, expected_prefix, top1.text
         );
     }

@@ -1,9 +1,11 @@
 use crate::custom_phrase::AuxiliaryDict;
+use crate::dat::DoubleArrayTrie;
 use crate::error::AlgoError;
 use crate::prism::STANDARD_INITIALS;
 use crate::syllables::STANDARD_SYLLABLES;
 use crate::table::COMPACT_DICT_MAGIC;
 use crate::user_adaptive::UserAdaptiveModel;
+use crate::vocab::Vocabulary;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -23,13 +25,6 @@ pub struct BuildStats {
     pub elapsed_ms: u64,
 }
 
-/// 词库构建与导入器 (Dictionary Builder & Importer)
-///
-/// # 设计原理
-/// - **实现初衷**：将离线全量词库打包（YAML -> bin）与普通用户个人词库一键导入（TXT -> 用户自适应库）统一抽象，
-///   避免在系统层面散落碎片化的脚本与工具包。
-/// - **核心优势**：流式行解析，内存开销可控；同时支持多源词库归并去重与按词频排序。
-/// - **代价与局限**：对超大规模词库（>100万条）需短暂占用数十兆内存完成排序与序列化。
 /// 将带声调的拼音字符归一化为无声调的 ASCII 拼音，并将空格转换为单引号切分符
 pub fn normalize_pinyin_tones(pinyin: &str) -> String {
     let mut s = String::with_capacity(pinyin.len());
@@ -41,9 +36,12 @@ pub fn normalize_pinyin_tones(pinyin: &str) -> String {
             'ī' | 'í' | 'ǐ' | 'ì' => s.push('i'),
             'ū' | 'ú' | 'ǔ' | 'ù' => s.push('u'),
             'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ü' => s.push('v'),
-            'ń' | 'ň' => s.push('n'),
+            'ń' | 'ň' | 'ǹ' => s.push('n'),
+            'ḿ' => s.push('m'),
             ' ' => s.push('\''),
-            other => s.push(other),
+            c if c.is_ascii_alphabetic() => s.push(c.to_ascii_lowercase()),
+            c if c == '\'' => s.push('\''),
+            _ => {}
         }
     }
     s
@@ -53,10 +51,7 @@ pub fn normalize_pinyin_tones(pinyin: &str) -> String {
 pub struct DictBuilder;
 
 impl DictBuilder {
-    /// 从多个文本词库源编译生成统一紧凑二进制词库文件（`base.dict.bin`）
-    ///
-    /// # Errors
-    /// 当文件无法读取或目标路径无法写入时返回 [`AlgoError::DictionaryIo`]。
+    /// 从多个文本词库源编译生成向后兼容的传统 bincode 二进制词库文件
     pub fn build_binary_dict<P: AsRef<Path>, Q: AsRef<Path>>(
         input_paths: &[P],
         output_path: Q,
@@ -93,7 +88,6 @@ impl DictBuilder {
                     continue;
                 }
 
-                // 支持制表符 \t 分隔或多空格分隔: 词条 \t 拼音 \t [词频]
                 let parts: Vec<&str> = trimmed.split('\t').collect();
                 if parts.len() >= 2 {
                     let word = parts[0].trim().to_string();
@@ -110,7 +104,6 @@ impl DictBuilder {
             }
         }
 
-        // 按词频降序优化每个拼音键下的候选列表
         for entries in dict_map.values_mut() {
             entries.sort_by_key(|b| std::cmp::Reverse(b.1));
         }
@@ -137,15 +130,32 @@ impl DictBuilder {
         })
     }
 
-    /// 从多个文本词库源编译生成高效紧凑零拷贝二进制词库文件（支持 mmap 零反序列化闪电加载）
+    /// 从多个文本词库源编译生成全新的 DAT 一体化零拷贝紧凑二进制词库文件 (WAYLAN_COMPACT02)
     pub fn build_compact_binary_dict<P: AsRef<Path>, Q: AsRef<Path>>(
         input_paths: &[P],
         output_path: Q,
     ) -> Result<BuildStats, AlgoError> {
         let start = Instant::now();
-        let mut dict_map: HashMap<String, Vec<(String, u32)>> = HashMap::new();
         let mut total_lines: usize = 0;
         let mut total_words: usize = 0;
+
+        // 1. 构建严格稳定的全局 Word ID 词表
+        // 优先检查同一目录是否存在旧版 vocab.bin，若存在则继承其 Word ID 顺序，确保与现有 Bigram 模型 100% 对应
+        let mut word_to_id: HashMap<String, u32> = HashMap::new();
+        let mut words: Vec<String> = Vec::new();
+
+        let vocab_path = Path::new("data/vocab.bin");
+        if vocab_path.exists() {
+            if let Ok(vocab) = Vocabulary::load_binary(vocab_path) {
+                for (id, w) in vocab.all_words().iter().enumerate() {
+                    word_to_id.insert(w.clone(), id as u32);
+                    words.push(w.clone());
+                }
+            }
+        }
+
+        // 2. 解析文本词库源文件
+        let mut dict_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
 
         for in_path in input_paths {
             let path_ref = in_path.as_ref();
@@ -178,25 +188,39 @@ impl DictBuilder {
                 if parts.len() >= 2 {
                     let word = parts[0].trim().to_string();
                     let pinyin = normalize_pinyin_tones(parts[1].trim());
+                    if pinyin.is_empty() || word.is_empty() {
+                        continue;
+                    }
+
                     let score: u32 = if parts.len() >= 3 {
                         parts[2].trim().parse().unwrap_or(1000)
                     } else {
                         1000
                     };
 
-                    dict_map.entry(pinyin).or_default().push((word, score));
+                    let wid = if let Some(&id) = word_to_id.get(&word) {
+                        id
+                    } else {
+                        let new_id = words.len() as u32;
+                        words.push(word.clone());
+                        word_to_id.insert(word, new_id);
+                        new_id
+                    };
+
+                    dict_map.entry(pinyin).or_default().push((wid, score));
                     total_words = total_words.saturating_add(1);
                 }
             }
         }
 
+        // 按原始词频降序排序
         for entries in dict_map.values_mut() {
             entries.sort_by_key(|b| std::cmp::Reverse(b.1));
         }
 
-        // 提取简拼缩写索引
-        let mut acronym_map: HashMap<String, Vec<(String, u32)>> = HashMap::new();
-        for (pinyin, word_list) in &dict_map {
+        // 3. 提取简拼缩写索引 (key_type = 1)
+        let mut acronym_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+        for (pinyin, cand_list) in &dict_map {
             if pinyin.contains('\'') {
                 let parts: Vec<&str> = pinyin.split('\'').collect();
                 if parts.len() >= 2 {
@@ -208,9 +232,9 @@ impl DictBuilder {
                     }
                     if acronym.len() >= 2 {
                         let list = acronym_map.entry(acronym).or_default();
-                        for (w, s) in word_list {
-                            if *s >= 3_000 {
-                                list.push((w.clone(), *s));
+                        for &(wid, score) in cand_list {
+                            if score >= 3_000 {
+                                list.push((wid, score));
                             }
                         }
                     }
@@ -222,16 +246,18 @@ impl DictBuilder {
             list.truncate(8);
         }
 
-        // 提取声母单字索引
-        let mut initial_map: HashMap<String, Vec<(String, u32)>> = HashMap::new();
+        // 4. 提取声母单字索引 (key_type = 2)
+        let mut initial_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
         for &initial in STANDARD_INITIALS {
             let mut list = Vec::new();
             for &syl in STANDARD_SYLLABLES {
                 if syl.starts_with(initial) {
                     if let Some(matches) = dict_map.get(syl) {
-                        for (text, score) in matches {
-                            if text.chars().count() == 1 {
-                                list.push((text.clone(), *score));
+                        for &(wid, score) in matches {
+                            if let Some(text) = words.get(wid as usize) {
+                                if text.chars().count() == 1 {
+                                    list.push((wid, score));
+                                }
                             }
                         }
                     }
@@ -244,65 +270,99 @@ impl DictBuilder {
             }
         }
 
-        // 排序所有 keys
-        let mut sorted_keys: Vec<String> = dict_map.keys().cloned().collect();
+        // 5. 汇总所有唯一键：全拼(0)、简拼(1)、声母(2)
+        // 使用 HashMap 聚合，避免同一拼音键在不同来源冲突
+        let mut combined_keys: HashMap<String, (u8, Vec<(u32, u32)>)> = HashMap::new();
+        for (k, v) in dict_map {
+            combined_keys.insert(k, (0, v));
+        }
+        for (k, v) in acronym_map {
+            if !combined_keys.contains_key(&k) {
+                combined_keys.insert(k, (1, v));
+            }
+        }
+        for (k, v) in initial_map {
+            if !combined_keys.contains_key(&k) {
+                combined_keys.insert(k, (2, v));
+            }
+        }
+
+        // 严格按字典序排序所有键
+        let mut sorted_keys: Vec<String> = combined_keys.keys().cloned().collect();
         sorted_keys.sort();
 
-        let mut sorted_acronyms: Vec<String> = acronym_map.keys().cloned().collect();
-        sorted_acronyms.sort();
+        let num_keys = sorted_keys.len();
+        let key_values: Vec<u32> = (0..num_keys as u32).collect();
 
-        let mut sorted_initials: Vec<String> = initial_map.keys().cloned().collect();
-        sorted_initials.sort();
+        // 6. 构建双数组 Trie (DAT + Tail 压缩)
+        let dat = DoubleArrayTrie::build(&sorted_keys, &key_values);
 
-        // 打包字符串池与值池
-        let mut string_pool = Vec::new();
-        let mut string_offset_map: HashMap<String, (u32, u16)> = HashMap::new();
+        // 7. 构建候选值数组与键元数据数组
+        let mut key_metas_data = Vec::with_capacity(num_keys * 8);
+        let mut candidates_data = Vec::new();
+        let mut cand_counter: u32 = 0;
 
-        let get_or_intern = |s: &str, pool: &mut Vec<u8>, map: &mut HashMap<String, (u32, u16)>| -> (u32, u16) {
-            if let Some(&loc) = map.get(s) {
-                return loc;
+        for k in &sorted_keys {
+            let (k_type, cands) = combined_keys.get(k).unwrap();
+            let c_start = cand_counter;
+            let c_count = cands.len() as u16;
+
+            for &(wid, score) in cands {
+                candidates_data.extend_from_slice(&wid.to_le_bytes());
+                let score_u16 = (score.min(65535)) as u16;
+                candidates_data.extend_from_slice(&score_u16.to_le_bytes());
+                cand_counter += 1;
             }
-            let off = pool.len() as u32;
-            let bytes = s.as_bytes();
-            let len = bytes.len() as u16;
-            pool.extend_from_slice(bytes);
-            map.insert(s.to_string(), (off, len));
-            (off, len)
-        };
 
-        let mut values_data = Vec::new();
-        let mut values_offset_counter: u32 = 0;
+            key_metas_data.extend_from_slice(&c_start.to_le_bytes());
+            key_metas_data.extend_from_slice(&c_count.to_le_bytes());
+            key_metas_data.push(*k_type);
+            key_metas_data.push(0); // 对齐 padding
+        }
 
-        let mut encode_entries = |keys: &[String], map: &HashMap<String, Vec<(String, u32)>>| -> Vec<u8> {
-            let mut index_buf = Vec::with_capacity(keys.len() * 16);
-            for k in keys {
-                let (k_off, k_len) = get_or_intern(k, &mut string_pool, &mut string_offset_map);
-                let vals = map.get(k).map(|v| v.as_slice()).unwrap_or(&[]);
-                let val_start = values_offset_counter;
-                let val_count = vals.len() as u32;
+        let num_candidates = cand_counter as usize;
 
-                for (text, score) in vals {
-                    let (t_off, t_len) = get_or_intern(text, &mut string_pool, &mut string_offset_map);
-                    values_data.extend_from_slice(&t_off.to_le_bytes());
-                    values_data.extend_from_slice(&t_len.to_le_bytes());
-                    values_data.extend_from_slice(&0u16.to_le_bytes());
-                    values_data.extend_from_slice(&score.to_le_bytes());
-                    values_offset_counter += 1;
-                }
+        // 8. 构建单源词表段 (Vocab Offsets + String Pool + Sorted Vocab IDs)
+        let vocab_size = words.len();
+        let mut vocab_offsets: Vec<u32> = Vec::with_capacity(vocab_size + 1);
+        let mut vocab_strings: Vec<u8> = Vec::new();
+        let mut current_str_offset: u32 = 0;
 
-                index_buf.extend_from_slice(&k_off.to_le_bytes());
-                index_buf.extend_from_slice(&k_len.to_le_bytes());
-                index_buf.extend_from_slice(&0u16.to_le_bytes());
-                index_buf.extend_from_slice(&val_start.to_le_bytes());
-                index_buf.extend_from_slice(&val_count.to_le_bytes());
-            }
-            index_buf
-        };
+        for w in &words {
+            vocab_offsets.push(current_str_offset);
+            let b = w.as_bytes();
+            vocab_strings.extend_from_slice(b);
+            current_str_offset += b.len() as u32;
+        }
+        vocab_offsets.push(current_str_offset);
 
-        let entries_buf = encode_entries(&sorted_keys, &dict_map);
-        let acronyms_buf = encode_entries(&sorted_acronyms, &acronym_map);
-        let initials_buf = encode_entries(&sorted_initials, &initial_map);
+        // 构建按字典序排序的 sorted_vocab_ids
+        let mut sorted_vocab_ids: Vec<u32> = (0..vocab_size as u32).collect();
+        sorted_vocab_ids.sort_by(|&a, &b| words[a as usize].cmp(&words[b as usize]));
 
+        // 9. 计算各段文件绝对偏移量
+        let header_len = 64usize;
+        let dat_base_bytes = dat.base.len() * 4;
+        let dat_check_bytes = dat.check.len() * 4;
+        let dat_tail_bytes = dat.tail.len();
+
+        let mut current_offset = header_len + dat_base_bytes + dat_check_bytes + dat_tail_bytes;
+        // 4 字节对齐
+        let pad1 = (4 - (current_offset % 4)) % 4;
+        current_offset += pad1;
+
+        let key_metas_offset = current_offset as u64;
+        current_offset += key_metas_data.len();
+
+        let candidates_offset = current_offset as u64;
+        current_offset += candidates_data.len();
+
+        let pad2 = (4 - (current_offset % 4)) % 4;
+        current_offset += pad2;
+
+        let vocab_offset = current_offset as u64;
+
+        // 10. 写入目标文件
         let out_ref = output_path.as_ref();
         let out_file = File::create(out_ref).map_err(|e| AlgoError::DictionaryIo {
             path: PathBuf::from(out_ref),
@@ -310,23 +370,47 @@ impl DictBuilder {
         })?;
         let mut writer = BufWriter::new(out_file);
 
-        writer.write_all(COMPACT_DICT_MAGIC).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(out_ref),
-            source: e,
-        })?;
-        writer.write_all(&(sorted_keys.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&(sorted_acronyms.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&(sorted_initials.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&0u32.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        // Header (64 字节)
+        let mut header = [0u8; 64];
+        header[0..16].copy_from_slice(COMPACT_DICT_MAGIC);
+        header[16..20].copy_from_slice(&2u32.to_le_bytes()); // version = 2
+        header[20..24].copy_from_slice(&(num_keys as u32).to_le_bytes());
+        header[24..28].copy_from_slice(&(num_candidates as u32).to_le_bytes());
+        header[28..32].copy_from_slice(&(vocab_size as u32).to_le_bytes());
+        header[32..36].copy_from_slice(&(dat.base.len() as u32).to_le_bytes());
+        header[36..40].copy_from_slice(&(dat.tail.len() as u32).to_le_bytes());
+        header[40..48].copy_from_slice(&key_metas_offset.to_le_bytes());
+        header[48..56].copy_from_slice(&candidates_offset.to_le_bytes());
+        header[56..64].copy_from_slice(&vocab_offset.to_le_bytes());
+        writer.write_all(&header).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
 
-        writer.write_all(&entries_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&acronyms_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&initials_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        // DAT 数据
+        for &b in &dat.base {
+            writer.write_all(&b.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        }
+        for &c in &dat.check {
+            writer.write_all(&c.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        }
+        writer.write_all(&dat.tail).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        if pad1 > 0 {
+            writer.write_all(&vec![0u8; pad1]).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        }
 
-        writer.write_all(&(values_offset_counter as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&(string_pool.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&values_data).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
-        writer.write_all(&string_pool).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        // Key Metas 与 Candidates
+        writer.write_all(&key_metas_data).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        writer.write_all(&candidates_data).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        if pad2 > 0 {
+            writer.write_all(&vec![0u8; pad2]).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        }
+
+        // Vocab 段
+        for &off in &vocab_offsets {
+            writer.write_all(&off.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        }
+        for &id in &sorted_vocab_ids {
+            writer.write_all(&id.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
+        }
+        writer.write_all(&vocab_strings).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
 
         writer.flush().map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(out_ref), source: e })?;
 
@@ -342,11 +426,6 @@ impl DictBuilder {
     }
 
     /// 构建并编译辅助与混输二进制词库（`aux.dict.bin`）
-    ///
-    /// # 参数
-    /// - `en_paths`: 可选的外部英文词库文本/YAML 路径列表
-    /// - `sym_paths`: 可选的外部符号与表情文本/YAML 路径列表
-    /// - `output_path`: 输出的二进制目标文件路径
     pub fn build_auxiliary_dict<P: AsRef<Path>, Q: AsRef<Path>, R: AsRef<Path>>(
         en_paths: &[P],
         sym_paths: &[Q],
@@ -419,7 +498,6 @@ impl DictBuilder {
                             let parts: Vec<&str> = trimmed.split('\t').collect();
                             if parts.len() >= 2 {
                                 let (key, sym, desc) = if parts[0].chars().any(|c| !c.is_ascii_alphanumeric() && c != '\'' && c != '_') {
-                                    // 符号/Emoji/颜文字在前，拼音在后
                                     let py = parts[1].trim().to_lowercase().replace(' ', "");
                                     let emoji_or_sym = parts[0].trim().to_string();
                                     let d = if py == "vv" {
@@ -429,7 +507,6 @@ impl DictBuilder {
                                     };
                                     (py, emoji_or_sym, d)
                                 } else {
-                                    // 拼音/缩写在前，符号在后
                                     let k = parts[0].trim().to_lowercase();
                                     let s = parts[1].trim().to_string();
                                     let d = if parts.len() >= 3 {
@@ -454,13 +531,7 @@ impl DictBuilder {
         Ok(dict)
     }
 
-    /// 用户导入个人自定义词库文本（直接注入用户自适应习惯词库中）
-    ///
-    /// # 格式支持
-    /// 每行格式为：`词条 \t 拼音` 或 `词条 \t 拼音 \t 初始频次`
-    ///
-    /// # Errors
-    /// 当文件无法打开时返回 [`AlgoError::DictionaryIo`]。
+    /// 用户导入个人自定义词库文本
     pub fn import_user_text_dict<P: AsRef<Path>>(
         file_path: P,
         user_model: &mut UserAdaptiveModel,
@@ -508,7 +579,6 @@ impl DictBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     #[test]
     fn test_build_and_import() {
@@ -560,12 +630,12 @@ mod tests {
         writeln!(file, "中\tzhong\t9000").unwrap();
         drop(file);
 
-        // 1. 编译为零拷贝紧凑二进制格式
+        // 1. 编译为零拷贝紧凑二进制格式 (DAT 一体化)
         let stats = DictBuilder::build_compact_binary_dict(&[&txt_path], &compact_bin_path)
             .expect("紧凑编译成功");
         assert_eq!(stats.total_words, 3);
 
-        // 2. 使用 LexiconTable::load_binary 加载（内部自动识别魔数并执行零拷贝 mmap 加载）
+        // 2. 使用 LexiconTable::load_binary 加载
         let table = LexiconTable::load_binary(&compact_bin_path).expect("零拷贝紧凑词库加载成功");
 
         // 3. 验证全拼检索
@@ -573,7 +643,7 @@ mod tests {
         assert!(!cands.is_empty());
         assert_eq!(cands[0].text, "中国");
 
-        // 4. 验证简拼缩写检索（由 builder 预计算）
+        // 4. 验证简拼缩写检索 (由 builder 自动提取)
         let acronym_cands = table.lookup_acronym("zg");
         assert!(!acronym_cands.is_empty(), "简拼 zg 应召回中国");
         assert_eq!(acronym_cands[0].text, "中国");
@@ -581,6 +651,13 @@ mod tests {
         // 5. 验证单字声母预置索引
         let initial_entries = table.get_initial_raw_entries("z");
         assert!(initial_entries.is_some(), "声母 z 应有预置单字索引");
+
+        // 6. 验证 Word ID 与反查
+        let compact = table.compact_mmap.as_ref().unwrap();
+        let id_zg = compact.get_id("中国");
+        assert!(id_zg.is_some());
+        let word_zg = compact.get_word(id_zg.unwrap());
+        assert_eq!(word_zg, Some("中国"));
 
         // 清理临时文件
         let _ = std::fs::remove_file(txt_path);

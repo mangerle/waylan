@@ -6,7 +6,11 @@ use waylan_algo::AlgoEngine;
 
 #[test]
 fn test_shux_prefix_expansion_end_to_end() {
-    let dict_path = if std::path::Path::new("data/base.dict.bin").exists() {
+    let dict_path = if std::path::Path::new("/home/wsl/waylan/data/base.dict.bin").exists() {
+        "/home/wsl/waylan/data/base.dict.bin"
+    } else if std::path::Path::new("../../data/base.dict.bin").exists() {
+        "../../data/base.dict.bin"
+    } else if std::path::Path::new("data/base.dict.bin").exists() {
         "data/base.dict.bin"
     } else if std::path::Path::new("/usr/share/waylan/data/base.dict.bin").exists() {
         "/usr/share/waylan/data/base.dict.bin"
@@ -44,7 +48,11 @@ fn test_shux_prefix_expansion_end_to_end() {
 
 #[test]
 fn test_timing_measurement() {
-    let dict_path = if std::path::Path::new("data/base.dict.bin").exists() {
+    let dict_path = if std::path::Path::new("/home/wsl/waylan/data/base.dict.bin").exists() {
+        "/home/wsl/waylan/data/base.dict.bin"
+    } else if std::path::Path::new("../../data/base.dict.bin").exists() {
+        "../../data/base.dict.bin"
+    } else if std::path::Path::new("data/base.dict.bin").exists() {
         "data/base.dict.bin"
     } else if std::path::Path::new("/usr/share/waylan/data/base.dict.bin").exists() {
         "/usr/share/waylan/data/base.dict.bin"

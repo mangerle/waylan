@@ -3,6 +3,7 @@ pub mod builder;
 pub mod clipboard;
 pub mod composition;
 pub mod custom_phrase;
+pub mod dat;
 pub mod dict_importer;
 pub mod dispatcher;
 pub mod entity;
@@ -449,10 +450,22 @@ impl AlgoEngine {
 
             // 词典精确及倒排检索
             let mut matches = self.table.lookup(&key);
+            if path.is_typo {
+                for m in &mut matches {
+                    m.tier = CandidateTier::TypoCorrection;
+                    m.comment = Some(format!("[纠错: {}]", key));
+                }
+            }
             raw_candidates.append(&mut matches);
 
             // 用户自造词检索
             let mut user_matches = self.user_model.lookup_user_words(&key, 1_700_000_000);
+            if path.is_typo {
+                for m in &mut user_matches {
+                    m.tier = CandidateTier::TypoCorrection;
+                    m.comment = Some(format!("[纠错: {}]", key));
+                }
+            }
             raw_candidates.append(&mut user_matches);
         }
 
@@ -468,12 +481,14 @@ impl AlgoEngine {
                     1
                 };
             if total_units >= min_units {
-                if let Some(sentence) = ViterbiDecoder::decode_sentence_with_context(
+                if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context(
                     &path.syllables,
                     &path.remaining,
                     &self.table,
                     self.last_commit_context.as_deref(),
                 ) {
+                    // 融合切分路径拓扑代价值：代价值越大（如包含借音碎切），扣除对应的似然惩罚，防止劣质路径反超优质整句
+                    sentence.score = sentence.score.saturating_sub((path.cost as u32).saturating_mul(100));
                     raw_candidates.push(sentence);
                 }
             }
