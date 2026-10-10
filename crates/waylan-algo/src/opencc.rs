@@ -12,17 +12,6 @@ pub const OPENCC_DICT_MAGIC: &[u8; 16] = b"WAYLAN_OPENCC001";
 /// 全局共享默认简繁转换词典缓存
 static GLOBAL_OPENCC_DICT: OnceLock<Arc<OpenCcDict>> = OnceLock::new();
 
-/// 纯 Rust 简繁转换词库与正向最大匹配（FMM）引擎
-///
-/// # 设计原理
-/// - **两级词表架构**：
-///   1. `STCharacters`（单字规范表）：记录简化字到首选繁体字及多繁备选字的映射（如 `发 -> [發, 髮]`、`后 -> [後, 后]`）；
-///   2. `STPhrases`（一简对多繁短语消歧表）：记录多字词组的精确繁体映射及边界保护词条（如 `头发 -> 頭髮`、`皇后 -> 皇后`）。
-/// - **正向最大匹配（FMM）**：
-///   转换多字词或句子时，利用 `first_char_max_len` 首字最大词长索引，优先从最长可能窗口向下执行零拷贝 UTF-8 切片查表；
-///   命中的短语整体替换为对应繁体词并跨越游标，未命中的单字回退查询 `STCharacters` 首选繁体字。
-/// - **单字候选一简多繁展开**：
-///   当候选词为单个汉字且存在多个繁体映射时，首选字原位替换，次选繁体字自动派生为紧随其后的候选词，兼顾词组消歧与单字完备性。
 /// 紧凑短语映射表（按 UTF-8 字节序连续存储，通过二分查找实现零堆分配极速查询）
 #[derive(Debug, Clone, Default)]
 pub struct CompactPhraseTable {
@@ -69,6 +58,17 @@ impl CompactPhraseTable {
     }
 }
 
+/// 纯 Rust 简繁转换词库与正向最大匹配（FMM）引擎
+///
+/// # 设计原理
+/// - **两级词表架构**：
+///   1. `STCharacters`（单字规范表）：记录简化字到首选繁体字及多繁备选字的映射（如 `发 -> [發, 髮]`、`后 -> [後, 后]`）；
+///   2. `STPhrases`（一简对多繁短语消歧表）：记录多字词组的精确繁体映射及边界保护词条（如 `头发 -> 頭髮`、`皇后 -> 皇后`）。
+/// - **正向最大匹配（FMM）**：
+///   转换多字词或句子时，利用 `first_char_max_len` 首字最大词长索引，优先从最长可能窗口向下执行零拷贝 UTF-8 切片查表；
+///   命中的短语整体替换为对应繁体词并跨越游标，未命中的单字回退查询 `STCharacters` 首选繁体字。
+/// - **单字候选一简多繁展开**：
+///   当候选词为单个汉字且存在多个繁体映射时，首选字原位替换，次选繁体字自动派生为紧随其后的候选词，兼顾词组消歧与单字完备性。
 #[derive(Debug, Clone, Default)]
 pub struct OpenCcDict {
     /// 简化字单字 -> 繁体字序列（首元素为默认首选繁体字，后续元素为一简多繁备选字）
@@ -543,18 +543,25 @@ impl OpenCcDict {
             let mut matched_phrase = false;
             if let Some(&max_len) = self.first_char_max_len.get(&first_ch) {
                 if max_len >= 2 {
-                    // 收集从第 2 个字符到 max_len 个字符的 UTF-8 字节结束偏移
-                    let mut end_offsets: Vec<usize> = Vec::with_capacity(max_len);
+                    // 使用栈固定数组收集 UTF-8 字节结束偏移，彻底消除每次字符匹配时的堆内存分配
+                    const MAX_FMM_WINDOW: usize = 24;
+                    let mut end_offsets = [0usize; MAX_FMM_WINDOW];
+                    let mut offset_count = 0usize;
+                    let limit = max_len.min(MAX_FMM_WINDOW);
+
                     for (char_idx, (byte_idx, ch)) in chars_iter.enumerate() {
                         let cur_char_count = char_idx + 2;
-                        end_offsets.push(byte_idx + ch.len_utf8());
-                        if cur_char_count >= max_len {
+                        if offset_count < MAX_FMM_WINDOW {
+                            end_offsets[offset_count] = byte_idx + ch.len_utf8();
+                            offset_count += 1;
+                        }
+                        if cur_char_count >= limit {
                             break;
                         }
                     }
 
                     // 从最长窗口向下递减执行零拷贝切片匹配
-                    for &byte_end in end_offsets.iter().rev() {
+                    for &byte_end in end_offsets[..offset_count].iter().rev() {
                         let slice = &rem[..byte_end];
                         if let Some(trad_phrase) = self.lookup_phrase(slice) {
                             result.push_str(trad_phrase);
@@ -670,7 +677,8 @@ mod tests {
     fn test_opencc_binary_save_and_load_roundtrip() {
         let dict = OpenCcDict::with_builtin_fallback();
         let temp_path = std::env::temp_dir().join("waylan_test_opencc.dict.bin");
-        dict.save_to_file(&temp_path).expect("保存简繁二进制词库应成功");
+        dict.save_to_file(&temp_path)
+            .expect("保存简繁二进制词库应成功");
 
         let loaded = OpenCcDict::load_from_file(&temp_path).expect("加载简繁二进制词库应成功");
         assert_eq!(loaded.convert_text("头发和牛肉面"), "頭髮和牛肉麪");
