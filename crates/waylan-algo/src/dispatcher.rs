@@ -77,95 +77,101 @@ impl ModeDispatcher {
         candidates
     }
 
-    /// 轻量安全四则运算解析器
+    /// 轻量安全四则运算解析器（支持圆括号嵌套优先级、一元正负号与除零保护）
     fn eval_math_simple(expr: &str) -> Option<f64> {
-        let clean: String = expr.chars().filter(|c| !c.is_whitespace()).collect();
-        if clean.is_empty() {
+        let chars: Vec<char> = expr.chars().filter(|c| !c.is_whitespace()).collect();
+        if chars.is_empty() {
             return None;
         }
 
-        let mut nums: Vec<f64> = Vec::new();
-        let mut ops: Vec<char> = Vec::new();
-        let mut current_num = String::new();
-
-        for ch in clean.chars() {
-            if ch.is_ascii_digit() || ch == '.' {
-                current_num.push(ch);
-            } else if "+-*/%".contains(ch) {
-                if current_num.is_empty() {
-                    return None;
-                }
-                let val = current_num.parse::<f64>().ok()?;
-                nums.push(val);
-                current_num.clear();
-
-                while let Some(&last_op) = ops.last() {
-                    if Self::precedence(last_op) >= Self::precedence(ch) {
-                        ops.pop();
-                        Self::apply_op(&mut nums, last_op)?;
-                    } else {
-                        break;
-                    }
-                }
-                ops.push(ch);
-            } else {
-                return None;
-            }
-        }
-
-        if !current_num.is_empty() {
-            let val = current_num.parse::<f64>().ok()?;
-            nums.push(val);
-        }
-
-        while let Some(op) = ops.pop() {
-            Self::apply_op(&mut nums, op)?;
-        }
-
-        if nums.len() == 1 {
-            nums.pop()
+        let mut pos = 0;
+        let val = Self::parse_expr(&chars, &mut pos)?;
+        if pos == chars.len() && val.is_finite() {
+            Some(val)
         } else {
             None
         }
     }
 
-    /// 运算符优先级
-    fn precedence(op: char) -> u8 {
-        match op {
-            '+' | '-' => 1,
-            '*' | '/' | '%' => 2,
-            _ => 0,
+    /// 解析加减级表达式：term { ('+' | '-') term }
+    fn parse_expr(chars: &[char], pos: &mut usize) -> Option<f64> {
+        let mut lhs = Self::parse_term(chars, pos)?;
+        while let Some(&op) = chars.get(*pos) {
+            if op == '+' || op == '-' {
+                *pos += 1;
+                let rhs = Self::parse_term(chars, pos)?;
+                lhs = if op == '+' { lhs + rhs } else { lhs - rhs };
+            } else {
+                break;
+            }
         }
+        Some(lhs)
     }
 
-    /// 执行单步二元运算（含除零与溢出保护）
-    fn apply_op(nums: &mut Vec<f64>, op: char) -> Option<()> {
-        if nums.len() < 2 {
+    /// 解析乘除取模级项：factor { ('*' | '/' | '%') factor }
+    fn parse_term(chars: &[char], pos: &mut usize) -> Option<f64> {
+        let mut lhs = Self::parse_factor(chars, pos)?;
+        while let Some(&op) = chars.get(*pos) {
+            if op == '*' || op == '/' || op == '%' {
+                *pos += 1;
+                let rhs = Self::parse_factor(chars, pos)?;
+                lhs = match op {
+                    '*' => lhs * rhs,
+                    '/' => {
+                        if rhs.abs() < 1e-12 {
+                            return None;
+                        }
+                        lhs / rhs
+                    }
+                    '%' => {
+                        if rhs.abs() < 1e-12 {
+                            return None;
+                        }
+                        lhs % rhs
+                    }
+                    _ => unreachable!(),
+                };
+            } else {
+                break;
+            }
+        }
+        Some(lhs)
+    }
+
+    /// 解析原子因子：一元正负号、括号子表达式或浮点数常量
+    fn parse_factor(chars: &[char], pos: &mut usize) -> Option<f64> {
+        let &ch = chars.get(*pos)?;
+        if ch == '+' {
+            *pos += 1;
+            return Self::parse_factor(chars, pos);
+        }
+        if ch == '-' {
+            *pos += 1;
+            return Some(-Self::parse_factor(chars, pos)?);
+        }
+        if ch == '(' {
+            *pos += 1;
+            let val = Self::parse_expr(chars, pos)?;
+            if chars.get(*pos) == Some(&')') {
+                *pos += 1;
+                return Some(val);
+            }
             return None;
         }
-        let b = nums.pop()?;
-        let a = nums.pop()?;
 
-        let res = match op {
-            '+' => a + b,
-            '-' => a - b,
-            '*' => a * b,
-            '/' => {
-                if b.abs() < 1e-12 {
-                    return None; // 除零保护
-                }
-                a / b
+        let start = *pos;
+        while let Some(&c) = chars.get(*pos) {
+            if c.is_ascii_digit() || c == '.' {
+                *pos += 1;
+            } else {
+                break;
             }
-            '%' => {
-                if b.abs() < 1e-12 {
-                    return None;
-                }
-                a % b
-            }
-            _ => return None,
-        };
-        nums.push(res);
-        Some(())
+        }
+        if *pos == start {
+            return None;
+        }
+        let num_str: String = chars[start..*pos].iter().collect();
+        num_str.parse::<f64>().ok()
     }
 
     /// U 模式：拆字与笔画反查
@@ -246,6 +252,19 @@ mod tests {
         let result = ModeDispatcher::try_dispatch("v1+2*3", &config).expect("应触发V模式");
         assert_eq!(result[0].text, "7");
         assert_eq!(result[1].text, "1+2*3=7");
+
+        // 圆括号嵌套优先级
+        let paren_res = ModeDispatcher::try_dispatch("v(1+2)*3", &config).expect("应支持括号算式");
+        assert_eq!(paren_res[0].text, "9");
+        assert_eq!(paren_res[1].text, "(1+2)*3=9");
+
+        let nested_res =
+            ModeDispatcher::try_dispatch("v100/(2+3)", &config).expect("应支持分母括号算式");
+        assert_eq!(nested_res[0].text, "20");
+
+        // 一元负号表达式
+        let neg_res = ModeDispatcher::try_dispatch("v-5+10", &config).expect("应支持负号开头算式");
+        assert_eq!(neg_res[0].text, "5");
 
         let div_zero = ModeDispatcher::try_dispatch("v10/0", &config);
         assert!(div_zero.is_none());
