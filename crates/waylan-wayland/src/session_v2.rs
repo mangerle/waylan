@@ -225,11 +225,11 @@ impl WaylanV2Session {
 impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
     fn event(
         state: &mut Self,
-        _proxy: &ZwpInputMethodV2,
+        proxy: &ZwpInputMethodV2,
         event: V2Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
+        qhandle: &QueueHandle<Self>,
     ) {
         match event {
             V2Event::Activate => {
@@ -237,12 +237,19 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 state.sync_external_state();
                 state.is_active = true;
                 state.mods_depressed = 0;
+                if state.keyboard_grab.is_none() {
+                    let grab = proxy.grab_keyboard(qhandle, ());
+                    state.keyboard_grab = Some(grab);
+                }
                 state.engine.reset();
             }
             V2Event::Deactivate => {
                 info!("[Wayland v2] 收到会话失焦事件：输入焦点已离开。");
                 state.is_active = false;
                 state.mods_depressed = 0;
+                if let Some(grab) = state.keyboard_grab.take() {
+                    grab.release();
+                }
                 state.engine.reset();
                 state.surface_manager.on_input_inactive();
             }
@@ -533,6 +540,55 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
             }
             _ => {}
         }
+    }
+}
+
+// 为 wl_seat 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_seat::WlSeat, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_seat::WlSeat,
+        _event: <wayland_client::protocol::wl_seat::WlSeat as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 zwp_input_method_manager_v2 实现 Dispatch
+impl
+    Dispatch<
+        wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+        (),
+    > for WaylanV2Session
+{
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+        _event: <wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_registry 实现 Dispatch
+impl
+    Dispatch<
+        wayland_client::protocol::wl_registry::WlRegistry,
+        wayland_client::globals::GlobalListContents,
+    > for WaylanV2Session
+{
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_registry::WlRegistry,
+        _event: <wayland_client::protocol::wl_registry::WlRegistry as wayland_client::Proxy>::Event,
+        _data: &wayland_client::globals::GlobalListContents,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
     }
 }
 

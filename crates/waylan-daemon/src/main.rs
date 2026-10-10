@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     engine.load_auxiliary_dict(aux_dict);
 
     // 6. 探测 Wayland 环境与合成器协议能力
-    check_wayland_capabilities();
+    let caps = check_wayland_capabilities();
 
     // 7. 执行环境自检（--check 参数）
     if args.len() > 1 && args[1] == "--check" {
@@ -132,65 +132,127 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
     info!("------------------------------------------------------------");
 
-    // 9. 构造并驱动 Wayland 输入法会话事件循环
-    let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
-    session.surface_manager.renderer = renderer;
-    session.shift_sm = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
-        SwitchKey::Shift => ToggleKeyMode::Shift,
-        SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
-    });
-    session.punctuation_processor = PunctuationProcessor::with_options(
-        cfg.slash_to_dunhao,
-        cfg.protect_digits_punctuation,
-        cfg.auto_complete_pairs,
-    );
-    session.page_keys = match cfg.page_keys {
-        PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
-        PageKeys::Bracket => PageKeyConfig::Bracket,
-        PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
-    };
-    session.shared_is_chinese = Some(tray.mode_flag());
-    session.reload_requested = Some(tray.reload_flag());
-    session.reload_callback = Some(Box::new(|s| {
-        let new_cfg = AppConfig::load_or_create();
-        s.engine.config.page_size = new_cfg.page_size;
-        s.engine.config.enable_v_mode = new_cfg.v_mode;
-        s.engine.config.traditional_chinese = new_cfg.traditional_chinese;
-        s.engine.config.fuzzy = if new_cfg.fuzzy_pinyin {
-            FuzzyConfig::all_enabled()
-        } else {
-            FuzzyConfig::default()
-        };
-        s.engine.config.double_pinyin = new_cfg.double_pinyin;
-        s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
-        s.surface_manager.renderer.theme = match new_cfg.theme {
-            ThemeMode::Light => UiTheme::light(),
-            ThemeMode::Dark => UiTheme::dark(),
-        };
-        s.surface_manager.renderer.font_size = new_cfg.font_size;
-        s.shift_sm = ShiftToggleStateMachine::with_toggle_key(match new_cfg.switch_key {
+    // 9. 构造并驱动 Wayland 输入法会话事件循环（优先协商 V2 协议，不支持时自动回退 V1 协议）
+    let loop_result = if caps.has_input_method_v2 && caps.has_seat {
+        info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
+        let mut session_v2 = waylan_wayland::session_v2::WaylanV2Session::new(engine);
+        session_v2.surface_manager.renderer = renderer;
+        session_v2.shift_state = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
             SwitchKey::Shift => ToggleKeyMode::Shift,
             SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
         });
-        s.punctuation_processor = PunctuationProcessor::with_options(
-            new_cfg.slash_to_dunhao,
-            new_cfg.protect_digits_punctuation,
-            new_cfg.auto_complete_pairs,
+        session_v2.punctuation_processor = PunctuationProcessor::with_options(
+            cfg.slash_to_dunhao,
+            cfg.protect_digits_punctuation,
+            cfg.auto_complete_pairs,
         );
-        s.page_keys = match new_cfg.page_keys {
+        session_v2.page_keys = match cfg.page_keys {
             PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
             PageKeys::Bracket => PageKeyConfig::Bracket,
             PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
         };
-        let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-        s.engine.custom_phrases =
-            waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
-        let u_dict = AppConfig::user_dict_path();
-        s.engine.set_user_dict_path(&u_dict);
-        s.engine.load_auxiliary_dict(load_auxiliary_dict());
-    }));
+        session_v2.shared_is_chinese = Some(tray.mode_flag());
+        session_v2.reload_requested = Some(tray.reload_flag());
+        session_v2.reload_callback = Some(Box::new(|s| {
+            let new_cfg = AppConfig::load_or_create();
+            s.engine.config.page_size = new_cfg.page_size;
+            s.engine.config.enable_v_mode = new_cfg.v_mode;
+            s.engine.config.traditional_chinese = new_cfg.traditional_chinese;
+            s.engine.config.fuzzy = if new_cfg.fuzzy_pinyin {
+                FuzzyConfig::all_enabled()
+            } else {
+                FuzzyConfig::default()
+            };
+            s.engine.config.double_pinyin = new_cfg.double_pinyin;
+            s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
+            s.surface_manager.renderer.theme = match new_cfg.theme {
+                ThemeMode::Light => UiTheme::light(),
+                ThemeMode::Dark => UiTheme::dark(),
+            };
+            s.surface_manager.renderer.font_size = new_cfg.font_size;
+            s.shift_state = ShiftToggleStateMachine::with_toggle_key(match new_cfg.switch_key {
+                SwitchKey::Shift => ToggleKeyMode::Shift,
+                SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+            });
+            s.punctuation_processor = PunctuationProcessor::with_options(
+                new_cfg.slash_to_dunhao,
+                new_cfg.protect_digits_punctuation,
+                new_cfg.auto_complete_pairs,
+            );
+            s.page_keys = match new_cfg.page_keys {
+                PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+                PageKeys::Bracket => PageKeyConfig::Bracket,
+                PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+            };
+            let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+            s.engine.custom_phrases =
+                waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
+            let u_dict = AppConfig::user_dict_path();
+            s.engine.set_user_dict_path(&u_dict);
+            s.engine.load_auxiliary_dict(load_auxiliary_dict());
+        }));
+        waylan_wayland::run_session_v2_loop(session_v2)
+    } else {
+        let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
+        session.surface_manager.renderer = renderer;
+        session.shift_sm = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
+            SwitchKey::Shift => ToggleKeyMode::Shift,
+            SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+        });
+        session.punctuation_processor = PunctuationProcessor::with_options(
+            cfg.slash_to_dunhao,
+            cfg.protect_digits_punctuation,
+            cfg.auto_complete_pairs,
+        );
+        session.page_keys = match cfg.page_keys {
+            PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+            PageKeys::Bracket => PageKeyConfig::Bracket,
+            PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+        };
+        session.shared_is_chinese = Some(tray.mode_flag());
+        session.reload_requested = Some(tray.reload_flag());
+        session.reload_callback = Some(Box::new(|s| {
+            let new_cfg = AppConfig::load_or_create();
+            s.engine.config.page_size = new_cfg.page_size;
+            s.engine.config.enable_v_mode = new_cfg.v_mode;
+            s.engine.config.traditional_chinese = new_cfg.traditional_chinese;
+            s.engine.config.fuzzy = if new_cfg.fuzzy_pinyin {
+                FuzzyConfig::all_enabled()
+            } else {
+                FuzzyConfig::default()
+            };
+            s.engine.config.double_pinyin = new_cfg.double_pinyin;
+            s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
+            s.surface_manager.renderer.theme = match new_cfg.theme {
+                ThemeMode::Light => UiTheme::light(),
+                ThemeMode::Dark => UiTheme::dark(),
+            };
+            s.surface_manager.renderer.font_size = new_cfg.font_size;
+            s.shift_sm = ShiftToggleStateMachine::with_toggle_key(match new_cfg.switch_key {
+                SwitchKey::Shift => ToggleKeyMode::Shift,
+                SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+            });
+            s.punctuation_processor = PunctuationProcessor::with_options(
+                new_cfg.slash_to_dunhao,
+                new_cfg.protect_digits_punctuation,
+                new_cfg.auto_complete_pairs,
+            );
+            s.page_keys = match new_cfg.page_keys {
+                PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+                PageKeys::Bracket => PageKeyConfig::Bracket,
+                PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+            };
+            let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+            s.engine.custom_phrases =
+                waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
+            let u_dict = AppConfig::user_dict_path();
+            s.engine.set_user_dict_path(&u_dict);
+            s.engine.load_auxiliary_dict(load_auxiliary_dict());
+        }));
+        waylan_wayland::run_session_v1_loop(session)
+    };
 
-    match waylan_wayland::run_session_v1_loop(session) {
+    match loop_result {
         Ok(_) => {}
         Err(e) => {
             warn!(
@@ -268,7 +330,7 @@ fn load_auxiliary_dict() -> waylan_algo::AuxiliaryDict {
 }
 
 /// 检查 Wayland 合成器协议能力
-fn check_wayland_capabilities() {
+fn check_wayland_capabilities() -> waylan_wayland::WaylandCapabilities {
     info!("[系统环境] 正在检查当前 Wayland 会话与合成器能力...");
     match probe_wayland_environment() {
         Ok(caps) => {
@@ -280,12 +342,14 @@ fn check_wayland_capabilities() {
                 caps.has_input_method_v2,
                 caps.has_layer_shell_v1
             );
+            caps
         }
         Err(e) => {
             warn!(
                 "[系统环境 警告] 无法直接连接默认 Wayland 会话 ({})，请确保 WAYLAND_DISPLAY 环境变量已设置。",
                 e
             );
+            waylan_wayland::WaylandCapabilities::default()
         }
     }
 }

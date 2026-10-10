@@ -168,6 +168,28 @@ pub fn run_session_v1_loop(
     }
 }
 
+/// 启动并运行现代 Wayland V2 输入法事件循环（适用于 KDE Plasma 6 / GNOME / Hyprland / Sway）
+pub fn run_session_v2_loop(
+    mut session: session_v2::WaylanV2Session,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conn = Connection::connect_to_env()?;
+    let (globals, mut event_queue) = wayland_client::globals::registry_queue_init(&conn)?;
+    let qh = event_queue.handle();
+
+    let seat: WlSeat = globals.bind(&qh, 1..=7, ())?;
+    let im_manager: ZwpInputMethodManagerV2 = globals.bind(&qh, 1..=1, ())?;
+    let input_method = im_manager.get_input_method(&seat, &qh, ());
+    session.set_input_method(input_method);
+
+    log::info!(
+        "[微澜 Wayland] 成功绑定 zwp_input_method_manager_v2 与 wl_seat，进入 V2 输入法事件分发循环。"
+    );
+
+    loop {
+        event_queue.blocking_dispatch(&mut session)?;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
