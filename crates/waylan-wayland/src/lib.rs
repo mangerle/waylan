@@ -3,10 +3,14 @@ pub mod session_v1;
 pub mod session_v2;
 pub mod surface;
 
+use protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_seat::WlSeat};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
-use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+    Anchor, KeyboardInteractivity,
+};
 
 /// Wayland 合成器支持的特权能力汇总
 #[derive(Debug, Default, Clone)]
@@ -164,6 +168,31 @@ pub fn run_session_v1_loop(
 
     if let Ok(compositor) = globals.bind::<WlCompositor, _, _>(&qh, 1..=6, ()) {
         let wl_surface = compositor.create_surface(&qh, ());
+
+        // 优先尝试绑定原生的 zwp_input_panel_v1 输入法浮动面板协议赋予 overlay_panel 角色
+        if let Ok(input_panel) = globals.bind::<ZwpInputPanelV1, _, _>(&qh, 1..=1, ()) {
+            let panel_surface = input_panel.get_input_panel_surface(&wl_surface, &qh, ());
+            panel_surface.set_overlay_panel();
+            session.panel_surface = Some(panel_surface);
+            log::info!("[微澜 Wayland] 成功绑定 zwp_input_panel_v1 并将候选框配置为光标悬浮面板(overlay_panel)。");
+        } else if let Ok(layer_shell) = globals.bind::<ZwlrLayerShellV1, _, _>(&qh, 1..=4, ()) {
+            let layer_surface = layer_shell.get_layer_surface(
+                &wl_surface,
+                None,
+                Layer::Overlay,
+                "waylan-candidate-box".to_string(),
+                &qh,
+                (),
+            );
+            layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer_surface.set_anchor(Anchor::Top | Anchor::Left);
+            wl_surface.commit();
+            session.layer_surface = Some(layer_surface);
+            log::info!("[微澜 Wayland] 成功绑定 zwlr_layer_shell_v1 并将候选框配置为 Overlay 图层表面。");
+        } else {
+            log::warn!("[微澜 Wayland] 合成器未提供 zwp_input_panel_v1 或 zwlr_layer_shell_v1，裸 wl_surface 可能无法正常显示。");
+        }
+
         session.popup_wl_surface = Some(wl_surface);
     }
     if let Ok(shm) = globals.bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&qh, 1..=1, ()) {

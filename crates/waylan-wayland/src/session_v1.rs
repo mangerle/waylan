@@ -4,6 +4,8 @@ use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::{
 use crate::protocol_v1::input_method_v1::zwp_input_method_v1::{
     Event as MethodEvent, ZwpInputMethodV1,
 };
+use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1;
+use crate::protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
 use log::info;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::types::AlgoConfig;
@@ -11,6 +13,10 @@ use waylan_algo::AlgoEngine;
 use waylan_core::InputMode;
 use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, WlKeyboard};
 use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+    Event as LayerSurfaceEvent, ZwlrLayerSurfaceV1,
+};
 
 /// Linux 常见按键键码常量（基于 linux/input-event-codes.h）
 pub const KEY_ESC: u32 = 1;
@@ -231,6 +237,10 @@ pub struct WaylanV1Session {
     pub shm: Option<wayland_client::protocol::wl_shm::WlShm>,
     /// 候选框渲染目标 Wayland 表面
     pub popup_wl_surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    /// V1 输入面板表面角色对象 (zwp_input_panel_surface_v1)
+    pub panel_surface: Option<ZwpInputPanelSurfaceV1>,
+    /// WLR Layer Shell 表面角色对象（用于 Sway / wlroots 等环境）
+    pub layer_surface: Option<ZwlrLayerSurfaceV1>,
     /// 当前挂载在表面上的活跃像素缓冲区
     pub active_buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
     /// Wayland 事件队列句柄
@@ -259,6 +269,8 @@ impl Default for WaylanV1Session {
             grabbed_keyboard: None,
             shm: None,
             popup_wl_surface: None,
+            panel_surface: None,
+            layer_surface: None,
             active_buffer: None,
             qhandle: None,
             current_serial: 0,
@@ -290,6 +302,8 @@ impl WaylanV1Session {
             grabbed_keyboard: None,
             shm: None,
             popup_wl_surface: None,
+            panel_surface: None,
+            layer_surface: None,
             active_buffer: None,
             qhandle: None,
             current_serial: 0,
@@ -882,3 +896,63 @@ impl
     ) {
     }
 }
+
+// 为 zwp_input_panel_v1 实现 Dispatch
+impl Dispatch<ZwpInputPanelV1, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpInputPanelV1,
+        _event: <ZwpInputPanelV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 zwp_input_panel_surface_v1 实现 Dispatch
+impl Dispatch<ZwpInputPanelSurfaceV1, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpInputPanelSurfaceV1,
+        _event: <ZwpInputPanelSurfaceV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 zwlr_layer_shell_v1 实现 Dispatch
+impl Dispatch<ZwlrLayerShellV1, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrLayerShellV1,
+        _event: <ZwlrLayerShellV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 zwlr_layer_surface_v1 实现 Dispatch
+impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        proxy: &ZwlrLayerSurfaceV1,
+        event: <ZwlrLayerSurfaceV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            LayerSurfaceEvent::Configure { serial, .. } => {
+                proxy.ack_configure(serial);
+            }
+            LayerSurfaceEvent::Closed => {}
+            _ => {}
+        }
+    }
+}
+
