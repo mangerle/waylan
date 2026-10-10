@@ -28,18 +28,45 @@ pub struct UserEntry {
 /// - **实现初衷**：根据用户个人输入历史实现智能词频调优与自造新词记忆，使输入法越用越懂用户。
 /// - **核心优势**：结合使用频次与时间半衰期衰减算法，既能快速置顶常用词，又避免一次误选终身置顶。
 /// - **代价与局限**：需要定期落盘持久化，但通过内存缓存结合退出/定时写盘可消除 I/O 阻塞。
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserAdaptiveModel {
     /// 键为拼音序列，值为该拼音下记录的用户词列表
     entries: HashMap<String, Vec<UserEntry>>,
+    /// 运行期向 WAL 追加记录的计数器（用于触发周期性自动压缩）
+    #[serde(skip)]
+    wal_append_counter: usize,
+    /// 触发自动压缩的追加条数阈值（默认为 1000 条）
+    #[serde(skip)]
+    compact_threshold: usize,
+}
+
+impl Default for UserAdaptiveModel {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UserAdaptiveModel {
+    /// 默认运行时触发自动压缩的追加阈值
+    pub const DEFAULT_COMPACT_THRESHOLD: usize = 1000;
+
     /// 创建新的用户自适应模型
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            wal_append_counter: 0,
+            compact_threshold: Self::DEFAULT_COMPACT_THRESHOLD,
         }
+    }
+
+    /// 设置运行期触发自动压缩的 WAL 追加流水阈值
+    pub fn set_compact_threshold(&mut self, threshold: usize) {
+        self.compact_threshold = threshold;
+    }
+
+    /// 获取当前未压缩的 WAL 追加流水计数值
+    pub fn wal_append_counter(&self) -> usize {
+        self.wal_append_counter
     }
 
     /// 记录一次用户选词上屏动作
@@ -175,6 +202,13 @@ impl UserAdaptiveModel {
                 source: e,
             })?;
 
+        // 运行期累计写入流水达到阈值时，自动触发一次原子压缩合并，避免 WAL 持续膨胀
+        self.wal_append_counter += 1;
+        if self.wal_append_counter >= self.compact_threshold {
+            self.compact_wal(path_ref)?;
+            self.wal_append_counter = 0;
+        }
+
         Ok(())
     }
 
@@ -199,6 +233,7 @@ impl UserAdaptiveModel {
                 source: e,
             })?;
 
+            let mut record_count = 0;
             let mut cursor = 0;
             while cursor + 12 <= buf.len() {
                 let timestamp =
@@ -223,7 +258,14 @@ impl UserAdaptiveModel {
 
                 if !py_str.is_empty() && !text_str.is_empty() {
                     model.record_commit(text_str, py_str, timestamp);
+                    record_count += 1;
                 }
+            }
+
+            // 启动加载自动压缩判定：
+            // 若记录流水数 >= 50 且流水数超过独立有效词条数的 3 倍，说明存在大量历史冗余流水，自动触发一次原子压缩
+            if record_count >= 50 && record_count > model.total_entries() * 3 {
+                let _ = model.compact_wal(path_ref);
             }
 
             Ok(model)
@@ -256,7 +298,9 @@ impl UserAdaptiveModel {
 
             for list in self.entries.values() {
                 for entry in list {
-                    for _ in 0..entry.commit_count {
+                    // 压缩归并时限制单词最大历史频次（最多 20 次），消除海量重复选词流水导致的体积无限膨胀
+                    let write_count = entry.commit_count.min(20).max(1);
+                    for _ in 0..write_count {
                         let py_bytes = entry.pinyin.as_bytes();
                         let text_bytes = entry.text.as_bytes();
                         let py_len = py_bytes.len() as u16;
@@ -426,6 +470,68 @@ mod tests {
         restored.compact_wal(&wal_path).expect("WAL归并成功");
         let compacted = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放归并后的WAL");
         assert_eq!(compacted.total_entries(), 2);
+
+        let _ = std::fs::remove_file(wal_path);
+    }
+
+    #[test]
+    fn test_wal_runtime_auto_compaction() {
+        let temp_dir = std::env::temp_dir();
+        let wal_path = temp_dir.join("test_runtime_auto_compact.wal");
+        if wal_path.exists() {
+            let _ = std::fs::remove_file(&wal_path);
+        }
+
+        let mut model = UserAdaptiveModel::new();
+        // 设置较小阈值为 5，用于测试自动触发
+        model.set_compact_threshold(5);
+
+        for i in 0..4 {
+            model
+                .append_to_wal(&wal_path, "测试", "ce'shi", 1_700_000_000 + i)
+                .expect("追加写入");
+        }
+        assert_eq!(model.wal_append_counter(), 4);
+
+        // 第 5 次追加达到阈值，触发自动 compact 并清零计数器
+        model
+            .append_to_wal(&wal_path, "测试", "ce'shi", 1_700_000_010)
+            .expect("触发自动压缩");
+        assert_eq!(model.wal_append_counter(), 0);
+
+        // 重新加载验证数据完整无损
+        let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放验证");
+        assert_eq!(restored.total_entries(), 1);
+
+        let _ = std::fs::remove_file(wal_path);
+    }
+
+    #[test]
+    fn test_wal_startup_auto_compaction() {
+        let temp_dir = std::env::temp_dir();
+        let wal_path = temp_dir.join("test_startup_auto_compact.wal");
+        if wal_path.exists() {
+            let _ = std::fs::remove_file(&wal_path);
+        }
+
+        let mut model = UserAdaptiveModel::new();
+        model.set_compact_threshold(100_000); // 运行期不触发
+
+        // 写入 60 条同一个词的流水（高冗余率：60 流水 vs 1 个词）
+        for i in 0..60 {
+            model
+                .append_to_wal(&wal_path, "高频词", "gao'pin'ci", 1_700_000_000 + i)
+                .expect("追加");
+        }
+
+        let size_before = std::fs::metadata(&wal_path).unwrap().len();
+
+        // 启动重放检测到流水数 >= 50 且 > 词条数*3，触发自动压缩
+        let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放触发启动压缩");
+        assert_eq!(restored.total_entries(), 1);
+
+        let size_after = std::fs::metadata(&wal_path).unwrap().len();
+        assert!(size_after < size_before, "自动压缩后文件体积应明显缩小 ({} -> {})", size_before, size_after);
 
         let _ = std::fs::remove_file(wal_path);
     }
