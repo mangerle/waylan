@@ -120,13 +120,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tray = tray::TrayService::spawn();
 
     info!("------------------------------------------------------------");
-    info!("[微澜守护进程] 核心服务启动就绪，正在后台监听键盘事件。");
+    info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
     info!("------------------------------------------------------------");
 
-    // 保持主服务持续在后台常驻运行
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(3600));
+    // 9. 构造并驱动 Wayland 输入法会话事件循环
+    let session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
+    match waylan_wayland::run_session_v1_loop(session) {
+        Ok(_) => {}
+        Err(e) => {
+            warn!(
+                "[微澜守护进程 警告] 无法启动 Wayland 输入法事件循环 ({})，进入常驻等待模式。",
+                e
+            );
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+            }
+        }
     }
+
+    Ok(())
 }
 
 /// 按照多级搜索策略加载字词库

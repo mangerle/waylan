@@ -139,6 +139,35 @@ pub fn probe_wayland_environment() -> Result<WaylandCapabilities, Box<dyn std::e
     Ok(state.capabilities)
 }
 
+/// 启动并运行 Wayland V1 输入法事件循环（使用已初始化的会话实例）
+pub fn run_session_v1_loop(
+    mut session: session_v1::WaylanV1Session,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conn = Connection::connect_to_env()?;
+    let (globals, mut event_queue) = wayland_client::globals::registry_queue_init(&conn)?;
+    let qh = event_queue.handle();
+
+    let mut im_global = None;
+    for g in globals.contents().clone_list() {
+        if g.interface == "zwp_input_method_v1" {
+            im_global = Some(g);
+            break;
+        }
+    }
+
+    let Some(_global_info) = im_global else {
+        return Err("当前 Wayland 合成器未暴露 zwp_input_method_v1 接口".into());
+    };
+
+    let _input_method: protocol_v1::input_method_v1::zwp_input_method_v1::ZwpInputMethodV1 =
+        globals.bind(&qh, 1..=1, ())?;
+    log::info!("[微澜 Wayland] 成功绑定 zwp_input_method_v1 接口，进入输入法事件分发循环。");
+
+    loop {
+        event_queue.blocking_dispatch(&mut session)?;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
