@@ -1,4 +1,4 @@
-use crate::syllables::STANDARD_SYLLABLES;
+use crate::syllables::find_syllables_by_prefix;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 
@@ -14,37 +14,38 @@ impl LexiconTable {
         }
 
         let mut candidates = Vec::new();
+        let matched_syllables = find_syllables_by_prefix(remaining_initial);
 
         if prefix_syllables.is_empty() {
-            for &syl in STANDARD_SYLLABLES {
-                if syl.starts_with(remaining_initial) {
-                    if let Some(matches) = self.get_raw_entries(syl) {
-                        for (text, score) in matches {
-                            if text.chars().count() == 1 {
-                                candidates.push(
-                                    AlgoCandidate::new(text, syl, score)
-                                        .with_tier(CandidateTier::ExactWord),
-                                );
-                            }
+            for &syl in matched_syllables {
+                if let Some(matches) = self.get_raw_entries(syl) {
+                    for (text, score) in matches {
+                        if text.chars().count() == 1 {
+                            candidates.push(
+                                AlgoCandidate::new(text, syl, score)
+                                    .with_tier(CandidateTier::ExactWord),
+                            );
                         }
                     }
                 }
             }
         } else {
             let prefix_key = prefix_syllables.join("'");
-            for &syl in STANDARD_SYLLABLES {
-                if syl.starts_with(remaining_initial) {
-                    let full_key = format!("{}'{}", prefix_key, syl);
-                    if let Some(matches) = self.get_raw_entries(&full_key) {
-                        for (text, score) in matches {
-                            let char_len = text.chars().count() as u32;
-                            let boost = char_len.saturating_sub(1).saturating_mul(600_000);
-                            let final_score = score.saturating_add(boost);
-                            candidates.push(
-                                AlgoCandidate::new(text, full_key.clone(), final_score)
-                                    .with_tier(CandidateTier::ExactWord),
-                            );
-                        }
+            let mut full_key = String::with_capacity(prefix_key.len() + 10);
+            for &syl in matched_syllables {
+                full_key.clear();
+                full_key.push_str(&prefix_key);
+                full_key.push('\'');
+                full_key.push_str(syl);
+                if let Some(matches) = self.get_raw_entries(&full_key) {
+                    for (text, score) in matches {
+                        let char_len = text.chars().count() as u32;
+                        let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                        let final_score = score.saturating_add(boost);
+                        candidates.push(
+                            AlgoCandidate::new(text, full_key.as_str(), final_score)
+                                .with_tier(CandidateTier::ExactWord),
+                        );
                     }
                 }
             }
