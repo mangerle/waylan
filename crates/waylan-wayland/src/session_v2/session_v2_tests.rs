@@ -111,56 +111,35 @@ fn test_formatted_cursor_byte_offset_sync() {
 }
 
 #[test]
-fn test_v2_english_mode_and_empty_buffer_commits() {
+fn test_v2_english_mode_and_empty_buffer_passthrough() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
 
-    // 1. 中文模式空缓冲区：数字键 1、空格键、回车键与 Tab 键应直接提交上屏
-    assert_eq!(session.handle_key_event(KEY_1, true), Some("1".to_string()));
-    session.handle_key_event(KEY_1, false);
-    assert_eq!(
-        session.handle_key_event(KEY_SPACE, true),
-        Some(" ".to_string())
-    );
-    session.handle_key_event(KEY_SPACE, false);
-    assert_eq!(
-        session.handle_key_event(KEY_ENTER, true),
-        Some("\n".to_string())
-    );
-    session.handle_key_event(KEY_ENTER, false);
-    assert_eq!(
-        session.handle_key_event(KEY_TAB, true),
-        Some("\t".to_string())
-    );
-    session.handle_key_event(KEY_TAB, false);
+    // 1. 中文模式空缓冲区：回车键、Tab 键、空格键、退格键与数字键应原生透传 (返回 (false, None))
+    let (consumed_1, _) = session.process_key_event(KEY_1, true);
+    assert!(!consumed_1, "空闲状态数字键应保持透传");
+    let (consumed_space, _) = session.process_key_event(KEY_SPACE, true);
+    assert!(!consumed_space, "空闲状态空格键应保持透传");
+    let (consumed_enter, _) = session.process_key_event(KEY_ENTER, true);
+    assert!(!consumed_enter, "空闲状态回车键应保持透传");
+    let (consumed_tab, _) = session.process_key_event(KEY_TAB, true);
+    assert!(!consumed_tab, "空闲状态 Tab 键应保持透传");
+    let (consumed_bs, _) = session.process_key_event(KEY_BACKSPACE, true);
+    assert!(!consumed_bs, "空闲状态退格键应保持透传");
 
-    // 空缓冲区下退格键触发 delete_backward（返回 None，不向预编辑输入）
-    assert_eq!(session.handle_key_event(KEY_BACKSPACE, true), None);
-    session.handle_key_event(KEY_BACKSPACE, false);
+    // 中文标点（逗号）在空闲状态下应被正确拦截并提交中文标点
+    let (consumed_comma, commit_comma) = session.process_key_event(KEY_COMMA, true);
+    assert!(consumed_comma, "中文标点逗号应被输入法消费");
+    assert_eq!(commit_comma, Some("，".to_string()));
 
-    // 2. 切换至英文模式：普通字母键 a (keycode 30)、Shift+a、数字、标点、回车与 Tab 直接以英文上屏
+    // 2. 切换至英文模式：普通字母、回车、Tab、退格等全部原生透传给席位
     session.mode = InputMode::English;
-    assert_eq!(session.handle_key_event(30, true), Some("a".to_string()));
-    session.handle_key_event(30, false);
-    assert_eq!(
-        session.handle_key_event(KEY_ENTER, true),
-        Some("\n".to_string())
-    );
-    session.handle_key_event(KEY_ENTER, false);
-    assert_eq!(
-        session.handle_key_event(KEY_TAB, true),
-        Some("\t".to_string())
-    );
-    session.handle_key_event(KEY_TAB, false);
-    assert_eq!(session.handle_key_event(KEY_BACKSPACE, true), None);
-    session.handle_key_event(KEY_BACKSPACE, false);
-
-    session.handle_key_event(KEY_LEFTSHIFT, true);
-    assert_eq!(session.handle_key_event(30, true), Some("A".to_string()));
-    session.handle_key_event(30, false);
-    assert_eq!(session.handle_key_event(KEY_1, true), Some("!".to_string()));
-    session.handle_key_event(KEY_1, false);
-    session.handle_key_event(KEY_LEFTSHIFT, false);
+    let (consumed_a, _) = session.process_key_event(30, true);
+    assert!(!consumed_a, "英文模式普通字母应原生透传");
+    let (consumed_en_enter, _) = session.process_key_event(KEY_ENTER, true);
+    assert!(!consumed_en_enter, "英文模式回车键应原生透传");
+    let (consumed_en_bs, _) = session.process_key_event(KEY_BACKSPACE, true);
+    assert!(!consumed_en_bs, "英文模式退格键应原生透传");
 }
 
 #[test]

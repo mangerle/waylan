@@ -2,52 +2,11 @@ use super::WaylanV2Session;
 use crate::input_core::*;
 use waylan_core::TextAction;
 
-/// 处理英文模式下的按键输入
-pub fn process_english_mode_key(session: &mut WaylanV2Session, key: u32) -> (bool, Option<String>) {
-    if key == KEY_BACKSPACE {
-        session.delete_backward();
-        return (true, None);
-    }
-    if key == KEY_DELETE {
-        session.delete_forward();
-        return (true, None);
-    }
-    if key == KEY_ENTER {
-        session.commit_text("\n");
-        return (true, Some("\n".to_string()));
-    }
-    if key == KEY_TAB {
-        session.commit_text("\t");
-        return (true, Some("\t".to_string()));
-    }
-    if let Some(ch) = keycode_to_char(key) {
-        let out = if session.is_shift_active() {
-            ch.to_ascii_uppercase().to_string()
-        } else {
-            ch.to_string()
-        };
-        session.punctuation_processor.record_commit(&out);
-        session.commit_text(&out);
-        return (true, Some(out));
-    }
-    if !session.is_shift_active() {
-        if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
-            let out = digit_ch.to_string();
-            session.punctuation_processor.record_commit(&out);
-            session.commit_text(&out);
-            return (true, Some(out));
-        }
-    }
-    if let Some(punct_ch) = keycode_to_punctuation_with_shift(key, session.is_shift_active()) {
-        let out = punct_ch.to_string();
-        session.punctuation_processor.record_commit(&out);
-        session.commit_text(&out);
-        return (true, Some(out));
-    }
-    if key == KEY_SPACE {
-        session.commit_text(" ");
-        return (true, Some(" ".to_string()));
-    }
+/// 处理英文模式下的按键输入（所有常规按键不拦截，由席位原生透传以支持 Key Repeat 与系统布局）
+pub fn process_english_mode_key(
+    _session: &mut WaylanV2Session,
+    _key: u32,
+) -> (bool, Option<String>) {
     (false, None)
 }
 
@@ -183,29 +142,9 @@ pub fn process_composition_key(
     None
 }
 
-/// 处理输入缓冲区为空时的空闲按键输入
+/// 处理输入缓冲区为空时的空闲按键输入（仅拦截中文标点，其余编辑键与数字键保持原生透传）
 pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool, Option<String>)> {
-    if key == KEY_BACKSPACE {
-        session.delete_backward();
-        return Some((true, None));
-    }
-    if key == KEY_DELETE {
-        session.delete_forward();
-        return Some((true, None));
-    }
-    if key == KEY_ENTER {
-        session.commit_text("\n");
-        return Some((true, Some("\n".to_string())));
-    }
-    if key == KEY_TAB {
-        session.commit_text("\t");
-        return Some((true, Some("\t".to_string())));
-    }
-    if key == KEY_SPACE {
-        session.commit_text(" ");
-        return Some((true, Some(" ".to_string())));
-    }
-
+    // 中文模式下的智能标点符号拦截（含 Shift 组合标点，如 !?$^_()""<>{}:~）
     if let Some(punct_char) = keycode_to_punctuation_with_shift(key, session.is_shift_active()) {
         if let Some(actions) = session
             .punctuation_processor
@@ -234,14 +173,14 @@ pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool
         }
     }
 
+    // 若为未按 Shift 的纯数字键输入，记录数字上下文以便后续触发 3.14 / 12:00 半角标点保护，但按键本身保持原生透传
     if !session.is_shift_active() {
         if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
             let s = digit_ch.to_string();
             session.punctuation_processor.record_commit(&s);
-            session.commit_text(&s);
-            return Some((true, Some(s)));
         }
     }
 
+    // 其他空闲编辑键（回车、退格、空格、Tab、数字等）不拦截，原生透传给焦点应用
     None
 }
