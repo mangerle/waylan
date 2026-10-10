@@ -7,7 +7,9 @@ use protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_seat::WlSeat};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
-use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
+    Layer, ZwlrLayerShellV1,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     Anchor, KeyboardInteractivity,
 };
@@ -188,7 +190,9 @@ pub fn run_session_v1_loop(
             layer_surface.set_anchor(Anchor::Top | Anchor::Left);
             wl_surface.commit();
             session.layer_surface = Some(layer_surface);
-            log::info!("[微澜 Wayland] 成功绑定 zwlr_layer_shell_v1 并将候选框配置为 Overlay 图层表面。");
+            log::info!(
+                "[微澜 Wayland] 成功绑定 zwlr_layer_shell_v1 并将候选框配置为 Overlay 图层表面。"
+            );
         } else {
             log::warn!("[微澜 Wayland] 合成器未提供 zwp_input_panel_v1 或 zwlr_layer_shell_v1，裸 wl_surface 可能无法正常显示。");
         }
@@ -207,16 +211,28 @@ pub fn run_session_v1_loop(
     }
 }
 
-/// 启动并运行现代 Wayland V2 输入法事件循环（适用于 KDE Plasma 6 / GNOME / Hyprland / Sway）
-pub fn run_session_v2_loop(
+/// 启动并运行现代 Wayland V2 输入法事件循环（若协议不可用或发生错误，返回错误同时移交 session 实例以便降级）
+pub fn run_session_v2_loop_fallible(
     mut session: session_v2::WaylanV2Session,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let conn = Connection::connect_to_env()?;
-    let (globals, mut event_queue) = wayland_client::globals::registry_queue_init(&conn)?;
+) -> Result<(), (Box<dyn std::error::Error>, Box<session_v2::WaylanV2Session>)> {
+    let conn = match Connection::connect_to_env() {
+        Ok(c) => c,
+        Err(e) => return Err((e.into(), Box::new(session))),
+    };
+    let (globals, mut event_queue) = match wayland_client::globals::registry_queue_init(&conn) {
+        Ok(res) => res,
+        Err(e) => return Err((e.into(), Box::new(session))),
+    };
     let qh = event_queue.handle();
 
-    let seat: WlSeat = globals.bind(&qh, 1..=7, ())?;
-    let im_manager: ZwpInputMethodManagerV2 = globals.bind(&qh, 1..=1, ())?;
+    let seat: WlSeat = match globals.bind(&qh, 1..=7, ()) {
+        Ok(s) => s,
+        Err(e) => return Err((e.into(), Box::new(session))),
+    };
+    let im_manager: ZwpInputMethodManagerV2 = match globals.bind(&qh, 1..=1, ()) {
+        Ok(m) => m,
+        Err(e) => return Err((e.into(), Box::new(session))),
+    };
     let input_method = im_manager.get_input_method(&seat, &qh, ());
 
     if let Ok(compositor) = globals.bind::<WlCompositor, _, _>(&qh, 1..=6, ()) {
@@ -242,8 +258,24 @@ pub fn run_session_v2_loop(
     );
 
     loop {
-        event_queue.blocking_dispatch(&mut session)?;
+        if let Err(e) = event_queue.blocking_dispatch(&mut session) {
+            return Err((e.into(), Box::new(session)));
+        }
+        if session.is_unavailable {
+            log::warn!("[微澜 Wayland] zwp_input_method_v2 收到 Unavailable 事件，跳出 V2 事件循环以准备降级。");
+            return Err((
+                "zwp_input_method_v2 协议已被合成器宣告不可用 (Unavailable)".into(),
+                Box::new(session),
+            ));
+        }
     }
+}
+
+/// 启动并运行现代 Wayland V2 输入法事件循环（适用于 KDE Plasma 6 / GNOME / Hyprland / Sway）
+pub fn run_session_v2_loop(
+    session: session_v2::WaylanV2Session,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_session_v2_loop_fallible(session).map_err(|(e, _)| e)
 }
 
 #[cfg(test)]

@@ -206,6 +206,9 @@ pub fn is_next_page_key(keycode: u32, page_keys: PageKeyConfig) -> bool {
     }
 }
 
+/// V1 会话配置与词库热重载回调函数类型
+pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;
+
 /// 微澜输入法会话状态机
 pub struct WaylanV1Session {
     /// 拼音算法引擎核心
@@ -225,7 +228,7 @@ pub struct WaylanV1Session {
     /// 与外部系统托盘共享的配置与词库重载请求标志
     pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
-    pub reload_callback: Option<Box<dyn FnMut(&mut Self) + Send>>,
+    pub reload_callback: Option<V1ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
     pub watched_paths: Vec<std::path::PathBuf>,
     /// 上次记录的被监控文件最新修改时间戳
@@ -637,7 +640,11 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                 context.commit_string(serial, committed_text);
                                 if remaining_len > 0 {
                                     state.refresh_candidate_surface();
-                                    context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
+                                    context.preedit_string(
+                                        serial,
+                                        state.engine.formatted_preedit(),
+                                        String::new(),
+                                    );
                                 } else {
                                     state.hide_candidate_surface();
                                     context.preedit_string(serial, String::new(), String::new());
@@ -657,7 +664,11 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                             context.commit_string(serial, committed_text);
                             if remaining_len > 0 {
                                 state.refresh_candidate_surface();
-                                context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
+                                context.preedit_string(
+                                    serial,
+                                    state.engine.formatted_preedit(),
+                                    String::new(),
+                                );
                             } else {
                                 state.hide_candidate_surface();
                                 context.preedit_string(serial, String::new(), String::new());
@@ -729,7 +740,8 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         } else {
                             let preedit = state.engine.formatted_preedit();
                             state.refresh_candidate_surface();
-                            context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
+                            context
+                                .preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
                             context.preedit_string(serial, preedit, String::new());
                         }
                         return;
@@ -773,7 +785,8 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                     }
                                     waylan_core::TextAction::MoveCursor(offset) => {
                                         for _ in 0..offset.unsigned_abs() {
-                                            let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
+                                            let dir_key =
+                                                if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
                                             context.key(serial, time, dir_key, 1);
                                             context.key(serial, time, dir_key, 0);
                                         }
@@ -894,13 +907,16 @@ impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for WaylanV1
 // 为 wl_buffer 实现 Dispatch
 impl Dispatch<wayland_client::protocol::wl_buffer::WlBuffer, ()> for WaylanV1Session {
     fn event(
-        _state: &mut Self,
-        _proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
-        _event: <wayland_client::protocol::wl_buffer::WlBuffer as wayland_client::Proxy>::Event,
+        state: &mut Self,
+        proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
+        event: <wayland_client::protocol::wl_buffer::WlBuffer as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        if matches!(event, wayland_client::protocol::wl_buffer::Event::Release) {
+            state.surface_manager.on_buffer_released(proxy);
+        }
     }
 }
 
@@ -980,4 +996,3 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylanV1Session {
         }
     }
 }
-

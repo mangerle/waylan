@@ -100,7 +100,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 加载自定义短语与用户历史自造词库
     let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-    engine.custom_phrases = waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+    engine.custom_phrases =
+        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
     let user_dict = AppConfig::user_dict_path();
     engine.set_user_dict_path(&user_dict);
     if user_dict.exists() {
@@ -201,7 +202,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             s.engine.set_user_dict_path(&u_dict);
             s.engine.load_auxiliary_dict(load_auxiliary_dict());
         }));
-        waylan_wayland::run_session_v2_loop(session_v2)
+        let v2_result = waylan_wayland::run_session_v2_loop_fallible(session_v2);
+        match v2_result {
+            Ok(()) => Ok(()),
+            Err((e, returned_session)) => {
+                warn!(
+                    "[微澜守护进程] Wayland V2 协议会话不可用或异常结束 ({})，正在自动降级启动 V1 协议会话...",
+                    e
+                );
+                let engine = returned_session.engine;
+                let renderer = returned_session.surface_manager.renderer;
+                let watched_paths = returned_session.watched_paths;
+                let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
+                session.surface_manager.renderer = renderer;
+                session.watched_paths = watched_paths;
+                session.shift_sm = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
+                    SwitchKey::Shift => ToggleKeyMode::Shift,
+                    SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+                });
+                session.punctuation_processor = PunctuationProcessor::with_options(
+                    cfg.slash_to_dunhao,
+                    cfg.protect_digits_punctuation,
+                    cfg.auto_complete_pairs,
+                );
+                session.page_keys = match cfg.page_keys {
+                    PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+                    PageKeys::Bracket => PageKeyConfig::Bracket,
+                    PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+                };
+                session.shared_is_chinese = Some(tray.mode_flag());
+                session.reload_requested = Some(tray.reload_flag());
+                session.reload_callback = Some(Box::new(|s| {
+                    let new_cfg = AppConfig::load_or_create();
+                    s.engine.config.page_size = new_cfg.page_size;
+                    s.engine.config.enable_v_mode = new_cfg.v_mode;
+                    s.engine.config.traditional_chinese = new_cfg.traditional_chinese;
+                    s.engine.config.fuzzy = if new_cfg.fuzzy_pinyin {
+                        FuzzyConfig::all_enabled()
+                    } else {
+                        FuzzyConfig::default()
+                    };
+                    s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
+                    s.surface_manager.renderer.theme = match new_cfg.theme {
+                        ThemeMode::Light => UiTheme::light(),
+                        ThemeMode::Dark => UiTheme::dark(),
+                    };
+                    s.surface_manager.renderer.font_size = new_cfg.font_size;
+                    s.shift_sm =
+                        ShiftToggleStateMachine::with_toggle_key(match new_cfg.switch_key {
+                            SwitchKey::Shift => ToggleKeyMode::Shift,
+                            SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+                        });
+                    s.punctuation_processor = PunctuationProcessor::with_options(
+                        new_cfg.slash_to_dunhao,
+                        new_cfg.protect_digits_punctuation,
+                        new_cfg.auto_complete_pairs,
+                    );
+                    s.page_keys = match new_cfg.page_keys {
+                        PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+                        PageKeys::Bracket => PageKeyConfig::Bracket,
+                        PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+                    };
+                    let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+                    s.engine.custom_phrases =
+                        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
+                    let u_dict = AppConfig::user_dict_path();
+                    s.engine.set_user_dict_path(&u_dict);
+                    s.engine.load_auxiliary_dict(load_auxiliary_dict());
+                }));
+                waylan_wayland::run_session_v1_loop(session)
+            }
+        }
     } else {
         let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
         session.surface_manager.renderer = renderer;
@@ -413,8 +484,12 @@ fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error:
             }
             let output_path = &sub_args[sub_args.len() - 1];
             let input_paths = &sub_args[1..sub_args.len() - 1];
-            println!("[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}", output_path);
-            let stats = DictBuilder::build_compact_binary_dict(input_paths, Path::new(output_path))?;
+            println!(
+                "[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}",
+                output_path
+            );
+            let stats =
+                DictBuilder::build_compact_binary_dict(input_paths, Path::new(output_path))?;
             println!(
                 "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
                 stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms

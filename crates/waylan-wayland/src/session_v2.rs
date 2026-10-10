@@ -13,7 +13,6 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
-use waylan_core::{CandidateBoxState, InputMode, TextAction};
 use crate::session_v1::{
     is_next_page_key, is_prev_page_key, keycode_to_ascii_digit_char, keycode_to_char,
     keycode_to_digit, keycode_to_punctuation_with_shift, PageKeyConfig, KEY_BACKSPACE, KEY_DELETE,
@@ -21,6 +20,104 @@ use crate::session_v1::{
     KEY_RIGHTALT, KEY_RIGHTCTRL, KEY_RIGHTSHIFT, KEY_SPACE, KEY_TAB, KEY_UP, MOD_ALT, MOD_CTRL,
     MOD_SHIFT, MOD_SUPER,
 };
+use waylan_core::{CandidateBoxState, InputMode, TextAction};
+
+/// 配置与词库热重载回调函数类型
+pub type ReloadCallback = Box<dyn FnMut(&mut WaylanV2Session) + Send>;
+
+/// 计算退格删除（Backspace）在当前 surrounding_text 下应通知合成器删除的字节区间 (before_bytes, after_bytes)
+pub fn calculate_delete_backward_range(surrounding: Option<&(String, u32, u32)>) -> (u32, u32) {
+    let Some((text, cursor, anchor)) = surrounding else {
+        return (1, 0);
+    };
+
+    let cursor_idx = *cursor as usize;
+    let anchor_idx = *anchor as usize;
+    let len = text.len();
+
+    // 边界安全防御：若游标越界，兜底返回 1 字节
+    if cursor_idx > len || anchor_idx > len {
+        return (1, 0);
+    }
+
+    // 1. 若当前存在文本选区 (cursor != anchor)，优先删除整个高亮选区
+    if cursor_idx != anchor_idx {
+        if cursor_idx > anchor_idx {
+            return ((cursor_idx - anchor_idx) as u32, 0);
+        } else {
+            return (0, (anchor_idx - cursor_idx) as u32);
+        }
+    }
+
+    // 2. 无选区：光标前向删除 1 个 UTF-8 字符
+    if cursor_idx == 0 {
+        return (0, 0);
+    }
+
+    // 防御性校验 UTF-8 字符边界，避免切片引发 panic
+    let mut safe_cursor = cursor_idx.min(len);
+    while safe_cursor > 0 && !text.is_char_boundary(safe_cursor) {
+        safe_cursor -= 1;
+    }
+    if safe_cursor == 0 {
+        return (0, 0);
+    }
+
+    let prefix = &text[..safe_cursor];
+    let char_len = prefix
+        .chars()
+        .next_back()
+        .map(|c| c.len_utf8() as u32)
+        .unwrap_or(1);
+    (char_len, 0)
+}
+
+/// 计算向前删除（Delete）在当前 surrounding_text 下应通知合成器删除的字节区间 (before_bytes, after_bytes)
+pub fn calculate_delete_forward_range(surrounding: Option<&(String, u32, u32)>) -> (u32, u32) {
+    let Some((text, cursor, anchor)) = surrounding else {
+        return (0, 1);
+    };
+
+    let cursor_idx = *cursor as usize;
+    let anchor_idx = *anchor as usize;
+    let len = text.len();
+
+    // 边界安全防御：若游标越界，兜底返回 1 字节
+    if cursor_idx > len || anchor_idx > len {
+        return (0, 1);
+    }
+
+    // 1. 若当前存在文本选区 (cursor != anchor)，优先删除整个高亮选区
+    if cursor_idx != anchor_idx {
+        if cursor_idx > anchor_idx {
+            return ((cursor_idx - anchor_idx) as u32, 0);
+        } else {
+            return (0, (anchor_idx - cursor_idx) as u32);
+        }
+    }
+
+    // 2. 无选区：光标后向删除 1 个 UTF-8 字符
+    if cursor_idx >= len {
+        return (0, 0);
+    }
+
+    // 防御性校验 UTF-8 字符边界，避免切片引发 panic
+    let mut safe_cursor = cursor_idx;
+    while safe_cursor < len && !text.is_char_boundary(safe_cursor) {
+        safe_cursor += 1;
+    }
+    if safe_cursor >= len {
+        return (0, 0);
+    }
+
+    let suffix = &text[safe_cursor..];
+    let char_len = suffix
+        .chars()
+        .next()
+        .map(|c| c.len_utf8() as u32)
+        .unwrap_or(1);
+    (0, char_len)
+}
 
 /// 微澜面向现代 Wayland 合成器 (KDE Plasma 6 / GNOME 46+ / Hyprland) 的 V2 会话状态
 pub struct WaylanV2Session {
@@ -61,7 +158,7 @@ pub struct WaylanV2Session {
     /// 与外部系统托盘共享的配置与词库重载请求标志
     pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
-    pub reload_callback: Option<Box<dyn FnMut(&mut Self) + Send>>,
+    pub reload_callback: Option<ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
     pub watched_paths: Vec<std::path::PathBuf>,
     /// 上次记录的被监控文件最新修改时间戳
@@ -72,6 +169,8 @@ pub struct WaylanV2Session {
     pub done_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
     pub mods_depressed: u32,
+    /// 标记 V2 会话是否已被合成器宣告不可用（触发自动降级）
+    pub is_unavailable: bool,
 }
 
 impl WaylanV2Session {
@@ -101,6 +200,7 @@ impl WaylanV2Session {
             surrounding_text: None,
             done_serial: 0,
             mods_depressed: 0,
+            is_unavailable: false,
         }
     }
 
@@ -290,44 +390,39 @@ impl WaylanV2Session {
         self.update_preedit("");
     }
 
-    /// 触发退格向后删除（空缓冲区或英文模式下删除光标前 1 个字符）
+    /// 触发退格向后删除（空缓冲区或英文模式下删除光标前 1 个字符或删除当前选区）
     pub fn delete_backward(&mut self) {
         if let Some(im) = &self.input_method {
-            let delete_bytes = if let Some((ref text, cursor, _)) = self.surrounding_text {
-                if cursor > 0 && (cursor as usize) <= text.len() {
-                    let prefix = &text[..cursor as usize];
-                    prefix.chars().next_back().map(|c| c.len_utf8() as u32).unwrap_or(1)
-                } else {
-                    1
-                }
-            } else {
-                1
-            };
-            im.delete_surrounding_text(delete_bytes, 0);
-            im.commit(self.done_serial);
+            let (before, after) = calculate_delete_backward_range(self.surrounding_text.as_ref());
+            if before > 0 || after > 0 {
+                im.delete_surrounding_text(before, after);
+                im.commit(self.done_serial);
+            }
         }
     }
 
-    /// 触发向前删除（Delete 键删除光标后 1 个字符）
+    /// 触发向前删除（Delete 键删除光标后 1 个字符或删除当前选区）
     pub fn delete_forward(&mut self) {
         if let Some(im) = &self.input_method {
-            let delete_bytes = if let Some((ref text, cursor, _)) = self.surrounding_text {
-                if (cursor as usize) < text.len() {
-                    let suffix = &text[cursor as usize..];
-                    suffix.chars().next().map(|c| c.len_utf8() as u32).unwrap_or(1)
-                } else {
-                    1
-                }
-            } else {
-                1
-            };
-            im.delete_surrounding_text(0, delete_bytes);
-            im.commit(self.done_serial);
+            let (before, after) = calculate_delete_forward_range(self.surrounding_text.as_ref());
+            if before > 0 || after > 0 {
+                im.delete_surrounding_text(before, after);
+                im.commit(self.done_serial);
+            }
         }
     }
 
-    /// 处理单个硬件按键按下/释放事件（返回本次直接上屏的文本，便于无合成器环境下单元测试验证）
-    pub fn handle_key_event(&mut self, key: u32, is_press: bool) -> Option<String> {
+    /// 将未被输入法消费的原始物理按键通过虚拟键盘协议回投到席位，确保快捷键与控制键正常透传
+    pub fn forward_key_to_seat(&mut self, time: u32, key: u32, is_press: bool) {
+        if let Some(ref vk) = self.virtual_keyboard {
+            vk.modifiers(self.mods_depressed, 0, 0, 0);
+            let state_val = if is_press { 1 } else { 0 };
+            vk.key(time, key, state_val);
+        }
+    }
+
+    /// 处理单个硬件按键事件并返回 (是否被输入法消费, 本次直接上屏文本)
+    pub fn process_key_event(&mut self, key: u32, is_press: bool) -> (bool, Option<String>) {
         self.update_modifier_by_key(key, is_press);
 
         // 1. 优先经由 Shift/Ctrl 防误触状态机判定
@@ -351,33 +446,39 @@ impl WaylanV2Session {
                 let raw = self.engine.raw_input().to_string();
                 self.commit_text(&raw);
                 self.engine.reset();
-                return Some(raw);
+                return (true, Some(raw));
             }
-            return None;
+            return (true, None);
         }
 
-        // 只在按键按下时处理字符与候选交互
-        if !is_press || self.has_ctrl_or_alt() {
-            return None;
+        // 按键释放阶段：若处于拼音组词状态则吞掉释放事件；若无预编辑内容则视为未消费以便透传释放事件
+        if !is_press {
+            let in_composition = !self.engine.raw_input().is_empty();
+            return (in_composition, None);
+        }
+
+        // 快捷键穿透：若按下了 Ctrl / Alt / Super 等修饰组合键，输入法不拦截，透传回席位
+        if self.has_ctrl_or_alt() {
+            return (false, None);
         }
 
         // 2. 英文模式：直接将字母（含 Shift 大写）、数字、标点、空格、回车、Tab 与退格提交上屏
         if self.mode == InputMode::English {
             if key == KEY_BACKSPACE {
                 self.delete_backward();
-                return None;
+                return (true, None);
             }
             if key == KEY_DELETE {
                 self.delete_forward();
-                return None;
+                return (true, None);
             }
             if key == KEY_ENTER {
                 self.commit_text("\n");
-                return Some("\n".to_string());
+                return (true, Some("\n".to_string()));
             }
             if key == KEY_TAB {
                 self.commit_text("\t");
-                return Some("\t".to_string());
+                return (true, Some("\t".to_string()));
             }
             if let Some(ch) = keycode_to_char(key) {
                 let out = if self.is_shift_active() {
@@ -387,27 +488,27 @@ impl WaylanV2Session {
                 };
                 self.punctuation_processor.record_commit(&out);
                 self.commit_text(&out);
-                return Some(out);
+                return (true, Some(out));
             }
             if !self.is_shift_active() {
                 if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
                     let out = digit_ch.to_string();
                     self.punctuation_processor.record_commit(&out);
                     self.commit_text(&out);
-                    return Some(out);
+                    return (true, Some(out));
                 }
             }
             if let Some(punct_ch) = keycode_to_punctuation_with_shift(key, self.is_shift_active()) {
                 let out = punct_ch.to_string();
                 self.punctuation_processor.record_commit(&out);
                 self.commit_text(&out);
-                return Some(out);
+                return (true, Some(out));
             }
             if key == KEY_SPACE {
                 self.commit_text(" ");
-                return Some(" ".to_string());
+                return (true, Some(" ".to_string()));
             }
-            return None;
+            return (false, None);
         }
 
         // 3. 正在组合拼音状态下的专门按键拦截
@@ -422,7 +523,7 @@ impl WaylanV2Session {
                 let sel = self.engine.selected_index;
                 self.engine.toggle_expand(sel);
                 self.refresh_candidate_surface();
-                return None;
+                return (true, None);
             }
 
             // 3.2 处于展开二级状态下的导航与选择
@@ -431,12 +532,12 @@ impl WaylanV2Session {
                 if key == KEY_DOWN {
                     self.engine.next_expanded_item(sel);
                     self.refresh_candidate_surface();
-                    return None;
+                    return (true, None);
                 }
                 if key == KEY_UP {
                     self.engine.prev_expanded_item(sel);
                     self.refresh_candidate_surface();
-                    return None;
+                    return (true, None);
                 }
                 if key == KEY_ENTER || key == KEY_SPACE {
                     if let Some((committed, _)) = self
@@ -445,7 +546,7 @@ impl WaylanV2Session {
                     {
                         self.punctuation_processor.record_commit(&committed);
                         self.commit_text(&committed);
-                        return Some(committed);
+                        return (true, Some(committed));
                     }
                 }
             } else {
@@ -453,12 +554,12 @@ impl WaylanV2Session {
                 if key == KEY_DOWN {
                     self.engine.next_candidate();
                     self.refresh_candidate_surface();
-                    return None;
+                    return (true, None);
                 }
                 if key == KEY_UP {
                     self.engine.prev_candidate();
                     self.refresh_candidate_surface();
-                    return None;
+                    return (true, None);
                 }
             }
 
@@ -476,7 +577,7 @@ impl WaylanV2Session {
                         } else {
                             self.commit_text(&committed_text);
                         }
-                        return Some(committed_text);
+                        return (true, Some(committed_text));
                     }
                 }
             }
@@ -494,7 +595,7 @@ impl WaylanV2Session {
                     } else {
                         self.commit_text(&committed_text);
                     }
-                    return Some(committed_text);
+                    return (true, Some(committed_text));
                 }
             }
 
@@ -503,7 +604,7 @@ impl WaylanV2Session {
                 let raw = self.engine.raw_input().to_string();
                 self.engine.reset();
                 self.commit_text(&raw);
-                return Some(raw);
+                return (true, Some(raw));
             }
 
             // 3.6 退格键（Backspace）：删除一个拼文字母
@@ -511,19 +612,19 @@ impl WaylanV2Session {
                 self.engine.pop_char();
                 let preedit = self.engine.formatted_preedit();
                 self.update_preedit(&preedit);
-                return None;
+                return (true, None);
             }
 
             // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
             if !self.is_shift_active() && is_prev_page_key(key, self.page_keys) {
                 self.engine.prev_page();
                 self.refresh_candidate_surface();
-                return None;
+                return (true, None);
             }
             if !self.is_shift_active() && is_next_page_key(key, self.page_keys) {
                 self.engine.next_page();
                 self.refresh_candidate_surface();
-                return None;
+                return (true, None);
             }
 
             // 3.8 预编辑区内光标左移/右移
@@ -531,25 +632,25 @@ impl WaylanV2Session {
                 self.engine.move_cursor_left();
                 let preedit = self.engine.formatted_preedit();
                 self.update_preedit(&preedit);
-                return None;
+                return (true, None);
             }
             if key == KEY_RIGHT {
                 self.engine.move_cursor_right();
                 let preedit = self.engine.formatted_preedit();
                 self.update_preedit(&preedit);
-                return None;
+                return (true, None);
             }
             if key == KEY_DELETE {
                 self.engine.delete_char_at_cursor();
                 let preedit = self.engine.formatted_preedit();
                 self.update_preedit(&preedit);
-                return None;
+                return (true, None);
             }
 
             // 3.9 ESC 键：取消当前输入并清空
             if key == KEY_ESC {
                 self.cancel_input();
-                return None;
+                return (true, None);
             }
         }
 
@@ -557,31 +658,28 @@ impl WaylanV2Session {
         if self.engine.raw_input().is_empty() {
             if key == KEY_BACKSPACE {
                 self.delete_backward();
-                return None;
+                return (true, None);
             }
             if key == KEY_DELETE {
                 self.delete_forward();
-                return None;
+                return (true, None);
             }
             if key == KEY_ENTER {
                 self.commit_text("\n");
-                return Some("\n".to_string());
+                return (true, Some("\n".to_string()));
             }
             if key == KEY_TAB {
                 self.commit_text("\t");
-                return Some("\t".to_string());
+                return (true, Some("\t".to_string()));
             }
             if key == KEY_SPACE {
                 self.commit_text(" ");
-                return Some(" ".to_string());
+                return (true, Some(" ".to_string()));
             }
 
-            if let Some(punct_char) =
-                keycode_to_punctuation_with_shift(key, self.is_shift_active())
+            if let Some(punct_char) = keycode_to_punctuation_with_shift(key, self.is_shift_active())
             {
-                if let Some(actions) =
-                    self.punctuation_processor.process_punctuation(punct_char)
-                {
+                if let Some(actions) = self.punctuation_processor.process_punctuation(punct_char) {
                     let mut committed_out = None;
                     for action in actions {
                         match action {
@@ -601,7 +699,7 @@ impl WaylanV2Session {
                             _ => {}
                         }
                     }
-                    return committed_out;
+                    return (true, committed_out);
                 }
             }
 
@@ -610,7 +708,7 @@ impl WaylanV2Session {
                     let s = digit_ch.to_string();
                     self.punctuation_processor.record_commit(&s);
                     self.commit_text(&s);
-                    return Some(s);
+                    return (true, Some(s));
                 }
             }
         }
@@ -620,9 +718,15 @@ impl WaylanV2Session {
             self.engine.push_char(ch);
             let preedit = self.engine.formatted_preedit();
             self.update_preedit(&preedit);
+            return (true, None);
         }
 
-        None
+        (false, None)
+    }
+
+    /// 处理单个硬件按键按下/释放事件（返回本次直接上屏的文本，便于无合成器环境下单元测试验证）
+    pub fn handle_key_event(&mut self, key: u32, is_press: bool) -> Option<String> {
+        self.process_key_event(key, is_press).1
     }
 }
 
@@ -659,15 +763,24 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 state.engine.reset();
                 state.hide_candidate_surface();
             }
-            V2Event::SurroundingText { text, cursor, anchor } => {
+            V2Event::SurroundingText {
+                text,
+                cursor,
+                anchor,
+            } => {
                 info!(
                     "[Wayland v2] 上下文环境文本更新: 长度={}, 光标={}, 锚点={}",
-                    text.len(), cursor, anchor
+                    text.len(),
+                    cursor,
+                    anchor
                 );
                 state.surrounding_text = Some((text, cursor, anchor));
             }
             V2Event::TextChangeCause { cause: _ } => {}
-            V2Event::ContentType { hint: _, purpose: _ } => {}
+            V2Event::ContentType {
+                hint: _,
+                purpose: _,
+            } => {}
             V2Event::Done => {
                 // 批次状态同步已完成，原子序列号递增
                 state.done_serial = state.done_serial.wrapping_add(1);
@@ -675,6 +788,8 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
             V2Event::Unavailable => {
                 info!("[Wayland v2] 输入法 v2 协议不可用，正在自动降级兼容模式。");
                 state.is_active = false;
+                state.is_unavailable = true;
+                proxy.destroy();
             }
             _ => {}
         }
@@ -691,13 +806,21 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        if let PopupEvent::TextInputRectangle { x, y, width, height } = event {
+        if let PopupEvent::TextInputRectangle {
+            x,
+            y,
+            width,
+            height,
+        } = event
+        {
             info!(
                 "[Wayland v2 光标矩形] 捕获焦点光标变化: x={}, y={}, w={}, h={}",
                 x, y, width, height
             );
             state.current_cursor = CursorRect::new(x, y, width, height);
-            state.surface_manager.update_cursor_rect(x, y, width, height);
+            state
+                .surface_manager
+                .update_cursor_rect(x, y, width, height);
         }
     }
 }
@@ -724,7 +847,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
             }
             GrabEvent::Key {
                 serial: _,
-                time: _,
+                time,
                 key,
                 state: key_state,
             } => {
@@ -734,7 +857,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         wayland_client::protocol::wl_keyboard::KeyState::Pressed
                     )
                 );
-                state.handle_key_event(key, is_press);
+                let (consumed, _) = state.process_key_event(key, is_press);
+                if !consumed {
+                    state.forward_key_to_seat(time, key, is_press);
+                }
             }
             GrabEvent::Modifiers {
                 serial: _,
@@ -846,13 +972,16 @@ impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for WaylanV2
 // 为 wl_buffer 实现 Dispatch
 impl Dispatch<wayland_client::protocol::wl_buffer::WlBuffer, ()> for WaylanV2Session {
     fn event(
-        _state: &mut Self,
-        _proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
-        _event: <wayland_client::protocol::wl_buffer::WlBuffer as wayland_client::Proxy>::Event,
+        state: &mut Self,
+        proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
+        event: <wayland_client::protocol::wl_buffer::WlBuffer as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        if matches!(event, wayland_client::protocol::wl_buffer::Event::Release) {
+            state.surface_manager.on_buffer_released(proxy);
+        }
     }
 }
 
@@ -953,7 +1082,10 @@ mod tests {
             keycode_to_punctuation_with_shift(KEY_APOSTROPHE, true),
             Some('"')
         );
-        assert_eq!(keycode_to_punctuation_with_shift(KEY_SLASH, true), Some('?'));
+        assert_eq!(
+            keycode_to_punctuation_with_shift(KEY_SLASH, true),
+            Some('?')
+        );
         assert_eq!(
             keycode_to_punctuation_with_shift(KEY_SLASH, false),
             Some('/')
@@ -1018,11 +1150,20 @@ mod tests {
         // 1. 中文模式空缓冲区：数字键 1、空格键、回车键与 Tab 键应直接提交上屏
         assert_eq!(session.handle_key_event(KEY_1, true), Some("1".to_string()));
         session.handle_key_event(KEY_1, false);
-        assert_eq!(session.handle_key_event(KEY_SPACE, true), Some(" ".to_string()));
+        assert_eq!(
+            session.handle_key_event(KEY_SPACE, true),
+            Some(" ".to_string())
+        );
         session.handle_key_event(KEY_SPACE, false);
-        assert_eq!(session.handle_key_event(KEY_ENTER, true), Some("\n".to_string()));
+        assert_eq!(
+            session.handle_key_event(KEY_ENTER, true),
+            Some("\n".to_string())
+        );
         session.handle_key_event(KEY_ENTER, false);
-        assert_eq!(session.handle_key_event(KEY_TAB, true), Some("\t".to_string()));
+        assert_eq!(
+            session.handle_key_event(KEY_TAB, true),
+            Some("\t".to_string())
+        );
         session.handle_key_event(KEY_TAB, false);
 
         // 空缓冲区下退格键触发 delete_backward（返回 None，不向预编辑输入）
@@ -1033,9 +1174,15 @@ mod tests {
         session.mode = InputMode::English;
         assert_eq!(session.handle_key_event(30, true), Some("a".to_string()));
         session.handle_key_event(30, false);
-        assert_eq!(session.handle_key_event(KEY_ENTER, true), Some("\n".to_string()));
+        assert_eq!(
+            session.handle_key_event(KEY_ENTER, true),
+            Some("\n".to_string())
+        );
         session.handle_key_event(KEY_ENTER, false);
-        assert_eq!(session.handle_key_event(KEY_TAB, true), Some("\t".to_string()));
+        assert_eq!(
+            session.handle_key_event(KEY_TAB, true),
+            Some("\t".to_string())
+        );
         session.handle_key_event(KEY_TAB, false);
         assert_eq!(session.handle_key_event(KEY_BACKSPACE, true), None);
         session.handle_key_event(KEY_BACKSPACE, false);
@@ -1097,5 +1244,97 @@ mod tests {
         assert_eq!(commit, Some("ni".to_string()));
         assert!(session.engine.raw_input().is_empty());
         assert!(!session.build_candidate_box_state().visible);
+    }
+
+    #[test]
+    fn test_v2_unconsumed_key_and_shortcuts() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut session = WaylanV2Session::new(engine);
+
+        // 1. 中文模式空缓冲区下，普通方向键（如 KEY_LEFT）未被输入法消费，应透传席位
+        let (consumed, text) = session.process_key_event(KEY_LEFT, true);
+        assert!(!consumed);
+        assert_eq!(text, None);
+        let (consumed_up, _) = session.process_key_event(KEY_LEFT, false);
+        assert!(!consumed_up);
+
+        // 2. 模拟按下 Ctrl+C 组合快捷键
+        session.process_key_event(KEY_LEFTCTRL, true);
+        assert!(session.has_ctrl_or_alt());
+
+        // 按下 C 键 (keycode 46)，由于带有 Ctrl 修饰键，输入法不拦截消费
+        let (consumed_c, text_c) = session.process_key_event(46, true);
+        assert!(!consumed_c, "Ctrl+C 应透传给应用程序而非被输入法拦截吞掉");
+        assert_eq!(text_c, None);
+
+        // 释放 C 键与释放 Ctrl 键
+        let (consumed_c_up, _) = session.process_key_event(46, false);
+        assert!(!consumed_c_up);
+        session.process_key_event(KEY_LEFTCTRL, false);
+        assert!(!session.has_ctrl_or_alt());
+
+        // 3. 正常输入拼音字符时，应被输入法消费
+        let (consumed_n, text_n) = session.process_key_event(49, true); // 'n'
+        assert!(consumed_n);
+        assert_eq!(text_n, None);
+        assert_eq!(session.engine.raw_input(), "n");
+    }
+
+    #[test]
+    fn test_calculate_delete_range_utf8_and_selection() {
+        // 1. 无 surrounding_text 时的默认兜底行为
+        assert_eq!(calculate_delete_backward_range(None), (1, 0));
+        assert_eq!(calculate_delete_forward_range(None), (0, 1));
+
+        // 2. 正常 ASCII 字符删除
+        let ascii_env = ("hello".to_string(), 5, 5);
+        assert_eq!(calculate_delete_backward_range(Some(&ascii_env)), (1, 0));
+        let ascii_mid = ("hello".to_string(), 2, 2);
+        assert_eq!(calculate_delete_forward_range(Some(&ascii_mid)), (0, 1));
+
+        // 3. 中文多字节 UTF-8 字符（每个汉字 3 字节）
+        // "你好世界"：每个字 3 字节，共 12 字节
+        let zh_env = ("你好世界".to_string(), 6, 6); // 光标在 "好" 后面 (6 字节)
+        assert_eq!(
+            calculate_delete_backward_range(Some(&zh_env)),
+            (3, 0),
+            "向后删除中文字符应准确删除 3 字节"
+        );
+        assert_eq!(
+            calculate_delete_forward_range(Some(&zh_env)),
+            (0, 3),
+            "向前删除中文字符应准确删除 3 字节"
+        );
+
+        // 4. 异常非 UTF-8 字符边界传入（如 cursor 落在多字节汉字中间第 4 字节）：绝对不应 Panic
+        let invalid_boundary_env = ("你好世界".to_string(), 4, 4);
+        let (del_b, _) = calculate_delete_backward_range(Some(&invalid_boundary_env));
+        assert!(del_b > 0, "非字符边界应安全回退而不触发切片 panic");
+
+        // 5. 选区整块删除：cursor > anchor (从左往右拖动选区，选中 "你好" 6 字节)
+        let sel_right = ("你好世界".to_string(), 6, 0);
+        assert_eq!(
+            calculate_delete_backward_range(Some(&sel_right)),
+            (6, 0),
+            "选区存在时 Backspace 应删除整个选区 6 字节"
+        );
+        assert_eq!(
+            calculate_delete_forward_range(Some(&sel_right)),
+            (6, 0),
+            "选区存在时 Delete 亦应删除整个选区 6 字节"
+        );
+
+        // 6. 选区整块删除：cursor < anchor (从右往左反向拖选，选中 "你好" 6 字节)
+        let sel_left = ("你好世界".to_string(), 0, 6);
+        assert_eq!(
+            calculate_delete_backward_range(Some(&sel_left)),
+            (0, 6),
+            "反向选区存在时 Backspace 应删除光标后方的整个选区 6 字节"
+        );
+        assert_eq!(
+            calculate_delete_forward_range(Some(&sel_left)),
+            (0, 6),
+            "反向选区存在时 Delete 应删除光标后方的整个选区 6 字节"
+        );
     }
 }

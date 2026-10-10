@@ -18,13 +18,19 @@ pub struct ShmSlot {
     pub file: File,
     /// 当前已向内核申请的文件容量（字节）
     pub capacity: usize,
+    /// 标记当前槽位的缓冲区是否正被合成器读取占用
+    pub is_busy: bool,
 }
 
 impl ShmSlot {
     /// 创建带有指定初始容量的共享内存槽位
     pub fn new(capacity: usize) -> std::io::Result<Self> {
         let file = CandidateSurfaceManager::create_shm_fd(capacity)?;
-        Ok(Self { file, capacity })
+        Ok(Self {
+            file,
+            capacity,
+            is_busy: false,
+        })
     }
 
     /// 确保文件容量至少达到目标字节数（容量不足时按 2 倍扩容）
@@ -62,7 +68,12 @@ impl CursorRect {
     }
 
     /// 计算输入法候选框的最佳悬浮锚定坐标（优先悬浮在光标正下方，留出 4px 间隙）
-    pub fn compute_popup_position(&self, _popup_width: u32, popup_height: u32, screen_height: i32) -> (i32, i32) {
+    pub fn compute_popup_position(
+        &self,
+        _popup_width: u32,
+        popup_height: u32,
+        screen_height: i32,
+    ) -> (i32, i32) {
         let popup_h = popup_height as i32;
         let mut target_y = self.y + self.height + 4;
 
@@ -88,6 +99,8 @@ pub struct CandidateSurfaceManager {
     pub renderer: CandidateBoxRenderer,
     /// 共享内存双缓冲槽位（交替使用以避免单缓冲画面撕裂与频繁创建文件）
     pub shm_slots: [Option<ShmSlot>; 2],
+    /// 各槽位绑定的 Wayland 活跃缓冲区对象（等待 release 回调）
+    pub slot_buffers: [Option<WlBuffer>; 2],
     /// 当前活跃槽位索引
     pub current_slot: usize,
     /// 复用的像素格式转换内存缓冲区（避免每次按键触发堆内存重新分配）
@@ -108,6 +121,7 @@ impl CandidateSurfaceManager {
             current_size: (0, 0),
             renderer: CandidateBoxRenderer::new(UiTheme::light()),
             shm_slots: [None, None],
+            slot_buffers: [None, None],
             current_slot: 0,
             pixel_buffer: Vec::with_capacity(64 * 1024),
         }
@@ -159,6 +173,22 @@ impl CandidateSurfaceManager {
         }
     }
 
+    /// 响应合成器发射的 wl_buffer.release 事件，标记对应槽位为空闲并销毁旧 buffer
+    pub fn on_buffer_released(&mut self, released_buffer: &WlBuffer) {
+        for (idx, slot_buf) in self.slot_buffers.iter_mut().enumerate() {
+            if let Some(buf) = slot_buf {
+                if buf == released_buffer {
+                    if let Some(ref mut slot) = self.shm_slots[idx] {
+                        slot.is_busy = false;
+                    }
+                    buf.destroy();
+                    *slot_buf = None;
+                    break;
+                }
+            }
+        }
+    }
+
     /// 隐藏并卸载绑定的 Wayland 候选框表面缓冲
     pub fn hide_wayland_surface(
         &mut self,
@@ -172,6 +202,14 @@ impl CandidateSurfaceManager {
         }
         if let Some(old_buf) = active_buffer.take() {
             old_buf.destroy();
+        }
+        for (idx, slot_buf) in self.slot_buffers.iter_mut().enumerate() {
+            if let Some(buf) = slot_buf.take() {
+                buf.destroy();
+            }
+            if let Some(ref mut slot) = self.shm_slots[idx] {
+                slot.is_busy = false;
+            }
         }
     }
 
@@ -206,6 +244,15 @@ impl CandidateSurfaceManager {
             );
             pool.destroy();
 
+            let old_slot_buf = self.slot_buffers[self.current_slot].take();
+            if let Some(old) = old_slot_buf {
+                old.destroy();
+            }
+            self.slot_buffers[self.current_slot] = Some(buffer.clone());
+            if let Some(ref mut slot) = self.shm_slots[self.current_slot] {
+                slot.is_busy = true;
+            }
+
             if let Some(old_buf) = active_buffer.take() {
                 old_buf.destroy();
             }
@@ -233,8 +280,21 @@ impl CandidateSurfaceManager {
         self.convert_rgba_to_pixel_buffer(pixmap.data());
         let required_bytes = self.pixel_buffer.len();
 
-        // 2. 轮换至下一个持久化槽位（双缓冲交替）
-        let next_slot = (self.current_slot + 1) % 2;
+        // 2. 轮换至下一个空闲持久化槽位（双缓冲交替，优先选择合成器已 release 的空闲槽位）
+        let mut next_slot = (self.current_slot + 1) % self.shm_slots.len();
+        for offset in 1..=self.shm_slots.len() {
+            let candidate = (self.current_slot + offset) % self.shm_slots.len();
+            if let Some(ref slot) = self.shm_slots[candidate] {
+                if !slot.is_busy {
+                    next_slot = candidate;
+                    break;
+                }
+            } else {
+                next_slot = candidate;
+                break;
+            }
+        }
+
         self.ensure_slot(next_slot, required_bytes).ok()?;
         self.current_slot = next_slot;
 
@@ -297,13 +357,15 @@ mod tests {
     #[test]
     fn test_shm_slot_reuse_and_ping_pong() {
         let mut manager = CandidateSurfaceManager::new();
-        let mut state = CandidateBoxState::default();
-        state.visible = true;
-        state.preedit = "ce".to_string();
-        state.candidates = vec![
-            waylan_core::Candidate::new("策", "ce", 100),
-            waylan_core::Candidate::new("测", "ce", 90),
-        ];
+        let state = CandidateBoxState {
+            visible: true,
+            preedit: "ce".to_string(),
+            candidates: vec![
+                waylan_core::Candidate::new("策", "ce", 100),
+                waylan_core::Candidate::new("测", "ce", 90),
+            ],
+            ..CandidateBoxState::default()
+        };
 
         // 第一次渲染：应初始化 slot 1
         let (w1, h1, file1) = manager.render_state(&state).expect("第一次渲染失败");
