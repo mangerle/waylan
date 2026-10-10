@@ -27,10 +27,16 @@ pub struct FuzzyConfig {
     pub in_ing: bool,
     /// 边鼻音: l <=> n
     pub l_n: bool,
+    /// 唇齿与舌根擦音: f <=> h
+    #[serde(default)]
+    pub f_h: bool,
+    /// 卷舌与边音: r <=> l
+    #[serde(default)]
+    pub r_l: bool,
 }
 
 impl FuzzyConfig {
-    /// 创建开启全部模糊音规则（平翘舌、前后鼻音、边鼻音）的配置
+    /// 创建开启全部 9 类模糊音规则的配置
     pub fn all_enabled() -> Self {
         Self {
             z_zh: true,
@@ -40,12 +46,22 @@ impl FuzzyConfig {
             en_eng: true,
             in_ing: true,
             l_n: true,
+            f_h: true,
+            r_l: true,
         }
     }
 
     /// 检查是否存在任一激活的模糊音规则
     pub fn has_active_rules(&self) -> bool {
-        self.z_zh || self.c_ch || self.s_sh || self.an_ang || self.en_eng || self.in_ing || self.l_n
+        self.z_zh
+            || self.c_ch
+            || self.s_sh
+            || self.an_ang
+            || self.en_eng
+            || self.in_ing
+            || self.l_n
+            || self.f_h
+            || self.r_l
     }
 }
 

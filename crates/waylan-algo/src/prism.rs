@@ -382,58 +382,143 @@ impl PrismEngine {
         }]
     }
 
-    /// 模糊音等价性判定
-    fn is_fuzzy_valid(slice: &str, fuzzy: &FuzzyConfig) -> bool {
+    /// 展开单个音节在当前模糊音配置下的所有合法标准等价音节（不含原音节自身）
+    pub fn expand_fuzzy_syllables(slice: &str, fuzzy: &FuzzyConfig) -> Vec<String> {
+        if !fuzzy.has_active_rules() || slice.is_empty() {
+            return Vec::new();
+        }
+
+        // 1. 收集声母等价变体（含原切片自身）
+        let mut init_variants = vec![slice.to_string()];
+
         if fuzzy.z_zh {
-            let alt = if let Some(rest) = slice.strip_prefix("zh") {
-                format!("z{}", rest)
+            if let Some(rest) = slice.strip_prefix("zh") {
+                init_variants.push(format!("z{}", rest));
             } else if let Some(rest) = slice.strip_prefix('z') {
-                format!("zh{}", rest)
-            } else {
-                String::new()
-            };
-            if !alt.is_empty() && is_valid_syllable(&alt) {
-                return true;
+                init_variants.push(format!("zh{}", rest));
             }
         }
         if fuzzy.c_ch {
-            let alt = if let Some(rest) = slice.strip_prefix("ch") {
-                format!("c{}", rest)
+            if let Some(rest) = slice.strip_prefix("ch") {
+                init_variants.push(format!("c{}", rest));
             } else if let Some(rest) = slice.strip_prefix('c') {
-                format!("ch{}", rest)
-            } else {
-                String::new()
-            };
-            if !alt.is_empty() && is_valid_syllable(&alt) {
-                return true;
+                init_variants.push(format!("ch{}", rest));
             }
         }
         if fuzzy.s_sh {
-            let alt = if let Some(rest) = slice.strip_prefix("sh") {
-                format!("s{}", rest)
+            if let Some(rest) = slice.strip_prefix("sh") {
+                init_variants.push(format!("s{}", rest));
             } else if let Some(rest) = slice.strip_prefix('s') {
-                format!("sh{}", rest)
-            } else {
-                String::new()
-            };
-            if !alt.is_empty() && is_valid_syllable(&alt) {
-                return true;
+                init_variants.push(format!("sh{}", rest));
             }
         }
-        if fuzzy.in_ing {
-            if let Some(rest) = slice.strip_suffix("ing") {
-                let alt = format!("{}in", rest);
-                if is_valid_syllable(&alt) {
-                    return true;
+        if fuzzy.l_n {
+            if let Some(rest) = slice.strip_prefix('l') {
+                init_variants.push(format!("n{}", rest));
+            } else if let Some(rest) = slice.strip_prefix('n') {
+                init_variants.push(format!("l{}", rest));
+            }
+        }
+        if fuzzy.f_h {
+            if let Some(rest) = slice.strip_prefix('f') {
+                init_variants.push(format!("h{}", rest));
+            } else if let Some(rest) = slice.strip_prefix('h') {
+                init_variants.push(format!("f{}", rest));
+            }
+        }
+        if fuzzy.r_l {
+            if let Some(rest) = slice.strip_prefix('r') {
+                init_variants.push(format!("l{}", rest));
+            } else if let Some(rest) = slice.strip_prefix('l') {
+                init_variants.push(format!("r{}", rest));
+            }
+        }
+
+        // 2. 在声母变体基础上叠加韵母等价变体
+        let mut all_variants = Vec::new();
+        for v in init_variants {
+            let mut final_cands = vec![v.clone()];
+            if fuzzy.an_ang {
+                if let Some(stem) = v.strip_suffix("ang") {
+                    final_cands.push(format!("{}an", stem));
+                } else if let Some(stem) = v.strip_suffix("an") {
+                    final_cands.push(format!("{}ang", stem));
                 }
-            } else if let Some(rest) = slice.strip_suffix("in") {
-                let alt = format!("{}ing", rest);
-                if is_valid_syllable(&alt) {
-                    return true;
+            }
+            if fuzzy.en_eng {
+                if let Some(stem) = v.strip_suffix("eng") {
+                    final_cands.push(format!("{}en", stem));
+                } else if let Some(stem) = v.strip_suffix("en") {
+                    final_cands.push(format!("{}eng", stem));
+                }
+            }
+            if fuzzy.in_ing {
+                if let Some(stem) = v.strip_suffix("ing") {
+                    final_cands.push(format!("{}in", stem));
+                } else if let Some(stem) = v.strip_suffix("in") {
+                    final_cands.push(format!("{}ing", stem));
+                }
+            }
+
+            for cand in final_cands {
+                if cand != slice && is_valid_syllable(&cand) && !all_variants.contains(&cand) {
+                    all_variants.push(cand);
                 }
             }
         }
-        false
+
+        all_variants
+    }
+
+    /// 展开一条切分路径在当前模糊音配置下的所有等价词典查询键（不含原始 `path.to_key_string()`）
+    pub fn expand_fuzzy_keys(path: &SegmentPath, fuzzy: &FuzzyConfig) -> Vec<String> {
+        if !fuzzy.has_active_rules() || path.syllables.is_empty() || !path.remaining.is_empty() {
+            return Vec::new();
+        }
+
+        let mut combos: Vec<Vec<String>> = vec![Vec::new()];
+        for syl in &path.syllables {
+            let mut syl_options = Vec::new();
+            if is_valid_syllable(syl) {
+                syl_options.push(syl.clone());
+            }
+            for alt in Self::expand_fuzzy_syllables(syl, fuzzy) {
+                if !syl_options.contains(&alt) {
+                    syl_options.push(alt);
+                }
+            }
+            if syl_options.is_empty() {
+                syl_options.push(syl.clone());
+            }
+
+            let mut next_combos = Vec::new();
+            for prefix in &combos {
+                for opt in &syl_options {
+                    if next_combos.len() >= 16 {
+                        break;
+                    }
+                    let mut next = prefix.clone();
+                    next.push(opt.clone());
+                    next_combos.push(next);
+                }
+                if next_combos.len() >= 16 {
+                    break;
+                }
+            }
+            combos = next_combos;
+        }
+
+        let orig_key = path.to_key_string();
+        combos
+            .into_iter()
+            .map(|parts| parts.join("'"))
+            .filter(|k| k != &orig_key)
+            .collect()
+    }
+
+    /// 模糊音等价性判定
+    fn is_fuzzy_valid(slice: &str, fuzzy: &FuzzyConfig) -> bool {
+        !Self::expand_fuzzy_syllables(slice, fuzzy).is_empty()
     }
 
     /// 零声母与特殊单辅音音节集合（以 a, o, e 开头，或特殊叹词音节 n, ng, m）
@@ -501,6 +586,9 @@ impl PrismEngine {
 
     /// 小鹤双拼声韵母映射
     fn map_xiaohe_pair(initial: char, final_char: char) -> String {
+        if matches!(initial, 'b' | 'p' | 'm' | 'f' | 'w' | 'y') && final_char == 'o' {
+            return format!("{}o", initial);
+        }
         // 声母映射
         let init_str = match initial {
             'v' => "zh",
@@ -572,7 +660,13 @@ impl PrismEngine {
             'y' => "ing",
             'u' => "u",
             'i' => "i",
-            'o' => "uo",
+            'o' => {
+                if matches!(initial, 'b' | 'p' | 'm' | 'f' | 'w' | 'y') {
+                    "o"
+                } else {
+                    "uo"
+                }
+            }
             'p' => "un",
             'a' => "a",
             's' => {
@@ -702,5 +796,54 @@ mod tests {
         assert!(!paths.is_empty(), "切分路径不应为空");
         let has_ni_hao = paths.iter().any(|p| p.to_key_string() == "ni'hao");
         assert!(has_ni_hao, "输入 nihso 应通过高斯邻键虚边成功容错切分出 ni'hao");
+    }
+
+    #[test]
+    fn test_fuzzy_nine_rules_expansion() {
+        let fuzzy = FuzzyConfig::all_enabled();
+        let zong_alts = PrismEngine::expand_fuzzy_syllables("zong", &fuzzy);
+        assert!(zong_alts.contains(&"zhong".to_string()));
+
+        let lu_alts = PrismEngine::expand_fuzzy_syllables("lu", &fuzzy);
+        assert!(lu_alts.contains(&"nu".to_string()));
+        assert!(lu_alts.contains(&"ru".to_string()));
+
+        let fa_alts = PrismEngine::expand_fuzzy_syllables("fa", &fuzzy);
+        assert!(fa_alts.contains(&"ha".to_string()));
+
+        let lan_alts = PrismEngine::expand_fuzzy_syllables("lan", &fuzzy);
+        assert!(lan_alts.contains(&"lang".to_string()));
+        assert!(lan_alts.contains(&"nan".to_string()));
+        assert!(lan_alts.contains(&"nang".to_string()));
+
+        let sen_alts = PrismEngine::expand_fuzzy_syllables("sen", &fuzzy);
+        assert!(sen_alts.contains(&"seng".to_string()));
+        assert!(sen_alts.contains(&"shen".to_string()));
+        assert!(sen_alts.contains(&"sheng".to_string()));
+    }
+
+    #[test]
+    fn test_fuzzy_engine_lookup_zongguo() {
+        let mut config = crate::types::AlgoConfig::default();
+        config.fuzzy = FuzzyConfig::all_enabled();
+        let mut engine = crate::AlgoEngine::with_sample_data(config);
+        for ch in "zongguo".chars() {
+            engine.push_char(ch);
+        }
+        assert_eq!(
+            engine.formatted_preedit(),
+            "zong'guo",
+            "模糊音模式下预编辑文本必须严格保持用户原始键入字母"
+        );
+        let texts: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
+        assert!(
+            texts.contains(&"中国".to_string()),
+            "开启模糊音后输入 zongguo 应能联合检索召回 中国，实际候选: {:?}",
+            texts
+        );
+        let idx = texts.iter().position(|t| t == "中国").unwrap();
+        let (committed, rem) = engine.select_candidate(idx, 100).unwrap();
+        assert_eq!(committed, "中国");
+        assert_eq!(rem, 0, "选中模糊音候选词后应完整消费原始按键序列");
     }
 }

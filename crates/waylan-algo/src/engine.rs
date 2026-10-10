@@ -150,10 +150,14 @@ impl AlgoEngine {
         &self.current_candidates
     }
 
-    /// 候选翻下一页
+    /// 候选翻下一页（若已处于末页则保持当前页不产生空白页）
     pub fn next_page(&mut self) -> &[AlgoCandidate] {
         self.page_index = self.page_index.saturating_add(1);
         self.recompute_candidates();
+        if self.current_candidates.is_empty() && self.page_index > 0 {
+            self.page_index -= 1;
+            self.recompute_candidates();
+        }
         &self.current_candidates
     }
 
@@ -247,9 +251,184 @@ impl AlgoEngine {
         let consumed_len = if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
             self.composition.len()
         } else {
-            Self::compute_consumed_len(self.composition.as_str(), &selected.pinyin)
+            self.compute_consumed_len_for_candidate(&selected)
         };
+
         self.composition.consume_prefix(consumed_len);
+
+        self.page_index = 0;
+        self.recompute_candidates();
+        &self.current_candidates
+    }
+
+    /// 退格删除一个字符
+    pub fn pop_char(&mut self) -> &[AlgoCandidate] {
+        self.composition.pop_char();
+        self.page_index = 0;
+        self.recompute_candidates();
+        &self.current_candidates
+    }
+
+    /// 光标左移
+    pub fn move_cursor_left(&mut self) -> &[AlgoCandidate] {
+        if self.composition.move_cursor_left() {
+            self.recompute_candidates();
+        }
+        &self.current_candidates
+    }
+
+    /// 光标右移
+    pub fn move_cursor_right(&mut self) -> &[AlgoCandidate] {
+        if self.composition.move_cursor_right() {
+            self.recompute_candidates();
+        }
+        &self.current_candidates
+    }
+
+    /// 候选翻下一页（若已处于末页则保持当前页不产生空白页）
+    pub fn next_page(&mut self) -> &[AlgoCandidate] {
+        self.page_index = self.page_index.saturating_add(1);
+        self.recompute_candidates();
+        if self.current_candidates.is_empty() && self.page_index > 0 {
+            self.page_index -= 1;
+            self.recompute_candidates();
+        }
+        &self.current_candidates
+    }
+
+    /// 候选翻上一页
+    pub fn prev_page(&mut self) -> &[AlgoCandidate] {
+        self.page_index = self.page_index.saturating_sub(1);
+        self.recompute_candidates();
+        &self.current_candidates
+    }
+
+    /// 在当前页候选词中向后（向下/向右）循环移动高亮选中项
+    pub fn next_candidate(&mut self) {
+        if !self.current_candidates.is_empty() {
+            self.selected_index = (self.selected_index + 1) % self.current_candidates.len();
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
+        }
+    }
+
+    /// 在当前页候选词中向前（向上/向左）循环移动高亮选中项
+    pub fn prev_candidate(&mut self) {
+        if !self.current_candidates.is_empty() {
+            if self.selected_index == 0 {
+                self.selected_index = self.current_candidates.len().saturating_sub(1);
+            } else {
+                self.selected_index = self.selected_index.saturating_sub(1);
+            }
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
+        }
+    }
+
+    /// 选择指定索引的候选词上屏
+    ///
+    /// # 返回值
+    /// 返回 `Some((上屏文本, 剩余未完成拼音长度))`；若索引无效则返回 `None`。
+    pub fn select_candidate(
+        &mut self,
+        index: usize,
+        current_timestamp: u64,
+    ) -> Option<(String, usize)> {
+        if index >= self.current_candidates.len() {
+            return None;
+        }
+
+        let selected = self.current_candidates[index].clone();
+
+        // 若选中的是可展开项，且直接按数字键确认（未展开时）：
+        // 优先将首个格式化子候选文本（如当前标准日期 2026年10月9日）上屏
+        let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
+            selected.sub_candidates[0].clone()
+        } else {
+            selected.text.clone()
+        };
+
+        // 记录用户选词并动态调频（若配置了持久化路径则同步追加至 WAL 日志）
+        if let Some(ref path) = self.user_dict_path {
+            let _ = self.user_model.append_to_wal(
+                path,
+                &selected.text,
+                &selected.pinyin,
+                current_timestamp,
+            );
+        } else {
+            self.user_model
+                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+        }
+
+        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
+        let commit_text = if self.config.auto_pangu_spacing {
+            if let Some(prev) = &self.last_commit_context {
+                if Self::should_insert_pangu_space(prev, &raw_commit) {
+                    format!(" {}", raw_commit)
+                } else {
+                    raw_commit.clone()
+                }
+            } else {
+                raw_commit.clone()
+            }
+        } else {
+            raw_commit.clone()
+        };
+
+        // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
+        let trimmed_commit = raw_commit.trim();
+        if !trimmed_commit.is_empty() {
+            self.last_commit_context = Some(trimmed_commit.to_string());
+        }
+
+        // 计算消费的拼音字母长度并执行分段确认（动态功能项与容错纠错项消费全部输入）
+        let consumed_len = if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
+            self.composition.len()
+        } else {
+            self.compute_consumed_len_for_candidate(&selected)
+        };
+
+        if !selected.is_expandable && selected.tier != CandidateTier::TypoCorrection && !selected.pinyin.is_empty() {
+            self.partial_commit_segments
+                .push((selected.text.clone(), selected.pinyin.clone()));
+        } else {
+            self.partial_commit_segments.clear();
+        }
+
+        self.composition.consume_prefix(consumed_len);
+
+        // 若当前整串拼音已全部消费完毕，且通过 2 次及以上分段选词完成，自动合成为用户自造新词
+        if self.composition.is_empty() {
+            if self.partial_commit_segments.len() >= 2 {
+                let full_text: String = self
+                    .partial_commit_segments
+                    .iter()
+                    .map(|(t, _)| t.as_str())
+                    .collect();
+                let full_pinyin: String = self
+                    .partial_commit_segments
+                    .iter()
+                    .map(|(_, p)| p.as_str())
+                    .collect::<Vec<_>>()
+                    .join("'");
+                let char_len = full_text.chars().count();
+                if (2..=8).contains(&char_len) {
+                    if let Some(ref path) = self.user_dict_path {
+                        let _ = self.user_model.append_to_wal(
+                            path,
+                            &full_text,
+                            &full_pinyin,
+                            current_timestamp,
+                        );
+                    } else {
+                        self.user_model
+                            .record_commit(&full_text, &full_pinyin, current_timestamp);
+                    }
+                }
+            }
+            self.partial_commit_segments.clear();
+        }
 
         self.page_index = 0;
         self.recompute_candidates();
@@ -327,6 +506,89 @@ impl AlgoEngine {
         self.recompute_candidates();
 
         Some((commit_text, 0))
+    }
+
+    /// 结合当前双拼/全拼模式与音节图计算选中候选词所消费的原始按键字节长度
+    fn compute_consumed_len_for_candidate(&self, selected: &AlgoCandidate) -> usize {
+        let raw = self.composition.as_str();
+        let pinyin = selected.pinyin.as_str();
+        if raw.is_empty() {
+            return 0;
+        }
+
+        if raw.starts_with(pinyin) && !pinyin.is_empty() {
+            let mut len = pinyin.len();
+            if raw[len..].starts_with('\'') {
+                len = len.saturating_add(1);
+            }
+            return len;
+        }
+
+        // 双拼模式：每个完整音节固定消费 2 个原始双拼按键字符
+        if self.config.double_pinyin.is_some() {
+            let syl_count = pinyin.split('\'').filter(|s| !s.is_empty()).count();
+            if syl_count == 0 {
+                return raw.len();
+            }
+            let target_chars = syl_count.saturating_mul(2);
+            let mut seen_non_quote = 0usize;
+            let mut last_end = 0usize;
+            for (idx, ch) in raw.char_indices() {
+                last_end = idx.saturating_add(ch.len_utf8());
+                if ch != '\'' {
+                    seen_non_quote += 1;
+                    if seen_non_quote >= target_chars {
+                        if raw[last_end..].starts_with('\'') {
+                            last_end = last_end.saturating_add(1);
+                        }
+                        break;
+                    }
+                }
+            }
+            return last_end.min(raw.len());
+        }
+
+        // 全拼与简拼混合模式：优先按候选音节逐段对齐原始输入或最优切分路径单元
+        let cand_syls: Vec<&str> = pinyin.split('\'').filter(|s| !s.is_empty()).collect();
+        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy, None);
+        let mut best_units: Vec<String> = Vec::new();
+        if let Some(best) = paths.first() {
+            best_units.extend(best.syllables.iter().cloned());
+            if !best.remaining.is_empty() {
+                best_units.push(best.remaining.clone());
+            }
+        }
+
+        let mut pos = 0usize;
+        for (i, &cs) in cand_syls.iter().enumerate() {
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+            if pos >= raw.len() {
+                break;
+            }
+            if raw[pos..].starts_with(cs) {
+                pos += cs.len();
+            } else if i < best_units.len() && raw[pos..].starts_with(best_units[i].as_str()) {
+                pos += best_units[i].len();
+            } else {
+                let first_len = cs.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                if raw[pos..].starts_with(&cs[..first_len]) {
+                    pos += first_len;
+                } else {
+                    return Self::compute_consumed_len(raw, pinyin);
+                }
+            }
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+        }
+
+        if pos > 0 {
+            pos.min(raw.len())
+        } else {
+            Self::compute_consumed_len(raw, pinyin)
+        }
     }
 
     /// 精确计算用户选词所消费的原始按键长度（含自动跳过隔音符）
@@ -497,6 +759,26 @@ impl AlgoEngine {
                 }
             }
             raw_candidates.append(&mut user_matches);
+
+            // 模糊音等价查询键联合检索（将候选词 pinyin 映射回原始输入切分键以保证选词消费长度一致）
+            if self.config.fuzzy.has_active_rules() && !path.is_typo {
+                for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
+                    let mut fuzzy_matches = self.table.lookup(&fuzzy_key);
+                    for fm in &mut fuzzy_matches {
+                        fm.pinyin = key.clone();
+                        fm.score = fm.score.saturating_sub(50);
+                    }
+                    raw_candidates.append(&mut fuzzy_matches);
+
+                    let mut fuzzy_user_matches =
+                        self.user_model.lookup_user_words(&fuzzy_key, eval_ts);
+                    for fum in &mut fuzzy_user_matches {
+                        fum.pinyin = key.clone();
+                        fum.score = fum.score.saturating_sub(50);
+                    }
+                    raw_candidates.append(&mut fuzzy_user_matches);
+                }
+            }
         }
 
         // 2.1 Viterbi 长句动态规划解码（遵循 Best Path Only 原则）：
@@ -565,6 +847,16 @@ impl AlgoEngine {
                 if !first_path.syllables.is_empty() {
                     let first_syl = &first_path.syllables[0];
                     let mut first_matches = self.table.lookup(first_syl);
+                    if self.config.fuzzy.has_active_rules() {
+                        for alt_syl in PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy) {
+                            let mut alt_matches = self.table.lookup(&alt_syl);
+                            for am in &mut alt_matches {
+                                am.pinyin = first_syl.clone();
+                                am.score = am.score.saturating_sub(50);
+                            }
+                            first_matches.append(&mut alt_matches);
+                        }
+                    }
                     if first_matches.is_empty() {
                         if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl) {
                             for (text, score) in initial_entries {
@@ -603,74 +895,74 @@ impl AlgoEngine {
         let mut candidates =
             CandidatePipeline::process(raw_candidates, &self.config, self.page_index);
 
-        // 5. 状态机感知与容错门禁控制：
-        // 若当前输入处于正常的合法前缀打字态（已成功检索出 ExactWord 级别的完整成词或前缀展开短语），
-        // 绝对免受激进物理空间容错打扰；仅在无任何合法成词/前缀展开命中时（如输入 nihso, cehng），才激活次位容错。
-        let has_exact_or_prefix_words = candidates
-            .iter()
-            .any(|c| c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity);
-
-        if !has_exact_or_prefix_words {
-            let typo_cands = Self::generate_spatial_typo_candidates(raw_input, &self.table);
-            for (i, typo_cand) in typo_cands.into_iter().take(2).enumerate() {
-                // 若列表中已有同名候选但非容错词（例如 Viterbi 产生的不完全前缀预测），先将其剔除
-                candidates.retain(|c| c.text != typo_cand.text);
-                let target_pos = if candidates.is_empty() {
-                    0
-                } else {
-                    (1 + i).min(candidates.len())
-                };
-                candidates.insert(target_pos, typo_cand);
-            }
-        }
-
-        // 6. 动态扩展功能（日期、时间、干支等）注入：
-        // 若命中动态日期/时间指令，将动态功能项插入到第 2 位（仅次于首选的常规成词）
-        if let Some(dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
-            let insert_pos = if candidates.is_empty() { 0 } else { 1 };
-            candidates.insert(insert_pos, dynamic_cand);
-        }
-
-        // 6. 英文单词联想注入（如输入 rust、github、apple 等在次位提供英文候选，若已存在相同专名则避免重复）
-        let eng_cands = self.english_suggester.lookup(raw_input);
-        for eng in eng_cands.into_iter().rev() {
-            if !candidates.iter().any(|c| c.text.eq_ignore_ascii_case(&eng.text)) {
-                let pos = if candidates.is_empty() { 0 } else { 1 };
-                candidates.insert(pos, eng);
-            }
-        }
-
-        // 7. 符号与表情联想注入（如输入 dianzan、daxiao 等在次位提供符号候选）
-        let sym_cands = self.symbol_suggester.lookup(raw_input);
-        for sym in sym_cands.into_iter().rev() {
-            let pos = if candidates.is_empty() { 0 } else { 1 };
-            candidates.insert(pos, sym);
-        }
-
-        // 8. 用户自定义短语注入（如输入 mymail、addr 等置顶首位）
-        let phrase_cands = self.custom_phrases.lookup(raw_input);
-        for phrase in phrase_cands.into_iter().rev() {
-            candidates.insert(0, phrase);
-        }
-
-        // 9. 剪贴板历史快捷粘贴候选注入（敲入 v、zt、niantie 时首位提示）
-        let clip_cands = self.clipboard.try_eval_candidates(raw_input);
-        for clip in clip_cands.into_iter().rev() {
-            candidates.insert(0, clip);
-        }
-
-        // 10. 前缀高频短词混排注入 (Prefix Segment Candidate Injection)：
-        // 当处于首未翻页状态 (page_index == 0) 且有效拼音达到 3 个及以上音节时，
-        // 自动提取前 3 个音节（如 wo'men'de -> 我们的）与前 2 个音节（如 wo'men -> 我们，或简拼 r'g -> 如果/入股）的高频成词，
-        // 紧随全长成词之后注入，支持分段确认 (Partial Commit)
         if self.page_index == 0 {
+            // 5. 状态机感知与容错门禁控制：
+            // 若当前输入处于正常的合法前缀打字态（已成功检索出 ExactWord 级别的完整成词或前缀展开短语），
+            // 绝对免受激进物理空间容错打扰；仅在无任何合法成词/前缀展开命中时（如输入 nihso, cehng），才激活次位容错。
+            let has_exact_or_prefix_words = candidates
+                .iter()
+                .any(|c| c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity);
+
+            if !has_exact_or_prefix_words {
+                let typo_cands = Self::generate_spatial_typo_candidates(raw_input, &self.table);
+                for (i, typo_cand) in typo_cands.into_iter().take(2).enumerate() {
+                    // 若列表中已有同名候选但非容错词（例如 Viterbi 产生的不完全前缀预测），先将其剔除
+                    candidates.retain(|c| c.text != typo_cand.text);
+                    let target_pos = if candidates.is_empty() {
+                        0
+                    } else {
+                        (1 + i).min(candidates.len())
+                    };
+                    candidates.insert(target_pos, typo_cand);
+                }
+            }
+
+            // 6. 动态扩展功能（日期、时间、干支等）注入：
+            // 若命中动态日期/时间指令，将动态功能项插入到第 2 位（仅次于首选的常规成词）
+            if let Some(dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
+                let insert_pos = if candidates.is_empty() { 0 } else { 1 };
+                candidates.insert(insert_pos, dynamic_cand);
+            }
+
+            // 7. 英文单词联想注入（如输入 rust、github、apple 等在次位提供英文候选，若已存在相同专名则避免重复）
+            let eng_cands = self.english_suggester.lookup(raw_input);
+            for eng in eng_cands.into_iter().rev() {
+                if !candidates.iter().any(|c| c.text.eq_ignore_ascii_case(&eng.text)) {
+                    let pos = if candidates.is_empty() { 0 } else { 1 };
+                    candidates.insert(pos, eng);
+                }
+            }
+
+            // 8. 符号与表情联想注入（如输入 dianzan、daxiao 等在次位提供符号候选）
+            let sym_cands = self.symbol_suggester.lookup(raw_input);
+            for sym in sym_cands.into_iter().rev() {
+                let pos = if candidates.is_empty() { 0 } else { 1 };
+                candidates.insert(pos, sym);
+            }
+
+            // 9. 用户自定义短语注入（如输入 mymail、addr 等置顶首位）
+            let phrase_cands = self.custom_phrases.lookup(raw_input);
+            for phrase in phrase_cands.into_iter().rev() {
+                candidates.insert(0, phrase);
+            }
+
+            // 10. 剪贴板历史快捷粘贴候选注入（敲入 v、zt、niantie 时首位提示）
+            let clip_cands = self.clipboard.try_eval_candidates(raw_input);
+            for clip in clip_cands.into_iter().rev() {
+                candidates.insert(0, clip);
+            }
+
+            // 11. 前缀高频短词混排注入 (Prefix Segment Candidate Injection)：
+            // 当处于首未翻页状态 (page_index == 0) 且有效拼音达到 3 个及以上音节时，
+            // 自动提取前 3 个音节（如 wo'men'de -> 我们的）与前 2 个音节（如 wo'men -> 我们，或简拼 r'g -> 如果/入股）的高频成词，
+            // 紧随全长成词之后注入，支持分段确认 (Partial Commit)
             if let Some(best_path) = paths.first() {
                 let total_syls = best_path.syllables.len()
                     + if best_path.remaining.is_empty() { 0 } else { 1 };
                 if total_syls >= 3 && best_path.syllables.len() >= 2 {
                     let mut prefix_items = Vec::new();
 
-                    // 10.1 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
+                    // 11.1 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
                     if total_syls >= 4 && best_path.syllables.len() >= 3 {
                         let key_3 = best_path.syllables[..3].join("'");
                         let matches_3 = self.table.lookup(&key_3);
@@ -684,7 +976,7 @@ impl AlgoEngine {
                         }
                     }
 
-                    // 10.2 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，则回退查简拼召回 Top-2 二字高频词如 如果、入股）
+                    // 11.2 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，则回退查简拼召回 Top-2 二字高频词如 如果、入股）
                     let key_2 = best_path.syllables[..2].join("'");
                     let matches_2 = self.table.lookup(&key_2);
                     let mut found_exact_2 = false;
@@ -708,7 +1000,7 @@ impl AlgoEngine {
                         }
                     }
 
-                    // 10.3 混排注入：动态保留前序全长成词（2 至 3 个），随后注入前缀短词并保持去重
+                    // 11.3 混排注入：动态保留前序全长成词（2 至 3 个），随后注入前缀短词并保持去重
                     if !prefix_items.is_empty() {
                         let mut injected = Vec::with_capacity(candidates.len() + prefix_items.len());
                         let mut seen = std::collections::HashSet::new();
@@ -743,13 +1035,14 @@ impl AlgoEngine {
                             }
                         }
 
-                        // 保持每页大小限制
-                        injected.truncate(self.config.page_size);
                         candidates = injected;
                     }
                 }
             }
         }
+
+        // 统一强制截断至单页容量上限，防止扩展项注入导致单页候选溢出
+        candidates.truncate(self.config.page_size.max(1));
 
         self.current_candidates = candidates;
     }
@@ -1095,3 +1388,59 @@ impl AlgoEngine {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::DoublePinyinSchema;
+
+    #[test]
+    fn test_double_pinyin_partial_commit_consumed_len() {
+        let mut config = AlgoConfig::default();
+        config.double_pinyin = Some(DoublePinyinSchema::XiaoHe);
+        let mut engine = AlgoEngine::with_sample_data(config);
+
+        // 小鹤双拼输入 womfvsgo -> wo'men'zhong'guo (我们中国)
+        for ch in "womfvsgo".chars() {
+            engine.push_char(ch);
+        }
+        let texts: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
+        let idx = texts.iter().position(|t| t == "我们").expect("候选列表应包含前缀短词 我们");
+        let (committed1, rem1) = engine.select_candidate(idx, 100).unwrap();
+        assert_eq!(committed1, "我们");
+        assert_eq!(rem1, 4, "双拼模式下选中二字词应精确消费 4 个双拼字符，剩余 vsgo");
+        assert_eq!(engine.raw_input(), "vsgo");
+
+        // 接着选中剩余 vsgo 对应的 中国
+        let texts2: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
+        let idx2 = texts2.iter().position(|t| t == "中国").expect("剩余双拼 vsgo 应召回 中国");
+        let (committed2, rem2) = engine.select_candidate(idx2, 101).unwrap();
+        assert_eq!(committed2, "中国");
+        assert_eq!(rem2, 0);
+    }
+
+    #[test]
+    fn test_pagination_truncate_and_last_page_guard() {
+        let mut config = AlgoConfig::default();
+        config.page_size = 5;
+        let mut engine = AlgoEngine::with_sample_data(config);
+
+        for ch in "riqi".chars() {
+            engine.push_char(ch);
+        }
+        assert!(
+            !engine.candidates().is_empty() && engine.candidates().len() <= 5,
+            "注入日期动态扩展项后单页候选数不得超过 page_size"
+        );
+
+        // 连续向后翻页，验证处于末页时不会翻入空白页
+        for _ in 0..5 {
+            let page_cands = engine.next_page();
+            assert!(
+                !page_cands.is_empty(),
+                "末页向后翻页应触发越界保护，始终保持非空候选列表"
+            );
+            assert!(page_cands.len() <= 5);
+        }
+    }
+
+}
