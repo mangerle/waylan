@@ -162,7 +162,7 @@ impl WaylanV2Session {
             visible: self.is_active && !self.engine.raw_input().is_empty(),
             preedit: self.engine.formatted_preedit(),
             candidates: core_candidates,
-            selected_index: 0,
+            selected_index: self.engine.selected_index,
             is_expanded: self.engine.is_expanded,
             expanded_selected_index: self.engine.expanded_selected_index,
             mode_badge: match self.mode {
@@ -365,35 +365,48 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
 
-                    // 3.1 Tab 键或方向键下：切换/展开二级动态格式卡片
-                    if (key == KEY_TAB || (key == KEY_DOWN && !state.engine.is_expanded))
-                        && state.engine.toggle_expand(0)
-                    {
+                    // 3.1 Tab 键：切换/展开当前高亮候选词的二级动态格式卡片
+                    if key == KEY_TAB {
+                        let sel = state.engine.selected_index;
+                        state.engine.toggle_expand(sel);
                         state.refresh_candidate_surface();
                         return;
                     }
 
                     // 3.2 处于展开二级状态下的导航与选择
                     if state.engine.is_expanded {
+                        let sel = state.engine.selected_index;
                         if key == KEY_DOWN {
-                            state.engine.next_expanded_item(0);
+                            state.engine.next_expanded_item(sel);
                             state.refresh_candidate_surface();
                             return;
                         }
                         if key == KEY_UP {
-                            state.engine.prev_expanded_item(0);
+                            state.engine.prev_expanded_item(sel);
                             state.refresh_candidate_surface();
                             return;
                         }
                         if key == KEY_ENTER || key == KEY_SPACE {
                             if let Some((committed, _)) = state
                                 .engine
-                                .select_expanded_item(0, state.engine.expanded_selected_index)
+                                .select_expanded_item(sel, state.engine.expanded_selected_index)
                             {
                                 state.punctuation_processor.record_commit(&committed);
                                 state.commit_text(&committed);
                                 return;
                             }
+                        }
+                    } else {
+                        // 非展开态下，上下方向键在当前页候选词间循环移动高亮胶囊
+                        if key == KEY_DOWN {
+                            state.engine.next_candidate();
+                            state.refresh_candidate_surface();
+                            return;
+                        }
+                        if key == KEY_UP {
+                            state.engine.prev_candidate();
+                            state.refresh_candidate_surface();
+                            return;
                         }
                     }
 
@@ -416,10 +429,11 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         }
                     }
 
-                    // 3.4 空格键：首选项上屏
+                    // 3.4 空格键：当前高亮候选词上屏
                     if key == KEY_SPACE {
+                        let sel = state.engine.selected_index;
                         if let Some((committed_text, remaining_len)) =
-                            state.engine.select_candidate(0, now)
+                            state.engine.select_candidate(sel, now)
                         {
                             state.punctuation_processor.record_commit(&committed_text);
                             if remaining_len > 0 {
@@ -662,5 +676,23 @@ mod tests {
         assert!(session.has_ctrl_or_alt());
         session.update_modifier_by_key(KEY_LEFTCTRL, false);
         assert!(!session.has_ctrl_or_alt());
+    }
+
+    #[test]
+    fn test_candidate_selection_navigation() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut session = WaylanV2Session::new(engine);
+        session.is_active = true;
+
+        for ch in "xian".chars() {
+            session.engine.push_char(ch);
+        }
+        assert!(session.engine.candidates().len() >= 2);
+
+        assert_eq!(session.build_candidate_box_state().selected_index, 0);
+        session.engine.next_candidate();
+        assert_eq!(session.build_candidate_box_state().selected_index, 1);
+        session.engine.prev_candidate();
+        assert_eq!(session.build_candidate_box_state().selected_index, 0);
     }
 }

@@ -44,6 +44,8 @@ pub struct AlgoEngine {
     pub config: AlgoConfig,
     /// 当前候选词分页索引（0-indexed）
     page_index: usize,
+    /// 当前页内高亮选中的候选词索引（0-indexed）
+    pub selected_index: usize,
     /// 当前呈现的清洗后候选词缓存
     current_candidates: Vec<AlgoCandidate>,
     /// 上一次选词上屏的历史上下文词条（用于跨句 Bigram 语言模型联想预测）
@@ -70,6 +72,7 @@ impl AlgoEngine {
             composition: Composition::new(),
             config,
             page_index: 0,
+            selected_index: 0,
             current_candidates: Vec::new(),
             last_commit_context: None,
             is_expanded: false,
@@ -159,6 +162,28 @@ impl AlgoEngine {
         self.page_index = self.page_index.saturating_sub(1);
         self.recompute_candidates();
         &self.current_candidates
+    }
+
+    /// 在当前页候选词中向后（向下/向右）循环移动高亮选中项
+    pub fn next_candidate(&mut self) {
+        if !self.current_candidates.is_empty() {
+            self.selected_index = (self.selected_index + 1) % self.current_candidates.len();
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
+        }
+    }
+
+    /// 在当前页候选词中向前（向上/向左）循环移动高亮选中项
+    pub fn prev_candidate(&mut self) {
+        if !self.current_candidates.is_empty() {
+            if self.selected_index == 0 {
+                self.selected_index = self.current_candidates.len().saturating_sub(1);
+            } else {
+                self.selected_index = self.selected_index.saturating_sub(1);
+            }
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
+        }
     }
 
     /// 选择指定索引的候选词上屏
@@ -417,6 +442,7 @@ impl AlgoEngine {
 
     /// 重新计算当前候选词列表
     fn recompute_candidates(&mut self) {
+        self.selected_index = 0;
         self.is_expanded = false;
         self.expanded_selected_index = 0;
 
@@ -1011,6 +1037,9 @@ impl AlgoEngine {
     pub fn reset(&mut self) {
         self.composition.clear();
         self.page_index = 0;
+        self.selected_index = 0;
+        self.is_expanded = false;
+        self.expanded_selected_index = 0;
         self.current_candidates.clear();
         self.last_commit_context = None;
     }

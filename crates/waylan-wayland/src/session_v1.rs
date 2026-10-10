@@ -352,7 +352,7 @@ impl WaylanV1Session {
             visible: !self.engine.raw_input().is_empty(),
             preedit: self.engine.formatted_preedit(),
             candidates: core_candidates,
-            selected_index: 0,
+            selected_index: self.engine.selected_index,
             is_expanded: self.engine.is_expanded,
             expanded_selected_index: self.engine.expanded_selected_index,
             mode_badge: match self.mode {
@@ -489,28 +489,31 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
 
-                    // 3.1 Tab 键或方向键下：切换/展开二级动态格式卡片
-                    if (key == KEY_TAB || (key == KEY_DOWN && !state.engine.is_expanded))
-                        && state.engine.toggle_expand(0) {
-                            state.refresh_candidate_surface();
-                            return;
-                        }
+                    // 3.1 Tab 键：切换/展开当前高亮候选词的二级动态格式卡片
+                    if key == KEY_TAB {
+                        let sel = state.engine.selected_index;
+                        state.engine.toggle_expand(sel);
+                        state.refresh_candidate_surface();
+                        return;
+                    }
 
                     // 3.2 处于展开二级状态下的导航与选择
                     if state.engine.is_expanded {
+                        let sel = state.engine.selected_index;
                         if key == KEY_DOWN {
-                            state.engine.next_expanded_item(0);
+                            state.engine.next_expanded_item(sel);
                             state.refresh_candidate_surface();
                             return;
                         }
                         if key == KEY_UP {
-                            state.engine.prev_expanded_item(0);
+                            state.engine.prev_expanded_item(sel);
                             state.refresh_candidate_surface();
                             return;
                         }
                         if key == KEY_ENTER || key == KEY_SPACE {
-                            if let Some((committed, _)) =
-                                state.engine.select_expanded_item(0, state.engine.expanded_selected_index)
+                            if let Some((committed, _)) = state
+                                .engine
+                                .select_expanded_item(sel, state.engine.expanded_selected_index)
                             {
                                 state.punctuation_processor.record_commit(&committed);
                                 state.surface_manager.on_input_inactive();
@@ -518,6 +521,18 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                 context.preedit_string(serial, String::new(), String::new());
                                 return;
                             }
+                        }
+                    } else {
+                        // 非展开态下，上下方向键在当前页候选词间循环移动高亮胶囊
+                        if key == KEY_DOWN {
+                            state.engine.next_candidate();
+                            state.refresh_candidate_surface();
+                            return;
+                        }
+                        if key == KEY_UP {
+                            state.engine.prev_candidate();
+                            state.refresh_candidate_surface();
+                            return;
                         }
                     }
 
@@ -542,10 +557,11 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         }
                     }
 
-                    // 3.4 空格键：首选项上屏
+                    // 3.4 空格键：当前高亮候选词上屏
                     if key == KEY_SPACE {
+                        let sel = state.engine.selected_index;
                         if let Some((committed_text, remaining_len)) =
-                            state.engine.select_candidate(0, now)
+                            state.engine.select_candidate(sel, now)
                         {
                             state.punctuation_processor.record_commit(&committed_text);
                             context.commit_string(serial, committed_text);
