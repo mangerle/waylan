@@ -1,6 +1,6 @@
 use log::info;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
 use waylan_core::CandidateBoxState;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
@@ -11,6 +11,32 @@ use wayland_client::protocol::{
     wl_surface::WlSurface,
 };
 use wayland_client::{Dispatch, QueueHandle};
+
+/// 候选框共享内存持久槽位（复用匿名文件描述符与预分配内存空间）
+pub struct ShmSlot {
+    /// 匿名共享内存文件
+    pub file: File,
+    /// 当前已向内核申请的文件容量（字节）
+    pub capacity: usize,
+}
+
+impl ShmSlot {
+    /// 创建带有指定初始容量的共享内存槽位
+    pub fn new(capacity: usize) -> std::io::Result<Self> {
+        let file = CandidateSurfaceManager::create_shm_fd(capacity)?;
+        Ok(Self { file, capacity })
+    }
+
+    /// 确保文件容量至少达到目标字节数（容量不足时按 2 倍扩容）
+    pub fn ensure_capacity(&mut self, required_bytes: usize) -> std::io::Result<()> {
+        if self.capacity < required_bytes {
+            let new_cap = required_bytes.max(self.capacity * 2).max(64 * 1024);
+            self.file.set_len(new_cap as u64)?;
+            self.capacity = new_cap;
+        }
+        Ok(())
+    }
+}
 
 /// 焦点应用中的光标位置矩形 (Cursor Rectangle)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -60,6 +86,12 @@ pub struct CandidateSurfaceManager {
     pub current_size: (u32, u32),
     /// 候选框矢量渲染器实例
     pub renderer: CandidateBoxRenderer,
+    /// 共享内存双缓冲槽位（交替使用以避免单缓冲画面撕裂与频繁创建文件）
+    pub shm_slots: [Option<ShmSlot>; 2],
+    /// 当前活跃槽位索引
+    pub current_slot: usize,
+    /// 复用的像素格式转换内存缓冲区（避免每次按键触发堆内存重新分配）
+    pub pixel_buffer: Vec<u8>,
 }
 
 impl Default for CandidateSurfaceManager {
@@ -75,6 +107,32 @@ impl CandidateSurfaceManager {
             is_visible: false,
             current_size: (0, 0),
             renderer: CandidateBoxRenderer::new(UiTheme::light()),
+            shm_slots: [None, None],
+            current_slot: 0,
+            pixel_buffer: Vec::with_capacity(64 * 1024),
+        }
+    }
+
+    /// 确保指定槽位已经初始化并具备足够的容量
+    fn ensure_slot(&mut self, slot_idx: usize, required_bytes: usize) -> std::io::Result<()> {
+        if self.shm_slots[slot_idx].is_none() {
+            let init_cap = required_bytes.max(64 * 1024);
+            self.shm_slots[slot_idx] = Some(ShmSlot::new(init_cap)?);
+        } else if let Some(slot) = &mut self.shm_slots[slot_idx] {
+            slot.ensure_capacity(required_bytes)?;
+        }
+        Ok(())
+    }
+
+    /// 将 RGBA 像素流转换为 BGRA 格式并写入复用的内部缓冲区
+    fn convert_rgba_to_pixel_buffer(&mut self, rgba: &[u8]) {
+        self.pixel_buffer.clear();
+        self.pixel_buffer.reserve(rgba.len());
+        for chunk in rgba.chunks_exact(4) {
+            self.pixel_buffer.push(chunk[2]); // B
+            self.pixel_buffer.push(chunk[1]); // G
+            self.pixel_buffer.push(chunk[0]); // R
+            self.pixel_buffer.push(chunk[3]); // A
         }
     }
 
@@ -159,8 +217,8 @@ impl CandidateSurfaceManager {
         }
     }
 
-    /// 根据当前候选框状态渲染位图并准备共享内存缓冲
-    pub fn render_state(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, File)> {
+    /// 根据当前候选框状态渲染位图并复用共享内存槽位准备提交
+    pub fn render_state(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &File)> {
         if !state.visible || state.candidates.is_empty() {
             self.on_input_inactive();
             return None;
@@ -171,11 +229,21 @@ impl CandidateSurfaceManager {
         let height = pixmap.height();
         self.on_input_active(width, height);
 
-        let bgra = Self::rgba_to_argb8888_le(pixmap.data());
-        let mut file = Self::create_shm_fd(bgra.len()).ok()?;
-        file.write_all(&bgra).ok()?;
+        // 1. 复用内部内存缓冲完成 RGBA -> BGRA 格式转换
+        self.convert_rgba_to_pixel_buffer(pixmap.data());
+        let required_bytes = self.pixel_buffer.len();
 
-        Some((width, height, file))
+        // 2. 轮换至下一个持久化槽位（双缓冲交替）
+        let next_slot = (self.current_slot + 1) % 2;
+        self.ensure_slot(next_slot, required_bytes).ok()?;
+        self.current_slot = next_slot;
+
+        // 3. 复用已有文件描述符写入像素数据，消除频繁的 tempfile() 系统调用
+        let slot = self.shm_slots[self.current_slot].as_mut()?;
+        slot.file.seek(SeekFrom::Start(0)).ok()?;
+        slot.file.write_all(&self.pixel_buffer).ok()?;
+
+        Some((width, height, &slot.file))
     }
 
     /// 将 tiny-skia 预乘 RGBA 字节流转换为 Wayland WL_SHM_FORMAT_ARGB8888 小端序 (BGRA) 字节流
@@ -201,6 +269,7 @@ impl CandidateSurfaceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsRawFd;
 
     #[test]
     fn test_cursor_popup_position() {
@@ -223,5 +292,42 @@ mod tests {
         let rgba = vec![10, 20, 30, 255, 100, 150, 200, 128];
         let bgra = CandidateSurfaceManager::rgba_to_argb8888_le(&rgba);
         assert_eq!(bgra, vec![30, 20, 10, 255, 200, 150, 100, 128]);
+    }
+
+    #[test]
+    fn test_shm_slot_reuse_and_ping_pong() {
+        let mut manager = CandidateSurfaceManager::new();
+        let mut state = CandidateBoxState::default();
+        state.visible = true;
+        state.preedit = "ce".to_string();
+        state.candidates = vec![
+            waylan_core::Candidate::new("策", "ce", 100),
+            waylan_core::Candidate::new("测", "ce", 90),
+        ];
+
+        // 第一次渲染：应初始化 slot 1
+        let (w1, h1, file1) = manager.render_state(&state).expect("第一次渲染失败");
+        assert!(w1 > 0 && h1 > 0);
+        let fd1 = file1.as_raw_fd();
+        assert_eq!(manager.current_slot, 1);
+
+        // 第二次渲染：应轮换初始化 slot 0
+        let (w2, h2, file2) = manager.render_state(&state).expect("第二次渲染失败");
+        assert!(w2 > 0 && h2 > 0);
+        let fd2 = file2.as_raw_fd();
+        assert_eq!(manager.current_slot, 0);
+        assert_ne!(fd1, fd2, "双缓冲两个槽位应对应独立的内核文件描述符");
+
+        // 第三次渲染：应轮换复用 slot 1 的 fd，不再重复调用 tempfile()
+        let (_, _, file3) = manager.render_state(&state).expect("第三次渲染失败");
+        let fd3 = file3.as_raw_fd();
+        assert_eq!(manager.current_slot, 1);
+        assert_eq!(fd1, fd3, "第三次渲染应复用 slot 1 的文件描述符");
+
+        // 第四次渲染：应轮换复用 slot 0 的 fd
+        let (_, _, file4) = manager.render_state(&state).expect("第四次渲染失败");
+        let fd4 = file4.as_raw_fd();
+        assert_eq!(manager.current_slot, 0);
+        assert_eq!(fd2, fd4, "第四次渲染应复用 slot 0 的文件描述符");
     }
 }
