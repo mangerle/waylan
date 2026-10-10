@@ -153,6 +153,32 @@ impl DictBuilder {
                 }
             }
         }
+        if words.is_empty() {
+            if let Some(parent) = output_path.as_ref().parent() {
+                if parent.join("bigram.table.bin").exists() {
+                    let candidates_bin = [
+                        output_path.as_ref().to_path_buf(),
+                        PathBuf::from("/usr/share/waylan/data/base.dict.bin"),
+                    ];
+                    for bin_path in &candidates_bin {
+                        if bin_path.exists() {
+                            if let Ok(compact) = crate::table::CompactMmapLexicon::open(bin_path) {
+                                if compact.vocab_size > 1_800_000 {
+                                    words.reserve(compact.vocab_size);
+                                    word_to_id.reserve(compact.vocab_size);
+                                    for id in 0..compact.vocab_size as u32 {
+                                        let w = compact.get_word(id).unwrap_or("").to_string();
+                                        word_to_id.insert(w.clone(), id);
+                                        words.push(w);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // 2. 解析文本词库源文件
         let mut dict_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
@@ -219,6 +245,8 @@ impl DictBuilder {
         }
 
         // 3. 提取简拼缩写索引 (key_type = 1)
+        // 分级准入门槛：2字词碰撞率高，要求基础词频 >= 200；3字及以上长词与四字成语碰撞率低，保留全部有效词频 (score >= 1)，
+        // 并由后续按词频降序排序与 Top-8 截断统一保障索引紧凑度与成语召回率。
         let mut acronym_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
         for (pinyin, cand_list) in &dict_map {
             if pinyin.contains('\'') {
@@ -231,9 +259,10 @@ impl DictBuilder {
                         }
                     }
                     if acronym.len() >= 2 {
+                        let min_score = if acronym.len() == 2 { 200 } else { 1 };
                         let list = acronym_map.entry(acronym).or_default();
-                        for &(wid, score) in cand_list {
-                            if score >= 3_000 {
+                        for &(wid, score) in cand_list.iter().take(8) {
+                            if score >= min_score {
                                 list.push((wid, score));
                             }
                         }
@@ -271,16 +300,21 @@ impl DictBuilder {
         }
 
         // 5. 汇总所有唯一键：全拼(0)、简拼(1)、声母(2)
-        // 使用 HashMap 聚合，避免同一拼音键在不同来源冲突
+        // 采用内部单引号前缀隔离三类键空间（全拼: "{k}", 简拼: "'{k}", 声母: "''{k}"），
+        // 避免同形全拼、简拼、声母（如 "zh", "xian", "ma"）在 DAT 中发生键名覆盖冲突。
         let mut combined_keys: HashMap<String, (u8, Vec<(u32, u32)>)> = HashMap::new();
         for (k, v) in dict_map {
             combined_keys.insert(k, (0, v));
         }
         for (k, v) in acronym_map {
-            combined_keys.entry(k).or_insert((1, v));
+            if !v.is_empty() {
+                combined_keys.insert(format!("'{}", k), (1, v));
+            }
         }
         for (k, v) in initial_map {
-            combined_keys.entry(k).or_insert((2, v));
+            if !v.is_empty() {
+                combined_keys.insert(format!("''{}", k), (2, v));
+            }
         }
 
         // 严格按字典序排序所有键
@@ -615,17 +649,21 @@ mod tests {
         let txt_path = temp_dir.join("test_compact_dict.txt");
         let compact_bin_path = temp_dir.join("test_compact_dict.bin");
 
-        // 写入测试源数据
+        // 写入测试源数据（含低词频四字成语与同形声母/简拼）
         let mut file = File::create(&txt_path).expect("创建临时文件");
         writeln!(file, "微澜\twei lan\t15000").unwrap();
         writeln!(file, "中国\tzhong guo\t20000").unwrap();
         writeln!(file, "中\tzhong\t9000").unwrap();
+        writeln!(file, "最后\tzui hou\t12000").unwrap();
+        writeln!(file, "人工智能\tren gong zhi neng\t31607").unwrap();
+        writeln!(file, "人过中年\tren guo zhong nian\t504").unwrap();
+        writeln!(file, "弱冠之年\truo guan zhi nian\t78").unwrap();
         drop(file);
 
         // 1. 编译为零拷贝紧凑二进制格式 (DAT 一体化)
         let stats = DictBuilder::build_compact_binary_dict(&[&txt_path], &compact_bin_path)
             .expect("紧凑编译成功");
-        assert_eq!(stats.total_words, 3);
+        assert_eq!(stats.total_words, 7);
 
         // 2. 使用 LexiconTable::load_binary 加载
         let table = LexiconTable::load_binary(&compact_bin_path).expect("零拷贝紧凑词库加载成功");
@@ -635,14 +673,23 @@ mod tests {
         assert!(!cands.is_empty());
         assert_eq!(cands[0].text, "中国");
 
-        // 4. 验证简拼缩写检索 (由 builder 自动提取)
+        // 4. 验证简拼缩写检索 (含低频四字成语完整保留)
         let acronym_cands = table.lookup_acronym("zg");
         assert!(!acronym_cands.is_empty(), "简拼 zg 应召回中国");
         assert_eq!(acronym_cands[0].text, "中国");
 
-        // 5. 验证单字声母预置索引
-        let initial_entries = table.get_initial_raw_entries("z");
-        assert!(initial_entries.is_some(), "声母 z 应有预置单字索引");
+        let rgzn_cands = table.lookup_acronym("rgzn");
+        assert_eq!(rgzn_cands.len(), 3, "rgzn 应完整召回 3 个四字词/成语");
+        assert_eq!(rgzn_cands[0].text, "人工智能");
+        assert_eq!(rgzn_cands[1].text, "人过中年");
+        assert_eq!(rgzn_cands[2].text, "弱冠之年");
+
+        // 5. 验证单字声母预置索引与二字简拼互不覆盖 (如 "zh")
+        let zh_acronym = table.lookup_acronym("zh");
+        assert_eq!(zh_acronym[0].text, "最后");
+        let zh_initial = table.get_initial_raw_entries("zh");
+        assert!(zh_initial.is_some(), "翘舌声母 zh 不应被二字简拼 zh 覆盖");
+        assert_eq!(zh_initial.unwrap()[0].0, "中");
 
         // 6. 验证 Word ID 与反查
         let compact = table.compact_mmap.as_ref().unwrap();

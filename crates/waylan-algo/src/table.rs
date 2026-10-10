@@ -234,14 +234,20 @@ impl CompactMmapLexicon {
     /// 简拼缩写检索
     pub fn lookup_acronym(&self, key: &str) -> Option<Vec<(String, u32)>> {
         let reader = self.get_dat_reader();
-        let key_idx = reader.exact_match(key)? as usize;
+        let prefixed = format!("'{}", key);
+        let key_idx = reader
+            .exact_match(&prefixed)
+            .or_else(|| reader.exact_match(key))? as usize;
         self.get_candidates_by_key_idx(key_idx, Some(1))
     }
 
     /// 声母高频单字检索
     pub fn lookup_initial(&self, initial: &str) -> Option<Vec<(String, u32)>> {
         let reader = self.get_dat_reader();
-        let key_idx = reader.exact_match(initial)? as usize;
+        let prefixed = format!("''{}", initial);
+        let key_idx = reader
+            .exact_match(&prefixed)
+            .or_else(|| reader.exact_match(initial))? as usize;
         self.get_candidates_by_key_idx(key_idx, Some(2))
     }
 }
