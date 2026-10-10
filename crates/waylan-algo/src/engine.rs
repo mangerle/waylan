@@ -56,6 +56,8 @@ pub struct AlgoEngine {
     pub expanded_selected_index: usize,
     /// 用户自适应词库 WAL 持久化文件路径（若设置则每次选词自动追加写盘）
     pub user_dict_path: Option<std::path::PathBuf>,
+    /// 单次连续拼音输入过程中的分段选词累积器 (词条文本, 拼音片段)，用于整串消费完毕时自动合成用户自造新词
+    partial_commit_segments: Vec<(String, String)>,
 }
 
 impl AlgoEngine {
@@ -78,6 +80,7 @@ impl AlgoEngine {
             is_expanded: false,
             expanded_selected_index: 0,
             user_dict_path: None,
+            partial_commit_segments: Vec::new(),
         }
     }
 
@@ -129,141 +132,9 @@ impl AlgoEngine {
     /// 退格删除一个字符
     pub fn pop_char(&mut self) -> &[AlgoCandidate] {
         self.composition.pop_char();
-        self.page_index = 0;
-        self.recompute_candidates();
-        &self.current_candidates
-    }
-
-    /// 光标左移
-    pub fn move_cursor_left(&mut self) -> &[AlgoCandidate] {
-        if self.composition.move_cursor_left() {
-            self.recompute_candidates();
+        if self.composition.is_empty() {
+            self.partial_commit_segments.clear();
         }
-        &self.current_candidates
-    }
-
-    /// 光标右移
-    pub fn move_cursor_right(&mut self) -> &[AlgoCandidate] {
-        if self.composition.move_cursor_right() {
-            self.recompute_candidates();
-        }
-        &self.current_candidates
-    }
-
-    /// 候选翻下一页（若已处于末页则保持当前页不产生空白页）
-    pub fn next_page(&mut self) -> &[AlgoCandidate] {
-        self.page_index = self.page_index.saturating_add(1);
-        self.recompute_candidates();
-        if self.current_candidates.is_empty() && self.page_index > 0 {
-            self.page_index -= 1;
-            self.recompute_candidates();
-        }
-        &self.current_candidates
-    }
-
-    /// 候选翻上一页
-    pub fn prev_page(&mut self) -> &[AlgoCandidate] {
-        self.page_index = self.page_index.saturating_sub(1);
-        self.recompute_candidates();
-        &self.current_candidates
-    }
-
-    /// 在当前页候选词中向后（向下/向右）循环移动高亮选中项
-    pub fn next_candidate(&mut self) {
-        if !self.current_candidates.is_empty() {
-            self.selected_index = (self.selected_index + 1) % self.current_candidates.len();
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
-        }
-    }
-
-    /// 在当前页候选词中向前（向上/向左）循环移动高亮选中项
-    pub fn prev_candidate(&mut self) {
-        if !self.current_candidates.is_empty() {
-            if self.selected_index == 0 {
-                self.selected_index = self.current_candidates.len().saturating_sub(1);
-            } else {
-                self.selected_index = self.selected_index.saturating_sub(1);
-            }
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
-        }
-    }
-
-    /// 选择指定索引的候选词上屏
-    ///
-    /// # 返回值
-    /// 返回 `Some((上屏文本, 剩余未完成拼音长度))`；若索引无效则返回 `None`。
-    pub fn select_candidate(
-        &mut self,
-        index: usize,
-        current_timestamp: u64,
-    ) -> Option<(String, usize)> {
-        if index >= self.current_candidates.len() {
-            return None;
-        }
-
-        let selected = self.current_candidates[index].clone();
-
-        // 若选中的是可展开项，且直接按数字键确认（未展开时）：
-        // 优先将首个格式化子候选文本（如当前标准日期 2026年10月9日）上屏
-        let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
-            selected.sub_candidates[0].clone()
-        } else {
-            selected.text.clone()
-        };
-
-        // 记录用户选词并动态调频（若配置了持久化路径则同步追加至 WAL 日志）
-        if let Some(ref path) = self.user_dict_path {
-            let _ = self.user_model.append_to_wal(
-                path,
-                &selected.text,
-                &selected.pinyin,
-                current_timestamp,
-            );
-        } else {
-            self.user_model
-                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
-        }
-
-        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
-        let commit_text = if self.config.auto_pangu_spacing {
-            if let Some(prev) = &self.last_commit_context {
-                if Self::should_insert_pangu_space(prev, &raw_commit) {
-                    format!(" {}", raw_commit)
-                } else {
-                    raw_commit.clone()
-                }
-            } else {
-                raw_commit.clone()
-            }
-        } else {
-            raw_commit.clone()
-        };
-
-        // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
-        let trimmed_commit = raw_commit.trim();
-        if !trimmed_commit.is_empty() {
-            self.last_commit_context = Some(trimmed_commit.to_string());
-        }
-
-        // 计算消费的拼音字母长度并执行分段确认（动态功能项与容错纠错项消费全部输入）
-        let consumed_len = if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
-            self.composition.len()
-        } else {
-            self.compute_consumed_len_for_candidate(&selected)
-        };
-
-        self.composition.consume_prefix(consumed_len);
-
-        self.page_index = 0;
-        self.recompute_candidates();
-        &self.current_candidates
-    }
-
-    /// 退格删除一个字符
-    pub fn pop_char(&mut self) -> &[AlgoCandidate] {
-        self.composition.pop_char();
         self.page_index = 0;
         self.recompute_candidates();
         &self.current_candidates
@@ -1385,6 +1256,7 @@ impl AlgoEngine {
         self.expanded_selected_index = 0;
         self.current_candidates.clear();
         self.last_commit_context = None;
+        self.partial_commit_segments.clear();
     }
 }
 
@@ -1443,4 +1315,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_partial_commit_synthesizes_user_word() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+
+        // 输入 bjxian -> 分段依次选中 北京 (bei'jing) 与 西安 (xi'an)
+        for ch in "beijingxian".chars() {
+            engine.push_char(ch);
+        }
+        let texts1: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
+        let idx1 = texts1.iter().position(|t| t == "北京").expect("应包含前缀词 北京");
+        let (c1, rem1) = engine.select_candidate(idx1, 200).unwrap();
+        assert_eq!(c1, "北京");
+        assert_eq!(rem1, 4);
+
+        let texts2: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
+        let idx2 = texts2.iter().position(|t| t == "西安").expect("剩余 xian 应包含 西安");
+        let (c2, rem2) = engine.select_candidate(idx2, 201).unwrap();
+        assert_eq!(c2, "西安");
+        assert_eq!(rem2, 0);
+
+        // 再次输入 beijingxian，验证分段合成的自造新词 北京西安 已沉淀到用户模型并直接召回
+        let user_words = engine.user_model.lookup_user_words("bei'jing'xi'an", 202);
+        assert!(
+            user_words.iter().any(|w| w.text == "北京西安"),
+            "分段选词消费完整个拼音序列后应自动合成用户自造新词 北京西安"
+        );
+    }
 }
+
