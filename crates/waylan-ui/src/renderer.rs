@@ -24,6 +24,8 @@ pub struct CandidateBoxRenderer {
     font: Option<Font>,
     /// 基础候选字号大小
     pub font_size: f32,
+    /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
+    pub scale: f32,
     /// 字形位图与度量信息缓存（避免高频字符每次击键重复矢量光栅化）
     glyph_cache: Mutex<HashMap<(char, u32), CachedGlyph>>,
 }
@@ -46,16 +48,36 @@ struct GlyphBitmapParams<'a> {
     height: usize,
 }
 
+/// 卡片背景几何与描边参数
+struct CardBackgroundParams {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    stroke_width: f32,
+}
+
 impl CandidateBoxRenderer {
     pub fn new(theme: UiTheme) -> Self {
         let mut renderer = Self {
             theme,
             font: None,
             font_size: 15.0,
+            scale: 1.0,
             glyph_cache: Mutex::new(HashMap::with_capacity(256)),
         };
         renderer.load_default_fonts();
         renderer
+    }
+
+    /// 设置 HiDPI 屏幕缩放因子
+    pub fn set_scale(&mut self, scale: f32) {
+        let normalized = scale.max(0.5);
+        if (self.scale - normalized).abs() > 0.001 {
+            self.scale = normalized;
+            self.clear_glyph_cache();
+        }
     }
 
     /// 查询当前是否已加载有效字体
@@ -221,16 +243,17 @@ impl CandidateBoxRenderer {
         warn!("[矢量渲染] 警告：系统中未检测到任何中西文字体，已自动启用豆腐块几何占位降级模式。建议安装 noto-fonts-cjk 或 wqy-microhei。");
     }
 
-    /// 渲染单行胶囊候选栏
     /// 渲染单行胶囊候选栏及微信键盘风格二级展开浮层卡片
     pub fn render(&self, state: &CandidateBoxState) -> Option<Pixmap> {
         if state.candidates.is_empty() {
             return None;
         }
 
-        let bar_height: f32 = 38.0;
-        let padding_h: f32 = 8.0;
-        let item_gap: f32 = 14.0;
+        let s = self.scale.max(0.5);
+        let bar_height: f32 = 38.0 * s;
+        let padding_h: f32 = 8.0 * s;
+        let item_gap: f32 = 14.0 * s;
+        let font_size = self.font_size * s;
 
         // 1. 预先测量计算每个候选词条的宽度
         #[allow(dead_code)]
@@ -246,22 +269,22 @@ impl CandidateBoxRenderer {
         }
 
         let mut measured_items = Vec::new();
-        let mut current_pos_x = padding_h + 2.0;
+        let mut current_pos_x = padding_h + 2.0 * s;
 
         for (idx, cand) in state.candidates.iter().enumerate() {
             let index_str = format!("{}", idx + 1);
             let text_str = cand.text.clone();
 
-            let index_width = self.measure_text(&index_str, self.font_size * 0.85);
-            let text_width = self.measure_text(&text_str, self.font_size);
-            let icon_width = if cand.is_expandable { 16.0 } else { 0.0 };
+            let index_width = self.measure_text(&index_str, font_size * 0.85);
+            let text_width = self.measure_text(&text_str, font_size);
+            let icon_width = if cand.is_expandable { 16.0 * s } else { 0.0 };
 
             let is_selected = idx == state.selected_index;
             let item_width = if is_selected {
                 // 首选/高亮项是胶囊背景，左右有内边距
-                index_width + icon_width + text_width + 16.0
+                index_width + icon_width + text_width + 16.0 * s
             } else {
-                index_width + 4.0 + icon_width + text_width
+                index_width + 4.0 * s + icon_width + text_width
             };
 
             measured_items.push(ItemMeasure {
@@ -279,7 +302,7 @@ impl CandidateBoxRenderer {
         }
 
         // 右侧操作区宽度（展开箭头下拉按钮）
-        let action_area_width = 24.0;
+        let action_area_width = 24.0 * s;
         let total_bar_width = current_pos_x - item_gap + action_area_width + padding_h;
 
         // 2. 测量计算二级扩展卡片几何尺寸（如果当前处于展开状态）
@@ -295,9 +318,9 @@ impl CandidateBoxRenderer {
             &Vec::new()
         };
 
-        let row_height: f32 = 28.0;
+        let row_height: f32 = 28.0 * s;
         let popup_h: f32 = if has_active_sub {
-            sub_candidates.len() as f32 * row_height + 12.0
+            sub_candidates.len() as f32 * row_height + 12.0 * s
         } else {
             0.0
         };
@@ -305,12 +328,12 @@ impl CandidateBoxRenderer {
         let max_sub_w = if has_active_sub {
             sub_candidates
                 .iter()
-                .map(|s| self.measure_text(s, self.font_size))
+                .map(|item_str| self.measure_text(item_str, font_size))
                 .fold(0.0_f32, f32::max)
         } else {
             0.0
         };
-        let popup_w: f32 = (max_sub_w + 48.0).max(190.0);
+        let popup_w: f32 = (max_sub_w + 48.0 * s).max(190.0 * s);
 
         // 卡片 X 锚点对齐当前选中的扩展项，且限制不超出边界
         let active_item_x = measured_items
@@ -325,7 +348,7 @@ impl CandidateBoxRenderer {
             total_bar_width
         };
         let canvas_h = if has_active_sub {
-            bar_height + 6.0 + popup_h
+            bar_height + 6.0 * s + popup_h
         } else {
             bar_height
         };
@@ -333,8 +356,18 @@ impl CandidateBoxRenderer {
         let mut pixmap = Pixmap::new(canvas_w.ceil() as u32, canvas_h.ceil() as u32)?;
         pixmap.fill(tiny_skia::Color::TRANSPARENT);
 
-        // 3. 绘制主单行卡片底框（白色胶囊，圆角 12px）
-        self.draw_card_background_at(&mut pixmap, 0.0, 0.0, total_bar_width, bar_height);
+        // 3. 绘制主单行卡片底框（白色胶囊，圆角 10px * s）
+        self.draw_card_background_at(
+            &mut pixmap,
+            CardBackgroundParams {
+                x: 0.0,
+                y: 0.0,
+                width: total_bar_width,
+                height: bar_height,
+                radius: 10.0 * s,
+                stroke_width: 1.0 * s,
+            },
+        );
 
         // 4. 逐个绘制候选词条目
         let baseline_y = bar_height * 0.65;
@@ -343,8 +376,8 @@ impl CandidateBoxRenderer {
             let is_selected = idx == state.selected_index;
 
             if is_selected {
-                // 绘制首选项的高亮翡翠绿胶囊背景（圆角 7px，上下居中）
-                let badge_h = 28.0;
+                // 绘制首选项的高亮翡翠绿胶囊背景（圆角 7px * s，上下居中）
+                let badge_h = 28.0 * s;
                 let badge_y = (bar_height - badge_h) / 2.0;
                 self.draw_rounded_rect(
                     &mut pixmap,
@@ -353,26 +386,26 @@ impl CandidateBoxRenderer {
                         y: badge_y,
                         w: item.total_item_width,
                         h: badge_h,
-                        r: 7.0,
+                        r: 7.0 * s,
                     },
                     self.theme.highlight_badge,
                 );
 
                 // 白色数字序号
-                let text_x = item.start_x + 7.0;
+                let text_x = item.start_x + 7.0 * s;
                 self.draw_text(
                     &mut pixmap,
                     &item.index_str,
                     text_x,
                     baseline_y,
-                    self.font_size * 0.9,
+                    font_size * 0.9,
                     self.theme.highlight_text,
                 );
 
-                let mut content_x = text_x + item.index_width + 3.0;
+                let mut content_x = text_x + item.index_width + 3.0 * s;
                 // 若为可展开项，在序号后绘制微型矢量日历图标
                 if item.is_expandable {
-                    self.draw_calendar_icon(&mut pixmap, content_x, badge_y + 8.5, true);
+                    self.draw_calendar_icon(&mut pixmap, content_x, badge_y + 8.5 * s, true, s);
                     content_x += item.icon_width;
                 }
 
@@ -382,7 +415,7 @@ impl CandidateBoxRenderer {
                     &item.text_str,
                     content_x,
                     baseline_y,
-                    self.font_size,
+                    font_size,
                     self.theme.highlight_text,
                 );
             } else {
@@ -392,15 +425,15 @@ impl CandidateBoxRenderer {
                     &item.index_str,
                     item.start_x,
                     baseline_y,
-                    self.font_size * 0.85,
+                    font_size * 0.85,
                     self.theme.index_text,
                 );
 
-                let mut content_x = item.start_x + item.index_width + 4.0;
+                let mut content_x = item.start_x + item.index_width + 4.0 * s;
                 // 若为可展开项，绘制常规色微型矢量日历图标
                 if item.is_expandable {
-                    let icon_y = (bar_height - 11.0) / 2.0;
-                    self.draw_calendar_icon(&mut pixmap, content_x, icon_y, false);
+                    let icon_y = (bar_height - 11.0 * s) / 2.0;
+                    self.draw_calendar_icon(&mut pixmap, content_x, icon_y, false, s);
                     content_x += item.icon_width;
                 }
 
@@ -410,7 +443,7 @@ impl CandidateBoxRenderer {
                     &item.text_str,
                     content_x,
                     baseline_y,
-                    self.font_size,
+                    font_size,
                     self.theme.candidate_text,
                 );
             }
@@ -419,15 +452,25 @@ impl CandidateBoxRenderer {
         // 5. 绘制右侧下拉箭头 'v'
         let arrow_x = total_bar_width - action_area_width;
         let arrow_center_y = bar_height / 2.0;
-        self.draw_dropdown_arrow(&mut pixmap, arrow_x + 6.0, arrow_center_y);
+        self.draw_dropdown_arrow(&mut pixmap, arrow_x + 6.0 * s, arrow_center_y, s);
 
         // 6. 绘制微信键盘同款二级纵向展开浮层卡片
         if has_active_sub {
-            let popup_top_y = bar_height + 6.0;
-            self.draw_card_background_at(&mut pixmap, popup_x, popup_top_y, popup_w, popup_h);
+            let popup_top_y = bar_height + 6.0 * s;
+            self.draw_card_background_at(
+                &mut pixmap,
+                CardBackgroundParams {
+                    x: popup_x,
+                    y: popup_top_y,
+                    width: popup_w,
+                    height: popup_h,
+                    radius: 10.0 * s,
+                    stroke_width: 1.0 * s,
+                },
+            );
 
             for (s_idx, sub_str) in sub_candidates.iter().enumerate() {
-                let row_y = popup_top_y + 6.0 + s_idx as f32 * row_height;
+                let row_y = popup_top_y + 6.0 * s + s_idx as f32 * row_height;
                 let is_sub_selected = s_idx == state.expanded_selected_index;
                 let sub_num_str = format!("{}", s_idx + 1);
 
@@ -436,54 +479,54 @@ impl CandidateBoxRenderer {
                     self.draw_rounded_rect(
                         &mut pixmap,
                         RoundedRectParams {
-                            x: popup_x + 4.0,
+                            x: popup_x + 4.0 * s,
                             y: row_y,
-                            w: popup_w - 8.0,
-                            h: 24.0,
-                            r: 6.0,
+                            w: popup_w - 8.0 * s,
+                            h: 24.0 * s,
+                            r: 6.0 * s,
                         },
                         self.theme.highlight_badge,
                     );
 
                     // 白色序号 + 白色文本
-                    let num_x = popup_x + 10.0;
-                    let text_baseline = row_y + 17.0;
+                    let num_x = popup_x + 10.0 * s;
+                    let text_baseline = row_y + 17.0 * s;
                     self.draw_text(
                         &mut pixmap,
                         &sub_num_str,
                         num_x,
                         text_baseline,
-                        self.font_size * 0.9,
+                        font_size * 0.9,
                         self.theme.highlight_text,
                     );
-                    let num_w = self.measure_text(&sub_num_str, self.font_size * 0.9);
+                    let num_w = self.measure_text(&sub_num_str, font_size * 0.9);
                     self.draw_text(
                         &mut pixmap,
                         sub_str,
-                        num_x + num_w + 8.0,
+                        num_x + num_w + 8.0 * s,
                         text_baseline,
-                        self.font_size * 0.95,
+                        font_size * 0.95,
                         self.theme.highlight_text,
                     );
                 } else {
                     // 常规行：浅灰序号 + 深色格式文本
-                    let num_x = popup_x + 10.0;
-                    let text_baseline = row_y + 17.0;
+                    let num_x = popup_x + 10.0 * s;
+                    let text_baseline = row_y + 17.0 * s;
                     self.draw_text(
                         &mut pixmap,
                         &sub_num_str,
                         num_x,
                         text_baseline,
-                        self.font_size * 0.85,
+                        font_size * 0.85,
                         self.theme.index_text,
                     );
-                    let num_w = self.measure_text(&sub_num_str, self.font_size * 0.85);
+                    let num_w = self.measure_text(&sub_num_str, font_size * 0.85);
                     self.draw_text(
                         &mut pixmap,
                         sub_str,
-                        num_x + num_w + 8.0,
+                        num_x + num_w + 8.0 * s,
                         text_baseline,
-                        self.font_size * 0.95,
+                        font_size * 0.95,
                         self.theme.candidate_text,
                     );
                 }
@@ -494,7 +537,7 @@ impl CandidateBoxRenderer {
     }
 
     /// 绘制精美小巧的微型矢量日历图标（严格纯矢量，不使用Emoji）
-    fn draw_calendar_icon(&self, pixmap: &mut Pixmap, x: f32, y: f32, is_selected: bool) {
+    fn draw_calendar_icon(&self, pixmap: &mut Pixmap, x: f32, y: f32, is_selected: bool, s: f32) {
         let stroke_color = if is_selected {
             self.theme.highlight_text
         } else {
@@ -507,9 +550,9 @@ impl CandidateBoxRenderer {
             RoundedRectParams {
                 x,
                 y,
-                w: 12.0,
-                h: 11.0,
-                r: 2.0,
+                w: 12.0 * s,
+                h: 11.0 * s,
+                r: 2.0 * s,
             },
             stroke_color,
         );
@@ -523,25 +566,25 @@ impl CandidateBoxRenderer {
         self.draw_rounded_rect(
             pixmap,
             RoundedRectParams {
-                x: x + 1.0,
-                y: y + 3.0,
-                w: 10.0,
-                h: 7.0,
-                r: 1.0,
+                x: x + 1.0 * s,
+                y: y + 3.0 * s,
+                w: 10.0 * s,
+                h: 7.0 * s,
+                r: 1.0 * s,
             },
             bg_color,
         );
 
         // 3. 顶部装订小竖线（左右两点）
         let mut pb = PathBuilder::new();
-        pb.move_to(x + 3.0, y - 1.5);
-        pb.line_to(x + 3.0, y + 1.5);
-        pb.move_to(x + 9.0, y - 1.5);
-        pb.line_to(x + 9.0, y + 1.5);
+        pb.move_to(x + 3.0 * s, y - 1.5 * s);
+        pb.line_to(x + 3.0 * s, y + 1.5 * s);
+        pb.move_to(x + 9.0 * s, y - 1.5 * s);
+        pb.line_to(x + 9.0 * s, y + 1.5 * s);
 
         if let Some(path) = pb.finish() {
             let stroke = Stroke {
-                width: 1.0,
+                width: 1.0 * s,
                 ..Default::default()
             };
             let mut paint = Paint::default();
@@ -573,25 +616,33 @@ impl CandidateBoxRenderer {
     }
 
     /// 绘制指定坐标外层卡片背景（纯白微阴影与细描边）
-    fn draw_card_background_at(
-        &self,
-        pixmap: &mut Pixmap,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-    ) {
-        let r = 10.0; // 圆角
+    fn draw_card_background_at(&self, pixmap: &mut Pixmap, params: CardBackgroundParams) {
+        let r = params.radius;
         let mut pb = PathBuilder::new();
-        pb.move_to(x + r, y);
-        pb.line_to(x + width - r, y);
-        pb.quad_to(x + width, y, x + width, y + r);
-        pb.line_to(x + width, y + height - r);
-        pb.quad_to(x + width, y + height, x + width - r, y + height);
-        pb.line_to(x + r, y + height);
-        pb.quad_to(x, y + height, x, y + height - r);
-        pb.line_to(x, y + r);
-        pb.quad_to(x, y, x + r, y);
+        pb.move_to(params.x + r, params.y);
+        pb.line_to(params.x + params.width - r, params.y);
+        pb.quad_to(
+            params.x + params.width,
+            params.y,
+            params.x + params.width,
+            params.y + r,
+        );
+        pb.line_to(params.x + params.width, params.y + params.height - r);
+        pb.quad_to(
+            params.x + params.width,
+            params.y + params.height,
+            params.x + params.width - r,
+            params.y + params.height,
+        );
+        pb.line_to(params.x + r, params.y + params.height);
+        pb.quad_to(
+            params.x,
+            params.y + params.height,
+            params.x,
+            params.y + params.height - r,
+        );
+        pb.line_to(params.x, params.y + r);
+        pb.quad_to(params.x, params.y, params.x + r, params.y);
         pb.close();
 
         if let Some(path) = pb.finish() {
@@ -607,9 +658,9 @@ impl CandidateBoxRenderer {
                 None,
             );
 
-            // 1px 细描边
+            // 细描边
             let stroke = Stroke {
-                width: 1.0,
+                width: params.stroke_width,
                 ..Default::default()
             };
             let mut border_paint = Paint::default();
@@ -663,15 +714,15 @@ impl CandidateBoxRenderer {
     }
 
     /// 绘制右侧下拉箭头
-    fn draw_dropdown_arrow(&self, pixmap: &mut Pixmap, x: f32, y: f32) {
+    fn draw_dropdown_arrow(&self, pixmap: &mut Pixmap, x: f32, y: f32, s: f32) {
         let mut pb = PathBuilder::new();
-        pb.move_to(x, y - 2.0);
-        pb.line_to(x + 4.0, y + 2.0);
-        pb.line_to(x + 8.0, y - 2.0);
+        pb.move_to(x, y - 2.0 * s);
+        pb.line_to(x + 4.0 * s, y + 2.0 * s);
+        pb.line_to(x + 8.0 * s, y - 2.0 * s);
 
         if let Some(path) = pb.finish() {
             let stroke = Stroke {
-                width: 1.5,
+                width: 1.5 * s,
                 ..Default::default()
             };
             let mut paint = Paint::default();
@@ -685,6 +736,7 @@ impl CandidateBoxRenderer {
     fn draw_text(&self, pixmap: &mut Pixmap, text: &str, x: f32, y: f32, size: f32, color: Color) {
         if self.font.is_none() {
             // 字体缺失降级：绘制字符占位小圆角线框（豆腐块），确保排版可见不白屏
+            let s = self.scale.max(0.5);
             let mut current_x = x;
             let glyph_w = size * 0.8;
             let glyph_h = size;
@@ -696,10 +748,10 @@ impl CandidateBoxRenderer {
                     y: y - glyph_h,
                     w: glyph_w,
                     h: glyph_h,
-                    r: 2.0,
+                    r: 2.0 * s,
                 };
                 self.draw_rounded_rect(pixmap, rect_params, placeholder_color);
-                current_x += glyph_w + 3.0;
+                current_x += glyph_w + 3.0 * s;
             }
             return;
         };
@@ -954,5 +1006,29 @@ mod tests {
             cache_len_1, cache_len_2,
             "再次渲染相同字形应 100% 命中缓存，避免重复矢量光栅化"
         );
+    }
+
+    #[test]
+    fn test_hidpi_scale_rendering() {
+        let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
+        let state = CandidateBoxState {
+            visible: true,
+            preedit: "ce".to_string(),
+            candidates: vec![Candidate::new("测试", "ce'shi", 100)],
+            selected_index: 0,
+            is_expanded: false,
+            expanded_selected_index: 0,
+            mode_badge: "中".to_string(),
+        };
+
+        // 默认 1.0 倍缩放
+        let pixmap_1x = renderer.render(&state).expect("1x 渲染失败");
+        assert_eq!(pixmap_1x.height(), 38);
+
+        // 设置 2.0 倍 HiDPI 缩放
+        renderer.set_scale(2.0);
+        let pixmap_2x = renderer.render(&state).expect("2x 渲染失败");
+        assert_eq!(pixmap_2x.height(), 76);
+        assert!(pixmap_2x.width() >= pixmap_1x.width() * 2 - 2);
     }
 }

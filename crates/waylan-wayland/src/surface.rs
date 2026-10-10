@@ -95,6 +95,8 @@ pub struct CandidateSurfaceManager {
     pub is_visible: bool,
     /// 最近一次渲染的位图宽高
     pub current_size: (u32, u32),
+    /// 当前 HiDPI 缩放因子（Wayland 整数缩放，默认 1）
+    pub scale: i32,
     /// 候选框矢量渲染器实例
     pub renderer: CandidateBoxRenderer,
     /// 共享内存双缓冲槽位（交替使用以避免单缓冲画面撕裂与频繁创建文件）
@@ -119,12 +121,20 @@ impl CandidateSurfaceManager {
             cursor_rect: CursorRect::default(),
             is_visible: false,
             current_size: (0, 0),
+            scale: 1,
             renderer: CandidateBoxRenderer::new(UiTheme::light()),
             shm_slots: [None, None],
             slot_buffers: [None, None],
             current_slot: 0,
             pixel_buffer: Vec::with_capacity(64 * 1024),
         }
+    }
+
+    /// 设置 HiDPI 缩放比例并同步更新矢量渲染器
+    pub fn set_scale(&mut self, scale: i32) {
+        let scale = scale.max(1);
+        self.scale = scale;
+        self.renderer.set_scale(scale as f32);
     }
 
     /// 确保指定槽位已经初始化并具备足够的容量
@@ -257,8 +267,11 @@ impl CandidateSurfaceManager {
                 old_buf.destroy();
             }
 
+            surf.set_buffer_scale(self.scale);
             surf.attach(Some(&buffer), 0, 0);
-            surf.damage(0, 0, width as i32, height as i32);
+            let logical_w = ((width as f32) / (self.scale as f32)).ceil() as i32;
+            let logical_h = ((height as f32) / (self.scale as f32)).ceil() as i32;
+            surf.damage(0, 0, logical_w, logical_h);
             surf.commit();
             *active_buffer = Some(buffer);
         }
@@ -391,5 +404,26 @@ mod tests {
         let fd4 = file4.as_raw_fd();
         assert_eq!(manager.current_slot, 0);
         assert_eq!(fd2, fd4, "第四次渲染应复用 slot 0 的文件描述符");
+    }
+
+    #[test]
+    fn test_surface_manager_scale() {
+        let mut manager = CandidateSurfaceManager::new();
+        assert_eq!(manager.scale, 1);
+
+        manager.set_scale(2);
+        assert_eq!(manager.scale, 2);
+        assert!((manager.renderer.scale - 2.0).abs() < 0.001);
+
+        let state = CandidateBoxState {
+            visible: true,
+            preedit: "ce".to_string(),
+            candidates: vec![waylan_core::Candidate::new("测试", "ce'shi", 100)],
+            ..CandidateBoxState::default()
+        };
+
+        let (w, h, _) = manager.render_state(&state).expect("2x 渲染位图失败");
+        assert_eq!(h, 76);
+        assert!(w > 100);
     }
 }
