@@ -207,7 +207,33 @@ pub fn run_session_v1_loop(
     log::info!("[微澜 Wayland] 成功绑定 zwp_input_method_v1 接口，进入输入法事件分发循环。");
 
     loop {
-        event_queue.blocking_dispatch(&mut session)?;
+        if session
+            .exit_requested
+            .as_ref()
+            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(false)
+        {
+            log::info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V1 事件循环。");
+            return Ok(());
+        }
+
+        event_queue.dispatch_pending(&mut session)?;
+        event_queue.flush()?;
+
+        if let Some(guard) = event_queue.prepare_read() {
+            let fd = guard.connection_fd();
+            let mut fds = [rustix::event::PollFd::new(
+                &fd,
+                rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
+            )];
+            match rustix::event::poll(&mut fds, 200) {
+                Ok(_) => {
+                    let _ = guard.read();
+                }
+                Err(rustix::io::Errno::INTR) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 }
 
@@ -258,7 +284,17 @@ pub fn run_session_v2_loop_fallible(
     );
 
     loop {
-        if let Err(e) = event_queue.blocking_dispatch(&mut session) {
+        if session
+            .exit_requested
+            .as_ref()
+            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(false)
+        {
+            log::info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V2 事件循环。");
+            return Ok(());
+        }
+
+        if let Err(e) = event_queue.dispatch_pending(&mut session) {
             return Err((e.into(), Box::new(session)));
         }
         if session.is_unavailable {
@@ -267,6 +303,27 @@ pub fn run_session_v2_loop_fallible(
                 "zwp_input_method_v2 协议已被合成器宣告不可用 (Unavailable)".into(),
                 Box::new(session),
             ));
+        }
+
+        if let Err(e) = event_queue.flush() {
+            return Err((e.into(), Box::new(session)));
+        }
+
+        if let Some(guard) = event_queue.prepare_read() {
+            let fd = guard.connection_fd();
+            let mut fds = [rustix::event::PollFd::new(
+                &fd,
+                rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
+            )];
+            match rustix::event::poll(&mut fds, 200) {
+                Ok(_) => {
+                    let _ = guard.read();
+                }
+                Err(rustix::io::Errno::INTR) => {}
+                Err(e) => {
+                    return Err((e.into(), Box::new(session)));
+                }
+            }
         }
     }
 }

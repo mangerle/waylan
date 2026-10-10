@@ -253,6 +253,8 @@ pub struct WaylanV1Session {
     pub current_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
     pub mods_depressed: u32,
+    /// 与外部系统托盘共享的优雅退出请求标志
+    pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for WaylanV1Session {
@@ -279,6 +281,7 @@ impl Default for WaylanV1Session {
             qhandle: None,
             current_serial: 0,
             mods_depressed: 0,
+            exit_requested: None,
         }
     }
 }
@@ -312,6 +315,7 @@ impl WaylanV1Session {
             qhandle: None,
             current_serial: 0,
             mods_depressed: 0,
+            exit_requested: None,
         }
     }
 

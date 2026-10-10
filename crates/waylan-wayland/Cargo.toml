@@ -17,3 +17,4 @@ wayland-scanner = "0.31"
 wayland-backend = "0.3"
 tempfile = "3"
 log = "0.4"
+rustix = { version = "0.38", features = ["event"] }

@@ -165,6 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         session_v2.shared_is_chinese = Some(tray.mode_flag());
         session_v2.reload_requested = Some(tray.reload_flag());
+        session_v2.exit_requested = Some(tray.exit_flag());
         session_v2.reload_callback = Some(Box::new(|s| {
             let new_cfg = AppConfig::load_or_create();
             s.engine.config.page_size = new_cfg.page_size;
@@ -206,6 +207,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match v2_result {
             Ok(()) => Ok(()),
             Err((e, returned_session)) => {
+                if tray.is_exit_requested() {
+                    info!("[微澜守护进程] 检测到优雅退出请求，服务安全退场。");
+                    return Ok(());
+                }
                 warn!(
                     "[微澜守护进程] Wayland V2 协议会话不可用或异常结束 ({})，正在自动降级启动 V1 协议会话...",
                     e
@@ -232,6 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 session.shared_is_chinese = Some(tray.mode_flag());
                 session.reload_requested = Some(tray.reload_flag());
+                session.exit_requested = Some(tray.exit_flag());
                 session.reload_callback = Some(Box::new(|s| {
                     let new_cfg = AppConfig::load_or_create();
                     s.engine.config.page_size = new_cfg.page_size;
@@ -293,6 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         session.shared_is_chinese = Some(tray.mode_flag());
         session.reload_requested = Some(tray.reload_flag());
+        session.exit_requested = Some(tray.exit_flag());
         session.reload_callback = Some(Box::new(|s| {
             let new_cfg = AppConfig::load_or_create();
             s.engine.config.page_size = new_cfg.page_size;
@@ -334,8 +341,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match loop_result {
-        Ok(_) => {}
+        Ok(_) => {
+            info!("[微澜守护进程] Wayland 输入法事件循环已正常退出，所有资源已安全释放。");
+        }
         Err(e) => {
+            if tray.is_exit_requested() {
+                info!("[微澜守护进程] 收到优雅退出请求，服务安全退场。");
+                return Ok(());
+            }
             warn!(
                 "[微澜守护进程 警告] 无法启动 Wayland 输入法事件循环 ({})，进入常驻等待模式。",
                 e

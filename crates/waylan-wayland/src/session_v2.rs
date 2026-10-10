@@ -171,6 +171,8 @@ pub struct WaylanV2Session {
     pub mods_depressed: u32,
     /// 标记 V2 会话是否已被合成器宣告不可用（触发自动降级）
     pub is_unavailable: bool,
+    /// 与外部系统托盘共享的优雅退出请求标志
+    pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl WaylanV2Session {
@@ -201,6 +203,7 @@ impl WaylanV2Session {
             done_serial: 0,
             mods_depressed: 0,
             is_unavailable: false,
+            exit_requested: None,
         }
     }
 

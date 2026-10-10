@@ -3399,6 +3399,7 @@ name = "waylan-wayland"
 version = "0.1.0"
 dependencies = [
  "log",
+ "rustix 0.38.44",
  "tempfile",
  "waylan-algo",
  "waylan-core",

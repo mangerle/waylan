@@ -13,6 +13,8 @@ type ToolTipData = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 pub struct StatusNotifierItem {
     /// 当前是否处于中文模式
     is_chinese: Arc<AtomicBool>,
+    /// 图标与状态刷新通知发送端
+    icon_update_tx: std::sync::mpsc::SyncSender<()>,
 }
 
 #[interface(name = "org.kde.StatusNotifierItem")]
@@ -43,7 +45,7 @@ impl StatusNotifierItem {
 
     /// 图标名称（根据中英文状态动态切换）
     #[zbus(property)]
-    fn icon_name(&self) -> String {
+    pub(crate) fn icon_name(&self) -> String {
         if self.is_chinese.load(Ordering::Relaxed) {
             "input-keyboard".to_string()
         } else {
@@ -74,10 +76,11 @@ impl StatusNotifierItem {
     }
 
     /// 用户左键点击托盘图标：触发中英文快速切换
-    fn activate(&self, _x: i32, _y: i32) {
+    pub(crate) fn activate(&self, _x: i32, _y: i32) {
         let current = self.is_chinese.load(Ordering::Relaxed);
         let next = !current;
         self.is_chinese.store(next, Ordering::Relaxed);
+        let _ = self.icon_update_tx.try_send(());
         info!(
             "[系统托盘] 用户点击托盘图标，切换输入模式为: {}",
             if next { "中文" } else { "英文" }
@@ -88,6 +91,15 @@ impl StatusNotifierItem {
     fn context_menu(&self, x: i32, y: i32) {
         info!("[系统托盘] 用户右键点击托盘图标，坐标: ({}, {})", x, y);
     }
+
+    /// 图标更新通知信号（用于告知系统任务栏刷新图标呈现）
+    #[zbus(signal)]
+    async fn new_icon(signal_ctxt: &zbus::object_server::SignalContext<'_>) -> zbus::Result<()>;
+
+    /// 悬停提示更新通知信号
+    #[zbus(signal)]
+    async fn new_tool_tip(signal_ctxt: &zbus::object_server::SignalContext<'_>)
+        -> zbus::Result<()>;
 }
 
 /// DBusMenu 布局返回元组类型定义
@@ -104,6 +116,8 @@ pub type DbusMenuLayout = (
 pub struct DBusMenu {
     is_chinese: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
+    exit_requested: Arc<AtomicBool>,
+    icon_update_tx: std::sync::mpsc::SyncSender<()>,
 }
 
 #[interface(name = "com.canonical.dbusmenu")]
@@ -137,27 +151,59 @@ impl DBusMenu {
         // 1. 模式切换
         let mut item1 = std::collections::HashMap::new();
         item1.insert("label".to_string(), zbus::zvariant::Value::from(mode_text));
-        menu_items.push(zbus::zvariant::Value::from((1, item1, Vec::<zbus::zvariant::Value>::new())));
+        menu_items.push(zbus::zvariant::Value::from((
+            1,
+            item1,
+            Vec::<zbus::zvariant::Value>::new(),
+        )));
 
         // 2. 重新加载词库与配置
         let mut item2 = std::collections::HashMap::new();
-        item2.insert("label".to_string(), zbus::zvariant::Value::from("重新加载词库与配置"));
-        menu_items.push(zbus::zvariant::Value::from((2, item2, Vec::<zbus::zvariant::Value>::new())));
+        item2.insert(
+            "label".to_string(),
+            zbus::zvariant::Value::from("重新加载词库与配置"),
+        );
+        menu_items.push(zbus::zvariant::Value::from((
+            2,
+            item2,
+            Vec::<zbus::zvariant::Value>::new(),
+        )));
 
         // 3. 偏好设置
         let mut item3 = std::collections::HashMap::new();
-        item3.insert("label".to_string(), zbus::zvariant::Value::from("偏好设置..."));
-        menu_items.push(zbus::zvariant::Value::from((3, item3, Vec::<zbus::zvariant::Value>::new())));
+        item3.insert(
+            "label".to_string(),
+            zbus::zvariant::Value::from("偏好设置..."),
+        );
+        menu_items.push(zbus::zvariant::Value::from((
+            3,
+            item3,
+            Vec::<zbus::zvariant::Value>::new(),
+        )));
 
         // 4. 查看运行日志
         let mut item4 = std::collections::HashMap::new();
-        item4.insert("label".to_string(), zbus::zvariant::Value::from("查看运行日志 (~/.local/state/waylan/waylan.log)"));
-        menu_items.push(zbus::zvariant::Value::from((4, item4, Vec::<zbus::zvariant::Value>::new())));
+        item4.insert(
+            "label".to_string(),
+            zbus::zvariant::Value::from("查看运行日志 (~/.local/state/waylan/waylan.log)"),
+        );
+        menu_items.push(zbus::zvariant::Value::from((
+            4,
+            item4,
+            Vec::<zbus::zvariant::Value>::new(),
+        )));
 
         // 5. 退出输入法
         let mut item5 = std::collections::HashMap::new();
-        item5.insert("label".to_string(), zbus::zvariant::Value::from("退出微澜输入法"));
-        menu_items.push(zbus::zvariant::Value::from((5, item5, Vec::<zbus::zvariant::Value>::new())));
+        item5.insert(
+            "label".to_string(),
+            zbus::zvariant::Value::from("退出微澜输入法"),
+        );
+        menu_items.push(zbus::zvariant::Value::from((
+            5,
+            item5,
+            Vec::<zbus::zvariant::Value>::new(),
+        )));
 
         let root_props = std::collections::HashMap::new();
         (1, (0, root_props, menu_items))
@@ -174,6 +220,7 @@ impl DBusMenu {
                 let current = self.is_chinese.load(Ordering::Relaxed);
                 let next = !current;
                 self.is_chinese.store(next, Ordering::Relaxed);
+                let _ = self.icon_update_tx.try_send(());
                 info!(
                     "[系统托盘] 右键菜单切换输入模式为: {}",
                     if next { "中文" } else { "英文" }
@@ -187,30 +234,22 @@ impl DBusMenu {
                 info!("[系统托盘] 唤起微澜偏好设置界面...");
                 let spawned = std::process::Command::new("waylan-settings")
                     .spawn()
-                    .or_else(|_| {
-                        std::process::Command::new("waylan")
-                            .arg("settings")
-                            .spawn()
-                    });
+                    .or_else(|_| std::process::Command::new("waylan").arg("settings").spawn());
 
                 if spawned.is_err() {
                     if let Some(path) = crate::config::AppConfig::config_path() {
-                        let _ = std::process::Command::new("xdg-open")
-                            .arg(path)
-                            .spawn();
+                        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
                     }
                 }
             }
             4 => {
                 let log_path = crate::logger::log_file_path();
                 info!("[系统托盘] 查看运行日志: {:?}", log_path);
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(log_path)
-                    .spawn();
+                let _ = std::process::Command::new("xdg-open").arg(log_path).spawn();
             }
             5 => {
-                info!("[系统托盘] 正在退出微澜输入法守护进程...");
-                std::process::exit(0);
+                info!("[系统托盘] 收到退出菜单指令，正在触发优雅停机与数据落盘流程...");
+                self.exit_requested.store(true, Ordering::SeqCst);
             }
             _ => {}
         }
@@ -222,6 +261,8 @@ impl DBusMenu {
 pub struct TrayService {
     is_chinese: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
+    exit_requested: Arc<AtomicBool>,
+    icon_update_tx: std::sync::mpsc::SyncSender<()>,
 }
 
 #[allow(dead_code)]
@@ -230,16 +271,29 @@ impl TrayService {
     pub fn spawn() -> Self {
         let is_chinese = Arc::new(AtomicBool::new(true));
         let reload_requested = Arc::new(AtomicBool::new(false));
+        let exit_requested = Arc::new(AtomicBool::new(false));
+        let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
+
         let flag_clone = Arc::clone(&is_chinese);
         let reload_clone = Arc::clone(&reload_requested);
+        let exit_clone = Arc::clone(&exit_requested);
+        let tx_clone = icon_update_tx.clone();
 
         thread::spawn(move || {
-            Self::run_dbus_loop(flag_clone, reload_clone);
+            Self::run_dbus_loop(
+                flag_clone,
+                reload_clone,
+                exit_clone,
+                tx_clone,
+                icon_update_rx,
+            );
         });
 
         Self {
             is_chinese,
             reload_requested,
+            exit_requested,
+            icon_update_tx,
         }
     }
 
@@ -253,25 +307,47 @@ impl TrayService {
         Arc::clone(&self.reload_requested)
     }
 
+    /// 获取优雅退出请求共享原子标志句柄
+    pub fn exit_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.exit_requested)
+    }
+
+    /// 查询是否已收到优雅退出请求
+    pub fn is_exit_requested(&self) -> bool {
+        self.exit_requested.load(Ordering::Relaxed)
+    }
+
     /// 获取当前是否处于中文模式
     pub fn is_chinese(&self) -> bool {
         self.is_chinese.load(Ordering::Relaxed)
     }
 
-    /// 更新当前输入模式并触发托盘图标变动
+    /// 更新当前输入模式并触发托盘图标变动与 D-Bus NewIcon 信号广播
     pub fn update_mode(&self, mode: InputMode) {
         let is_zh = matches!(mode, InputMode::Chinese);
-        self.is_chinese.store(is_zh, Ordering::Relaxed);
+        let prev = self.is_chinese.swap(is_zh, Ordering::Relaxed);
+        if prev != is_zh {
+            let _ = self.icon_update_tx.try_send(());
+        }
     }
 
     /// 在独立线程中初始化 DBus 连接与注册 StatusNotifierItem 及 DBusMenu
-    fn run_dbus_loop(is_chinese: Arc<AtomicBool>, reload_requested: Arc<AtomicBool>) {
+    fn run_dbus_loop(
+        is_chinese: Arc<AtomicBool>,
+        reload_requested: Arc<AtomicBool>,
+        exit_requested: Arc<AtomicBool>,
+        icon_update_tx: std::sync::mpsc::SyncSender<()>,
+        icon_update_rx: std::sync::mpsc::Receiver<()>,
+    ) {
         let sni = StatusNotifierItem {
             is_chinese: Arc::clone(&is_chinese),
+            icon_update_tx: icon_update_tx.clone(),
         };
         let menu = DBusMenu {
             is_chinese,
             reload_requested,
+            exit_requested,
+            icon_update_tx,
         };
 
         // 尝试连接用户 DBus 会话总线
@@ -318,9 +394,27 @@ impl TrayService {
             info!("[系统托盘] 已成功向系统任务栏 (Waybar/KDE/GNOME) 注册托盘图标！");
         }
 
-        // 保持 DBus 事件处理循环运行
-        loop {
-            thread::sleep(std::time::Duration::from_millis(500));
+        // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon 与 NewToolTip 信号
+        while let Ok(()) = icon_update_rx.recv() {
+            if let Err(e) = conn.emit_signal(
+                Option::<&str>::None,
+                "/StatusNotifierItem",
+                "org.kde.StatusNotifierItem",
+                "NewIcon",
+                &(),
+            ) {
+                warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
+            } else {
+                info!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
+            }
+
+            let _ = conn.emit_signal(
+                Option::<&str>::None,
+                "/StatusNotifierItem",
+                "org.kde.StatusNotifierItem",
+                "NewToolTip",
+                &(),
+            );
         }
     }
 }
@@ -333,25 +427,37 @@ mod tests {
     fn test_tray_mode_toggle() {
         let is_chinese = Arc::new(AtomicBool::new(true));
         let reload_requested = Arc::new(AtomicBool::new(false));
+        let exit_requested = Arc::new(AtomicBool::new(false));
+        let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
         let tray = TrayService {
             is_chinese: Arc::clone(&is_chinese),
             reload_requested,
+            exit_requested,
+            icon_update_tx,
         };
 
         assert!(tray.is_chinese());
+        assert!(!tray.is_exit_requested());
         tray.update_mode(InputMode::English);
         assert!(!tray.is_chinese());
+        assert!(icon_update_rx.try_recv().is_ok());
+
         tray.update_mode(InputMode::Chinese);
         assert!(tray.is_chinese());
+        assert!(icon_update_rx.try_recv().is_ok());
     }
 
     #[test]
     fn test_tray_menu_layout_and_event() {
         let is_chinese = Arc::new(AtomicBool::new(true));
         let reload_requested = Arc::new(AtomicBool::new(false));
+        let exit_requested = Arc::new(AtomicBool::new(false));
+        let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
         let menu = DBusMenu {
             is_chinese: Arc::clone(&is_chinese),
             reload_requested: Arc::clone(&reload_requested),
+            exit_requested,
+            icon_update_tx,
         };
 
         let (_rev, (_parent_id, _props, items)) = menu.get_layout(0, -1, vec![]);
@@ -360,14 +466,50 @@ mod tests {
         // 模拟点击菜单第1项（模式切换）
         menu.event(1, "clicked".to_string(), zbus::zvariant::Value::from(0), 0);
         assert!(!is_chinese.load(Ordering::Relaxed));
+        assert!(icon_update_rx.try_recv().is_ok());
 
         // 再次点击切回中文
         menu.event(1, "clicked".to_string(), zbus::zvariant::Value::from(0), 0);
         assert!(is_chinese.load(Ordering::Relaxed));
+        assert!(icon_update_rx.try_recv().is_ok());
 
         // 模拟点击菜单第2项（重新加载词库与配置）
         assert!(!reload_requested.load(Ordering::Relaxed));
         menu.event(2, "clicked".to_string(), zbus::zvariant::Value::from(0), 0);
         assert!(reload_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_tray_menu_exit_event() {
+        let is_chinese = Arc::new(AtomicBool::new(true));
+        let reload_requested = Arc::new(AtomicBool::new(false));
+        let exit_requested = Arc::new(AtomicBool::new(false));
+        let (icon_update_tx, _icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
+        let menu = DBusMenu {
+            is_chinese,
+            reload_requested,
+            exit_requested: Arc::clone(&exit_requested),
+            icon_update_tx,
+        };
+
+        assert!(!exit_requested.load(Ordering::Relaxed));
+        // 模拟点击菜单第5项（退出微澜输入法）
+        menu.event(5, "clicked".to_string(), zbus::zvariant::Value::from(0), 0);
+        assert!(exit_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_status_notifier_item_activate_sends_icon_update() {
+        let is_chinese = Arc::new(AtomicBool::new(true));
+        let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
+        let sni = StatusNotifierItem {
+            is_chinese: Arc::clone(&is_chinese),
+            icon_update_tx,
+        };
+
+        assert_eq!(sni.icon_name(), "input-keyboard");
+        sni.activate(0, 0);
+        assert_eq!(sni.icon_name(), "input-latin");
+        assert!(icon_update_rx.try_recv().is_ok());
     }
 }

@@ -5,6 +5,7 @@ use crate::custom_phrase::{
 use crate::dict_importer::ImportedDictEntry;
 use crate::dispatcher::ModeDispatcher;
 use crate::entity::EntityProtectionManager;
+use crate::error::AlgoError;
 use crate::evaluator::DateTimeEvaluator;
 use crate::opencc::OpenCcDict;
 use crate::pipeline::CandidatePipeline;
@@ -95,6 +96,32 @@ impl AlgoEngine {
         self.user_dict_path = Some(p);
     }
 
+    /// 强制执行用户自适应词库的归并与刷盘持久化 (WAL Compaction)
+    pub fn persist_user_dict(&mut self) -> Result<(), AlgoError> {
+        if let Some(ref path) = self.user_dict_path {
+            self.user_model.compact_wal(path)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AlgoEngine {
+    fn drop(&mut self) {
+        if let Some(ref path) = self.user_dict_path {
+            log::info!(
+                "[算法引擎] 引擎正在析构，确保用户自适应词库落盘: {:?}",
+                path
+            );
+            if let Err(e) = self.user_model.compact_wal(path) {
+                log::warn!("[算法引擎] 析构保存用户词库失败: {}", e);
+            } else {
+                log::info!("[算法引擎] 析构已成功完成用户词库安全落盘。");
+            }
+        }
+    }
+}
+
+impl AlgoEngine {
     /// 使用内置样例数据创建算法引擎（用于测试）
     pub fn with_sample_data(config: AlgoConfig) -> Self {
         Self::new(LexiconTable::with_sample_data(), config)
@@ -270,13 +297,17 @@ impl AlgoEngine {
         }
 
         // 计算消费的拼音字母长度并执行分段确认（动态功能项与容错纠错项消费全部输入）
-        let consumed_len = if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
-            self.composition.len()
-        } else {
-            self.compute_consumed_len_for_candidate(&selected)
-        };
+        let consumed_len =
+            if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
+                self.composition.len()
+            } else {
+                self.compute_consumed_len_for_candidate(&selected)
+            };
 
-        if !selected.is_expandable && selected.tier != CandidateTier::TypoCorrection && !selected.pinyin.is_empty() {
+        if !selected.is_expandable
+            && selected.tier != CandidateTier::TypoCorrection
+            && !selected.pinyin.is_empty()
+        {
             self.partial_commit_segments
                 .push((selected.text.clone(), selected.pinyin.clone()));
         } else {
@@ -546,20 +577,137 @@ impl AlgoEngine {
     pub fn is_chinese_classifier(word: &str) -> bool {
         const CLASSIFIERS: &[&str] = &[
             // 常见单字量词
-            "个", "只", "支", "枝", "张", "条", "头", "匹", "尾", "块", "片", "粒", "颗", "本",
-            "册", "部", "首", "篇", "幅", "座", "栋", "扇", "套", "件", "双", "对", "副", "打",
-            "群", "把", "口", "根", "排", "行", "段", "节", "项", "类", "种", "束", "串", "包",
-            "盒", "箱", "袋", "瓶", "罐", "杯", "碗", "盘", "锅", "桶", "盆", "页", "枚", "尊",
-            "通", "场", "顿", "番", "次", "回", "趟", "遍", "遭", "阵", "门", "桩", "任", "届",
+            "个",
+            "只",
+            "支",
+            "枝",
+            "张",
+            "条",
+            "头",
+            "匹",
+            "尾",
+            "块",
+            "片",
+            "粒",
+            "颗",
+            "本",
+            "册",
+            "部",
+            "首",
+            "篇",
+            "幅",
+            "座",
+            "栋",
+            "扇",
+            "套",
+            "件",
+            "双",
+            "对",
+            "副",
+            "打",
+            "群",
+            "把",
+            "口",
+            "根",
+            "排",
+            "行",
+            "段",
+            "节",
+            "项",
+            "类",
+            "种",
+            "束",
+            "串",
+            "包",
+            "盒",
+            "箱",
+            "袋",
+            "瓶",
+            "罐",
+            "杯",
+            "碗",
+            "盘",
+            "锅",
+            "桶",
+            "盆",
+            "页",
+            "枚",
+            "尊",
+            "通",
+            "场",
+            "顿",
+            "番",
+            "次",
+            "回",
+            "趟",
+            "遍",
+            "遭",
+            "阵",
+            "门",
+            "桩",
+            "任",
+            "届",
             // 度量衡单位
-            "米", "分米", "厘米", "毫米", "微米", "纳米", "千米", "公里", "里", "尺", "寸", "丈",
-            "克", "千克", "公斤", "斤", "两", "钱", "吨", "磅", "盎司",
-            "升", "毫升", "立方米", "平方米", "平方", "公顷", "亩",
+            "米",
+            "分米",
+            "厘米",
+            "毫米",
+            "微米",
+            "纳米",
+            "千米",
+            "公里",
+            "里",
+            "尺",
+            "寸",
+            "丈",
+            "克",
+            "千克",
+            "公斤",
+            "斤",
+            "两",
+            "钱",
+            "吨",
+            "磅",
+            "盎司",
+            "升",
+            "毫升",
+            "立方米",
+            "平方米",
+            "平方",
+            "公顷",
+            "亩",
             // 时间与日期
-            "秒", "分", "分钟", "刻", "时", "小时", "天", "日", "周", "月", "年", "岁", "代", "季", "度",
+            "秒",
+            "分",
+            "分钟",
+            "刻",
+            "时",
+            "小时",
+            "天",
+            "日",
+            "周",
+            "月",
+            "年",
+            "岁",
+            "代",
+            "季",
+            "度",
             // 货币与比率
-            "元", "角", "块", "毛", "镑", "刀",
-            "折", "倍", "成", "点", "级", "百分点", "万", "亿", "兆",
+            "元",
+            "角",
+            "块",
+            "毛",
+            "镑",
+            "刀",
+            "折",
+            "倍",
+            "成",
+            "点",
+            "级",
+            "百分点",
+            "万",
+            "亿",
+            "兆",
         ];
 
         CLASSIFIERS.contains(&word)
@@ -646,14 +794,13 @@ impl AlgoEngine {
         // 2.1 Viterbi 长句动态规划解码（遵循 Best Path Only 原则）：
         // 仅针对 Prism 中代价最低的最优主路径执行整句求解，彻底杜绝次级碎切路径产生劣质假整句；
         // 同时传入末尾残存拼音 remaining 与上屏历史上下文，支持跨句二元转移预测
-        let min_units = if self.last_commit_context.is_some() { 1 } else { 2 };
+        let min_units = if self.last_commit_context.is_some() {
+            1
+        } else {
+            2
+        };
         if let Some(path) = paths.first() {
-            let total_units = path.syllables.len()
-                + if path.remaining.is_empty() {
-                    0
-                } else {
-                    1
-                };
+            let total_units = path.syllables.len() + if path.remaining.is_empty() { 0 } else { 1 };
             if total_units >= min_units {
                 if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context(
                     &path.syllables,
@@ -669,7 +816,6 @@ impl AlgoEngine {
         }
 
         if let Some(best_path) = paths.first() {
-
             // 2.2 前缀残存拼音与声母补全检索（解决诸如 "shux" 召回“熟悉”、“数学”、“属性”等）
             if !best_path.remaining.is_empty() {
                 let mut prefix_matches = self
@@ -678,8 +824,8 @@ impl AlgoEngine {
                 raw_candidates.append(&mut prefix_matches);
 
                 // 2.2.1 跨词边界短语前缀合成检索（解决诸如 "womendeshij" 召回“我们的时间”、“我们的世界”等）
-                let mut phrase_matches = self
-                    .synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
+                let mut phrase_matches =
+                    self.synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
                 raw_candidates.append(&mut phrase_matches);
 
                 // 若前序已完成音节非空，同时将首段已完成音节的候选词作为降级备选（如“数”、“书”、“树”）
@@ -710,7 +856,9 @@ impl AlgoEngine {
                     let first_syl = &first_path.syllables[0];
                     let mut first_matches = self.table.lookup(first_syl);
                     if self.config.fuzzy.has_active_rules() {
-                        for alt_syl in PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy) {
+                        for alt_syl in
+                            PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy)
+                        {
                             let mut alt_matches = self.table.lookup(&alt_syl);
                             for am in &mut alt_matches {
                                 am.pinyin = first_syl.clone();
@@ -720,7 +868,8 @@ impl AlgoEngine {
                         }
                     }
                     if first_matches.is_empty() {
-                        if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl) {
+                        if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl)
+                        {
                             for (text, score) in initial_entries {
                                 first_matches.push(
                                     AlgoCandidate::new(text, first_syl.clone(), score)
@@ -745,7 +894,9 @@ impl AlgoEngine {
                 let affinity = self
                     .table
                     .get_bigram_affinity(prev, &c.text)
-                    .unwrap_or_else(|| BigramLanguageModel::estimate_bigram_affinity(prev, &c.text));
+                    .unwrap_or_else(|| {
+                        BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
+                    });
                 if affinity > 0 {
                     // 将语言模型亲和度映射为候选词得分增益（大幅提高首位命中率）
                     c.score = c.score.saturating_add((affinity as u32).min(50_000));
@@ -765,9 +916,9 @@ impl AlgoEngine {
             // 5. 状态机感知与容错门禁控制：
             // 若当前输入处于正常的合法前缀打字态（已成功检索出 ExactWord 级别的完整成词或前缀展开短语），
             // 绝对免受激进物理空间容错打扰；仅在无任何合法成词/前缀展开命中时（如输入 nihso, cehng），才激活次位容错。
-            let has_exact_or_prefix_words = candidates
-                .iter()
-                .any(|c| c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity);
+            let has_exact_or_prefix_words = candidates.iter().any(|c| {
+                c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity
+            });
 
             if !has_exact_or_prefix_words {
                 let typo_cands = Self::generate_spatial_typo_candidates(raw_input, &self.table);
@@ -796,7 +947,10 @@ impl AlgoEngine {
             // 7. 英文单词联想注入（如输入 rust、github、apple 等在次位提供英文候选，若已存在相同专名则避免重复）
             let eng_cands = self.english_suggester.lookup(raw_input);
             for eng in eng_cands.into_iter().rev() {
-                if !candidates.iter().any(|c| c.text.eq_ignore_ascii_case(&eng.text)) {
+                if !candidates
+                    .iter()
+                    .any(|c| c.text.eq_ignore_ascii_case(&eng.text))
+                {
                     let pos = if candidates.is_empty() { 0 } else { 1 };
                     candidates.insert(pos, eng);
                 }
@@ -820,8 +974,8 @@ impl AlgoEngine {
             // 自动提取前 3 个音节（如 wo'men'de -> 我们的）与前 2 个音节（如 wo'men -> 我们，或简拼 r'g -> 如果/入股）的高频成词，
             // 紧随全长成词之后注入，支持分段确认 (Partial Commit)
             if let Some(best_path) = paths.first() {
-                let total_syls = best_path.syllables.len()
-                    + if best_path.remaining.is_empty() { 0 } else { 1 };
+                let total_syls =
+                    best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
                 if total_syls >= 3 && best_path.syllables.len() >= 2 {
                     let mut prefix_items = Vec::new();
 
@@ -874,7 +1028,8 @@ impl AlgoEngine {
 
                     // 11.3 混排注入：动态保留前序全长成词（2 至 3 个），随后注入前缀短词并保持去重
                     if !prefix_items.is_empty() {
-                        let mut injected = Vec::with_capacity(candidates.len() + prefix_items.len());
+                        let mut injected =
+                            Vec::with_capacity(candidates.len() + prefix_items.len());
                         let mut seen = std::collections::HashSet::new();
 
                         // 统计排在列表头部的全长匹配成词数量（如 rgzn 命中的 人工智能、人过中年、弱冠之年）
@@ -1014,7 +1169,11 @@ impl AlgoEngine {
         // 5. 跨词短语笛卡尔积合成与打分
         let mut results = Vec::new();
         for (head_text, head_pinyin, head_score) in &head_options {
-            let head_last_char = head_text.chars().last().map(|c| c.to_string()).unwrap_or_default();
+            let head_last_char = head_text
+                .chars()
+                .last()
+                .map(|c| c.to_string())
+                .unwrap_or_default();
             for tail in tail_cands.iter().take(5) {
                 let phrase_text = format!("{}{}", head_text, tail.text);
                 let phrase_pinyin = format!("{}'{}", head_pinyin, tail.pinyin);
@@ -1027,11 +1186,14 @@ impl AlgoEngine {
                     .table
                     .get_bigram_affinity(head_text, &tail.text)
                     .unwrap_or_else(|| {
-                        let rule_score = BigramLanguageModel::estimate_bigram_affinity(head_text, &tail.text);
+                        let rule_score =
+                            BigramLanguageModel::estimate_bigram_affinity(head_text, &tail.text);
                         if rule_score > 0 {
                             rule_score
                         } else {
-                            self.table.get_bigram_affinity(&head_last_char, &tail.text).unwrap_or(0)
+                            self.table
+                                .get_bigram_affinity(&head_last_char, &tail.text)
+                                .unwrap_or(0)
                         }
                     });
 
@@ -1086,8 +1248,7 @@ impl AlgoEngine {
                 // 原地变换并在使用后立即原地恢复，消除 Vec<char> 与 String 堆内存分配
                 buf[i] = alt_b;
                 if let Ok(mutated) = std::str::from_utf8(&buf[..n]) {
-                    let paths =
-                        PrismEngine::build_paths(mutated, &types::FuzzyConfig::default());
+                    let paths = PrismEngine::build_paths(mutated, &types::FuzzyConfig::default());
                     if let Some(best) = paths.first() {
                         if best.remaining.is_empty() && !best.syllables.is_empty() {
                             let key = best.to_key_string();
@@ -1111,8 +1272,7 @@ impl AlgoEngine {
         for i in 0..n.saturating_sub(1) {
             buf.swap(i, i + 1);
             if let Ok(swapped) = std::str::from_utf8(&buf[..n]) {
-                let paths =
-                    PrismEngine::build_paths(swapped, &types::FuzzyConfig::default());
+                let paths = PrismEngine::build_paths(swapped, &types::FuzzyConfig::default());
                 if let Some(best) = paths.first() {
                     if best.remaining.is_empty() && !best.syllables.is_empty() {
                         let key = best.to_key_string();
@@ -1152,7 +1312,8 @@ impl AlgoEngine {
     pub fn import_dict_entries(&mut self, entries: &[ImportedDictEntry]) {
         let now = 1_700_000_000;
         for entry in entries {
-            self.user_model.record_commit(&entry.text, &entry.pinyin, now);
+            self.user_model
+                .record_commit(&entry.text, &entry.pinyin, now);
         }
     }
 
@@ -1264,8 +1425,10 @@ mod tests {
 
     #[test]
     fn test_pagination_truncate_and_last_page_guard() {
-        let mut config = AlgoConfig::default();
-        config.page_size = 5;
+        let config = AlgoConfig {
+            page_size: 5,
+            ..Default::default()
+        };
         let mut engine = AlgoEngine::with_sample_data(config);
 
         for ch in "riqi".chars() {
@@ -1296,13 +1459,19 @@ mod tests {
             engine.push_char(ch);
         }
         let texts1: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
-        let idx1 = texts1.iter().position(|t| t == "北京").expect("应包含前缀词 北京");
+        let idx1 = texts1
+            .iter()
+            .position(|t| t == "北京")
+            .expect("应包含前缀词 北京");
         let (c1, rem1) = engine.select_candidate(idx1, 200).unwrap();
         assert_eq!(c1, "北京");
         assert_eq!(rem1, 4);
 
         let texts2: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
-        let idx2 = texts2.iter().position(|t| t == "西安").expect("剩余 xian 应包含 西安");
+        let idx2 = texts2
+            .iter()
+            .position(|t| t == "西安")
+            .expect("剩余 xian 应包含 西安");
         let (c2, rem2) = engine.select_candidate(idx2, 201).unwrap();
         assert_eq!(c2, "西安");
         assert_eq!(rem2, 0);
@@ -1323,7 +1492,10 @@ mod tests {
             engine.push_char(ch);
         }
         let texts1: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
-        let idx1 = texts1.iter().position(|t| t == "北京").expect("应包含前缀词 北京");
+        let idx1 = texts1
+            .iter()
+            .position(|t| t == "北京")
+            .expect("应包含前缀词 北京");
         let (c1, rem1) = engine.select_candidate(idx1, 200).unwrap();
         assert_eq!(c1, "北京");
         assert_eq!(rem1, 4);
@@ -1336,5 +1508,33 @@ mod tests {
             "修改剩余拼音时必须立即清空自造词累积器，防止拼音错位合成脏词"
         );
     }
-}
 
+    #[test]
+    fn test_engine_persist_and_drop_saves_user_dict() {
+        let temp_dir = std::env::temp_dir();
+        let dict_path = temp_dir.join(format!("test_waylan_user_dict_{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&dict_path);
+
+        {
+            let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+            engine.set_user_dict_path(&dict_path);
+
+            for ch in "nihao".chars() {
+                engine.push_char(ch);
+            }
+            let res = engine.select_candidate(0, 100);
+            assert!(res.is_some(), "应当成功选中首个候选词 你好");
+            // 引擎在此作用域结束并触发 Drop
+        }
+
+        // 重新从持久化落盘的文件恢复，验证词频数据已成功刷盘
+        assert!(dict_path.exists(), "引擎析构后用户词库文件应当已安全落盘");
+        let restored_model =
+            UserAdaptiveModel::load_or_replay_wal(&dict_path).expect("读取持久化词库失败");
+        assert!(
+            restored_model.total_entries() > 0,
+            "重新加载的用户自适应词库词条数应大于 0"
+        );
+        let _ = std::fs::remove_file(&dict_path);
+    }
+}

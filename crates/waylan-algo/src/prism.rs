@@ -126,10 +126,7 @@ pub static STANDARD_INITIALS: &[&str] = &[
 
 impl PrismEngine {
     /// 构建拼写音节图并求解所有合法切分路径
-    pub fn build_paths(
-        input: &str,
-        fuzzy: &FuzzyConfig,
-    ) -> Vec<SegmentPath> {
+    pub fn build_paths(input: &str, fuzzy: &FuzzyConfig) -> Vec<SegmentPath> {
         if input.is_empty() {
             return Vec::new();
         }
@@ -155,7 +152,16 @@ impl PrismEngine {
 
         let mut current_syllables = Vec::new();
         // 第一阶段：正向严格搜索（不启用容错虚边，保证正常长句以微秒级极致性能直通）
-        Self::dfs_dag(input, 0, &mut current_syllables, 0, 0, false, &mut paths, fuzzy);
+        Self::dfs_dag(
+            input,
+            0,
+            &mut current_syllables,
+            0,
+            0,
+            false,
+            &mut paths,
+            fuzzy,
+        );
 
         // 判定是否属于正常击键流程：
         // 1. 前驱音节全部属于完整标准音节（无单字母辅音声母降级）；
@@ -178,14 +184,40 @@ impl PrismEngine {
         let is_pure_initials = input.chars().all(|c| {
             matches!(
                 c,
-                'b' | 'p' | 'm' | 'f' | 'd' | 't' | 'n' | 'l' | 'g' | 'k' | 'h' | 'j' | 'q' | 'x' | 'r'
-                    | 'z' | 'c' | 's' | 'y' | 'w'
+                'b' | 'p'
+                    | 'm'
+                    | 'f'
+                    | 'd'
+                    | 't'
+                    | 'n'
+                    | 'l'
+                    | 'g'
+                    | 'k'
+                    | 'h'
+                    | 'j'
+                    | 'q'
+                    | 'x'
+                    | 'r'
+                    | 'z'
+                    | 'c'
+                    | 's'
+                    | 'y'
+                    | 'w'
             )
         });
 
         // 第二阶段：若非纯声母缩写，且非正常全拼键入流（存在断流、孤立辅音声母或非法残余前缀），启动容错虚边补救搜索
         if !is_pure_initials && !is_normal_typing {
-            Self::dfs_dag(input, 0, &mut current_syllables, 0, 0, true, &mut paths, fuzzy);
+            Self::dfs_dag(
+                input,
+                0,
+                &mut current_syllables,
+                0,
+                0,
+                true,
+                &mut paths,
+                fuzzy,
+            );
         }
 
         // 如果完全无法形成完整音节切分，尝试提取最长可能前缀
@@ -244,11 +276,24 @@ impl PrismEngine {
             // 检查零声母借音碎切：当前音节若以 a, o, e 开头，且与前一个音节可合并成合法单音节，则判定为借音碎切并施加惩罚
             if let Some(prev) = current.last() {
                 if Self::is_zero_initial_borrowing_split(prev, std_syl) {
-                    step_cost += if matches!(std_syl, "n" | "ng" | "m") { 50 } else { 35 };
+                    step_cost += if matches!(std_syl, "n" | "ng" | "m") {
+                        50
+                    } else {
+                        35
+                    };
                 }
             }
             current.push(std_syl.to_string());
-            Self::dfs_dag(input, start + len, current, current_cost + step_cost, typo_count, enable_typo, results, fuzzy);
+            Self::dfs_dag(
+                input,
+                start + len,
+                current,
+                current_cost + step_cost,
+                typo_count,
+                enable_typo,
+                results,
+                fuzzy,
+            );
             current.pop();
         }
 
@@ -265,7 +310,16 @@ impl PrismEngine {
                         }
                     }
                     current.push(slice.to_string());
-                    Self::dfs_dag(input, start + len, current, current_cost + step_cost, typo_count, enable_typo, results, fuzzy);
+                    Self::dfs_dag(
+                        input,
+                        start + len,
+                        current,
+                        current_cost + step_cost,
+                        typo_count,
+                        enable_typo,
+                        results,
+                        fuzzy,
+                    );
                     current.pop();
                 }
             }
@@ -276,7 +330,7 @@ impl PrismEngine {
         if enable_typo && typo_count == 0 && start + 1 < input.len() && results.len() < 48 {
             let bytes = input.as_bytes();
             let rem_bytes = &bytes[start..];
-            
+
             // 尝试互换相邻索引 (0, 1) 或 (1, 2)
             let swap_pairs = if rem_bytes.len() >= 3 {
                 vec![(0, 1), (1, 2)]
@@ -292,7 +346,16 @@ impl PrismEngine {
                     for &(std_syl, len) in swapped_matches.iter().rev() {
                         if len > idx2 {
                             current.push(std_syl.to_string());
-                            Self::dfs_dag(input, start + len, current, current_cost + 10 + 16, 1, enable_typo, results, fuzzy);
+                            Self::dfs_dag(
+                                input,
+                                start + len,
+                                current,
+                                current_cost + 10 + 16,
+                                1,
+                                enable_typo,
+                                results,
+                                fuzzy,
+                            );
                             current.pop();
                         }
                     }
@@ -302,14 +365,27 @@ impl PrismEngine {
 
         // 1.4 容错虚边：物理键盘紧邻按键高斯误触（如 nihso -> nihao, beikin -> beijin）
         // 防候选词爆炸：仅在第二阶段且未匹配出 4 字符以上音节时探索
-        if enable_typo && typo_count == 0 && !fsa_matches.iter().any(|m| m.1 >= 4) && results.len() < 48 {
+        if enable_typo
+            && typo_count == 0
+            && !fsa_matches.iter().any(|m| m.1 >= 4)
+            && results.len() < 48
+        {
             for len in (2..=max_len).rev() {
                 let slice = &input[start..start + len];
                 let corrections = crate::syllables::get_spatial_typo_corrections(slice, 25);
                 for (std_syl, edit_cost) in corrections {
                     if !fsa_matches.iter().any(|m| m.0 == std_syl) {
                         current.push(std_syl);
-                        Self::dfs_dag(input, start + len, current, current_cost + 10 + edit_cost, 1, enable_typo, results, fuzzy);
+                        Self::dfs_dag(
+                            input,
+                            start + len,
+                            current,
+                            current_cost + 10 + edit_cost,
+                            1,
+                            enable_typo,
+                            results,
+                            fuzzy,
+                        );
                         current.pop();
                     }
                 }
@@ -324,7 +400,16 @@ impl PrismEngine {
                 let len = initial.len();
                 if start + len < input.len() {
                     current.push(initial.to_string());
-                    Self::dfs_dag(input, start + len, current, current_cost + 25, typo_count, enable_typo, results, fuzzy);
+                    Self::dfs_dag(
+                        input,
+                        start + len,
+                        current,
+                        current_cost + 25,
+                        typo_count,
+                        enable_typo,
+                        results,
+                        fuzzy,
+                    );
                     current.pop();
                 } else if !current.is_empty() {
                     results.push(SegmentPath {
@@ -553,10 +638,20 @@ impl PrismEngine {
     pub fn is_zero_initial_syllable(syl: &str) -> bool {
         matches!(
             syl,
-            "a" | "ai" | "an" | "ang" | "ao"
-                | "e" | "ei" | "en" | "eng" | "er"
-                | "o" | "ou"
-                | "n" | "ng" | "m"
+            "a" | "ai"
+                | "an"
+                | "ang"
+                | "ao"
+                | "e"
+                | "ei"
+                | "en"
+                | "eng"
+                | "er"
+                | "o"
+                | "ou"
+                | "n"
+                | "ng"
+                | "m"
         )
     }
 
@@ -575,8 +670,6 @@ impl PrismEngine {
         combined.push_str(curr);
         is_valid_syllable(&combined)
     }
-
-
 }
 
 #[cfg(test)]
@@ -604,7 +697,9 @@ mod tests {
         // 验证 xi'a 能够同时切分出闭合的 xi'a 与带 remaining: a 的前缀扩展路径
         let paths_prefix = PrismEngine::build_paths("xi'a", &fuzzy);
         assert!(paths_prefix.iter().any(|p| p.syllables == vec!["xi", "a"]));
-        assert!(paths_prefix.iter().any(|p| p.syllables == vec!["xi"] && p.remaining == "a"));
+        assert!(paths_prefix
+            .iter()
+            .any(|p| p.syllables == vec!["xi"] && p.remaining == "a"));
     }
 
     #[test]
@@ -637,9 +732,14 @@ mod tests {
         assert!(!paths.is_empty());
         // 最优主路径必须是完整的星期天，且代价值低于借音碎切的 ti'an
         assert_eq!(paths[0].to_key_string(), "jin'tian'xing'qi'tian");
-        let sub_split_opt = paths.iter().find(|p| p.to_key_string() == "jin'tian'xing'qi'ti'an");
+        let sub_split_opt = paths
+            .iter()
+            .find(|p| p.to_key_string() == "jin'tian'xing'qi'ti'an");
         if let Some(sub_path) = sub_split_opt {
-            assert!(paths[0].cost < sub_path.cost, "正常长音节切分代价值必须严格低于借音碎切");
+            assert!(
+                paths[0].cost < sub_path.cost,
+                "正常长音节切分代价值必须严格低于借音碎切"
+            );
         }
     }
 
@@ -648,8 +748,13 @@ mod tests {
         let fuzzy = FuzzyConfig::default();
         let paths = PrismEngine::build_paths("cehng", &fuzzy);
         assert!(!paths.is_empty(), "切分路径不应为空");
-        let has_cheng = paths.iter().any(|p| p.syllables.contains(&"cheng".to_string()));
-        assert!(has_cheng, "输入 cehng 应通过相邻颠倒虚边成功容错切分出 cheng");
+        let has_cheng = paths
+            .iter()
+            .any(|p| p.syllables.contains(&"cheng".to_string()));
+        assert!(
+            has_cheng,
+            "输入 cehng 应通过相邻颠倒虚边成功容错切分出 cheng"
+        );
     }
 
     #[test]
@@ -658,7 +763,10 @@ mod tests {
         let paths = PrismEngine::build_paths("nihso", &fuzzy);
         assert!(!paths.is_empty(), "切分路径不应为空");
         let has_ni_hao = paths.iter().any(|p| p.to_key_string() == "ni'hao");
-        assert!(has_ni_hao, "输入 nihso 应通过高斯邻键虚边成功容错切分出 ni'hao");
+        assert!(
+            has_ni_hao,
+            "输入 nihso 应通过高斯邻键虚边成功容错切分出 ni'hao"
+        );
     }
 
     #[test]
@@ -687,8 +795,10 @@ mod tests {
 
     #[test]
     fn test_fuzzy_engine_lookup_zongguo() {
-        let mut config = crate::types::AlgoConfig::default();
-        config.fuzzy = FuzzyConfig::all_enabled();
+        let config = crate::types::AlgoConfig {
+            fuzzy: FuzzyConfig::all_enabled(),
+            ..Default::default()
+        };
         let mut engine = crate::AlgoEngine::with_sample_data(config);
         for ch in "zongguo".chars() {
             engine.push_char(ch);

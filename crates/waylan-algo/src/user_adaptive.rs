@@ -260,6 +260,9 @@ impl UserAdaptiveModel {
 
         drop(guard);
 
+        // 同步更新内存模型状态机（遵循 WAL 先写日志后更新内存的设计原则）
+        self.record_commit(text, pinyin, timestamp);
+
         // 运行期累计写入流水达到阈值时，自动触发一次原子压缩合并，避免 WAL 持续膨胀
         self.wal_append_counter += 1;
         if self.wal_append_counter >= self.compact_threshold {
