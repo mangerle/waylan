@@ -1,5 +1,88 @@
-use crate::syllables::{has_syllable_prefix, is_valid_syllable};
+use crate::syllables::{has_syllable_prefix, is_valid_syllable, STANDARD_SYLLABLES};
 use crate::types::{DoublePinyinSchema, FuzzyConfig};
+use std::sync::OnceLock;
+
+/// 有限状态机节点
+#[derive(Clone, Debug)]
+struct FsaNode {
+    next: [u16; 26],
+    syllable: Option<&'static str>,
+}
+
+/// 编译型音节投影有限状态机 (Prism FSA)
+///
+/// # 设计原理
+/// - 预编译所有 410 个标准普通话音节为紧凑字典树状态机；
+/// - 状态转移在 O(1) 数组索引内步进完成，彻底消灭每个前缀的重复二分查找；
+/// - 在输入流上单向步进，以严格 O(L) 复杂度提取所有合法音节切分。
+pub struct PrismFsa {
+    nodes: Vec<FsaNode>,
+}
+
+impl PrismFsa {
+    /// 全局静态编译单例
+    pub fn global() -> &'static PrismFsa {
+        static INSTANCE: OnceLock<PrismFsa> = OnceLock::new();
+        INSTANCE.get_or_init(Self::compile)
+    }
+
+    /// 编译全部合法标准拼音音节
+    fn compile() -> Self {
+        let mut nodes = vec![FsaNode {
+            next: [0; 26],
+            syllable: None,
+        }];
+
+        for &syl in STANDARD_SYLLABLES {
+            let mut curr = 0;
+            for b in syl.bytes() {
+                if b.is_ascii_lowercase() {
+                    let idx = (b - b'a') as usize;
+                    let next_state = nodes[curr].next[idx];
+                    if next_state == 0 {
+                        let new_state = nodes.len() as u16;
+                        nodes[curr].next[idx] = new_state;
+                        nodes.push(FsaNode {
+                            next: [0; 26],
+                            syllable: None,
+                        });
+                        curr = new_state as usize;
+                    } else {
+                        curr = next_state as usize;
+                    }
+                }
+            }
+            nodes[curr].syllable = Some(syl);
+        }
+
+        Self { nodes }
+    }
+
+    /// 在输入串上以单向步进方式匹配所有合法音节（返回 (标准音节, 匹配字节长度)）
+    pub fn match_syllables(&self, input: &str, start: usize) -> Vec<(&'static str, usize)> {
+        let mut matches = Vec::new();
+        let bytes = input.as_bytes();
+        let mut curr = 0;
+        let mut len = 0;
+
+        for &b in &bytes[start..] {
+            if !b.is_ascii_lowercase() {
+                break;
+            }
+            let idx = (b - b'a') as usize;
+            let next_state = self.nodes[curr].next[idx];
+            if next_state == 0 {
+                break;
+            }
+            curr = next_state as usize;
+            len += 1;
+            if let Some(syl) = self.nodes[curr].syllable {
+                matches.push((syl, len));
+            }
+        }
+        matches
+    }
+}
 
 /// 音节图中的一条候选切分路径
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +116,12 @@ impl SegmentPath {
 #[derive(Debug, Default)]
 pub struct PrismEngine;
 
+/// 现代汉语普通话标准声母列表（双字母翘舌声母排在最前优先匹配）
+pub static STANDARD_INITIALS: &[&str] = &[
+    "zh", "ch", "sh", "b", "p", "m", "f", "d", "t", "n", "l", "g", "k", "h", "j", "q", "x", "r",
+    "z", "c", "s", "y", "w",
+];
+
 impl PrismEngine {
     /// 构建拼写音节图并求解所有合法切分路径
     pub fn build_paths(
@@ -54,10 +143,21 @@ impl PrismEngine {
             return Self::build_explicit_split_paths(input, fuzzy);
         }
 
-        // 3. 全拼模式：在 DAG 上执行多路径搜索
+        // 3. 全拼与简拼混合模式：在 DAG 上执行多路径搜索
         let mut paths = Vec::new();
+
+        // 3.1 专有名词与实体保护机制 (NER 原型)：若输入精确匹配受保护实体，直接生成零代价原子路径
+        let entity_mgr = crate::entity::EntityProtectionManager::new();
+        if let Some(entity) = entity_mgr.match_exact(input) {
+            paths.push(SegmentPath {
+                syllables: vec![entity],
+                remaining: String::new(),
+                cost: 0,
+            });
+        }
+
         let mut current_syllables = Vec::new();
-        Self::dfs_dag(input, 0, &mut current_syllables, &mut paths, fuzzy);
+        Self::dfs_dag(input, 0, &mut current_syllables, 0, &mut paths, fuzzy);
 
         // 如果完全无法形成完整音节切分，尝试提取最长可能前缀
         if paths.is_empty() {
@@ -68,17 +168,18 @@ impl PrismEngine {
             });
         }
 
-        // 按代价值升序排序（段数少、完整覆盖的排在前）
+        // 按代价值升序排序（全拼完整度最高、段数适中的排在前）
         paths.sort_by_key(|p| p.cost);
         paths.dedup();
         paths
     }
 
-    /// 深度优先搜索构建音节 DAG 路径
+    /// 深度优先搜索构建音节与声母混合 DAG 路径（保证 100% 原始击键字母保真）
     fn dfs_dag(
         input: &str,
         start: usize,
         current: &mut Vec<String>,
+        current_cost: u32,
         results: &mut Vec<SegmentPath>,
         fuzzy: &FuzzyConfig,
     ) {
@@ -87,34 +188,70 @@ impl PrismEngine {
                 results.push(SegmentPath {
                     syllables: current.clone(),
                     remaining: String::new(),
-                    cost: current.len() as u32,
+                    cost: current_cost,
                 });
             }
             return;
         }
 
-        // 最长拼音音节不超过 6 字符（如 zhuang, chuang）
-        let max_len = (input.len() - start).min(6);
-        let mut matched_any = false;
+        if results.len() >= 64 {
+            return; // 限制全局分支数量，保障微秒级求解
+        }
 
-        for len in (1..=max_len).rev() {
-            let slice = &input[start..start + len];
-            if is_valid_syllable(slice) || Self::is_fuzzy_valid(slice, fuzzy) {
-                matched_any = true;
-                current.push(slice.to_string());
-                Self::dfs_dag(input, start + len, current, results, fuzzy);
-                current.pop();
+        let max_len = (input.len() - start).min(6);
+        let mut matched_full = false;
+
+        // 1. 优先尝试标准完整音节（利用 PrismFsa 编译型有限状态机单向步进匹配，消灭二分查找，保持原字母切片）
+        let fsa = PrismFsa::global();
+        let fsa_matches = fsa.match_syllables(input, start);
+        for &(std_syl, len) in fsa_matches.iter().rev() {
+            matched_full = true;
+            current.push(std_syl.to_string());
+            Self::dfs_dag(input, start + len, current, current_cost + 10, results, fuzzy);
+            current.pop();
+        }
+
+        // 1.2 模糊音音节匹配扩展（若启用了模糊音开关，严格使用原输入切片 slice）
+        if fuzzy.has_active_rules() {
+            for len in (1..=max_len).rev() {
+                let slice = &input[start..start + len];
+                if Self::is_fuzzy_valid(slice, fuzzy) && !fsa_matches.iter().any(|m| m.0 == slice) {
+                    matched_full = true;
+                    current.push(slice.to_string());
+                    Self::dfs_dag(input, start + len, current, current_cost + 12, results, fuzzy);
+                    current.pop();
+                }
             }
         }
 
-        // 若当前处于末尾且无法凑成完整音节，但属于合法前缀，记录为带有 remaining 的候选路径
-        if !matched_any && !current.is_empty() {
+        // 2. 声母简拼混合转移边（严格保持原始声母字母，绝不改动任何字符）：
+        // 若当前声母位于输入中间（后面还有更多字符）：作为跨音节声母转移（代价值 +25）
+        // 若当前声母位于输入末尾（start + len == input.len()）：作为未闭合的残余 remaining 前缀记录
+        for &initial in STANDARD_INITIALS {
+            if input[start..].starts_with(initial) {
+                let len = initial.len();
+                if start + len < input.len() {
+                    current.push(initial.to_string());
+                    Self::dfs_dag(input, start + len, current, current_cost + 25, results, fuzzy);
+                    current.pop();
+                } else if !current.is_empty() {
+                    results.push(SegmentPath {
+                        syllables: current.clone(),
+                        remaining: initial.to_string(),
+                        cost: current_cost + 30,
+                    });
+                }
+            }
+        }
+
+        // 3. 若当前处于末尾且无法凑成完整音节，但属于合法前缀，记录为带有 remaining 的候选路径
+        if !matched_full && !current.is_empty() {
             let remaining = &input[start..];
             if has_syllable_prefix(remaining) {
                 results.push(SegmentPath {
                     syllables: current.clone(),
                     remaining: remaining.to_string(),
-                    cost: current.len() as u32 + 2,
+                    cost: current_cost + 50,
                 });
             }
         }
@@ -389,5 +526,19 @@ mod tests {
         let fuzzy = FuzzyConfig::default();
         let paths = PrismEngine::build_paths("xm", &fuzzy, Some(DoublePinyinSchema::ZiRanMa));
         assert_eq!(paths[0].syllables, vec!["xian"]);
+    }
+
+    #[test]
+    fn test_strict_raw_initials_segmentation() {
+        let fuzzy = FuzzyConfig::default();
+        // 用户输入纯声母长串 qwdwwqswsqw，测试切分是否 100% 原按键保真，绝不篡改任何字母
+        let paths = PrismEngine::build_paths("qwdwwqswsqw", &fuzzy, None);
+        assert!(!paths.is_empty(), "切分路径不应为空");
+        let best_path = &paths[0];
+        assert_eq!(
+            best_path.to_key_string(),
+            "q'w'd'w'w'q's'w's'q'w",
+            "声母切分音节必须严格保持用户输入的原始字母，绝不允许换字母"
+        );
     }
 }

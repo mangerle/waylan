@@ -140,7 +140,7 @@ fn load_lexicon_table() -> LexiconTable {
                 Ok(loaded) => {
                     let elapsed = load_start.elapsed();
                     info!(
-                        "  - 成功加载全量字词库: {:?} (耗时: {:.2} ms, 拼音键数: {} 组)",
+                        "  - 成功加载全量汉语词库: {:?} (耗时: {:.2} ms, 拼音键数: {} 组)",
                         path,
                         elapsed.as_secs_f64() * 1000.0,
                         loaded.len()

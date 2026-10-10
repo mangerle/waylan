@@ -29,6 +29,13 @@ pub struct FuzzyConfig {
     pub l_n: bool,
 }
 
+impl FuzzyConfig {
+    /// 检查是否存在任一激活的模糊音规则
+    pub fn has_active_rules(&self) -> bool {
+        self.z_zh || self.c_ch || self.s_sh || self.an_ang || self.en_eng || self.in_ing || self.l_n
+    }
+}
+
 /// 微澜算法引擎全局运行配置
 ///
 /// # 设计原理
@@ -90,6 +97,8 @@ pub enum CandidateTier {
     /// 完整整词匹配（词库中完整匹配的成词，如“我们”、“中国”、“西安”、“先”）
     #[default]
     ExactWord = 5,
+    /// 专有名词与受保护实体（如技术专名、中英实体，享有最高置顶优先级）
+    ProtectedEntity = 6,
 }
 
 /// 算法内部候选词结构

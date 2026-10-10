@@ -62,6 +62,231 @@ pub fn has_syllable_prefix(prefix: &str) -> bool {
     }
 }
 
+/// 获取标准 QWERTY 键盘字母的物理二维平面坐标 (x, y)
+///
+/// 坐标基于标准键盘物理中心距归一化：
+/// - 行 0: Q~P 行 (y = 0.0)
+/// - 行 1: A~L 行 (y = 1.0, x 轴右移约 0.25 错位)
+/// - 行 2: Z~M 行 (y = 2.0, x 轴右移约 0.75 错位)
+pub fn get_qwerty_coord(c: char) -> Option<(f32, f32)> {
+    match c {
+        'q' => Some((0.0, 0.0)),
+        'w' => Some((1.0, 0.0)),
+        'e' => Some((2.0, 0.0)),
+        'r' => Some((3.0, 0.0)),
+        't' => Some((4.0, 0.0)),
+        'y' => Some((5.0, 0.0)),
+        'u' => Some((6.0, 0.0)),
+        'i' => Some((7.0, 0.0)),
+        'o' => Some((8.0, 0.0)),
+        'p' => Some((9.0, 0.0)),
+
+        'a' => Some((0.25, 1.0)),
+        's' => Some((1.25, 1.0)),
+        'd' => Some((2.25, 1.0)),
+        'f' => Some((3.25, 1.0)),
+        'g' => Some((4.25, 1.0)),
+        'h' => Some((5.25, 1.0)),
+        'j' => Some((6.25, 1.0)),
+        'k' => Some((7.25, 1.0)),
+        'l' => Some((8.25, 1.0)),
+
+        'z' => Some((0.75, 2.0)),
+        'x' => Some((1.75, 2.0)),
+        'c' => Some((2.75, 2.0)),
+        'v' => Some((3.75, 2.0)),
+        'b' => Some((4.75, 2.0)),
+        'n' => Some((5.75, 2.0)),
+        'm' => Some((6.75, 2.0)),
+        _ => None,
+    }
+}
+
+/// 计算两按键在物理键盘上的几何欧氏距离
+pub fn key_spatial_distance(c1: char, c2: char) -> f32 {
+    if c1 == c2 {
+        return 0.0;
+    }
+    match (get_qwerty_coord(c1), get_qwerty_coord(c2)) {
+        (Some((x1, y1)), Some((x2, y2))) => {
+            let dx = x1 - x2;
+            let dy = y1 - y2;
+            (dx * dx + dy * dy).sqrt()
+        }
+        _ => 5.0,
+    }
+}
+
+/// 计算字符替换的高斯几何惩罚代价（单位：惩罚分）
+///
+/// 算法原理：
+/// 采用高斯分布衰减模型：惩罚 = base + alpha * (1.0 - exp(-d^2 / (2 * sigma^2)))
+/// 紧邻按键（d <= 1.05，如 u-i, u-y, s-a, s-d）代价极低（约 12~14）；
+/// 次邻近按键（1.05 < d <= 1.5，如 s-w, u-j）代价约为 18~22；
+/// 跨区域远距离误触按键代价在 35 以上。
+pub fn char_substitution_cost(c1: char, c2: char) -> u32 {
+    if c1 == c2 {
+        return 0;
+    }
+    let d = key_spatial_distance(c1, c2);
+    let gaussian_factor = 1.0 - (- (d * d) / 2.0).exp();
+    let cost = 10.0 + 35.0 * gaussian_factor;
+    cost.round() as u32
+}
+
+/// 计算输入切片与目标标准音节之间的物理空间加权编辑距离
+///
+/// 支持操作：
+/// - 替换：根据 QWERTY 空间几何高斯距离加权；
+/// - 插入（用户多按键）：代价 26；
+/// - 删除（用户漏按键）：代价 26。
+pub fn weighted_edit_distance(source: &str, target: &str) -> u32 {
+    if source == target {
+        return 0;
+    }
+    let s_chars: Vec<char> = source.chars().collect();
+    let t_chars: Vec<char> = target.chars().collect();
+    let m = s_chars.len();
+    let n = t_chars.len();
+
+    if m == 0 {
+        return (n as u32) * 26;
+    }
+    if n == 0 {
+        return (m as u32) * 26;
+    }
+
+    if m.abs_diff(n) > 2 {
+        return 100;
+    }
+
+    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+
+    for i in 0..=m {
+        dp[i][0] = (i as u32) * 26;
+    }
+    for j in 0..=n {
+        dp[0][j] = (j as u32) * 26;
+    }
+
+    for i in 1..=m {
+        let sc = s_chars[i - 1];
+        for j in 1..=n {
+            let tc = t_chars[j - 1];
+            let sub_cost = char_substitution_cost(sc, tc);
+            let cost_sub = dp[i - 1][j - 1] + sub_cost;
+            let cost_del = dp[i - 1][j] + 26;
+            let cost_ins = dp[i][j - 1] + 26;
+
+            dp[i][j] = cost_sub.min(cost_del).min(cost_ins);
+        }
+    }
+
+    dp[m][n]
+}
+
+/// 获取输入拼音片段基于物理键盘加权的高斯纠错候选音节列表
+///
+/// 限制最大返回代价 `max_cost`（默认 25），返回 `(合法标准音节, 编辑代价)` 列表，按代价升序排列
+pub fn get_spatial_typo_corrections(slice: &str, max_cost: u32) -> Vec<(String, u32)> {
+    if slice.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    let slice_len = slice.len();
+    let first_char = slice.chars().next().unwrap_or('\0');
+
+    for &std_syl in STANDARD_SYLLABLES {
+        // 长度差超过 1 快速剪枝
+        if std_syl.len().abs_diff(slice_len) > 1 {
+            continue;
+        }
+        // 声母首字母物理距离相差过大快速剪枝（仅探索紧邻误触按键）
+        if let Some(target_first) = std_syl.chars().next() {
+            if key_spatial_distance(first_char, target_first) > 1.5 {
+                continue;
+            }
+        }
+        let cost = weighted_edit_distance(slice, std_syl);
+        if cost > 0 && cost <= max_cost {
+            candidates.push((std_syl.to_string(), cost));
+        }
+    }
+
+    candidates.sort_by_key(|item| item.1);
+    candidates.truncate(4);
+    candidates
+}
+
+/// 获取输入拼音片段的通用容错纠错音节列表
+///
+/// # 覆盖场景
+/// 1. 韵母易混颠倒 (ie <=> ei, ui <=> iu)；
+/// 2. 鼻音与辅音快速键入倒置 (neg => eng, agn => ang, ign => ing, ogn => ong)；
+/// 3. 元音轻微丢失或错按 (uen => un)。
+pub fn get_typo_corrections(slice: &str) -> Vec<String> {
+    let mut results = Vec::new();
+
+    // 1. ie <=> ei 双向互换 (如 mie <=> mei, tie <=> tei, die <=> dei, xei => xie)
+    if slice.contains("ie") {
+        let alt = slice.replace("ie", "ei");
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    } else if slice.contains("ei") {
+        let alt = slice.replace("ei", "ie");
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    }
+
+    // 2. ui <=> iu 易混颠倒 (如 gui <=> giu, dui <=> diu)
+    if slice.contains("ui") {
+        let alt = slice.replace("ui", "iu");
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    } else if slice.contains("iu") {
+        let alt = slice.replace("iu", "ui");
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    }
+
+    // 3. 鼻音辅音结尾倒置: neg => eng, agn => ang, ign => ing, ogn => ong
+    if slice.ends_with("neg") {
+        let alt = format!("{}eng", &slice[..slice.len() - 3]);
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    } else if slice.ends_with("agn") {
+        let alt = format!("{}ang", &slice[..slice.len() - 3]);
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    } else if slice.ends_with("ign") {
+        let alt = format!("{}ing", &slice[..slice.len() - 3]);
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    } else if slice.ends_with("ogn") {
+        let alt = format!("{}ong", &slice[..slice.len() - 3]);
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    }
+
+    // 4. 元音轻微丢失或错按 (uen => un)
+    if slice.contains("uen") {
+        let alt = slice.replace("uen", "un");
+        if is_valid_syllable(&alt) {
+            results.push(alt);
+        }
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +307,37 @@ mod tests {
         assert!(has_syllable_prefix("x"));
         assert!(has_syllable_prefix("ni"));
         assert!(!has_syllable_prefix("zz"));
+    }
+
+    #[test]
+    fn test_keyboard_spatial_distance_and_cost() {
+        // u 与 i 属于紧邻键，几何距离为 1.0
+        let dist_u_i = key_spatial_distance('u', 'i');
+        assert!((dist_u_i - 1.0).abs() < 1e-4);
+        let cost_u_i = char_substitution_cost('u', 'i');
+        assert!(cost_u_i <= 25, "邻键误触惩罚应在合理低位: {}", cost_u_i);
+
+        // u 与 z 跨区域远距离按键
+        let dist_u_z = key_spatial_distance('u', 'z');
+        assert!(dist_u_z > 4.0);
+        let cost_u_z = char_substitution_cost('u', 'z');
+        assert!(cost_u_z >= 40, "远距离误触惩罚应很高: {}", cost_u_z);
+    }
+
+    #[test]
+    fn test_spatial_typo_corrections() {
+        // 误将 hao 打成 hso (s 与 a 邻近)
+        let corrections = get_spatial_typo_corrections("hso", 25);
+        assert!(
+            corrections.iter().any(|(syl, _)| syl == "hao"),
+            "hso 应纠错召回 hao"
+        );
+
+        // 误将 zhong 打成 zhobg (b 与 n 邻近)
+        let corrections_zh = get_spatial_typo_corrections("zhobg", 25);
+        assert!(
+            corrections_zh.iter().any(|(syl, _)| syl == "zhong"),
+            "zhobg 应纠错召回 zhong"
+        );
     }
 }

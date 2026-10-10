@@ -23,7 +23,17 @@ impl ModeDispatcher {
         let body = &raw_input[first_char.len_utf8()..];
 
         match first_char {
-            'v' if config.enable_v_mode && !body.is_empty() => Some(Self::eval_v_mode(body)),
+            'v' if config.enable_v_mode
+                && !body.is_empty()
+                && body.starts_with(|c: char| c.is_ascii_digit() || c == '(' || c == '-') =>
+            {
+                let res = Self::eval_v_mode(body);
+                if res.is_empty() {
+                    None
+                } else {
+                    Some(res)
+                }
+            }
             'u' if config.enable_u_mode && !body.is_empty() => Some(Self::eval_u_mode(body)),
             'i' if config.enable_i_mode && !body.is_empty() => Some(Self::eval_i_mode(body)),
             _ => None,
@@ -223,8 +233,8 @@ mod tests {
         assert_eq!(result[0].text, "7");
         assert_eq!(result[1].text, "1+2*3=7");
 
-        let div_zero = ModeDispatcher::try_dispatch("v10/0", &config).expect("应捕获但无结果");
-        assert!(div_zero.is_empty());
+        let div_zero = ModeDispatcher::try_dispatch("v10/0", &config);
+        assert!(div_zero.is_none());
     }
 
     #[test]

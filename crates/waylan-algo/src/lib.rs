@@ -4,6 +4,7 @@ pub mod composition;
 pub mod custom_phrase;
 pub mod dict_importer;
 pub mod dispatcher;
+pub mod entity;
 pub mod error;
 pub mod evaluator;
 pub mod pipeline;
@@ -21,11 +22,12 @@ pub use custom_phrase::AuxiliaryDict;
 use custom_phrase::{CustomPhraseManager, EnglishSuggestionManager, SymbolSuggestionManager};
 use dict_importer::ImportedDictEntry;
 use dispatcher::ModeDispatcher;
+pub use entity::EntityProtectionManager;
 use evaluator::DateTimeEvaluator;
 use pipeline::CandidatePipeline;
 use prism::PrismEngine;
 use table::LexiconTable;
-use types::{AlgoCandidate, AlgoConfig};
+use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 use user_adaptive::UserAdaptiveModel;
 use viterbi::ViterbiDecoder;
 
@@ -50,6 +52,8 @@ pub struct AlgoEngine {
     english_suggester: EnglishSuggestionManager,
     /// 符号表情联想管理器
     symbol_suggester: SymbolSuggestionManager,
+    /// 专有名词与实体保护管理器
+    pub entity_manager: EntityProtectionManager,
     /// 增量敲击编辑状态机
     composition: Composition,
     /// 全局算法配置
@@ -74,6 +78,7 @@ impl AlgoEngine {
             custom_phrases: CustomPhraseManager::new(),
             english_suggester: EnglishSuggestionManager::new(),
             symbol_suggester: SymbolSuggestionManager::new(),
+            entity_manager: EntityProtectionManager::new(),
             composition: Composition::new(),
             config,
             page_index: 0,
@@ -102,6 +107,11 @@ impl AlgoEngine {
     /// 获取当前生效的符号与表情映射条目数量
     pub fn symbols_count(&self) -> usize {
         self.symbol_suggester.len()
+    }
+
+    /// 动态注册新的受保护专有名词与实体
+    pub fn register_entity(&mut self, entity: &str) {
+        self.entity_manager.register_entity(entity);
     }
 
     /// 键入一个字符
@@ -300,6 +310,14 @@ impl AlgoEngine {
 
         let mut raw_candidates = Vec::new();
 
+        // 2.0 专有名词与实体保护机制 (NER 原型)：精确命中受保护实体时注入置顶候选
+        if let Some(entity) = self.entity_manager.match_exact(raw_input) {
+            let mut cand = AlgoCandidate::new(entity, raw_input, 999_999);
+            cand.tier = CandidateTier::ProtectedEntity;
+            cand.comment = Some("专名".to_string());
+            raw_candidates.push(cand);
+        }
+
         for path in &paths {
             let key = path.to_key_string();
 
@@ -310,13 +328,46 @@ impl AlgoEngine {
             // 用户自造词检索
             let mut user_matches = self.user_model.lookup_user_words(&key, 1_700_000_000);
             raw_candidates.append(&mut user_matches);
+        }
 
-            // Viterbi 长句动态规划解码（多音节时生效）
-            if path.syllables.len() >= 2 {
-                if let Some(sentence) =
-                    ViterbiDecoder::decode_sentence(&path.syllables, &self.table)
-                {
+        // 2.1 Viterbi 长句动态规划解码：
+        // 仅针对 Prism 中代价最低的最优主路径执行整句求解，避免多路径重复计算与次级碎切噪音；
+        // 同时传入末尾残存拼音 remaining，支持未完成声母简拼自动补全（如 shi'zhong'g 补全为“中国”）
+        for path in paths.iter().take(2) {
+            let total_units = path.syllables.len()
+                + if path.remaining.is_empty() {
+                    0
+                } else {
+                    1
+                };
+            if total_units >= 2 {
+                if let Some(sentence) = ViterbiDecoder::decode_sentence(
+                    &path.syllables,
+                    &path.remaining,
+                    &self.table,
+                ) {
                     raw_candidates.push(sentence);
+                }
+            }
+        }
+
+        if let Some(best_path) = paths.first() {
+
+            // 2.2 前缀残存拼音与声母补全检索（解决诸如 "shux" 召回“熟悉”、“数学”、“属性”等）
+            if !best_path.remaining.is_empty() {
+                let mut prefix_matches = self
+                    .table
+                    .lookup_prefix_extension(&best_path.syllables, &best_path.remaining);
+                raw_candidates.append(&mut prefix_matches);
+
+                // 若前序已完成音节非空，同时将首段已完成音节的候选词作为降级备选（如“数”、“书”、“树”）
+                if !best_path.syllables.is_empty() {
+                    let base_key = best_path.syllables.join("'");
+                    let mut base_matches = self.table.lookup(&base_key);
+                    for bm in &mut base_matches {
+                        bm.tier = CandidateTier::PrefixPartial;
+                    }
+                    raw_candidates.append(&mut base_matches);
                 }
             }
         }
@@ -341,11 +392,13 @@ impl AlgoEngine {
             candidates.insert(insert_pos, dynamic_cand);
         }
 
-        // 6. 英文单词联想注入（如输入 rust、github、apple 等在次位提供英文候选）
+        // 6. 英文单词联想注入（如输入 rust、github、apple 等在次位提供英文候选，若已存在相同专名则避免重复）
         let eng_cands = self.english_suggester.lookup(raw_input);
         for eng in eng_cands.into_iter().rev() {
-            let pos = if candidates.is_empty() { 0 } else { 1 };
-            candidates.insert(pos, eng);
+            if !candidates.iter().any(|c| c.text.eq_ignore_ascii_case(&eng.text)) {
+                let pos = if candidates.is_empty() { 0 } else { 1 };
+                candidates.insert(pos, eng);
+            }
         }
 
         // 7. 符号与表情联想注入（如输入 dianzan、daxiao 等在次位提供符号候选）
@@ -577,5 +630,30 @@ mod tests {
         }
         let cands_zan = engine.candidates();
         assert!(cands_zan.iter().any(|c| c.text == "\u{1F44D}"));
+    }
+
+    #[test]
+    fn test_engine_entity_protection() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+
+        // 1. 测试内置实体置顶推荐 (wayland)
+        for ch in "wayland".chars() {
+            engine.push_char(ch);
+        }
+        let cands = engine.candidates();
+        assert!(!cands.is_empty(), "候选列表不应为空");
+        assert_eq!(cands[0].text, "wayland");
+        assert_eq!(cands[0].comment.as_deref(), Some("专名"));
+
+        // 2. 测试动态注册实体 (deepmind)
+        engine.reset();
+        engine.register_entity("DeepMind");
+        for ch in "deepmind".chars() {
+            engine.push_char(ch);
+        }
+        let dm_cands = engine.candidates();
+        assert!(!dm_cands.is_empty());
+        assert_eq!(dm_cands[0].text, "deepmind");
+        assert_eq!(dm_cands[0].comment.as_deref(), Some("专名"));
     }
 }

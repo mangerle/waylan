@@ -14,8 +14,8 @@ fn main() {
 
     let output_path = "data/base.dict.bin";
 
-    let stats = DictBuilder::build_binary_dict(&input_paths, output_path)
-        .expect("编译汉语主词库失败");
+    let stats = DictBuilder::build_compact_binary_dict(&input_paths, output_path)
+        .expect("编译汉语紧凑主词库失败");
 
     let elapsed = start.elapsed().as_millis();
     let file_size = std::fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
