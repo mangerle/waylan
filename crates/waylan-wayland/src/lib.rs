@@ -231,6 +231,12 @@ pub fn run_session_v2_loop(
     session.qhandle = Some(qh.clone());
     session.set_input_method(input_method);
 
+    if let Ok(vk_mgr) = globals.bind::<wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
+        let vk = vk_mgr.create_virtual_keyboard(&seat, &qh, ());
+        session.virtual_keyboard = Some(vk);
+        log::info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
+    }
+
     log::info!(
         "[微澜 Wayland] 成功绑定 zwp_input_method_manager_v2、wl_compositor 与 wl_shm，进入 V2 输入法事件分发循环。"
     );

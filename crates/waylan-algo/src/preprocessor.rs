@@ -95,6 +95,10 @@ impl ShiftToggleStateMachine {
 pub struct PunctuationProcessor {
     /// 记录上一次提交的字符是否是数字
     last_char_was_digit: bool,
+    /// 双引号开闭状态位（false 为待输入左双引号，true 为已输入左双引号待输入右双引号）
+    pub double_quote_open: bool,
+    /// 单引号开闭状态位（false 为待输入左单引号，true 为已输入左单引号待输入右单引号）
+    pub single_quote_open: bool,
     /// 是否将斜杠 / 转换为中文顿号 、
     pub slash_to_dunhao: bool,
     /// 是否开启数字后紧跟冒号/小数点/斜杠自动保持英文半角保护
@@ -107,6 +111,8 @@ impl Default for PunctuationProcessor {
     fn default() -> Self {
         Self {
             last_char_was_digit: false,
+            double_quote_open: false,
+            single_quote_open: false,
             slash_to_dunhao: true,
             protect_digits_punctuation: true,
             auto_complete_pairs: true,
@@ -127,16 +133,33 @@ impl PunctuationProcessor {
     ) -> Self {
         Self {
             last_char_was_digit: false,
+            double_quote_open: false,
+            single_quote_open: false,
             slash_to_dunhao,
             protect_digits_punctuation,
             auto_complete_pairs,
         }
     }
 
-    /// 记录外部提交动作以更新上下文状态
+    /// 重置成对引号的开闭记忆状态
+    pub fn reset_quote_states(&mut self) {
+        self.double_quote_open = false;
+        self.single_quote_open = false;
+    }
+
+    /// 记录外部提交动作以更新上下文状态（维护数字状态与成对引号开闭状态）
     pub fn record_commit(&mut self, text: &str) {
         if let Some(last_ch) = text.chars().last() {
             self.last_char_was_digit = last_ch.is_ascii_digit();
+        }
+        for ch in text.chars() {
+            match ch {
+                '“' => self.double_quote_open = true,
+                '”' => self.double_quote_open = false,
+                '‘' => self.single_quote_open = true,
+                '’' => self.single_quote_open = false,
+                _ => {}
+            }
         }
     }
 
@@ -238,7 +261,14 @@ impl PunctuationProcessor {
                         TextAction::MoveCursor(-1),
                     ]);
                 } else {
-                    return Some(vec![TextAction::Commit("“".to_string())]);
+                    let quote_str = if self.double_quote_open {
+                        self.double_quote_open = false;
+                        "”"
+                    } else {
+                        self.double_quote_open = true;
+                        "“"
+                    };
+                    return Some(vec![TextAction::Commit(quote_str.to_string())]);
                 }
             }
             // 单引号（在独立标点输入模式下）
@@ -249,7 +279,14 @@ impl PunctuationProcessor {
                         TextAction::MoveCursor(-1),
                     ]);
                 } else {
-                    return Some(vec![TextAction::Commit("‘".to_string())]);
+                    let quote_str = if self.single_quote_open {
+                        self.single_quote_open = false;
+                        "’"
+                    } else {
+                        self.single_quote_open = true;
+                        "‘"
+                    };
+                    return Some(vec![TextAction::Commit(quote_str.to_string())]);
                 }
             }
             _ => {}
@@ -451,6 +488,30 @@ mod tests {
         assert_eq!(
             pp.process_punctuation('('),
             Some(vec![TextAction::Commit("（".to_string())])
+        );
+
+        // 验证非自动成对补全模式下，双引号交替输出 “ 与 ”
+        assert_eq!(
+            pp.process_punctuation('"'),
+            Some(vec![TextAction::Commit("“".to_string())])
+        );
+        assert_eq!(
+            pp.process_punctuation('"'),
+            Some(vec![TextAction::Commit("”".to_string())])
+        );
+        assert_eq!(
+            pp.process_punctuation('"'),
+            Some(vec![TextAction::Commit("“".to_string())])
+        );
+
+        // 验证非自动成对补全模式下，单引号交替输出 ‘ 与 ’
+        assert_eq!(
+            pp.process_punctuation('\''),
+            Some(vec![TextAction::Commit("‘".to_string())])
+        );
+        assert_eq!(
+            pp.process_punctuation('\''),
+            Some(vec![TextAction::Commit("’".to_string())])
         );
     }
 }

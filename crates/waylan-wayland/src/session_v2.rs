@@ -10,6 +10,8 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::{
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface_v2::{
     Event as PopupEvent, ZwpInputPopupSurfaceV2,
 };
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
 use waylan_core::{CandidateBoxState, InputMode, TextAction};
 use crate::session_v1::{
@@ -40,6 +42,8 @@ pub struct WaylanV2Session {
     pub keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
     /// 悬浮候选弹出层 Surface
     pub popup_surface: Option<ZwpInputPopupSurfaceV2>,
+    /// 虚拟键盘输入协议句柄（用于模拟光标位移与未拦截按键透传）
+    pub virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
     /// 关联的共享内存管理器句柄
     pub shm: Option<wayland_client::protocol::wl_shm::WlShm>,
     /// 候选框渲染目标 Wayland 表面
@@ -82,6 +86,7 @@ impl WaylanV2Session {
             input_method: None,
             keyboard_grab: None,
             popup_surface: None,
+            virtual_keyboard: None,
             shm: None,
             popup_wl_surface: None,
             active_buffer: None,
@@ -565,9 +570,21 @@ impl WaylanV2Session {
                 {
                     let mut committed_out = None;
                     for action in actions {
-                        if let TextAction::Commit(text) = action {
-                            self.commit_text(&text);
-                            committed_out = Some(text);
+                        match action {
+                            TextAction::Commit(text) => {
+                                self.commit_text(&text);
+                                committed_out = Some(text);
+                            }
+                            TextAction::MoveCursor(offset) => {
+                                if let Some(ref vk) = self.virtual_keyboard {
+                                    let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
+                                    for _ in 0..offset.unsigned_abs() {
+                                        vk.key(0, dir_key, 1);
+                                        vk.key(0, dir_key, 0);
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     return committed_out;
@@ -837,6 +854,31 @@ impl
         _proxy: &wayland_client::protocol::wl_registry::WlRegistry,
         _event: <wayland_client::protocol::wl_registry::WlRegistry as wayland_client::Proxy>::Event,
         _data: &wayland_client::globals::GlobalListContents,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+// 为 zwp_virtual_keyboard_manager_v1 实现 Dispatch
+impl Dispatch<ZwpVirtualKeyboardManagerV1, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpVirtualKeyboardManagerV1,
+        _event: <ZwpVirtualKeyboardManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 zwp_virtual_keyboard_v1 实现 Dispatch
+impl Dispatch<ZwpVirtualKeyboardV1, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpVirtualKeyboardV1,
+        _event: <ZwpVirtualKeyboardV1 as wayland_client::Proxy>::Event,
+        _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
