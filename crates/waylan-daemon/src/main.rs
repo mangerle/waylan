@@ -358,7 +358,7 @@ fn load_opencc_dict() -> waylan_algo::OpenCcDict {
                         path,
                         elapsed.as_secs_f64() * 1000.0,
                         dict.chars.len(),
-                        dict.phrases.len()
+                        dict.phrases_len()
                     );
                     return dict;
                 }
@@ -448,7 +448,7 @@ fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error:
             println!(
                 "[构建完成] 单字映射: {} 个, 一简多繁短语: {} 组, 耗时: {} ms",
                 dict.chars.len(),
-                dict.phrases.len(),
+                dict.phrases_len(),
                 elapsed_ms
             );
         }

@@ -23,12 +23,60 @@ static GLOBAL_OPENCC_DICT: OnceLock<Arc<OpenCcDict>> = OnceLock::new();
 ///   命中的短语整体替换为对应繁体词并跨越游标，未命中的单字回退查询 `STCharacters` 首选繁体字。
 /// - **单字候选一简多繁展开**：
 ///   当候选词为单个汉字且存在多个繁体映射时，首选字原位替换，次选繁体字自动派生为紧随其后的候选词，兼顾词组消歧与单字完备性。
+/// 紧凑短语映射表（按 UTF-8 字节序连续存储，通过二分查找实现零堆分配极速查询）
+#[derive(Debug, Clone, Default)]
+pub struct CompactPhraseTable {
+    /// 紧凑短语条目列表：(simp_offset, simp_len, trad_offset, trad_len)
+    pub records: Vec<(u32, u16, u32, u16)>,
+    /// 连续字节字符串池
+    pub pool: Vec<u8>,
+}
+
+impl CompactPhraseTable {
+    /// 基于有序字节序二分查找简体短语对应的繁体短语
+    pub fn lookup(&self, simp: &str) -> Option<&str> {
+        let target_bytes = simp.as_bytes();
+        let idx = self
+            .records
+            .binary_search_by(|&(s_off, s_len, _, _)| {
+                let start = s_off as usize;
+                let end = start + s_len as usize;
+                if end > self.pool.len() {
+                    return std::cmp::Ordering::Less;
+                }
+                let cand = &self.pool[start..end];
+                cand.cmp(target_bytes)
+            })
+            .ok()?;
+
+        let (_, _, t_off, t_len) = self.records[idx];
+        let start = t_off as usize;
+        let end = start + t_len as usize;
+        if end > self.pool.len() {
+            return None;
+        }
+        std::str::from_utf8(&self.pool[start..end]).ok()
+    }
+
+    /// 获取短语总条目数
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// 判断是否为空
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct OpenCcDict {
     /// 简化字单字 -> 繁体字序列（首元素为默认首选繁体字，后续元素为一简多繁备选字）
     pub chars: HashMap<char, Vec<char>>,
-    /// 简体短语 -> 繁体短语映射表
+    /// 简体短语 -> 繁体短语映射表（动态构造与 TSV 构建阶段使用）
     pub phrases: HashMap<String, String>,
+    /// 紧凑短语表（从二进制词库加载时常驻，提供零堆分配二分检索）
+    pub compact_phrases: Option<CompactPhraseTable>,
     /// 短语首字 -> 以该字开头的最长短语字符数（用于加速 FMM 剪枝）
     pub first_char_max_len: HashMap<char, usize>,
 }
@@ -37,6 +85,23 @@ impl OpenCcDict {
     /// 创建空的简繁转换词典
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 获取短语总条目数
+    pub fn phrases_len(&self) -> usize {
+        if let Some(ref compact) = self.compact_phrases {
+            compact.len()
+        } else {
+            self.phrases.len()
+        }
+    }
+
+    /// 查询指定简体短语对应的繁体短语（优先二分检索紧凑表，回退查询 HashMap）
+    pub fn lookup_phrase(&self, simp: &str) -> Option<&str> {
+        if let Some(ref compact) = self.compact_phrases {
+            return compact.lookup(simp);
+        }
+        self.phrases.get(simp).map(|s| s.as_str())
     }
 
     /// 获取全局共享简繁转换词典实例（优先加载二进制 opencc.dict.bin，其次加载开源词表文本，最后使用内置核心表兜底）
@@ -301,14 +366,31 @@ impl OpenCcDict {
         }
 
         // 2. 整理有序短语条目
-        let mut sorted_phrases: Vec<(&String, &String)> = self.phrases.iter().collect();
-        sorted_phrases.sort_by(|a, b| a.0.cmp(b.0));
-
-        let mut phrase_records = Vec::with_capacity(sorted_phrases.len());
-        for (simp, trad) in sorted_phrases {
-            let (s_off, s_len) = intern(simp);
-            let (t_off, t_len) = intern(trad);
-            phrase_records.push((s_off, s_len, t_off, t_len));
+        let mut phrase_records = Vec::new();
+        if !self.phrases.is_empty() {
+            let mut sorted_phrases: Vec<(&String, &String)> = self.phrases.iter().collect();
+            sorted_phrases.sort_by(|a, b| a.0.cmp(b.0));
+            phrase_records.reserve(sorted_phrases.len());
+            for (simp, trad) in sorted_phrases {
+                let (s_off, s_len) = intern(simp);
+                let (t_off, t_len) = intern(trad);
+                phrase_records.push((s_off, s_len, t_off, t_len));
+            }
+        } else if let Some(ref compact) = self.compact_phrases {
+            phrase_records.reserve(compact.records.len());
+            for &(s_off, s_len, t_off, t_len) in &compact.records {
+                let s_str = std::str::from_utf8(
+                    &compact.pool[s_off as usize..s_off as usize + s_len as usize],
+                )
+                .unwrap_or("");
+                let t_str = std::str::from_utf8(
+                    &compact.pool[t_off as usize..t_off as usize + t_len as usize],
+                )
+                .unwrap_or("");
+                let (ns_off, ns_len) = intern(s_str);
+                let (nt_off, nt_len) = intern(t_str);
+                phrase_records.push((ns_off, ns_len, nt_off, nt_len));
+            }
         }
 
         // 3. 写入头部与数据表
@@ -395,7 +477,8 @@ impl OpenCcDict {
 
         let mut dict = Self {
             chars: HashMap::with_capacity(char_count),
-            phrases: HashMap::with_capacity(phrase_count),
+            phrases: HashMap::new(),
+            compact_phrases: None,
             first_char_max_len: HashMap::new(),
         };
 
@@ -413,6 +496,7 @@ impl OpenCcDict {
             }
         }
 
+        let mut phrase_records = Vec::with_capacity(phrase_count);
         for _ in 0..phrase_count {
             let s_off = u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap());
             let s_len = u16::from_le_bytes(buf[cursor + 4..cursor + 6].try_into().unwrap());
@@ -420,10 +504,22 @@ impl OpenCcDict {
             let t_len = u16::from_le_bytes(buf[cursor + 10..cursor + 12].try_into().unwrap());
             cursor += 12;
 
+            phrase_records.push((s_off, s_len, t_off, t_len));
+
             let simp = read_str(s_off, s_len)?;
-            let trad = read_str(t_off, t_len)?;
-            dict.insert_phrase_mapping(simp.to_string(), trad.to_string());
+            if let Some(first_ch) = simp.chars().next() {
+                let char_len = simp.chars().count();
+                let entry = dict.first_char_max_len.entry(first_ch).or_insert(0);
+                if char_len > *entry {
+                    *entry = char_len;
+                }
+            }
         }
+
+        dict.compact_phrases = Some(CompactPhraseTable {
+            records: phrase_records,
+            pool: pool.to_vec(),
+        });
 
         Ok(dict)
     }
@@ -460,7 +556,7 @@ impl OpenCcDict {
                     // 从最长窗口向下递减执行零拷贝切片匹配
                     for &byte_end in end_offsets.iter().rev() {
                         let slice = &rem[..byte_end];
-                        if let Some(trad_phrase) = self.phrases.get(slice) {
+                        if let Some(trad_phrase) = self.lookup_phrase(slice) {
                             result.push_str(trad_phrase);
                             pos += byte_end;
                             matched_phrase = true;
