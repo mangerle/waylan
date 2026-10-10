@@ -42,6 +42,12 @@ pub struct WaylanV2Session {
     pub current_cursor: CursorRect,
     /// 当前输入语言模式
     pub mode: InputMode,
+    /// 与外部系统托盘共享的中英文状态标志
+    pub shared_is_chinese: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// 与外部系统托盘共享的配置与词库重载请求标志
+    pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// 外部注入的配置与词库热重载回调函数
+    pub reload_callback: Option<Box<dyn FnMut(&mut Self) + Send>>,
     /// Done 事件累计序列号（用于 commit 请求原子同步）
     pub done_serial: u32,
 }
@@ -60,7 +66,44 @@ impl WaylanV2Session {
             popup_surface: None,
             current_cursor: CursorRect::default(),
             mode: InputMode::Chinese,
+            shared_is_chinese: None,
+            reload_requested: None,
+            reload_callback: None,
             done_serial: 0,
+        }
+    }
+
+    /// 同步外部系统托盘的中英文状态与热重载请求
+    pub fn sync_external_state(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        if let Some(ref reload_flag) = self.reload_requested {
+            if reload_flag.swap(false, Ordering::Relaxed) {
+                if let Some(mut cb) = self.reload_callback.take() {
+                    cb(self);
+                    self.reload_callback = Some(cb);
+                } else {
+                    let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+                    self.engine.custom_phrases =
+                        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+                    if let Some(ref wal_path) = self.engine.user_dict_path.clone() {
+                        self.engine.set_user_dict_path(wal_path);
+                    }
+                }
+                info!("[Wayland v2] 已完成用户词库与运行配置热重载。");
+            }
+        }
+
+        if let Some(ref zh_flag) = self.shared_is_chinese {
+            let external_zh = zh_flag.load(Ordering::Relaxed);
+            let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
+            if external_zh != current_zh {
+                self.mode = if external_zh {
+                    InputMode::Chinese
+                } else {
+                    InputMode::English
+                };
+            }
         }
     }
 
@@ -159,6 +202,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
         match event {
             V2Event::Activate => {
                 info!("[Wayland v2] 收到会话激活事件：输入焦点已建立。");
+                state.sync_external_state();
                 state.is_active = true;
                 state.engine.reset();
             }
@@ -221,6 +265,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
         _qhandle: &QueueHandle<Self>,
     ) {
         use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::Event as GrabEvent;
+        state.sync_external_state();
         match event {
             GrabEvent::Keymap { format, fd, size } => {
                 info!(
@@ -242,9 +287,15 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     )
                 );
 
-                // 1. 优先经由 Shift 防误触状态机判定
+                // 1. 优先经由 Shift/Ctrl 防误触状态机判定
                 if let Some(new_mode) = state.shift_state.on_key_event(key, is_press, state.mode) {
                     state.mode = new_mode;
+                    if let Some(ref zh_flag) = state.shared_is_chinese {
+                        zh_flag.store(
+                            matches!(new_mode, InputMode::Chinese | InputMode::VMode),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
                     let mode_str = match new_mode {
                         InputMode::Chinese => "中文",
                         InputMode::English => "英文",

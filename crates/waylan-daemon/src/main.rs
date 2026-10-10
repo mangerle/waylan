@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 8. 启动系统任务栏托盘常驻服务 (StatusNotifierItem)
-    let _tray = tray::TrayService::spawn();
+    let tray = tray::TrayService::spawn();
 
     info!("------------------------------------------------------------");
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
@@ -149,6 +149,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PageKeys::Bracket => PageKeyConfig::Bracket,
         PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
     };
+    session.shared_is_chinese = Some(tray.mode_flag());
+    session.reload_requested = Some(tray.reload_flag());
+    session.reload_callback = Some(Box::new(|s| {
+        let new_cfg = AppConfig::load_or_create();
+        s.engine.config.page_size = new_cfg.page_size;
+        s.engine.config.enable_v_mode = new_cfg.v_mode;
+        s.engine.config.traditional_chinese = new_cfg.traditional_chinese;
+        s.engine.config.fuzzy = if new_cfg.fuzzy_pinyin {
+            FuzzyConfig::all_enabled()
+        } else {
+            FuzzyConfig::default()
+        };
+        s.engine.config.double_pinyin = new_cfg.double_pinyin;
+        s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
+        s.surface_manager.renderer.theme = match new_cfg.theme {
+            ThemeMode::Light => UiTheme::light(),
+            ThemeMode::Dark => UiTheme::dark(),
+        };
+        s.surface_manager.renderer.font_size = new_cfg.font_size;
+        s.shift_sm = ShiftToggleStateMachine::with_toggle_key(match new_cfg.switch_key {
+            SwitchKey::Shift => ToggleKeyMode::Shift,
+            SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+        });
+        s.punctuation_processor = PunctuationProcessor::with_options(
+            new_cfg.slash_to_dunhao,
+            new_cfg.protect_digits_punctuation,
+            new_cfg.auto_complete_pairs,
+        );
+        s.page_keys = match new_cfg.page_keys {
+            PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+            PageKeys::Bracket => PageKeyConfig::Bracket,
+            PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+        };
+        let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+        s.engine.custom_phrases =
+            waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
+        let u_dict = AppConfig::user_dict_path();
+        s.engine.set_user_dict_path(&u_dict);
+        s.engine.load_auxiliary_dict(load_auxiliary_dict());
+    }));
 
     match waylan_wayland::run_session_v1_loop(session) {
         Ok(_) => {}

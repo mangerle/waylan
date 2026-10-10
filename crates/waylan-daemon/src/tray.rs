@@ -103,6 +103,7 @@ pub type DbusMenuLayout = (
 /// 标准 FreeDesktop DBusMenu 菜单实现
 pub struct DBusMenu {
     is_chinese: Arc<AtomicBool>,
+    reload_requested: Arc<AtomicBool>,
 }
 
 #[interface(name = "com.canonical.dbusmenu")]
@@ -179,7 +180,8 @@ impl DBusMenu {
                 );
             }
             2 => {
-                info!("[系统托盘] 右键菜单触发：重新加载词库与配置...");
+                self.reload_requested.store(true, Ordering::Relaxed);
+                info!("[系统托盘] 右键菜单触发：已发出重新加载词库与配置信号...");
             }
             3 => {
                 info!("[系统托盘] 唤起微澜偏好设置界面...");
@@ -219,6 +221,7 @@ impl DBusMenu {
 #[allow(dead_code)]
 pub struct TrayService {
     is_chinese: Arc<AtomicBool>,
+    reload_requested: Arc<AtomicBool>,
 }
 
 #[allow(dead_code)]
@@ -226,13 +229,28 @@ impl TrayService {
     /// 启动后台系统托盘常驻服务
     pub fn spawn() -> Self {
         let is_chinese = Arc::new(AtomicBool::new(true));
+        let reload_requested = Arc::new(AtomicBool::new(false));
         let flag_clone = Arc::clone(&is_chinese);
+        let reload_clone = Arc::clone(&reload_requested);
 
         thread::spawn(move || {
-            Self::run_dbus_loop(flag_clone);
+            Self::run_dbus_loop(flag_clone, reload_clone);
         });
 
-        Self { is_chinese }
+        Self {
+            is_chinese,
+            reload_requested,
+        }
+    }
+
+    /// 获取中英文模式共享原子标志句柄
+    pub fn mode_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.is_chinese)
+    }
+
+    /// 获取配置与词库重载请求共享原子标志句柄
+    pub fn reload_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.reload_requested)
     }
 
     /// 获取当前是否处于中文模式
@@ -247,9 +265,14 @@ impl TrayService {
     }
 
     /// 在独立线程中初始化 DBus 连接与注册 StatusNotifierItem 及 DBusMenu
-    fn run_dbus_loop(is_chinese: Arc<AtomicBool>) {
-        let sni = StatusNotifierItem { is_chinese: Arc::clone(&is_chinese) };
-        let menu = DBusMenu { is_chinese };
+    fn run_dbus_loop(is_chinese: Arc<AtomicBool>, reload_requested: Arc<AtomicBool>) {
+        let sni = StatusNotifierItem {
+            is_chinese: Arc::clone(&is_chinese),
+        };
+        let menu = DBusMenu {
+            is_chinese,
+            reload_requested,
+        };
 
         // 尝试连接用户 DBus 会话总线
         let conn = match Builder::session() {
@@ -309,8 +332,10 @@ mod tests {
     #[test]
     fn test_tray_mode_toggle() {
         let is_chinese = Arc::new(AtomicBool::new(true));
+        let reload_requested = Arc::new(AtomicBool::new(false));
         let tray = TrayService {
             is_chinese: Arc::clone(&is_chinese),
+            reload_requested,
         };
 
         assert!(tray.is_chinese());
@@ -323,8 +348,10 @@ mod tests {
     #[test]
     fn test_tray_menu_layout_and_event() {
         let is_chinese = Arc::new(AtomicBool::new(true));
+        let reload_requested = Arc::new(AtomicBool::new(false));
         let menu = DBusMenu {
             is_chinese: Arc::clone(&is_chinese),
+            reload_requested: Arc::clone(&reload_requested),
         };
 
         let (_rev, (_parent_id, _props, items)) = menu.get_layout(0, -1, vec![]);
@@ -337,5 +364,10 @@ mod tests {
         // 再次点击切回中文
         menu.event(1, "clicked".to_string(), zbus::zvariant::Value::from(0), 0);
         assert!(is_chinese.load(Ordering::Relaxed));
+
+        // 模拟点击菜单第2项（重新加载词库与配置）
+        assert!(!reload_requested.load(Ordering::Relaxed));
+        menu.event(2, "clicked".to_string(), zbus::zvariant::Value::from(0), 0);
+        assert!(reload_requested.load(Ordering::Relaxed));
     }
 }
