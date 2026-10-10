@@ -1056,42 +1056,68 @@ impl AlgoEngine {
         raw_input: &str,
         table: &LexiconTable,
     ) -> Vec<AlgoCandidate> {
-        if raw_input.len() < 3 || raw_input.len() > 20 {
+        let n = raw_input.len();
+        if !(3..=20).contains(&n) || !raw_input.is_ascii() {
             return Vec::new();
         }
 
         let mut candidates: Vec<(AlgoCandidate, u32)> = Vec::new();
-        let chars: Vec<char> = raw_input.chars().collect();
-        let n = chars.len();
+        let mut buf = [0u8; 24];
+        buf[..n].copy_from_slice(raw_input.as_bytes());
 
         // 1. 单字符邻键空间替换 (Single-char spatial substitution)
         for i in 0..n {
-            let orig_c = chars[i];
-            if !orig_c.is_ascii_lowercase() {
+            let orig_b = buf[i];
+            if !orig_b.is_ascii_lowercase() {
                 continue;
             }
+            let orig_c = orig_b as char;
 
             for alt_b in b'a'..=b'z' {
-                let alt_c = alt_b as char;
-                if alt_c == orig_c {
+                if alt_b == orig_b {
                     continue;
                 }
+                let alt_c = alt_b as char;
                 let dist = syllables::key_spatial_distance(orig_c, alt_c);
                 if dist > 1.25 {
                     continue; // 仅探索几何紧邻按键
                 }
 
-                let mut mutated_chars = chars.clone();
-                mutated_chars[i] = alt_c;
-                let mutated: String = mutated_chars.into_iter().collect();
+                // 原地变换并在使用后立即原地恢复，消除 Vec<char> 与 String 堆内存分配
+                buf[i] = alt_b;
+                if let Ok(mutated) = std::str::from_utf8(&buf[..n]) {
+                    let paths =
+                        PrismEngine::build_paths(mutated, &types::FuzzyConfig::default());
+                    if let Some(best) = paths.first() {
+                        if best.remaining.is_empty() && !best.syllables.is_empty() {
+                            let key = best.to_key_string();
+                            if let Some(entries) = table.get_raw_entries(&key) {
+                                let cost = syllables::char_substitution_cost(orig_c, alt_c);
+                                for (text, raw_score) in entries.iter().take(2) {
+                                    let mut cand = AlgoCandidate::new(text, &key, *raw_score);
+                                    cand.tier = CandidateTier::TypoCorrection;
+                                    cand.comment = Some(format!("[纠错: {}]", key));
+                                    candidates.push((cand, cost));
+                                }
+                            }
+                        }
+                    }
+                }
+                buf[i] = orig_b;
+            }
+        }
 
+        // 2. 邻近字母倒置 (Adjacent transpose, 如 cehng -> cheng, neg -> eng)
+        for i in 0..n.saturating_sub(1) {
+            buf.swap(i, i + 1);
+            if let Ok(swapped) = std::str::from_utf8(&buf[..n]) {
                 let paths =
-                    PrismEngine::build_paths(&mutated, &types::FuzzyConfig::default());
+                    PrismEngine::build_paths(swapped, &types::FuzzyConfig::default());
                 if let Some(best) = paths.first() {
                     if best.remaining.is_empty() && !best.syllables.is_empty() {
                         let key = best.to_key_string();
                         if let Some(entries) = table.get_raw_entries(&key) {
-                            let cost = syllables::char_substitution_cost(orig_c, alt_c);
+                            let cost = 16;
                             for (text, raw_score) in entries.iter().take(2) {
                                 let mut cand = AlgoCandidate::new(text, &key, *raw_score);
                                 cand.tier = CandidateTier::TypoCorrection;
@@ -1102,30 +1128,7 @@ impl AlgoEngine {
                     }
                 }
             }
-        }
-
-        // 2. 邻近字母倒置 (Adjacent transpose, 如 cehng -> cheng, neg -> eng)
-        for i in 0..n.saturating_sub(1) {
-            let mut swapped_chars = chars.clone();
-            swapped_chars.swap(i, i + 1);
-            let swapped: String = swapped_chars.into_iter().collect();
-
-            let paths =
-                PrismEngine::build_paths(&swapped, &types::FuzzyConfig::default());
-            if let Some(best) = paths.first() {
-                if best.remaining.is_empty() && !best.syllables.is_empty() {
-                    let key = best.to_key_string();
-                    if let Some(entries) = table.get_raw_entries(&key) {
-                        let cost = 16;
-                        for (text, raw_score) in entries.iter().take(2) {
-                            let mut cand = AlgoCandidate::new(text, &key, *raw_score);
-                            cand.tier = CandidateTier::TypoCorrection;
-                            cand.comment = Some(format!("[纠错: {}]", key));
-                            candidates.push((cand, cost));
-                        }
-                    }
-                }
-            }
+            buf.swap(i, i + 1);
         }
 
         // 3. 排序与去重：优先代价低，次优先词频高
