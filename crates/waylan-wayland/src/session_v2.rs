@@ -14,8 +14,8 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 use waylan_core::{CandidateBoxState, InputMode, TextAction};
 use crate::session_v1::{
     is_next_page_key, is_prev_page_key, keycode_to_ascii_digit_char, keycode_to_char,
-    keycode_to_digit, keycode_to_punctuation_with_shift, PageKeyConfig, KEY_BACKSPACE, KEY_DOWN,
-    KEY_ENTER, KEY_ESC, KEY_LEFT, KEY_LEFTALT, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_RIGHT,
+    keycode_to_digit, keycode_to_punctuation_with_shift, PageKeyConfig, KEY_BACKSPACE, KEY_DELETE,
+    KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_LEFT, KEY_LEFTALT, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_RIGHT,
     KEY_RIGHTALT, KEY_RIGHTCTRL, KEY_RIGHTSHIFT, KEY_SPACE, KEY_TAB, KEY_UP, MOD_ALT, MOD_CTRL,
     MOD_SHIFT, MOD_SUPER,
 };
@@ -62,6 +62,8 @@ pub struct WaylanV2Session {
     pub watched_paths: Vec<std::path::PathBuf>,
     /// 上次记录的被监控文件最新修改时间戳
     pub last_watched_mtime: Option<std::time::SystemTime>,
+    /// 客户端同步的上下文环境文本及光标位置 (text, cursor_byte_idx, anchor_byte_idx)
+    pub surrounding_text: Option<(String, u32, u32)>,
     /// Done 事件累计序列号（用于 commit 请求原子同步）
     pub done_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
@@ -91,6 +93,7 @@ impl WaylanV2Session {
             reload_callback: None,
             watched_paths: Vec::new(),
             last_watched_mtime: None,
+            surrounding_text: None,
             done_serial: 0,
             mods_depressed: 0,
         }
@@ -282,6 +285,42 @@ impl WaylanV2Session {
         self.update_preedit("");
     }
 
+    /// 触发退格向后删除（空缓冲区或英文模式下删除光标前 1 个字符）
+    pub fn delete_backward(&mut self) {
+        if let Some(im) = &self.input_method {
+            let delete_bytes = if let Some((ref text, cursor, _)) = self.surrounding_text {
+                if cursor > 0 && (cursor as usize) <= text.len() {
+                    let prefix = &text[..cursor as usize];
+                    prefix.chars().next_back().map(|c| c.len_utf8() as u32).unwrap_or(1)
+                } else {
+                    1
+                }
+            } else {
+                1
+            };
+            im.delete_surrounding_text(delete_bytes, 0);
+            im.commit(self.done_serial);
+        }
+    }
+
+    /// 触发向前删除（Delete 键删除光标后 1 个字符）
+    pub fn delete_forward(&mut self) {
+        if let Some(im) = &self.input_method {
+            let delete_bytes = if let Some((ref text, cursor, _)) = self.surrounding_text {
+                if (cursor as usize) < text.len() {
+                    let suffix = &text[cursor as usize..];
+                    suffix.chars().next().map(|c| c.len_utf8() as u32).unwrap_or(1)
+                } else {
+                    1
+                }
+            } else {
+                1
+            };
+            im.delete_surrounding_text(0, delete_bytes);
+            im.commit(self.done_serial);
+        }
+    }
+
     /// 处理单个硬件按键按下/释放事件（返回本次直接上屏的文本，便于无合成器环境下单元测试验证）
     pub fn handle_key_event(&mut self, key: u32, is_press: bool) -> Option<String> {
         self.update_modifier_by_key(key, is_press);
@@ -309,8 +348,24 @@ impl WaylanV2Session {
             return None;
         }
 
-        // 2. 英文模式：直接将字母（含 Shift 大写）、数字、标点与空格提交上屏
+        // 2. 英文模式：直接将字母（含 Shift 大写）、数字、标点、空格、回车、Tab 与退格提交上屏
         if self.mode == InputMode::English {
+            if key == KEY_BACKSPACE {
+                self.delete_backward();
+                return None;
+            }
+            if key == KEY_DELETE {
+                self.delete_forward();
+                return None;
+            }
+            if key == KEY_ENTER {
+                self.commit_text("\n");
+                return Some("\n".to_string());
+            }
+            if key == KEY_TAB {
+                self.commit_text("\t");
+                return Some("\t".to_string());
+            }
             if let Some(ch) = keycode_to_char(key) {
                 let out = if self.is_shift_active() {
                     ch.to_ascii_uppercase().to_string()
@@ -479,8 +534,24 @@ impl WaylanV2Session {
             }
         }
 
-        // 4. 输入缓冲区为空时的中文标点符号、数字与空格上屏处理
+        // 4. 输入缓冲区为空时的按键处理（回车、Tab、退格、删除、标点符号、数字与空格）
         if self.engine.raw_input().is_empty() {
+            if key == KEY_BACKSPACE {
+                self.delete_backward();
+                return None;
+            }
+            if key == KEY_DELETE {
+                self.delete_forward();
+                return None;
+            }
+            if key == KEY_ENTER {
+                self.commit_text("\n");
+                return Some("\n".to_string());
+            }
+            if key == KEY_TAB {
+                self.commit_text("\t");
+                return Some("\t".to_string());
+            }
             if key == KEY_SPACE {
                 self.commit_text(" ");
                 return Some(" ".to_string());
@@ -550,6 +621,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 info!("[Wayland v2] 收到会话失焦事件：输入焦点已离开。");
                 state.is_active = false;
                 state.mods_depressed = 0;
+                state.surrounding_text = None;
                 if let Some(grab) = state.keyboard_grab.take() {
                     grab.release();
                 }
@@ -561,6 +633,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                     "[Wayland v2] 上下文环境文本更新: 长度={}, 光标={}, 锚点={}",
                     text.len(), cursor, anchor
                 );
+                state.surrounding_text = Some((text, cursor, anchor));
             }
             V2Event::TextChangeCause { cause: _ } => {}
             V2Event::ContentType { hint: _, purpose: _ } => {}
@@ -886,16 +959,30 @@ mod tests {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut session = WaylanV2Session::new(engine);
 
-        // 1. 中文模式空缓冲区：数字键 1 (KEY_1) 与空格键 (KEY_SPACE) 应直接上屏
+        // 1. 中文模式空缓冲区：数字键 1、空格键、回车键与 Tab 键应直接提交上屏
         assert_eq!(session.handle_key_event(KEY_1, true), Some("1".to_string()));
         session.handle_key_event(KEY_1, false);
         assert_eq!(session.handle_key_event(KEY_SPACE, true), Some(" ".to_string()));
         session.handle_key_event(KEY_SPACE, false);
+        assert_eq!(session.handle_key_event(KEY_ENTER, true), Some("\n".to_string()));
+        session.handle_key_event(KEY_ENTER, false);
+        assert_eq!(session.handle_key_event(KEY_TAB, true), Some("\t".to_string()));
+        session.handle_key_event(KEY_TAB, false);
 
-        // 2. 切换至英文模式：普通字母键 a (keycode 30)、Shift+a、数字及标点直接以英文上屏
+        // 空缓冲区下退格键触发 delete_backward（返回 None，不向预编辑输入）
+        assert_eq!(session.handle_key_event(KEY_BACKSPACE, true), None);
+        session.handle_key_event(KEY_BACKSPACE, false);
+
+        // 2. 切换至英文模式：普通字母键 a (keycode 30)、Shift+a、数字、标点、回车与 Tab 直接以英文上屏
         session.mode = InputMode::English;
         assert_eq!(session.handle_key_event(30, true), Some("a".to_string()));
         session.handle_key_event(30, false);
+        assert_eq!(session.handle_key_event(KEY_ENTER, true), Some("\n".to_string()));
+        session.handle_key_event(KEY_ENTER, false);
+        assert_eq!(session.handle_key_event(KEY_TAB, true), Some("\t".to_string()));
+        session.handle_key_event(KEY_TAB, false);
+        assert_eq!(session.handle_key_event(KEY_BACKSPACE, true), None);
+        session.handle_key_event(KEY_BACKSPACE, false);
 
         session.handle_key_event(KEY_LEFTSHIFT, true);
         assert_eq!(session.handle_key_event(30, true), Some("A".to_string()));

@@ -34,6 +34,7 @@ pub const KEY_LEFT: u32 = 105;
 pub const KEY_RIGHT: u32 = 106;
 pub const KEY_DOWN: u32 = 108;
 pub const KEY_PAGEDOWN: u32 = 109;
+pub const KEY_DELETE: u32 = 111;
 pub const KEY_SLASH: u32 = 53;
 pub const KEY_COMMA: u32 = 51;
 pub const KEY_DOT: u32 = 52;
