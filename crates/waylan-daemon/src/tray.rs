@@ -255,6 +255,14 @@ impl DBusMenu {
             _ => {}
         }
     }
+
+    /// 菜单布局更新通知信号
+    #[zbus(signal)]
+    async fn layout_updated(
+        signal_ctxt: &zbus::object_server::SignalContext<'_>,
+        revision: u32,
+        parent: i32,
+    ) -> zbus::Result<()>;
 }
 
 /// 系统托盘服务控制器
@@ -395,7 +403,8 @@ impl TrayService {
             info!("[系统托盘] 已成功向系统任务栏 (Waybar/KDE/GNOME) 注册托盘图标！");
         }
 
-        // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon 与 NewToolTip 信号
+        // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon、NewToolTip 与 LayoutUpdated 信号
+        let mut menu_revision: u32 = 1;
         while let Ok(()) = icon_update_rx.recv() {
             if let Err(e) = conn.emit_signal(
                 Option::<&str>::None,
@@ -416,11 +425,26 @@ impl TrayService {
                 "NewToolTip",
                 &(),
             );
+
+            menu_revision = menu_revision.wrapping_add(1);
+            if let Err(e) = conn.emit_signal(
+                Option::<&str>::None,
+                "/MenuBar",
+                "com.canonical.dbusmenu",
+                "LayoutUpdated",
+                &(menu_revision, 0i32),
+            ) {
+                warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
+            } else {
+                info!(
+                    "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
+                    menu_revision
+                );
+            }
         }
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 #[path = "tray_tests.rs"]
 mod tests;
