@@ -6,8 +6,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-/// WAL 预写日志魔数标识（16 字节）
-pub const WAL_MAGIC: &[u8; 16] = b"WAYLAN_USERWAL01";
+/// 旧版 WAL 预写日志魔数标识（16 字节，V1 记录未携带频次字段）
+pub const WAL_MAGIC_V1: &[u8; 16] = b"WAYLAN_USERWAL01";
+
+/// 当前 WAL 预写日志魔数标识（16 字节，V2 记录原生支持 4 字节频次字段）
+pub const WAL_MAGIC: &[u8; 16] = b"WAYLAN_USERWAL02";
 
 /// 用户词条使用记录
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,17 +74,28 @@ impl UserAdaptiveModel {
 
     /// 记录一次用户选词上屏动作
     pub fn record_commit(&mut self, text: &str, pinyin: &str, current_timestamp: u64) {
+        self.record_commit_count(text, pinyin, current_timestamp, 1);
+    }
+
+    /// 记录指定频次的用户选词上屏动作（用于 WAL 快照重放与频次还原）
+    pub fn record_commit_count(
+        &mut self,
+        text: &str,
+        pinyin: &str,
+        current_timestamp: u64,
+        count: u32,
+    ) {
         let key = pinyin.to_string();
         let list = self.entries.entry(key).or_default();
 
         if let Some(existing) = list.iter_mut().find(|e| e.text == text) {
-            existing.commit_count = existing.commit_count.saturating_add(1);
-            existing.last_used_timestamp = current_timestamp;
+            existing.commit_count = existing.commit_count.saturating_add(count);
+            existing.last_used_timestamp = existing.last_used_timestamp.max(current_timestamp);
         } else {
             list.push(UserEntry {
                 text: text.to_string(),
                 pinyin: pinyin.to_string(),
-                commit_count: 1,
+                commit_count: count.max(1),
                 last_used_timestamp: current_timestamp,
             });
         }
@@ -148,7 +162,7 @@ impl UserAdaptiveModel {
             }
         }
 
-        // 若目标文件已存在但并非 WAL 格式（如旧版 bincode 快照），直接归并升级为标准 WAL 格式
+        // 若目标文件已存在但并非当前 V2 WAL 格式，直接归并升级为标准 V2 WAL 格式
         if path_ref.exists() {
             if let Ok(mut existing_file) = File::open(path_ref) {
                 let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -184,9 +198,11 @@ impl UserAdaptiveModel {
         let text_bytes = text.as_bytes();
         let py_len = py_bytes.len() as u16;
         let text_len = text_bytes.len() as u16;
+        let count: u32 = 1;
 
-        let mut buf = Vec::with_capacity(16 + py_bytes.len() + text_bytes.len());
+        let mut buf = Vec::with_capacity(20 + py_bytes.len() + text_bytes.len());
         buf.extend_from_slice(&timestamp.to_le_bytes());
+        buf.extend_from_slice(&count.to_le_bytes());
         buf.extend_from_slice(&py_len.to_le_bytes());
         buf.extend_from_slice(&text_len.to_le_bytes());
         buf.extend_from_slice(py_bytes);
@@ -212,7 +228,7 @@ impl UserAdaptiveModel {
         Ok(())
     }
 
-    /// 从 WAL 日志文件中重放还原用户词库模型，向下兼容旧版全量文件
+    /// 从 WAL 日志文件中重放还原用户词库模型，向下兼容旧版全量文件与旧版 V1 WAL
     pub fn load_or_replay_wal<P: AsRef<Path>>(path: P) -> Result<Self, AlgoError> {
         let path_ref = path.as_ref();
         if !path_ref.exists() {
@@ -225,50 +241,103 @@ impl UserAdaptiveModel {
         })?;
 
         let mut magic = [0u8; 16];
-        if file.read_exact(&mut magic).is_ok() && &magic == WAL_MAGIC {
-            let mut model = Self::new();
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf).map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+        if file.read_exact(&mut magic).is_ok() {
+            if &magic == WAL_MAGIC {
+                let mut model = Self::new();
+                let mut buf = Vec::new();
+                file.read_to_end(&mut buf)
+                    .map_err(|e| AlgoError::DictionaryIo {
+                        path: PathBuf::from(path_ref),
+                        source: e,
+                    })?;
 
-            let mut record_count = 0;
-            let mut cursor = 0;
-            while cursor + 12 <= buf.len() {
-                let timestamp =
-                    u64::from_le_bytes(buf[cursor..cursor + 8].try_into().unwrap_or([0; 8]));
-                let py_len =
-                    u16::from_le_bytes(buf[cursor + 8..cursor + 10].try_into().unwrap_or([0; 2]))
-                        as usize;
-                let text_len = u16::from_le_bytes(
-                    buf[cursor + 10..cursor + 12].try_into().unwrap_or([0; 2]),
-                ) as usize;
-                cursor += 12;
+                let mut record_count = 0;
+                let mut cursor = 0;
+                while cursor + 16 <= buf.len() {
+                    let timestamp =
+                        u64::from_le_bytes(buf[cursor..cursor + 8].try_into().unwrap_or([0; 8]));
+                    let count = u32::from_le_bytes(
+                        buf[cursor + 8..cursor + 12].try_into().unwrap_or([0; 4]),
+                    );
+                    let py_len = u16::from_le_bytes(
+                        buf[cursor + 12..cursor + 14].try_into().unwrap_or([0; 2]),
+                    ) as usize;
+                    let text_len = u16::from_le_bytes(
+                        buf[cursor + 14..cursor + 16].try_into().unwrap_or([0; 2]),
+                    ) as usize;
+                    cursor += 16;
 
-                if cursor + py_len + text_len + 4 > buf.len() {
-                    break;
+                    if cursor + py_len + text_len + 4 > buf.len() {
+                        break;
+                    }
+
+                    let py_str = std::str::from_utf8(&buf[cursor..cursor + py_len]).unwrap_or("");
+                    cursor += py_len;
+                    let text_str =
+                        std::str::from_utf8(&buf[cursor..cursor + text_len]).unwrap_or("");
+                    cursor += text_len;
+                    cursor += 4; // 跳过校验和
+
+                    if !py_str.is_empty() && !text_str.is_empty() {
+                        model.record_commit_count(text_str, py_str, timestamp, count);
+                        record_count += 1;
+                    }
                 }
 
-                let py_str = std::str::from_utf8(&buf[cursor..cursor + py_len]).unwrap_or("");
-                cursor += py_len;
-                let text_str = std::str::from_utf8(&buf[cursor..cursor + text_len]).unwrap_or("");
-                cursor += text_len;
-                cursor += 4; // 跳过校验和
-
-                if !py_str.is_empty() && !text_str.is_empty() {
-                    model.record_commit(text_str, py_str, timestamp);
-                    record_count += 1;
+                // 启动加载自动压缩判定：
+                // 若记录流水数 >= 50 且流水数超过独立有效词条数的 3 倍，说明存在大量历史冗余流水，自动触发一次原子压缩
+                if record_count >= 50 && record_count > model.total_entries() * 3 {
+                    let _ = model.compact_wal(path_ref);
                 }
-            }
 
-            // 启动加载自动压缩判定：
-            // 若记录流水数 >= 50 且流水数超过独立有效词条数的 3 倍，说明存在大量历史冗余流水，自动触发一次原子压缩
-            if record_count >= 50 && record_count > model.total_entries() * 3 {
-                let _ = model.compact_wal(path_ref);
-            }
+                Ok(model)
+            } else if &magic == WAL_MAGIC_V1 {
+                let mut model = Self::new();
+                let mut buf = Vec::new();
+                file.read_to_end(&mut buf)
+                    .map_err(|e| AlgoError::DictionaryIo {
+                        path: PathBuf::from(path_ref),
+                        source: e,
+                    })?;
 
-            Ok(model)
+                let mut record_count = 0;
+                let mut cursor = 0;
+                while cursor + 12 <= buf.len() {
+                    let timestamp =
+                        u64::from_le_bytes(buf[cursor..cursor + 8].try_into().unwrap_or([0; 8]));
+                    let py_len = u16::from_le_bytes(
+                        buf[cursor + 8..cursor + 10].try_into().unwrap_or([0; 2]),
+                    ) as usize;
+                    let text_len = u16::from_le_bytes(
+                        buf[cursor + 10..cursor + 12].try_into().unwrap_or([0; 2]),
+                    ) as usize;
+                    cursor += 12;
+
+                    if cursor + py_len + text_len + 4 > buf.len() {
+                        break;
+                    }
+
+                    let py_str = std::str::from_utf8(&buf[cursor..cursor + py_len]).unwrap_or("");
+                    cursor += py_len;
+                    let text_str =
+                        std::str::from_utf8(&buf[cursor..cursor + text_len]).unwrap_or("");
+                    cursor += text_len;
+                    cursor += 4; // 跳过校验和
+
+                    if !py_str.is_empty() && !text_str.is_empty() {
+                        model.record_commit(text_str, py_str, timestamp);
+                        record_count += 1;
+                    }
+                }
+
+                if record_count >= 50 && record_count > model.total_entries() * 3 {
+                    let _ = model.compact_wal(path_ref);
+                }
+
+                Ok(model)
+            } else {
+                Self::load_from_file(path_ref)
+            }
         } else {
             Self::load_from_file(path_ref)
         }
@@ -285,10 +354,11 @@ impl UserAdaptiveModel {
         let temp_path = path_ref.with_extension("wal.tmp");
 
         {
-            let mut file = File::create(&temp_path).map_err(|e| AlgoError::UserDictPersistFailed {
-                path: temp_path.clone(),
-                source: e,
-            })?;
+            let mut file =
+                File::create(&temp_path).map_err(|e| AlgoError::UserDictPersistFailed {
+                    path: temp_path.clone(),
+                    source: e,
+                })?;
 
             file.write_all(WAL_MAGIC)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
@@ -298,30 +368,26 @@ impl UserAdaptiveModel {
 
             for list in self.entries.values() {
                 for entry in list {
-                    // 压缩归并时限制单词最大历史频次（最多 20 次），消除海量重复选词流水导致的体积无限膨胀
-                    let write_count = entry.commit_count.min(20).max(1);
-                    for _ in 0..write_count {
-                        let py_bytes = entry.pinyin.as_bytes();
-                        let text_bytes = entry.text.as_bytes();
-                        let py_len = py_bytes.len() as u16;
-                        let text_len = text_bytes.len() as u16;
+                    let py_bytes = entry.pinyin.as_bytes();
+                    let text_bytes = entry.text.as_bytes();
+                    let py_len = py_bytes.len() as u16;
+                    let text_len = text_bytes.len() as u16;
 
-                        let mut buf = Vec::with_capacity(16 + py_bytes.len() + text_bytes.len());
-                        buf.extend_from_slice(&entry.last_used_timestamp.to_le_bytes());
-                        buf.extend_from_slice(&py_len.to_le_bytes());
-                        buf.extend_from_slice(&text_len.to_le_bytes());
-                        buf.extend_from_slice(py_bytes);
-                        buf.extend_from_slice(text_bytes);
-                        let checksum: u32 =
-                            buf.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
-                        buf.extend_from_slice(&checksum.to_le_bytes());
+                    let mut buf = Vec::with_capacity(20 + py_bytes.len() + text_bytes.len());
+                    buf.extend_from_slice(&entry.last_used_timestamp.to_le_bytes());
+                    buf.extend_from_slice(&entry.commit_count.to_le_bytes());
+                    buf.extend_from_slice(&py_len.to_le_bytes());
+                    buf.extend_from_slice(&text_len.to_le_bytes());
+                    buf.extend_from_slice(py_bytes);
+                    buf.extend_from_slice(text_bytes);
+                    let checksum: u32 = buf.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
+                    buf.extend_from_slice(&checksum.to_le_bytes());
 
-                        file.write_all(&buf)
-                            .map_err(|e| AlgoError::UserDictPersistFailed {
-                                path: temp_path.clone(),
-                                source: e,
-                            })?;
-                    }
+                    file.write_all(&buf)
+                        .map_err(|e| AlgoError::UserDictPersistFailed {
+                            path: temp_path.clone(),
+                            source: e,
+                        })?;
                 }
             }
         }
@@ -465,11 +531,27 @@ mod tests {
         assert_eq!(restored.total_entries(), 2);
         let wl_words = restored.lookup_user_words("wei'lan", 1_700_000_200);
         assert_eq!(wl_words[0].text, "微澜");
+        let wl_entry = restored
+            .entries
+            .get("wei'lan")
+            .unwrap()
+            .iter()
+            .find(|e| e.text == "微澜")
+            .unwrap();
+        assert_eq!(wl_entry.commit_count, 2);
 
         // 3. 压缩归并
         restored.compact_wal(&wal_path).expect("WAL归并成功");
         let compacted = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放归并后的WAL");
         assert_eq!(compacted.total_entries(), 2);
+        let compacted_entry = compacted
+            .entries
+            .get("wei'lan")
+            .unwrap()
+            .iter()
+            .find(|e| e.text == "微澜")
+            .unwrap();
+        assert_eq!(compacted_entry.commit_count, 2, "压缩后词频必须忠实保留");
 
         let _ = std::fs::remove_file(wal_path);
     }
@@ -531,7 +613,12 @@ mod tests {
         assert_eq!(restored.total_entries(), 1);
 
         let size_after = std::fs::metadata(&wal_path).unwrap().len();
-        assert!(size_after < size_before, "自动压缩后文件体积应明显缩小 ({} -> {})", size_before, size_after);
+        assert!(
+            size_after < size_before,
+            "自动压缩后文件体积应明显缩小 ({} -> {})",
+            size_before,
+            size_after
+        );
 
         let _ = std::fs::remove_file(wal_path);
     }
