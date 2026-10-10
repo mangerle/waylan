@@ -64,6 +64,8 @@ pub struct AlgoConfig {
     pub fuzzy: FuzzyConfig,
     /// 双拼方案配置（None 表示标准全拼模式）
     pub double_pinyin: Option<DoublePinyinSchema>,
+    /// 是否开启中西文智能空格（盘古之白，在中英文/数字交界处自动补齐半角空格）
+    pub auto_pangu_spacing: bool,
 }
 
 impl Default for AlgoConfig {
@@ -79,6 +81,7 @@ impl Default for AlgoConfig {
             auto_dedup: true,
             fuzzy: FuzzyConfig::default(),
             double_pinyin: None,
+            auto_pangu_spacing: false,
         }
     }
 }
@@ -88,17 +91,19 @@ impl Default for AlgoConfig {
 pub enum CandidateTier {
     /// 部分前缀匹配或残余拼音
     PrefixPartial = 1,
+    /// 次位邻键容错纠错候选
+    TypoCorrection = 2,
     /// 首字母缩写简拼（如 bj 匹配 北京，yyds 匹配 永远的神）
-    Acronym = 2,
+    Acronym = 3,
     /// 整句预测（Viterbi 多音节长句拼接）
-    SentenceViterbi = 3,
+    SentenceViterbi = 4,
     /// 用户自适应学习词或动态自造词
-    UserHistory = 4,
+    UserHistory = 5,
     /// 完整整词匹配（词库中完整匹配的成词，如“我们”、“中国”、“西安”、“先”）
     #[default]
-    ExactWord = 5,
+    ExactWord = 6,
     /// 专有名词与受保护实体（如技术专名、中英实体，享有最高置顶优先级）
-    ProtectedEntity = 6,
+    ProtectedEntity = 7,
 }
 
 /// 算法内部候选词结构

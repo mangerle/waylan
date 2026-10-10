@@ -1,3 +1,4 @@
+pub mod bigram;
 pub mod builder;
 pub mod clipboard;
 pub mod composition;
@@ -15,10 +16,13 @@ pub mod table;
 pub mod types;
 pub mod user_adaptive;
 pub mod viterbi;
+pub mod vocab;
 
 use clipboard::ClipboardManager;
 use composition::Composition;
 pub use custom_phrase::AuxiliaryDict;
+pub use bigram::CompactMmapBigram;
+pub use vocab::Vocabulary;
 use custom_phrase::{CustomPhraseManager, EnglishSuggestionManager, SymbolSuggestionManager};
 use dict_importer::ImportedDictEntry;
 use dispatcher::ModeDispatcher;
@@ -29,7 +33,7 @@ use prism::PrismEngine;
 use table::LexiconTable;
 use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 use user_adaptive::UserAdaptiveModel;
-use viterbi::ViterbiDecoder;
+use viterbi::{BigramLanguageModel, ViterbiDecoder};
 
 /// 微澜统一核心算法引擎门面 (AlgoEngine)
 ///
@@ -57,11 +61,13 @@ pub struct AlgoEngine {
     /// 增量敲击编辑状态机
     composition: Composition,
     /// 全局算法配置
-    config: AlgoConfig,
+    pub config: AlgoConfig,
     /// 当前候选词分页索引（0-indexed）
     page_index: usize,
     /// 当前呈现的清洗后候选词缓存
     current_candidates: Vec<AlgoCandidate>,
+    /// 上一次选词上屏的历史上下文词条（用于跨句 Bigram 语言模型联想预测）
+    pub last_commit_context: Option<String>,
     /// 二级扩展卡片是否展开
     pub is_expanded: bool,
     /// 二级扩展卡片中当前选中的子项索引（0-indexed）
@@ -83,6 +89,7 @@ impl AlgoEngine {
             config,
             page_index: 0,
             current_candidates: Vec::new(),
+            last_commit_context: None,
             is_expanded: false,
             expanded_selected_index: 0,
         }
@@ -177,7 +184,7 @@ impl AlgoEngine {
 
         // 若选中的是可展开项，且直接按数字键确认（未展开时）：
         // 优先将首个格式化子候选文本（如当前标准日期 2026年10月9日）上屏
-        let commit_text = if selected.is_expandable && !selected.sub_candidates.is_empty() {
+        let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
             selected.sub_candidates[0].clone()
         } else {
             selected.text.clone()
@@ -187,8 +194,29 @@ impl AlgoEngine {
         self.user_model
             .record_commit(&selected.text, &selected.pinyin, current_timestamp);
 
-        // 计算消费的拼音字母长度并执行分段确认（动态功能项消费全部输入）
-        let consumed_len = if selected.is_expandable {
+        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
+        let commit_text = if self.config.auto_pangu_spacing {
+            if let Some(prev) = &self.last_commit_context {
+                if Self::should_insert_pangu_space(prev, &raw_commit) {
+                    format!(" {}", raw_commit)
+                } else {
+                    raw_commit.clone()
+                }
+            } else {
+                raw_commit.clone()
+            }
+        } else {
+            raw_commit.clone()
+        };
+
+        // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
+        let trimmed_commit = raw_commit.trim();
+        if !trimmed_commit.is_empty() {
+            self.last_commit_context = Some(trimmed_commit.to_string());
+        }
+
+        // 计算消费的拼音字母长度并执行分段确认（动态功能项与容错纠错项消费全部输入）
+        let consumed_len = if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
             self.composition.len()
         } else {
             Self::compute_consumed_len(self.composition.as_str(), &selected.pinyin)
@@ -244,13 +272,33 @@ impl AlgoEngine {
         sub_index: usize,
     ) -> Option<(String, usize)> {
         let cand = self.current_candidates.get(main_index)?;
-        let text = cand.sub_candidates.get(sub_index)?.clone();
+        let raw_text = cand.sub_candidates.get(sub_index)?.clone();
+
+        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
+        let commit_text = if self.config.auto_pangu_spacing {
+            if let Some(prev) = &self.last_commit_context {
+                if Self::should_insert_pangu_space(prev, &raw_text) {
+                    format!(" {}", raw_text)
+                } else {
+                    raw_text.clone()
+                }
+            } else {
+                raw_text.clone()
+            }
+        } else {
+            raw_text.clone()
+        };
+
+        let trimmed_text = raw_text.trim();
+        if !trimmed_text.is_empty() {
+            self.last_commit_context = Some(trimmed_text.to_string());
+        }
 
         self.composition.clear();
         self.page_index = 0;
         self.recompute_candidates();
 
-        Some((text, 0))
+        Some((commit_text, 0))
     }
 
     /// 精确计算用户选词所消费的原始按键长度（含自动跳过隔音符）
@@ -284,6 +332,84 @@ impl AlgoEngine {
             }
         }
         last_end
+    }
+
+    /// 检查两个相邻文本之间是否需要插入盘古之白（中西文智能空格）
+    pub fn should_insert_pangu_space(prev_context: &str, curr_commit: &str) -> bool {
+        let prev_text = prev_context.trim();
+        let curr_text = curr_commit.trim();
+
+        if prev_text.is_empty() || curr_text.is_empty() {
+            return false;
+        }
+
+        let prev_ch = match prev_text.chars().last() {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let curr_ch = match curr_text.chars().next() {
+            Some(c) => c,
+            None => return false,
+        };
+
+        // 若前驱结尾或当前开头已有空格，则不重复插入
+        if prev_context.ends_with(' ') || curr_commit.starts_with(' ') {
+            return false;
+        }
+
+        let is_cjk = |c: char| -> bool {
+            matches!(c,
+                '\u{4e00}'..='\u{9fff}' |
+                '\u{3400}'..='\u{4dbf}' |
+                '\u{20000}'..='\u{2a6df}' |
+                '\u{f900}'..='\u{faff}'
+            )
+        };
+
+        // 场景 1：中文汉字接英文单词或数字（如："测试" + "Rust" => "测试 Rust"；"第" + "10" => "第 10"）
+        if is_cjk(prev_ch) && (curr_ch.is_ascii_alphabetic() || curr_ch.is_ascii_digit()) {
+            return true;
+        }
+
+        // 场景 2：英文单词接中文汉字（如："Rust" + "代码" => "Rust 代码"）
+        if prev_ch.is_ascii_alphabetic() && is_cjk(curr_ch) {
+            return true;
+        }
+
+        // 场景 3：数字接中文汉字（如："100" + "苹果" => "100 苹果"）
+        // 豁免情况：若当前词为中文量词或单位（如："100" + "米" => "100米"），则不插入空格
+        if prev_ch.is_ascii_digit() && is_cjk(curr_ch) {
+            if Self::is_chinese_classifier(curr_text) {
+                return false;
+            }
+            return true;
+        }
+
+        false
+    }
+
+    /// 判断是否属于常见中文量词或单位（用于数字与中文紧邻时的空格豁免）
+    pub fn is_chinese_classifier(word: &str) -> bool {
+        const CLASSIFIERS: &[&str] = &[
+            // 常见单字量词
+            "个", "只", "支", "枝", "张", "条", "头", "匹", "尾", "块", "片", "粒", "颗", "本",
+            "册", "部", "首", "篇", "幅", "座", "栋", "扇", "套", "件", "双", "对", "副", "打",
+            "群", "把", "口", "根", "排", "行", "段", "节", "项", "类", "种", "束", "串", "包",
+            "盒", "箱", "袋", "瓶", "罐", "杯", "碗", "盘", "锅", "桶", "盆", "页", "枚", "尊",
+            "通", "场", "顿", "番", "次", "回", "趟", "遍", "遭", "阵", "门", "桩", "任", "届",
+            // 度量衡单位
+            "米", "分米", "厘米", "毫米", "微米", "纳米", "千米", "公里", "里", "尺", "寸", "丈",
+            "克", "千克", "公斤", "斤", "两", "钱", "吨", "磅", "盎司",
+            "升", "毫升", "立方米", "平方米", "平方", "公顷", "亩",
+            // 时间与日期
+            "秒", "分", "分钟", "刻", "时", "小时", "天", "日", "周", "月", "年", "岁", "代", "季", "度",
+            // 货币与比率
+            "元", "角", "块", "毛", "镑", "刀",
+            "折", "倍", "成", "点", "级", "百分点", "万", "亿", "兆",
+        ];
+
+        CLASSIFIERS.contains(&word)
     }
 
     /// 重新计算当前候选词列表
@@ -332,7 +458,8 @@ impl AlgoEngine {
 
         // 2.1 Viterbi 长句动态规划解码：
         // 仅针对 Prism 中代价最低的最优主路径执行整句求解，避免多路径重复计算与次级碎切噪音；
-        // 同时传入末尾残存拼音 remaining，支持未完成声母简拼自动补全（如 shi'zhong'g 补全为“中国”）
+        // 同时传入末尾残存拼音 remaining 与上屏历史上下文，支持跨句二元转移预测
+        let min_units = if self.last_commit_context.is_some() { 1 } else { 2 };
         for path in paths.iter().take(2) {
             let total_units = path.syllables.len()
                 + if path.remaining.is_empty() {
@@ -340,11 +467,12 @@ impl AlgoEngine {
                 } else {
                     1
                 };
-            if total_units >= 2 {
-                if let Some(sentence) = ViterbiDecoder::decode_sentence(
+            if total_units >= min_units {
+                if let Some(sentence) = ViterbiDecoder::decode_sentence_with_context(
                     &path.syllables,
                     &path.remaining,
                     &self.table,
+                    self.last_commit_context.as_deref(),
                 ) {
                     raw_candidates.push(sentence);
                 }
@@ -376,16 +504,62 @@ impl AlgoEngine {
         let mut acronym_matches = self.table.lookup_acronym(raw_input);
         raw_candidates.append(&mut acronym_matches);
 
-        // 3. 动态应用用户习惯提权
+        // 2.3 若多音节切分未能命中整词，将首段已完成合法音节作为保真降级备选（如 "ni" -> "你"）
+        let clean_raw_len = raw_input.chars().filter(|c| *c != '\'').count();
+        let has_full_exact_match = raw_candidates.iter().any(|c| {
+            c.tier == CandidateTier::ExactWord
+                && c.pinyin.chars().filter(|ch| *ch != '\'').count() == clean_raw_len
+        });
+        if !has_full_exact_match {
+            if let Some(first_path) = paths.first() {
+                if !first_path.syllables.is_empty() {
+                    let first_syl = &first_path.syllables[0];
+                    let mut first_matches = self.table.lookup(first_syl);
+                    for fm in &mut first_matches {
+                        fm.tier = CandidateTier::PrefixPartial;
+                    }
+                    raw_candidates.append(&mut first_matches);
+                }
+            }
+        }
+
+        // 3. 动态应用用户习惯提权与上屏历史上下文亲和度加权
         for c in &mut raw_candidates {
             self.user_model.apply_boost(c, 1_700_000_000);
+            if let Some(ref prev) = self.last_commit_context {
+                let affinity = self
+                    .table
+                    .get_bigram_affinity(prev, &c.text)
+                    .unwrap_or_else(|| BigramLanguageModel::estimate_bigram_affinity(prev, &c.text));
+                if affinity > 0 {
+                    // 将语言模型亲和度映射为候选词得分增益（大幅提高首位命中率）
+                    c.score = c.score.saturating_add((affinity as u32).min(50_000));
+                }
+            }
         }
 
         // 4. 送入后处理流水线（去重、简繁、字符集、注释、分页）
         let mut candidates =
             CandidatePipeline::process(raw_candidates, &self.config, self.page_index);
 
-        // 5. 动态扩展功能（日期、时间、干支等）注入：
+        // 5. 次位容错备选注入：
+        // 保持切分音节 100% 原始字母绝对保真；
+        // 仅在主词库未命中完整成词时，在候选词第 2~3 位提供带有 [纠错] 标识的邻键候选词，避免盲打全盘皆空
+        if !has_full_exact_match {
+            let typo_cands = Self::generate_spatial_typo_candidates(raw_input, &self.table);
+            for (i, typo_cand) in typo_cands.into_iter().take(2).enumerate() {
+                // 若列表中已有同名候选但非容错词（例如 Viterbi 产生的不完全前缀预测），先将其剔除
+                candidates.retain(|c| c.text != typo_cand.text);
+                let target_pos = if candidates.is_empty() {
+                    0
+                } else {
+                    (1 + i).min(candidates.len())
+                };
+                candidates.insert(target_pos, typo_cand);
+            }
+        }
+
+        // 6. 动态扩展功能（日期、时间、干支等）注入：
         // 若命中动态日期/时间指令，将动态功能项插入到第 2 位（仅次于首选的常规成词）
         if let Some(dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
             let insert_pos = if candidates.is_empty() { 0 } else { 1 };
@@ -421,6 +595,100 @@ impl AlgoEngine {
         }
 
         self.current_candidates = candidates;
+    }
+
+    /// 生成基于 QWERTY 物理键盘邻键误触与相邻倒置的次位容错候选
+    fn generate_spatial_typo_candidates(
+        raw_input: &str,
+        table: &LexiconTable,
+    ) -> Vec<AlgoCandidate> {
+        if raw_input.len() < 3 || raw_input.len() > 20 {
+            return Vec::new();
+        }
+
+        let mut candidates: Vec<(AlgoCandidate, u32)> = Vec::new();
+        let chars: Vec<char> = raw_input.chars().collect();
+        let n = chars.len();
+
+        // 1. 单字符邻键空间替换 (Single-char spatial substitution)
+        for i in 0..n {
+            let orig_c = chars[i];
+            if !orig_c.is_ascii_lowercase() {
+                continue;
+            }
+
+            for alt_b in b'a'..=b'z' {
+                let alt_c = alt_b as char;
+                if alt_c == orig_c {
+                    continue;
+                }
+                let dist = syllables::key_spatial_distance(orig_c, alt_c);
+                if dist > 1.25 {
+                    continue; // 仅探索几何紧邻按键
+                }
+
+                let mut mutated_chars = chars.clone();
+                mutated_chars[i] = alt_c;
+                let mutated: String = mutated_chars.into_iter().collect();
+
+                let paths =
+                    PrismEngine::build_paths(&mutated, &types::FuzzyConfig::default(), None);
+                if let Some(best) = paths.first() {
+                    if best.remaining.is_empty() && !best.syllables.is_empty() {
+                        let key = best.to_key_string();
+                        if let Some(entries) = table.get_raw_entries(&key) {
+                            let cost = syllables::char_substitution_cost(orig_c, alt_c);
+                            for (text, raw_score) in entries.iter().take(2) {
+                                let mut cand = AlgoCandidate::new(text, &key, *raw_score);
+                                cand.tier = CandidateTier::TypoCorrection;
+                                cand.comment = Some(format!("[纠错: {}]", key));
+                                candidates.push((cand, cost));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 邻近字母倒置 (Adjacent transpose, 如 cehng -> cheng, neg -> eng)
+        for i in 0..n.saturating_sub(1) {
+            let mut swapped_chars = chars.clone();
+            swapped_chars.swap(i, i + 1);
+            let swapped: String = swapped_chars.into_iter().collect();
+
+            let paths =
+                PrismEngine::build_paths(&swapped, &types::FuzzyConfig::default(), None);
+            if let Some(best) = paths.first() {
+                if best.remaining.is_empty() && !best.syllables.is_empty() {
+                    let key = best.to_key_string();
+                    if let Some(entries) = table.get_raw_entries(&key) {
+                        let cost = 16;
+                        for (text, raw_score) in entries.iter().take(2) {
+                            let mut cand = AlgoCandidate::new(text, &key, *raw_score);
+                            cand.tier = CandidateTier::TypoCorrection;
+                            cand.comment = Some(format!("[纠错: {}]", key));
+                            candidates.push((cand, cost));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. 排序与去重：优先代价低，次优先词频高
+        candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.score.cmp(&a.0.score)));
+
+        let mut deduped = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (cand, _) in candidates {
+            if seen.insert(cand.text.clone()) {
+                deduped.push(cand);
+                if deduped.len() >= 3 {
+                    break;
+                }
+            }
+        }
+
+        deduped
     }
 
     /// 批量导入外部词库条目到用户自适应模型
@@ -471,11 +739,17 @@ impl AlgoEngine {
         &self.current_candidates
     }
 
+    /// 清空上屏历史上下文缓存
+    pub fn clear_commit_context(&mut self) {
+        self.last_commit_context = None;
+    }
+
     /// 清空并重置引擎
     pub fn reset(&mut self) {
         self.composition.clear();
         self.page_index = 0;
         self.current_candidates.clear();
+        self.last_commit_context = None;
     }
 }
 
@@ -655,5 +929,203 @@ mod tests {
         assert!(!dm_cands.is_empty());
         assert_eq!(dm_cands[0].text, "deepmind");
         assert_eq!(dm_cands[0].comment.as_deref(), Some("专名"));
+    }
+
+    #[test]
+    fn test_engine_commit_context_association() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        // 插入具有同音竞争的词条："shi'jian" => "事件"（静态分 14,000）与 "时间"（静态分 10,000）
+        engine.table.insert("shi'jian", "事件", 14_000);
+        engine.table.insert("shi'jian", "时间", 10_000);
+
+        // 1. 在无上屏历史上下文时，输入 shijian 优先命中静态分更高的“事件”
+        for ch in "shijian".chars() {
+            engine.push_char(ch);
+        }
+        assert_eq!(engine.candidates()[0].text, "事件");
+        engine.reset();
+        assert!(engine.last_commit_context.is_none());
+
+        // 2. 用户先输入 beijing 并选择“北京”上屏
+        for ch in "beijing".chars() {
+            engine.push_char(ch);
+        }
+        let (committed, remaining) = engine.select_candidate(0, 1_700_000_000).expect("选中北京");
+        assert_eq!(committed, "北京");
+        assert_eq!(remaining, 0);
+        assert_eq!(engine.last_commit_context.as_deref(), Some("北京"));
+
+        // 3. 用户紧接着输入 shijian：跨句历史上下文生效，由于“北京时间”强亲和度，“时间”逆袭首选！
+        for ch in "shijian".chars() {
+            engine.push_char(ch);
+        }
+        let candidates = engine.candidates();
+        assert!(!candidates.is_empty());
+        assert_eq!(
+            candidates[0].text, "时间",
+            "在跨句上下文‘北京’的驱动下，‘时间’应成功逆袭置顶首位"
+        );
+
+        // 4. 用户按 Esc/reset，上下文重置清空
+        engine.reset();
+        assert!(engine.last_commit_context.is_none());
+    }
+
+    #[test]
+    fn test_engine_spatial_typo_tolerance_nihso() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        // 模拟用户键入 nihso（其中 s 为 a 的 QWERTY 键盘紧邻误触按键，原本意图为 nihao 你好）
+        for ch in "nihso".chars() {
+            engine.push_char(ch);
+        }
+
+        // 验证 1：原始击键字母绝对保真（绝不篡改底层输入缓冲区）
+        assert_eq!(engine.raw_input(), "nihso");
+
+        // 验证 2：预编辑格式化文本绝不被改写为 nihao
+        assert_ne!(engine.formatted_preedit(), "ni'hao");
+
+        let candidates = engine.candidates();
+        assert!(candidates.len() >= 2, "应至少包含保真降级候选与次位容错备选");
+
+        // 验证 3：第 2 位（次位）提供带有 [纠错] 标识的邻键候选词“你好”
+        let typo_cand = &candidates[1];
+        assert_eq!(typo_cand.text, "你好");
+        assert_eq!(typo_cand.tier, CandidateTier::TypoCorrection);
+        assert!(
+            typo_cand.comment.as_ref().unwrap().contains("[纠错: ni'hao]"),
+            "注释应包含纠错提示"
+        );
+
+        // 验证 4：选中次位容错候选上屏，完全消费掉全部 5 个误触字符并清空输入
+        let (committed, remaining) = engine.select_candidate(1, 1_700_000_000).expect("选容错词");
+        assert_eq!(committed, "你好");
+        assert_eq!(remaining, 0, "选中纠错候选应完全清空输入缓冲区");
+        assert_eq!(engine.raw_input(), "");
+    }
+
+    #[test]
+    fn test_engine_typo_adjacent_transpose_cehng() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        // 词库准备目标词条："cheng" => "成"
+        engine.table.insert("cheng", "成", 10_000);
+
+        // 模拟用户键入 cehng（eh 为相邻字母颠倒误敲，原本意图为 cheng）
+        for ch in "cehng".chars() {
+            engine.push_char(ch);
+        }
+
+        let candidates = engine.candidates();
+        assert!(!candidates.is_empty(), "候选列表不应为空");
+        // 验证包含 cheng 纠错的候选
+        assert!(candidates.iter().any(|c| {
+            c.tier == CandidateTier::TypoCorrection
+                && c.comment.as_ref().map_or(false, |comm| comm.contains("[纠错: cheng]"))
+        }));
+    }
+
+    #[test]
+    fn test_pangu_spacing_helper_rules() {
+        // 1. 中文汉字接英文单词或数字
+        assert!(AlgoEngine::should_insert_pangu_space("测试", "Rust"));
+        assert!(AlgoEngine::should_insert_pangu_space("第", "10"));
+
+        // 2. 英文单词接中文汉字
+        assert!(AlgoEngine::should_insert_pangu_space("Rust", "语言"));
+        assert!(AlgoEngine::should_insert_pangu_space("Waylan", "输入法"));
+
+        // 3. 数字接量词豁免 vs 数字接普通汉字
+        assert!(!AlgoEngine::should_insert_pangu_space("100", "米"));
+        assert!(!AlgoEngine::should_insert_pangu_space("20", "个"));
+        assert!(!AlgoEngine::should_insert_pangu_space("5", "折"));
+        assert!(!AlgoEngine::should_insert_pangu_space("2026", "年"));
+        assert!(AlgoEngine::should_insert_pangu_space("100", "苹果"));
+        assert!(AlgoEngine::should_insert_pangu_space("2026", "你好"));
+
+        // 4. 同类别不插入空格
+        assert!(!AlgoEngine::should_insert_pangu_space("北京", "时间"));
+        assert!(!AlgoEngine::should_insert_pangu_space("hello", "world"));
+
+        // 5. 标点符号与已有空格不重复插入
+        assert!(!AlgoEngine::should_insert_pangu_space("你好", "，"));
+        assert!(!AlgoEngine::should_insert_pangu_space("测试 ", "Rust"));
+        assert!(!AlgoEngine::should_insert_pangu_space("测试", " Rust"));
+    }
+
+    #[test]
+    fn test_engine_auto_pangu_spacing_integration() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        // 注入目标词条与英文短语（带音节分词符）
+        engine.table.insert("ping'guo", "苹果", 10_000);
+        engine.table.insert("ge", "个", 10_000);
+        engine.custom_phrases.add_entry("rust".to_string(), "Rust".to_string());
+        engine.custom_phrases.add_entry("100".to_string(), "100".to_string());
+
+        // 1. 默认情况下，auto_pangu_spacing 为 false，不自动追加空格
+        assert!(!engine.config.auto_pangu_spacing);
+        for ch in "women".chars() {
+            engine.push_char(ch);
+        }
+        let (comm1, _) = engine.select_candidate(0, 1_700_000_000).expect("选中我们");
+        assert_eq!(comm1, "我们");
+
+        for ch in "rust".chars() {
+            engine.push_char(ch);
+        }
+        let (comm2, _) = engine.select_candidate(0, 1_700_000_000).expect("选中Rust");
+        assert_eq!(comm2, "Rust", "未开启智能空格时不应包含前置空格");
+
+        // 2. 开启智能空格配置
+        engine.reset();
+        engine.config.auto_pangu_spacing = true;
+
+        // 步骤 A：中文接英文（我们 -> Rust）
+        for ch in "women".chars() {
+            engine.push_char(ch);
+        }
+        let (c1, _) = engine.select_candidate(0, 1_700_000_000).expect("选中我们");
+        assert_eq!(c1, "我们");
+
+        for ch in "rust".chars() {
+            engine.push_char(ch);
+        }
+        let (c2, _) = engine.select_candidate(0, 1_700_000_000).expect("选中Rust");
+        assert_eq!(c2, " Rust", "中文接英文应自动补齐半角空格");
+        assert_eq!(engine.last_commit_context.as_deref(), Some("Rust"), "历史上下文应保存去除空格后的纯净词");
+
+        // 步骤 B：英文接中文（Rust -> 我们）
+        for ch in "women".chars() {
+            engine.push_char(ch);
+        }
+        let (c3, _) = engine.select_candidate(0, 1_700_000_000).expect("选中我们");
+        assert_eq!(c3, " 我们", "英文接中文应自动补齐半角空格");
+
+        // 步骤 C：数字接量词白名单豁免（100 -> 个）
+        engine.reset();
+        for ch in "100".chars() {
+            engine.push_char(ch);
+        }
+        let (num_c, _) = engine.select_candidate(0, 1_700_000_000).expect("选中100");
+        assert_eq!(num_c, "100");
+
+        for ch in "ge".chars() {
+            engine.push_char(ch);
+        }
+        let (clf_c, _) = engine.select_candidate(0, 1_700_000_000).expect("选中量词个");
+        assert_eq!(clf_c, "个", "数字接中文量词白名单应豁免，不加空格");
+
+        // 步骤 D：数字接普通中文词（100 -> 苹果）
+        engine.reset();
+        for ch in "100".chars() {
+            engine.push_char(ch);
+        }
+        let (num_c2, _) = engine.select_candidate(0, 1_700_000_000).expect("选中100");
+        assert_eq!(num_c2, "100");
+
+        for ch in "pingguo".chars() {
+            engine.push_char(ch);
+        }
+        let (noun_c, _) = engine.select_candidate(0, 1_700_000_000).expect("选中苹果");
+        assert_eq!(noun_c, " 苹果", "数字接普通中文词应自动补齐半角空格");
     }
 }

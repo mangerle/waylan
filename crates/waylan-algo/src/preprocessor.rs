@@ -81,16 +81,41 @@ impl PunctuationProcessor {
         }
     }
 
-    /// 尝试处理标点符号输入
+    /// 检查输入缓冲区是否属于网址模式或邮箱模式
+    pub fn is_url_or_email_mode(buffer: &str) -> bool {
+        let lower = buffer.to_lowercase();
+        lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("ftp://")
+            || lower.starts_with("www.")
+            || lower.starts_with("git@")
+            || lower.contains('@')
+    }
+
+    /// 尝试处理标点符号输入（兼容无缓冲区上下文接口）
     pub fn process_punctuation(&mut self, ch: char) -> Option<Vec<TextAction>> {
-        // 1. 数字间符号保护（例如 12:00 或 3.14，保持英文半角符号）
-        if self.last_char_was_digit && (ch == ':' || ch == '.') {
+        self.process_punctuation_with_context(ch, "")
+    }
+
+    /// 结合当前输入缓冲区上下文处理标点符号输入
+    pub fn process_punctuation_with_context(
+        &mut self,
+        ch: char,
+        buffer: &str,
+    ) -> Option<Vec<TextAction>> {
+        // 1. 网址与邮箱模式感知：当前缓冲区为 URL 或 Email 时，常见网络标点强制保持半角 ASCII
+        if Self::is_url_or_email_mode(buffer) && ".:/_?#&=@~-+".contains(ch) {
+            return Some(vec![TextAction::Commit(ch.to_string())]);
+        }
+
+        // 2. 数字间/数字后符号保护（例如 12:00, 3.14, 2026/10/10，保持英文半角符号）
+        if self.last_char_was_digit && (ch == ':' || ch == '.' || ch == '/') {
             return Some(vec![TextAction::Commit(ch.to_string())]);
         }
 
         self.last_char_was_digit = false;
 
-        // 2. 成对符号自动闭合并光标回退
+        // 3. 成对符号自动闭合并光标回退
         match ch {
             '(' => {
                 return Some(vec![
@@ -251,6 +276,27 @@ mod tests {
         pp.record_commit("3");
         assert_eq!(
             pp.process_punctuation('.'),
+            Some(vec![TextAction::Commit(".".to_string())])
+        );
+
+        // 数字后斜杠保护 2026/10/10
+        pp.record_commit("2026");
+        assert_eq!(
+            pp.process_punctuation('/'),
+            Some(vec![TextAction::Commit("/".to_string())])
+        );
+
+        // 网址模式标点直通
+        assert_eq!(
+            pp.process_punctuation_with_context('.', "www.baidu"),
+            Some(vec![TextAction::Commit(".".to_string())])
+        );
+        assert_eq!(
+            pp.process_punctuation_with_context('/', "https://github"),
+            Some(vec![TextAction::Commit("/".to_string())])
+        );
+        assert_eq!(
+            pp.process_punctuation_with_context('.', "user@example"),
             Some(vec![TextAction::Commit(".".to_string())])
         );
     }

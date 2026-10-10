@@ -1,3 +1,5 @@
+use crate::bigram::CompactMmapBigram;
+use crate::vocab::Vocabulary;
 use crate::error::AlgoError;
 use crate::prism::STANDARD_INITIALS;
 use crate::syllables::STANDARD_SYLLABLES;
@@ -230,6 +232,10 @@ pub struct LexiconTable {
     initial_entries: HashMap<String, Vec<(String, u32)>>,
     /// 零拷贝紧凑只读词典（通过 mmap 映射）
     compact_mmap: Option<CompactMmapLexicon>,
+    /// 零拷贝紧凑只读转移概率矩阵（CSR 微信键盘同级高密度架构）
+    pub compact_bigram: Option<CompactMmapBigram>,
+    /// 全局词表（用于 CSR 架构将词文本映射为 Word ID）
+    pub vocab: Option<Vocabulary>,
 }
 
 impl Default for LexiconTable {
@@ -246,6 +252,8 @@ impl LexiconTable {
             acronym_entries: HashMap::new(),
             initial_entries: HashMap::new(),
             compact_mmap: None,
+            compact_bigram: None,
+            vocab: None,
         }
     }
 
@@ -327,12 +335,57 @@ impl LexiconTable {
         };
 
         let compact = CompactMmapLexicon::from_mmap(mmap, path_ref)?;
+
+        // 自动探测并挂载全局词表与 CSR 高密度转移概率矩阵
+        let vocab_path = path_ref.with_file_name("vocab.bin");
+        let vocab = if vocab_path.exists() {
+            Vocabulary::load_binary(&vocab_path).ok()
+        } else {
+            None
+        };
+
+        let bigram_path = path_ref.with_file_name("bigram.table.bin");
+        let compact_bigram = if bigram_path.exists() {
+            CompactMmapBigram::open(&bigram_path).ok()
+        } else {
+            None
+        };
+
         Ok(Self {
             entries: HashMap::new(),
             acronym_entries: HashMap::new(),
             initial_entries: HashMap::new(),
             compact_mmap: Some(compact),
+            compact_bigram,
+            vocab,
         })
+    }
+
+    /// 手动挂载外部零拷贝 Bigram 转移概率矩阵与配套全局词表
+    pub fn load_bigram(
+        &mut self,
+        bigram_path: impl AsRef<Path>,
+        vocab_path: impl AsRef<Path>,
+    ) -> Result<(), AlgoError> {
+        let bg = CompactMmapBigram::open(bigram_path)?;
+        let vocab = Vocabulary::load_binary(vocab_path)?;
+        self.compact_bigram = Some(bg);
+        self.vocab = Some(vocab);
+        Ok(())
+    }
+
+    /// 查询二元词对统计转移亲和度加权得分
+    ///
+    /// 通过 `vocab` 将文本换算为整数 Word ID，并在高密度 CSR 矩阵内执行纳秒级局部二分查找；
+    /// 若未收录则返回 `None`（交由上层平滑回退至规则奖励）。
+    #[inline]
+    pub fn get_bigram_affinity(&self, prev: &str, curr: &str) -> Option<i64> {
+        if let (Some(bg), Some(vocab)) = (&self.compact_bigram, &self.vocab) {
+            if let (Some(id1), Some(id2)) = (vocab.get_id(prev), vocab.get_id(curr)) {
+                return bg.get_affinity_by_id(id1, id2);
+            }
+        }
+        None
     }
 
     /// 创建内置测试词库（用于自动化回归测试）

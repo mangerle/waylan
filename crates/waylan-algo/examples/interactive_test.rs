@@ -20,6 +20,9 @@ fn main() {
     let start_load = Instant::now();
     let table = LexiconTable::load_binary(dict_path).expect("主词库加载失败");
     println!("      全量主词库载入成功！耗时: {:.2} ms", start_load.elapsed().as_secs_f64() * 1000.0);
+    if let Some(ref bg) = table.compact_bigram {
+        println!("      联动挂载高密度 CSR 统计语言模型: 收录 {} 万二元转移词对 (零拷贝 mmap)", bg.total_pairs / 10000);
+    }
 
     let mut engine = AlgoEngine::new(table, AlgoConfig::default());
 

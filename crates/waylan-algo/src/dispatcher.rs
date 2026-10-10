@@ -1,3 +1,4 @@
+use crate::evaluator::FinancialEvaluator;
 use crate::types::{AlgoCandidate, AlgoConfig};
 
 /// 模式分流器
@@ -40,9 +41,16 @@ impl ModeDispatcher {
         }
     }
 
-    /// V 模式：算术表达式求值
+    /// V 模式：财务金额大写与算术表达式求值
     fn eval_v_mode(expr: &str) -> Vec<AlgoCandidate> {
-        let mut candidates = Vec::with_capacity(2);
+        let mut candidates = Vec::new();
+
+        // 1. 优先尝试财务金额大写转换（纯数字及小数，如 v12345, v12345.67）
+        if let Some(fin_cands) = FinancialEvaluator::try_evaluate(expr) {
+            candidates.extend(fin_cands);
+        }
+
+        // 2. 算术表达式安全求值（如 v20*5, v100+20）
         if let Some(val) = Self::eval_math_simple(expr) {
             let val_str = if (val.fract()).abs() < 1e-9 {
                 format!("{}", val as i64)
@@ -53,12 +61,18 @@ impl ModeDispatcher {
                     .to_string()
             };
 
-            candidates
-                .push(AlgoCandidate::new(val_str.clone(), expr, 100_000).with_comment("计算结果"));
-            candidates.push(
-                AlgoCandidate::new(format!("{}={}", expr, val_str), expr, 90_000)
-                    .with_comment("完整算式"),
-            );
+            // 避免与已有纯数字候选重复
+            if !candidates.iter().any(|c| c.text == val_str) {
+                candidates.push(
+                    AlgoCandidate::new(val_str.clone(), expr, 85_000).with_comment("计算结果"),
+                );
+            }
+            if expr.contains(|c| "+-*/%".contains(c)) {
+                candidates.push(
+                    AlgoCandidate::new(format!("{}={}", expr, val_str), expr, 80_000)
+                        .with_comment("完整算式"),
+                );
+            }
         }
         candidates
     }
@@ -235,6 +249,16 @@ mod tests {
 
         let div_zero = ModeDispatcher::try_dispatch("v10/0", &config);
         assert!(div_zero.is_none());
+    }
+
+    #[test]
+    fn test_v_mode_financial_amount() {
+        let config = AlgoConfig::default();
+        let result = ModeDispatcher::try_dispatch("v12345.67", &config).expect("应触发V模式金额转换");
+        assert_eq!(result[0].text, "壹万贰仟叁佰肆拾伍元陆角柒分");
+        assert_eq!(result[0].comment.as_deref(), Some("人民币大写"));
+        assert_eq!(result[1].text, "壹万贰仟叁佰肆拾伍点陆柒");
+        assert_eq!(result[2].text, "12,345.67");
     }
 
     #[test]

@@ -89,7 +89,15 @@ impl BigramLanguageModel {
     pub const BASE_WORD_PENALTY: i64 = 12_000;
 
     /// 计算从前驱词 `prev_word` 转移到当前词 `curr_word` 的联合对数似然得分
-    pub fn transition_score(prev_word: &str, curr_word: &str, curr_unigram: i64) -> i64 {
+    ///
+    /// 优先从 `table` 的零拷贝 Bigram 转移矩阵中获取百万级大语料统计亲和度；
+    /// 若未命中或未挂载，平滑回退（Back-off）至基于规则的通用接续奖励。
+    pub fn transition_score(
+        prev_word: &str,
+        curr_word: &str,
+        curr_unigram: i64,
+        table: &LexiconTable,
+    ) -> i64 {
         let char_len = curr_word.chars().count() as i64;
         let length_bonus = (char_len - 1) * 7_000;
 
@@ -99,14 +107,19 @@ impl BigramLanguageModel {
         }
 
         // 1. 评估二元词对接续亲和度 (Bigram Transition Bonus)
-        let bigram_bonus = Self::estimate_bigram_affinity(prev_word, curr_word);
+        // 优先尝试从紧凑内存映射矩阵中检索真实语料统计得分
+        let bigram_bonus = if let Some(affinity) = table.get_bigram_affinity(prev_word, curr_word) {
+            affinity
+        } else {
+            Self::estimate_bigram_affinity(prev_word, curr_word)
+        };
 
         // 2. 联合似然加和
         curr_unigram + length_bonus + bigram_bonus - Self::BASE_WORD_PENALTY
     }
 
-    /// 估算二元词对的接续亲和度
-    fn estimate_bigram_affinity(prev: &str, curr: &str) -> i64 {
+    /// 估算二元词对的接续亲和度（未挂载大语料模型时的平滑回退）
+    pub fn estimate_bigram_affinity(prev: &str, curr: &str) -> i64 {
         match (prev, curr) {
             ("你好", "世界") => 18_000,
             ("我们", "来了") | ("我们", "走") | ("我们", "去") => 16_000,
@@ -155,6 +168,16 @@ impl ViterbiDecoder {
         remaining: &str,
         table: &LexiconTable,
     ) -> Option<AlgoCandidate> {
+        Self::decode_sentence_with_context(syllables, remaining, table, None)
+    }
+
+    /// 对给定的音节切分列表、末尾残存拼音与上屏历史上下文进行整句动态规划求解
+    pub fn decode_sentence_with_context(
+        syllables: &[String],
+        remaining: &str,
+        table: &LexiconTable,
+        prev_context: Option<&str>,
+    ) -> Option<AlgoCandidate> {
         let n = syllables.len();
         if n == 0 && remaining.is_empty() {
             return None;
@@ -201,11 +224,13 @@ impl ViterbiDecoder {
                 for (text, raw_score) in raw_entries.iter().take(3) {
                     let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
                     for prev in &prev_nodes {
-                        let prev_word = prev.words.last().map(|s| s.as_str()).unwrap_or("");
+                        // 若为句首（无句内前驱词），无缝采用上屏历史上下文 prev_context
+                        let prev_word = prev.words.last().map(|s| s.as_str()).or(prev_context).unwrap_or("");
                         let trans_score = BigramLanguageModel::transition_score(
                             prev_word,
                             text,
                             freq_score,
+                            table,
                         );
 
                         let mut new_words = prev.words.clone();
@@ -238,11 +263,12 @@ impl ViterbiDecoder {
                             for (text, raw_score) in entries.iter().take(2) {
                                 let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
                                 for prev in &prev_nodes_n1 {
-                                    let prev_word = prev.words.last().map(|s| s.as_str()).unwrap_or("");
+                                    let prev_word = prev.words.last().map(|s| s.as_str()).or(prev_context).unwrap_or("");
                                     let trans_score = BigramLanguageModel::transition_score(
                                         prev_word,
                                         text,
                                         freq_score,
+                                        table,
                                     );
                                     let mut new_words = prev.words.clone();
                                     new_words.push(text.clone());
@@ -264,11 +290,12 @@ impl ViterbiDecoder {
                     for (text, raw_score) in entries.iter().take(3) {
                         let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
                         for prev in &prev_nodes_n {
-                            let prev_word = prev.words.last().map(|s| s.as_str()).unwrap_or("");
+                            let prev_word = prev.words.last().map(|s| s.as_str()).or(prev_context).unwrap_or("");
                             let trans_score = BigramLanguageModel::transition_score(
                                 prev_word,
                                 text,
                                 freq_score,
+                                table,
                             );
                             let mut new_words = prev.words.clone();
                             new_words.push(text.clone());
@@ -362,5 +389,28 @@ mod tests {
         let syllables = vec!["bei'jing".to_string(), "shi'jian".to_string()];
         let best = ViterbiDecoder::decode_sentence(&syllables, "", &table).expect("应解码成功");
         assert_eq!(best.text, "北京时间", "由于Bigram转移亲和度，应优先命中北京时间");
+    }
+
+    #[test]
+    fn test_viterbi_commit_context_disambiguation() {
+        let mut table = LexiconTable::with_sample_data();
+        // 插入竞争词条："shi'jian" => "事件"（静态分 14,000）与 "时间"（静态分 10,000）
+        table.insert("shi'jian", "事件", 14_000);
+        table.insert("shi'jian", "时间", 10_000);
+
+        let syllables = vec!["shi".to_string(), "jian".to_string()];
+        // 在无上下文时，静态分更高的“事件”会胜出
+        let no_ctx = ViterbiDecoder::decode_sentence(&syllables, "", &table).expect("应解码成功");
+        assert_eq!(no_ctx.text, "事件");
+
+        // 当注入上屏历史上下文“北京”时，由于（北京->时间）具有高亲和度，“时间”将逆袭胜出
+        let with_ctx = ViterbiDecoder::decode_sentence_with_context(
+            &syllables,
+            "",
+            &table,
+            Some("北京"),
+        )
+        .expect("应解码成功");
+        assert_eq!(with_ctx.text, "时间", "注入上屏上下文北京后，应优先推荐时间");
     }
 }
