@@ -351,29 +351,62 @@ impl PrismEngine {
         }
     }
 
-    /// 显式单引号强制切分处理
+    /// 显式单引号强制切分处理（支持末尾未闭合单字前缀继续展开联想）
     fn build_explicit_split_paths(input: &str, fuzzy: &FuzzyConfig) -> Vec<SegmentPath> {
         let parts: Vec<&str> = input.split('\'').filter(|s| !s.is_empty()).collect();
-        let mut syllables = Vec::new();
-        let mut remaining = String::new();
-
-        for (idx, &part) in parts.iter().enumerate() {
-            if is_valid_syllable(part) || Self::is_fuzzy_valid(part, fuzzy) {
-                syllables.push(part.to_string());
-            } else if idx == parts.len().saturating_sub(1) {
-                remaining = part.to_string();
-            } else {
-                syllables.push(part.to_string());
-            }
+        if parts.is_empty() {
+            return Vec::new();
         }
 
-        let cost = syllables.len() as u32;
-        vec![SegmentPath {
-            syllables,
-            remaining,
-            cost,
-            is_typo: false,
-        }]
+        let is_trailing_quote = input.ends_with('\'');
+        let last_idx = parts.len() - 1;
+        let last_part = parts[last_idx];
+
+        let mut base_syllables = Vec::with_capacity(parts.len());
+        for &part in &parts[..last_idx] {
+            base_syllables.push(part.to_string());
+        }
+
+        let mut paths = Vec::new();
+
+        // 1. 若末尾片段本身是合法音节（或末尾输入了单引号强制确认），生成闭合音节路径
+        if is_valid_syllable(last_part) || Self::is_fuzzy_valid(last_part, fuzzy) {
+            let mut syls = base_syllables.clone();
+            syls.push(last_part.to_string());
+            let cost = syls.len() as u32;
+            paths.push(SegmentPath {
+                syllables: syls,
+                remaining: String::new(),
+                cost,
+                is_typo: false,
+            });
+        }
+
+        // 2. 若末尾未以单引号显式封口，且末尾片段不是合法音节或存在更长的合法音节前缀，
+        // 则同时生成将末尾片段作为未完成前缀 (remaining) 的扩展路径（支持如 xi'a 联想 喜爱 xi'ai / 西安 xi'an）
+        if !is_trailing_quote
+            && (!is_valid_syllable(last_part)
+                || crate::syllables::has_strictly_longer_syllable(last_part))
+        {
+            let cost = (base_syllables.len() + 1) as u32;
+            paths.push(SegmentPath {
+                syllables: base_syllables,
+                remaining: last_part.to_string(),
+                cost,
+                is_typo: false,
+            });
+        }
+
+        if paths.is_empty() {
+            paths.push(SegmentPath {
+                syllables: parts.iter().map(|s| s.to_string()).collect(),
+                remaining: String::new(),
+                cost: parts.len() as u32,
+                is_typo: false,
+            });
+        }
+
+        paths
     }
 
     /// 展开单个音节在当前模糊音配置下的所有合法标准等价音节（不含原音节自身）
@@ -565,8 +598,13 @@ mod tests {
     fn test_explicit_split_quote() {
         let fuzzy = FuzzyConfig::default();
         let paths = PrismEngine::build_paths("xi'an", &fuzzy);
-        assert_eq!(paths.len(), 1);
+        assert!(!paths.is_empty());
         assert_eq!(paths[0].syllables, vec!["xi", "an"]);
+
+        // 验证 xi'a 能够同时切分出闭合的 xi'a 与带 remaining: a 的前缀扩展路径
+        let paths_prefix = PrismEngine::build_paths("xi'a", &fuzzy);
+        assert!(paths_prefix.iter().any(|p| p.syllables == vec!["xi", "a"]));
+        assert!(paths_prefix.iter().any(|p| p.syllables == vec!["xi"] && p.remaining == "a"));
     }
 
     #[test]

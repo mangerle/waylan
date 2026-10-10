@@ -62,6 +62,22 @@ pub fn has_syllable_prefix(prefix: &str) -> bool {
     }
 }
 
+/// 检查是否存在严格比当前字符串更长的合法音节以该字符串为前缀
+pub fn has_strictly_longer_syllable(prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    let start_idx = match STANDARD_SYLLABLES.binary_search(&prefix) {
+        Ok(idx) => idx + 1,
+        Err(idx) => idx,
+    };
+    if start_idx < STANDARD_SYLLABLES.len() {
+        STANDARD_SYLLABLES[start_idx].starts_with(prefix)
+    } else {
+        false
+    }
+}
+
 /// 获取标准 QWERTY 键盘字母的物理二维平面坐标 (x, y)
 ///
 /// 坐标基于标准键盘物理中心距归一化：
