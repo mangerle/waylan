@@ -78,6 +78,23 @@ pub fn has_strictly_longer_syllable(prefix: &str) -> bool {
     }
 }
 
+/// 根据拼音前缀二分截取所有匹配的标准音节切片
+///
+/// # 设计原理
+/// - **实现初衷**：为 Viterbi 尾部残存音节扩展提供极速音节切片，消除对 410 个音节的逐一遍历；
+/// - **核心优势**：利用 `STANDARD_SYLLABLES` 字典序预排序特性，通过 `partition_point` 二分定位起始位置，
+///   零堆内存分配返回连续借用切片，时间复杂度从 O(N) 降至 O(log N)；
+/// - **代价与局限**：依赖底层音节表保持严格升序排列。
+pub fn find_syllables_by_prefix(prefix: &str) -> &'static [&'static str] {
+    if prefix.is_empty() {
+        return STANDARD_SYLLABLES;
+    }
+    let start_idx = STANDARD_SYLLABLES.partition_point(|s| *s < prefix);
+    let slice = &STANDARD_SYLLABLES[start_idx..];
+    let count = slice.iter().take_while(|s| s.starts_with(prefix)).count();
+    &slice[..count]
+}
+
 /// 获取标准 QWERTY 键盘字母的物理二维平面坐标 (x, y)
 ///
 /// 坐标基于标准键盘物理中心距归一化：
@@ -323,6 +340,24 @@ mod tests {
         assert!(has_syllable_prefix("x"));
         assert!(has_syllable_prefix("ni"));
         assert!(!has_syllable_prefix("zz"));
+    }
+
+    #[test]
+    fn test_find_syllables_by_prefix() {
+        let j_syls = find_syllables_by_prefix("j");
+        assert!(!j_syls.is_empty());
+        assert!(j_syls.contains(&"ji"));
+        assert!(j_syls.contains(&"juan"));
+        assert!(j_syls.iter().all(|s| s.starts_with('j')));
+
+        let zh_syls = find_syllables_by_prefix("zh");
+        assert!(!zh_syls.is_empty());
+        assert!(zh_syls.contains(&"zha"));
+        assert!(zh_syls.contains(&"zhong"));
+        assert!(zh_syls.iter().all(|s| s.starts_with("zh")));
+
+        let none_syls = find_syllables_by_prefix("zz");
+        assert!(none_syls.is_empty());
     }
 
     #[test]

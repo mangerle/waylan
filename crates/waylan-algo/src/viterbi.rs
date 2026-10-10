@@ -1,4 +1,4 @@
-use crate::syllables::STANDARD_SYLLABLES;
+use crate::syllables::find_syllables_by_prefix;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 
@@ -340,28 +340,26 @@ impl ViterbiDecoder {
                 // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词（如 shi + j -> 时间）
                 let last_syl = &syllables[split_idx - 1];
                 let prev_step = split_idx - 1;
-                for &syl in STANDARD_SYLLABLES {
-                    if syl.starts_with(remaining) {
-                        let key = format!("{}'{}", last_syl, syl);
-                        if let Some(entries) = table.get_raw_entries(&key) {
-                            for (text, raw_score) in entries.iter().take(2) {
-                                let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
-                                for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
-                                    let prev_word = if prev_step == 0 {
-                                        prev_context.unwrap_or("")
-                                    } else {
-                                        &prev.word
-                                    };
-                                    let trans_score = BigramLanguageModel::transition_score(
-                                        prev_word, text, freq_score, table,
-                                    );
-                                    ext_candidates.push((
-                                        prev_step,
-                                        prev_beam_idx,
-                                        text.clone(),
-                                        prev.total_score + trans_score,
-                                    ));
-                                }
+                for &syl in find_syllables_by_prefix(remaining) {
+                    let key = format!("{}'{}", last_syl, syl);
+                    if let Some(entries) = table.get_raw_entries(&key) {
+                        for (text, raw_score) in entries.iter().take(2) {
+                            let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
+                            for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
+                                let prev_word = if prev_step == 0 {
+                                    prev_context.unwrap_or("")
+                                } else {
+                                    &prev.word
+                                };
+                                let trans_score = BigramLanguageModel::transition_score(
+                                    prev_word, text, freq_score, table,
+                                );
+                                ext_candidates.push((
+                                    prev_step,
+                                    prev_beam_idx,
+                                    text.clone(),
+                                    prev.total_score + trans_score,
+                                ));
                             }
                         }
                     }
