@@ -105,11 +105,23 @@ impl CandidateSurfaceManager {
         let height = pixmap.height();
         self.on_input_active(width, height);
 
-        let data = pixmap.data();
-        let mut file = Self::create_shm_fd(data.len()).ok()?;
-        file.write_all(data).ok()?;
+        let bgra = Self::rgba_to_argb8888_le(pixmap.data());
+        let mut file = Self::create_shm_fd(bgra.len()).ok()?;
+        file.write_all(&bgra).ok()?;
 
         Some((width, height, file))
+    }
+
+    /// 将 tiny-skia 预乘 RGBA 字节流转换为 Wayland WL_SHM_FORMAT_ARGB8888 小端序 (BGRA) 字节流
+    pub fn rgba_to_argb8888_le(rgba: &[u8]) -> Vec<u8> {
+        let mut bgra = Vec::with_capacity(rgba.len());
+        for chunk in rgba.chunks_exact(4) {
+            bgra.push(chunk[2]); // B
+            bgra.push(chunk[1]); // G
+            bgra.push(chunk[0]); // R
+            bgra.push(chunk[3]); // A
+        }
+        bgra
     }
 
     /// 将 RGBA/BGRA 像素位图写入匿名内存映射文件（用于跨进程传递给 Wayland 合成器）
@@ -137,5 +149,13 @@ mod tests {
         let (bx, by) = bottom_cursor.compute_popup_position(300, 40, 1080);
         assert_eq!(bx, 100);
         assert_eq!(by, 1050 - 40 - 4); // 1006
+    }
+
+    #[test]
+    fn test_rgba_to_argb8888_le_conversion() {
+        // 输入两个像素: [R=10, G=20, B=30, A=255] 与 [R=100, G=150, B=200, A=128]
+        let rgba = vec![10, 20, 30, 255, 100, 150, 200, 128];
+        let bgra = CandidateSurfaceManager::rgba_to_argb8888_le(&rgba);
+        assert_eq!(bgra, vec![30, 20, 10, 255, 200, 150, 100, 128]);
     }
 }
