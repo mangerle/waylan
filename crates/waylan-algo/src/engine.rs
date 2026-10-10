@@ -448,11 +448,11 @@ impl AlgoEngine {
             raw_candidates.append(&mut user_matches);
         }
 
-        // 2.1 Viterbi 长句动态规划解码：
-        // 仅针对 Prism 中代价最低的最优主路径执行整句求解，避免多路径重复计算与次级碎切噪音；
+        // 2.1 Viterbi 长句动态规划解码（遵循 Best Path Only 原则）：
+        // 仅针对 Prism 中代价最低的最优主路径执行整句求解，彻底杜绝次级碎切路径产生劣质假整句；
         // 同时传入末尾残存拼音 remaining 与上屏历史上下文，支持跨句二元转移预测
         let min_units = if self.last_commit_context.is_some() { 1 } else { 2 };
-        for path in paths.iter().take(2) {
+        if let Some(path) = paths.first() {
             let total_units = path.syllables.len()
                 + if path.remaining.is_empty() {
                     0
@@ -466,7 +466,7 @@ impl AlgoEngine {
                     &self.table,
                     self.last_commit_context.as_deref(),
                 ) {
-                    // 融合切分路径拓扑代价值：代价值越大（如包含借音碎切），扣除对应的似然惩罚，防止劣质路径反超优质整句
+                    // 融合切分路径拓扑代价值：扣除对应的拓扑惩罚
                     sentence.score = sentence.score.saturating_sub(path.cost.saturating_mul(100));
                     raw_candidates.push(sentence);
                 }
@@ -536,10 +536,14 @@ impl AlgoEngine {
         let mut candidates =
             CandidatePipeline::process(raw_candidates, &self.config, self.page_index);
 
-        // 5. 次位容错备选注入：
-        // 保持切分音节 100% 原始字母绝对保真；
-        // 仅在主词库未命中完整成词时，在候选词第 2~3 位提供带有 [纠错] 标识的邻键候选词，避免盲打全盘皆空
-        if !has_full_exact_match {
+        // 5. 状态机感知与容错门禁控制：
+        // 若当前输入处于正常的合法前缀打字态（已成功检索出 ExactWord 级别的完整成词或前缀展开短语），
+        // 绝对免受激进物理空间容错打扰；仅在无任何合法成词/前缀展开命中时（如输入 nihso, cehng），才激活次位容错。
+        let has_exact_or_prefix_words = candidates
+            .iter()
+            .any(|c| c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity);
+
+        if !has_exact_or_prefix_words {
             let typo_cands = Self::generate_spatial_typo_candidates(raw_input, &self.table);
             for (i, typo_cand) in typo_cands.into_iter().take(2).enumerate() {
                 // 若列表中已有同名候选但非容错词（例如 Viterbi 产生的不完全前缀预测），先将其剔除

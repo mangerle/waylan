@@ -372,3 +372,50 @@ fn test_engine_auto_pangu_spacing_integration() {
     let (noun_c, _) = engine.select_candidate(0, 1_700_000_000).expect("选中苹果");
     assert_eq!(noun_c, " 苹果", "数字接普通中文词应自动补齐半角空格");
 }
+
+#[test]
+fn test_engine_best_path_only_no_garbage_sentence() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    // 注入词条
+    engine.table.insert("wo'men'de'shi'jie", "我们的世界", 50_000);
+    engine.table.insert("wo'men", "我们", 20_000);
+    engine.table.insert("shi'jie", "世界", 20_000);
+    engine.table.insert("de", "的", 30_000);
+    engine.table.insert("me", "么", 10_000);
+    engine.table.insert("n", "嗯", 5_000);
+
+    for ch in "womendeshijie".chars() {
+        engine.push_char(ch);
+    }
+
+    let candidates = engine.candidates();
+    assert!(!candidates.is_empty());
+    // 验证绝不包含次级劣质碎切整句“我么嗯的世界”
+    assert!(!candidates.iter().any(|c| c.text == "我么嗯的世界"));
+    // 首选项必须为“我们的世界”
+    assert_eq!(candidates[0].text, "我们的世界");
+}
+
+#[test]
+fn test_engine_typo_guard_suppression_on_valid_prefix() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table.insert("shi'jian", "时间", 50_000);
+    engine.table.insert("de", "的", 80_000);
+
+    for ch in "womendeshij".chars() {
+        engine.push_char(ch);
+    }
+
+    let candidates = engine.candidates();
+    // 验证状态机门禁：合法前缀打字中，前排候选绝不包含荒谬的 TypoCorrection 容错词
+    for (idx, c) in candidates.iter().take(3).enumerate() {
+        assert_ne!(
+            c.tier,
+            CandidateTier::TypoCorrection,
+            "第 {} 位候选不应为容错词: {:?}",
+            idx + 1,
+            c
+        );
+    }
+}
+

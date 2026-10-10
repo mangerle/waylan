@@ -250,7 +250,7 @@ impl PrismEngine {
             // 检查零声母借音碎切：当前音节若以 a, o, e 开头，且与前一个音节可合并成合法单音节，则判定为借音碎切并施加惩罚
             if let Some(prev) = current.last() {
                 if Self::is_zero_initial_borrowing_split(prev, std_syl) {
-                    step_cost += 35;
+                    step_cost += if matches!(std_syl, "n" | "ng" | "m") { 50 } else { 35 };
                 }
             }
             current.push(std_syl.to_string());
@@ -436,7 +436,7 @@ impl PrismEngine {
         false
     }
 
-    /// 零声母音节集合（以 a, o, e 开头的普通话标准音节）
+    /// 零声母与特殊单辅音音节集合（以 a, o, e 开头，或特殊叹词音节 n, ng, m）
     #[inline]
     pub fn is_zero_initial_syllable(syl: &str) -> bool {
         matches!(
@@ -444,14 +444,15 @@ impl PrismEngine {
             "a" | "ai" | "an" | "ang" | "ao"
                 | "e" | "ei" | "en" | "eng" | "er"
                 | "o" | "ou"
+                | "n" | "ng" | "m"
         )
     }
 
     /// 判定是否属于与前驱音节无隔音符借音碎切
     ///
     /// # 判定原理
-    /// 若当前音节为零声母音节，且前驱音节与当前音节拼接在一起后，本身就是一个合法的标准拼音音节，
-    /// 说明用户在无隔音符情况下敲击的是连续拼音，把它们强行拆开属于无标记借音碎切（如 "ti"+"an"=>"tian"）。
+    /// 若当前音节为零声母音节或特殊叹词鼻辅音（如 n），且前驱音节与当前音节拼接在一起后，本身就是一个合法的标准拼音音节，
+    /// 说明用户在无隔音符情况下敲击的是连续拼音，把它们强行拆开属于无标记借音碎切（如 "ti"+"an"=>"tian", "me"+"n"=>"men"）。
     #[inline]
     pub fn is_zero_initial_borrowing_split(prev: &str, curr: &str) -> bool {
         if !Self::is_zero_initial_syllable(curr) {
