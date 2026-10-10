@@ -1,4 +1,5 @@
 pub mod draw;
+pub mod font;
 pub mod layout;
 
 use crate::theme::{Color, UiTheme};
@@ -6,11 +7,11 @@ use draw::{
     draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow, draw_rounded_rect,
     CardBackgroundParams, RoundedRectParams,
 };
+pub use font::CachedGlyph;
+use font::FontManager;
 use fontdue::{Font, FontSettings};
 use layout::{measure_candidates_bar, LayoutParams, PRECACHED_INDEX_STRINGS};
-use log::{info, warn};
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use tiny_skia::Pixmap;
@@ -18,13 +19,6 @@ use waylan_core::CandidateBoxState;
 
 /// 最大字形位图缓存条目数（覆盖绝大多数常用汉字与符号，占用内存不足 1MB）
 const MAX_GLYPH_CACHE_SIZE: usize = 2048;
-
-/// 缓存的单字形光栅化位图与度量信息
-#[derive(Debug, Clone)]
-pub struct CachedGlyph {
-    pub metrics: fontdue::Metrics,
-    pub bitmap: Vec<u8>,
-}
 
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式）
 pub struct CandidateBoxRenderer {
@@ -67,21 +61,20 @@ impl CandidateBoxRenderer {
 
     /// 手动从指定文件路径加载字体
     pub fn load_font_from_path(&mut self, path: &Path) -> bool {
-        if let Ok(data) = fs::read(path) {
-            self.load_font_from_bytes(&data)
-        } else {
-            false
-        }
+        std::fs::read(path)
+            .map(|data| self.load_font_from_bytes(&data))
+            .unwrap_or(false)
     }
 
     /// 从内存字节流中加载字体
     pub fn load_font_from_bytes(&mut self, bytes: &[u8]) -> bool {
-        if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
-            self.font = Some(font);
-            self.clear_glyph_cache();
-            true
-        } else {
-            false
+        match Font::from_bytes(bytes, FontSettings::default()) {
+            Ok(font) => {
+                self.font = Some(font);
+                self.clear_glyph_cache();
+                true
+            }
+            Err(_) => false,
         }
     }
 
@@ -131,75 +124,18 @@ impl CandidateBoxRenderer {
 
         let (metrics, bitmap) = font.rasterize(ch, size);
         let cached = CachedGlyph { metrics, bitmap };
-
         if let Ok(mut cache) = self.glyph_cache.lock() {
             if cache.len() >= MAX_GLYPH_CACHE_SIZE {
                 cache.clear();
             }
             cache.insert((ch, size_key), cached.clone());
         }
-
         Some(cached)
     }
 
     /// 加载默认系统字体
     fn load_default_fonts(&mut self) {
-        let candidates = [
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        ];
-
-        for path in &candidates {
-            if self.load_font_from_path(Path::new(path)) {
-                info!("[矢量渲染] 成功加载默认中文字体: {}", path);
-                return;
-            }
-        }
-
-        if let Some(font) = Self::scan_fallback_fonts() {
-            self.font = Some(font);
-            return;
-        }
-
-        warn!("[矢量渲染] 未检测到任何中文字体，启用占位降级模式。");
-    }
-
-    /// 回退字体深层探测
-    fn scan_fallback_fonts() -> Option<Font> {
-        let search_dirs = [
-            "/usr/share/fonts",
-            "/usr/local/share/fonts",
-            "~/.local/share/fonts",
-        ];
-
-        for dir in &search_dirs {
-            let path = Path::new(dir);
-            if !path.exists() {
-                continue;
-            }
-            if let Ok(entries) = fs::read_dir(path) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_file() {
-                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        if matches!(ext, "ttf" | "ttc" | "otf") {
-                            if let Ok(data) = fs::read(&p) {
-                                if let Ok(font) =
-                                    Font::from_bytes(&data[..], FontSettings::default())
-                                {
-                                    return Some(font);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
+        self.font = FontManager::load_default_fonts();
     }
 
     /// 绘制文本
@@ -240,13 +176,7 @@ impl CandidateBoxRenderer {
     }
 
     /// 混合字形位图（采用标准 Porter-Duff Source-Over）
-    fn blend_glyph(
-        &self,
-        pixmap: &mut Pixmap,
-        glyph: &CachedGlyph,
-        pos: (i32, i32),
-        color: Color,
-    ) {
+    fn blend_glyph(&self, pixmap: &mut Pixmap, glyph: &CachedGlyph, pos: (i32, i32), color: Color) {
         let (x, y) = pos;
         let width = glyph.metrics.width;
         let height = glyph.metrics.height;
@@ -561,6 +491,5 @@ impl CandidateBoxRenderer {
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 mod tests;

@@ -2,7 +2,7 @@ use crate::bigram::CompactMmapBigram;
 use crate::dat::DatReader;
 use crate::error::AlgoError;
 use crate::prism::STANDARD_INITIALS;
-use crate::types::{AlgoCandidate, CandidateTier};
+use crate::types::AlgoCandidate;
 use crate::vocab::Vocabulary;
 use memmap2::Mmap;
 use std::collections::HashMap;
@@ -297,9 +297,9 @@ pub struct LexiconTable {
     /// 倒排拼音索引表：键为拼音序列（如 "ni'hao"），值为候选文本与基础静态分
     entries: HashMap<String, Vec<(String, u32)>>,
     /// 简拼缩写索引表：键为首字母缩写（如 "bj"），值为候选文本与基础静态分
-    acronym_entries: HashMap<String, Vec<(String, u32)>>,
+    pub(crate) acronym_entries: HashMap<String, Vec<(String, u32)>>,
     /// 标准声母高频单字索引表（如 "s", "d", "g"）
-    initial_entries: HashMap<String, Vec<(String, u32)>>,
+    pub(crate) initial_entries: HashMap<String, Vec<(String, u32)>>,
     /// 零拷贝紧凑只读词典（DAT + 单源只读词表）
     pub compact_mmap: Option<CompactMmapLexicon>,
     /// 零拷贝紧凑只读转移概率矩阵 (CSR 架构)
@@ -451,46 +451,6 @@ impl LexiconTable {
             }
         }
         self.entries.get(key).cloned()
-    }
-
-    /// 检索指定单字母声母对应的高频单字原始词库条目列表
-    pub fn get_initial_raw_entries(&self, initial: &str) -> Option<Vec<(String, u32)>> {
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(entries) = compact.lookup_initial(initial) {
-                return Some(entries);
-            }
-        }
-        self.initial_entries.get(initial).cloned()
-    }
-
-    /// 检索首字母缩写简拼候选词（如 "bj" 匹配 "北京"）
-    pub fn lookup_acronym(&self, key: &str) -> Vec<AlgoCandidate> {
-        let mut candidates = Vec::new();
-
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(matches) = compact.lookup_acronym(key) {
-                for (text, score) in matches {
-                    candidates.push(
-                        AlgoCandidate::new(text, key, score)
-                            .with_tier(CandidateTier::Acronym)
-                            .with_comment("[简拼]"),
-                    );
-                }
-            }
-        }
-
-        if let Some(matches) = self.acronym_entries.get(key) {
-            candidates.reserve(matches.len());
-            for (text, score) in matches {
-                candidates.push(
-                    AlgoCandidate::new(text.clone(), key, *score)
-                        .with_tier(CandidateTier::Acronym)
-                        .with_comment("[简拼]"),
-                );
-            }
-        }
-
-        candidates
     }
 
     /// 获取索引中词条总数

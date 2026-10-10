@@ -54,4 +54,44 @@ impl LexiconTable {
         candidates.truncate(20);
         candidates
     }
+
+    /// 检索指定单字母声母对应的高频单字原始词库条目列表
+    pub fn get_initial_raw_entries(&self, initial: &str) -> Option<Vec<(String, u32)>> {
+        if let Some(compact) = &self.compact_mmap {
+            if let Some(entries) = compact.lookup_initial(initial) {
+                return Some(entries);
+            }
+        }
+        self.initial_entries.get(initial).cloned()
+    }
+
+    /// 检索首字母缩写简拼候选词（如 "bj" 匹配 "北京"）
+    pub fn lookup_acronym(&self, key: &str) -> Vec<AlgoCandidate> {
+        let mut candidates = Vec::new();
+
+        if let Some(compact) = &self.compact_mmap {
+            if let Some(matches) = compact.lookup_acronym(key) {
+                for (text, score) in matches {
+                    candidates.push(
+                        AlgoCandidate::new(text, key, score)
+                            .with_tier(CandidateTier::Acronym)
+                            .with_comment("[简拼]"),
+                    );
+                }
+            }
+        }
+
+        if let Some(matches) = self.acronym_entries.get(key) {
+            candidates.reserve(matches.len());
+            for (text, score) in matches {
+                candidates.push(
+                    AlgoCandidate::new(text.clone(), key, *score)
+                        .with_tier(CandidateTier::Acronym)
+                        .with_comment("[简拼]"),
+                );
+            }
+        }
+
+        candidates
+    }
 }
