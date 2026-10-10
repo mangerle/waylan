@@ -24,8 +24,6 @@ impl UserAdaptiveModel {
         pinyin: &str,
         timestamp: u64,
     ) -> Result<(), AlgoError> {
-        self.record_commit(text, pinyin, timestamp);
-
         let path_ref = path.as_ref();
         let mut guard = self
             .wal_file
