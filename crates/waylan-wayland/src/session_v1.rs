@@ -45,6 +45,18 @@ pub const KEY_6: u32 = 7;
 pub const KEY_7: u32 = 8;
 pub const KEY_8: u32 = 9;
 pub const KEY_9: u32 = 10;
+pub const KEY_0: u32 = 11;
+pub const KEY_GRAVE: u32 = 41;
+pub const KEY_LEFTCTRL: u32 = 29;
+pub const KEY_RIGHTCTRL: u32 = 97;
+pub const KEY_LEFTALT: u32 = 56;
+pub const KEY_RIGHTALT: u32 = 100;
+
+/// 标准 XKB 修饰键位掩码常量
+pub const MOD_SHIFT: u32 = 1;
+pub const MOD_CTRL: u32 = 4;
+pub const MOD_ALT: u32 = 8;
+pub const MOD_SUPER: u32 = 64;
 
 /// 将 Linux 扫描码转换为 ASCII 小写英文字母
 pub fn keycode_to_char(keycode: u32) -> Option<char> {
@@ -95,7 +107,24 @@ pub fn keycode_to_digit(keycode: u32) -> Option<usize> {
     }
 }
 
-/// 将扫描码转换为常见中文标点符号字符
+/// 将主键盘数字键扫描码转换为对应的 ASCII 数字字符 ('0'..='9')
+pub fn keycode_to_ascii_digit_char(keycode: u32) -> Option<char> {
+    match keycode {
+        KEY_1 => Some('1'),
+        KEY_2 => Some('2'),
+        KEY_3 => Some('3'),
+        KEY_4 => Some('4'),
+        KEY_5 => Some('5'),
+        KEY_6 => Some('6'),
+        KEY_7 => Some('7'),
+        KEY_8 => Some('8'),
+        KEY_9 => Some('9'),
+        KEY_0 => Some('0'),
+        _ => None,
+    }
+}
+
+/// 将扫描码转换为常见中文标点符号字符（未按 Shift）
 pub fn keycode_to_punctuation(keycode: u32) -> Option<char> {
     match keycode {
         KEY_COMMA => Some(','),
@@ -106,6 +135,31 @@ pub fn keycode_to_punctuation(keycode: u32) -> Option<char> {
         KEY_LEFTBRACE => Some('['),
         KEY_RIGHTBRACE => Some(']'),
         _ => None,
+    }
+}
+
+/// 结合 Shift 修饰键状态将扫描码转换为中文标点源字符（支持 !?$^_()""<>{}:~ 等 Shift 标点）
+pub fn keycode_to_punctuation_with_shift(keycode: u32, shift_pressed: bool) -> Option<char> {
+    if shift_pressed {
+        match keycode {
+            KEY_1 => Some('!'),
+            KEY_4 => Some('$'),
+            KEY_6 => Some('^'),
+            KEY_9 => Some('('),
+            KEY_0 => Some(')'),
+            KEY_MINUS => Some('_'),
+            KEY_LEFTBRACE => Some('{'),
+            KEY_RIGHTBRACE => Some('}'),
+            KEY_SEMICOLON => Some(':'),
+            KEY_APOSTROPHE => Some('"'),
+            KEY_GRAVE => Some('~'),
+            KEY_COMMA => Some('<'),
+            KEY_DOT => Some('>'),
+            KEY_SLASH => Some('?'),
+            _ => None,
+        }
+    } else {
+        keycode_to_punctuation(keycode)
     }
 }
 
@@ -171,6 +225,8 @@ pub struct WaylanV1Session {
     pub grabbed_keyboard: Option<WlKeyboard>,
     /// 当前上下文递增序号
     pub current_serial: u32,
+    /// 当前按下的修饰键位掩码（XKB mods_depressed）
+    pub mods_depressed: u32,
 }
 
 impl Default for WaylanV1Session {
@@ -188,6 +244,7 @@ impl Default for WaylanV1Session {
             active_context: None,
             grabbed_keyboard: None,
             current_serial: 0,
+            mods_depressed: 0,
         }
     }
 }
@@ -212,7 +269,35 @@ impl WaylanV1Session {
             active_context: None,
             grabbed_keyboard: None,
             current_serial: 0,
+            mods_depressed: 0,
         }
+    }
+
+    /// 根据按键按下/释放事件更新修饰键位掩码
+    pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
+        let mask = match keycode {
+            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => MOD_SHIFT,
+            KEY_LEFTCTRL | KEY_RIGHTCTRL => MOD_CTRL,
+            KEY_LEFTALT | KEY_RIGHTALT => MOD_ALT,
+            _ => 0,
+        };
+        if mask != 0 {
+            if is_press {
+                self.mods_depressed |= mask;
+            } else {
+                self.mods_depressed &= !mask;
+            }
+        }
+    }
+
+    /// 判断当前是否处于 Shift 按下状态
+    pub fn is_shift_active(&self) -> bool {
+        (self.mods_depressed & MOD_SHIFT) != 0
+    }
+
+    /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
+    pub fn has_ctrl_or_alt(&self) -> bool {
+        (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求
@@ -303,6 +388,7 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
                 let keyboard = id.grab_keyboard(qhandle, ());
                 state.grabbed_keyboard = Some(keyboard);
                 state.active_context = Some(id);
+                state.mods_depressed = 0;
                 state.engine.reset();
             }
             MethodEvent::Deactivate { context } => {
@@ -310,6 +396,7 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
                 context.destroy();
                 state.active_context = None;
                 state.grabbed_keyboard = None;
+                state.mods_depressed = 0;
                 state.engine.reset();
             }
         }
@@ -363,6 +450,8 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     )
                 );
 
+                state.update_modifier_by_key(key, is_press);
+
                 // 1. 优先送入 Shift/Ctrl 防误触状态机
                 if let Some(new_mode) = state.shift_sm.on_key_event(key, is_press, state.mode) {
                     state.mode = new_mode;
@@ -387,8 +476,8 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     return;
                 }
 
-                // 2. 如果当前处于英文模式，直接转发原始按键给应用
-                if state.mode == InputMode::English {
+                // 2. 如果当前处于英文模式，或按下了 Ctrl/Alt/Super 快捷键（如 Ctrl+C/V），直接转发原始按键给应用
+                if state.mode == InputMode::English || state.has_ctrl_or_alt() {
                     context.key(serial, time, key, 1);
                     return;
                 }
@@ -432,22 +521,24 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         }
                     }
 
-                    // 3.3 数字键 1-9：选择对应位候选词
-                    if let Some(digit) = keycode_to_digit(key) {
-                        let cand_idx = digit.saturating_sub(1);
-                        if let Some((committed_text, remaining_len)) =
-                            state.engine.select_candidate(cand_idx, now)
-                        {
-                            state.punctuation_processor.record_commit(&committed_text);
-                            context.commit_string(serial, committed_text);
-                            if remaining_len > 0 {
-                                state.refresh_candidate_surface();
-                                context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
-                            } else {
-                                state.surface_manager.on_input_inactive();
-                                context.preedit_string(serial, String::new(), String::new());
+                    // 3.3 数字键 1-9（未按 Shift 时）：选择对应位候选词
+                    if !state.is_shift_active() {
+                        if let Some(digit) = keycode_to_digit(key) {
+                            let cand_idx = digit.saturating_sub(1);
+                            if let Some((committed_text, remaining_len)) =
+                                state.engine.select_candidate(cand_idx, now)
+                            {
+                                state.punctuation_processor.record_commit(&committed_text);
+                                context.commit_string(serial, committed_text);
+                                if remaining_len > 0 {
+                                    state.refresh_candidate_surface();
+                                    context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
+                                } else {
+                                    state.surface_manager.on_input_inactive();
+                                    context.preedit_string(serial, String::new(), String::new());
+                                }
+                                return;
                             }
-                            return;
                         }
                     }
 
@@ -493,12 +584,12 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     }
 
                     // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
-                    if is_prev_page_key(key, state.page_keys) {
+                    if !state.is_shift_active() && is_prev_page_key(key, state.page_keys) {
                         state.engine.prev_page();
                         state.refresh_candidate_surface();
                         return;
                     }
-                    if is_next_page_key(key, state.page_keys) {
+                    if !state.is_shift_active() && is_next_page_key(key, state.page_keys) {
                         state.engine.next_page();
                         state.refresh_candidate_surface();
                         return;
@@ -541,8 +632,10 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         return;
                     }
 
-                    // 中文模式下的智能标点符号拦截
-                    if let Some(punct_char) = keycode_to_punctuation(key) {
+                    // 中文模式下的智能标点符号拦截（含 Shift 组合标点，如 !?$^_()""<>{}:~）
+                    if let Some(punct_char) =
+                        keycode_to_punctuation_with_shift(key, state.is_shift_active())
+                    {
                         if let Some(actions) =
                             state.punctuation_processor.process_punctuation(punct_char)
                         {
@@ -551,12 +644,27 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                     waylan_core::TextAction::Commit(text) => {
                                         context.commit_string(serial, text);
                                     }
-                                    waylan_core::TextAction::MoveCursor(_) => {
-                                        // 光标左移已包含在双括号或引号文本中
+                                    waylan_core::TextAction::MoveCursor(offset) => {
+                                        for _ in 0..offset.unsigned_abs() {
+                                            let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
+                                            context.key(serial, time, dir_key, 1);
+                                            context.key(serial, time, dir_key, 0);
+                                        }
                                     }
                                     _ => {}
                                 }
                             }
+                            return;
+                        }
+                    }
+
+                    // 若为未按 Shift 的纯数字键输入，记录数字上下文以便后续触发 3.14 / 12:00 半角标点保护
+                    if !state.is_shift_active() {
+                        if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
+                            state
+                                .punctuation_processor
+                                .record_commit(&digit_ch.to_string());
+                            context.key(serial, time, key, 1);
                             return;
                         }
                     }
@@ -581,6 +689,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                 mods_locked,
                 group,
             } => {
+                state.mods_depressed = mods_depressed;
                 // 原样透传修饰键状态给当前文本应用
                 context.modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
             }

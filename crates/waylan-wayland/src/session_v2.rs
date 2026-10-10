@@ -13,9 +13,11 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 
 use waylan_core::{CandidateBoxState, InputMode, TextAction};
 use crate::session_v1::{
-    is_next_page_key, is_prev_page_key, keycode_to_char, keycode_to_digit, keycode_to_punctuation,
-    PageKeyConfig, KEY_BACKSPACE, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
-    KEY_TAB, KEY_UP,
+    is_next_page_key, is_prev_page_key, keycode_to_ascii_digit_char, keycode_to_char,
+    keycode_to_digit, keycode_to_punctuation_with_shift, PageKeyConfig, KEY_BACKSPACE, KEY_DOWN,
+    KEY_ENTER, KEY_ESC, KEY_LEFT, KEY_LEFTALT, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_RIGHT,
+    KEY_RIGHTALT, KEY_RIGHTCTRL, KEY_RIGHTSHIFT, KEY_SPACE, KEY_TAB, KEY_UP, MOD_ALT, MOD_CTRL,
+    MOD_SHIFT, MOD_SUPER,
 };
 
 /// 微澜面向现代 Wayland 合成器 (KDE Plasma 6 / GNOME 46+ / Hyprland) 的 V2 会话状态
@@ -50,6 +52,8 @@ pub struct WaylanV2Session {
     pub reload_callback: Option<Box<dyn FnMut(&mut Self) + Send>>,
     /// Done 事件累计序列号（用于 commit 请求原子同步）
     pub done_serial: u32,
+    /// 当前按下的修饰键位掩码（XKB mods_depressed）
+    pub mods_depressed: u32,
 }
 
 impl WaylanV2Session {
@@ -70,7 +74,35 @@ impl WaylanV2Session {
             reload_requested: None,
             reload_callback: None,
             done_serial: 0,
+            mods_depressed: 0,
         }
+    }
+
+    /// 根据按键按下/释放事件更新修饰键位掩码
+    pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
+        let mask = match keycode {
+            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => MOD_SHIFT,
+            KEY_LEFTCTRL | KEY_RIGHTCTRL => MOD_CTRL,
+            KEY_LEFTALT | KEY_RIGHTALT => MOD_ALT,
+            _ => 0,
+        };
+        if mask != 0 {
+            if is_press {
+                self.mods_depressed |= mask;
+            } else {
+                self.mods_depressed &= !mask;
+            }
+        }
+    }
+
+    /// 判断当前是否处于 Shift 按下状态
+    pub fn is_shift_active(&self) -> bool {
+        (self.mods_depressed & MOD_SHIFT) != 0
+    }
+
+    /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
+    pub fn has_ctrl_or_alt(&self) -> bool {
+        (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求
@@ -204,11 +236,13 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 info!("[Wayland v2] 收到会话激活事件：输入焦点已建立。");
                 state.sync_external_state();
                 state.is_active = true;
+                state.mods_depressed = 0;
                 state.engine.reset();
             }
             V2Event::Deactivate => {
                 info!("[Wayland v2] 收到会话失焦事件：输入焦点已离开。");
                 state.is_active = false;
+                state.mods_depressed = 0;
                 state.engine.reset();
                 state.surface_manager.on_input_inactive();
             }
@@ -287,6 +321,8 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     )
                 );
 
+                state.update_modifier_by_key(key, is_press);
+
                 // 1. 优先经由 Shift/Ctrl 防误触状态机判定
                 if let Some(new_mode) = state.shift_state.on_key_event(key, is_press, state.mode) {
                     state.mode = new_mode;
@@ -310,8 +346,8 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     return;
                 }
 
-                // 2. 如果处于英文模式，跳过拼音组合拦截
-                if state.mode == InputMode::English {
+                // 2. 如果处于英文模式，或按下了 Ctrl/Alt/Super 快捷键（如 Ctrl+C/V），跳过拼音组合拦截
+                if state.mode == InputMode::English || state.has_ctrl_or_alt() {
                     return;
                 }
 
@@ -354,20 +390,22 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         }
                     }
 
-                    // 3.3 数字键 1-9：选择对应位候选词
-                    if let Some(digit) = keycode_to_digit(key) {
-                        let cand_idx = digit.saturating_sub(1);
-                        if let Some((committed_text, remaining_len)) =
-                            state.engine.select_candidate(cand_idx, now)
-                        {
-                            state.punctuation_processor.record_commit(&committed_text);
-                            if remaining_len > 0 {
-                                let preedit = state.engine.formatted_preedit();
-                                state.commit_partial(&committed_text, &preedit);
-                            } else {
-                                state.commit_text(&committed_text);
+                    // 3.3 数字键 1-9（未按 Shift 时）：选择对应位候选词
+                    if !state.is_shift_active() {
+                        if let Some(digit) = keycode_to_digit(key) {
+                            let cand_idx = digit.saturating_sub(1);
+                            if let Some((committed_text, remaining_len)) =
+                                state.engine.select_candidate(cand_idx, now)
+                            {
+                                state.punctuation_processor.record_commit(&committed_text);
+                                if remaining_len > 0 {
+                                    let preedit = state.engine.formatted_preedit();
+                                    state.commit_partial(&committed_text, &preedit);
+                                } else {
+                                    state.commit_text(&committed_text);
+                                }
+                                return;
                             }
-                            return;
                         }
                     }
 
@@ -404,12 +442,12 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     }
 
                     // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
-                    if is_prev_page_key(key, state.page_keys) {
+                    if !state.is_shift_active() && is_prev_page_key(key, state.page_keys) {
                         state.engine.prev_page();
                         state.refresh_candidate_surface();
                         return;
                     }
-                    if is_next_page_key(key, state.page_keys) {
+                    if !state.is_shift_active() && is_next_page_key(key, state.page_keys) {
                         state.engine.next_page();
                         state.refresh_candidate_surface();
                         return;
@@ -436,9 +474,11 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     }
                 }
 
-                // 4. 输入缓冲区为空时的中文标点符号处理
+                // 4. 输入缓冲区为空时的中文标点符号与数字上下文处理
                 if state.engine.raw_input().is_empty() {
-                    if let Some(punct_char) = keycode_to_punctuation(key) {
+                    if let Some(punct_char) =
+                        keycode_to_punctuation_with_shift(key, state.is_shift_active())
+                    {
                         if let Some(actions) =
                             state.punctuation_processor.process_punctuation(punct_char)
                         {
@@ -451,6 +491,15 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                                     _ => {}
                                 }
                             }
+                            return;
+                        }
+                    }
+
+                    if !state.is_shift_active() {
+                        if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
+                            state
+                                .punctuation_processor
+                                .record_commit(&digit_ch.to_string());
                             return;
                         }
                     }
@@ -470,6 +519,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                 mods_locked: _,
                 group: _,
             } => {
+                state.mods_depressed = mods_depressed;
                 info!(
                     "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}",
                     mods_depressed
@@ -489,6 +539,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_v1::{KEY_1, KEY_4, KEY_9, KEY_APOSTROPHE, KEY_SLASH};
     use waylan_algo::types::AlgoConfig;
 
     #[test]
@@ -525,5 +576,35 @@ mod tests {
         let box_state_after = session.build_candidate_box_state();
         assert!(!box_state_after.visible);
         assert!(session.engine.raw_input().is_empty());
+    }
+
+    #[test]
+    fn test_shift_punctuation_and_modifier_tracking() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut session = WaylanV2Session::new(engine);
+
+        assert_eq!(keycode_to_punctuation_with_shift(KEY_1, true), Some('!'));
+        assert_eq!(keycode_to_punctuation_with_shift(KEY_4, true), Some('$'));
+        assert_eq!(keycode_to_punctuation_with_shift(KEY_9, true), Some('('));
+        assert_eq!(
+            keycode_to_punctuation_with_shift(KEY_APOSTROPHE, true),
+            Some('"')
+        );
+        assert_eq!(keycode_to_punctuation_with_shift(KEY_SLASH, true), Some('?'));
+        assert_eq!(
+            keycode_to_punctuation_with_shift(KEY_SLASH, false),
+            Some('/')
+        );
+
+        session.update_modifier_by_key(KEY_LEFTSHIFT, true);
+        assert!(session.is_shift_active());
+        assert!(!session.has_ctrl_or_alt());
+        session.update_modifier_by_key(KEY_LEFTSHIFT, false);
+        assert!(!session.is_shift_active());
+
+        session.update_modifier_by_key(KEY_LEFTCTRL, true);
+        assert!(session.has_ctrl_or_alt());
+        session.update_modifier_by_key(KEY_LEFTCTRL, false);
+        assert!(!session.has_ctrl_or_alt());
     }
 }
