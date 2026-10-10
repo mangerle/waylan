@@ -439,6 +439,30 @@ fn test_engine_prefix_segment_candidate_injection_and_cascade() {
 }
 
 #[test]
+fn test_engine_phrase_prefix_synthesis_womendeshij() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    // 注入目标词条：“时间”和“的”
+    engine.table.insert("shi'jian", "时间", 50_000);
+    engine.table.insert("de", "的", 80_000);
+
+    // 模拟用户键入 womendeshij
+    for ch in "womendeshij".chars() {
+        engine.push_char(ch);
+    }
+
+    let candidates = engine.candidates();
+    assert!(!candidates.is_empty(), "候选列表不应为空");
+
+    // 验证成功合成跨词短语“我们的时间”
+    let texts: Vec<&str> = candidates.iter().map(|c| c.text.as_str()).collect();
+    assert!(
+        texts.contains(&"我们的时间"),
+        "候选列表中应成功包含跨词边界合成短语‘我们的时间’，当前候选: {:?}",
+        texts
+    );
+}
+
+#[test]
 fn test_engine_typo_guard_suppression_on_valid_prefix() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     engine.table.insert("shi'jian", "时间", 50_000);
@@ -460,4 +484,33 @@ fn test_engine_typo_guard_suppression_on_valid_prefix() {
         );
     }
 }
+
+#[test]
+fn test_engine_mixed_full_pinyin_and_tail_acronym_synthesis() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    // 注入目标词条与简拼
+    engine.table.insert("gong'tong", "共同", 50_000);
+    engine.table.insert("de", "的", 80_000);
+    engine.table.insert("gan'jue", "感觉", 60_000);
+    engine.table.insert("guo'wu'yuan", "国务院", 55_000);
+
+    // 1. 验证 k = 2（双声母）：womengongtongdegj -> 我们共同的感觉
+    for ch in "womengongtongdegj".chars() {
+        engine.push_char(ch);
+    }
+    let candidates = engine.candidates();
+    assert!(!candidates.is_empty());
+    assert_eq!(candidates[0].text, "我们共同的感觉", "首选词必须命中跨词简拼合成短语‘我们共同的感觉’");
+
+    // 2. 验证 k = 3（三声母）：womendegwy -> 我们的国务院
+    engine.reset();
+    for ch in "womendegwy".chars() {
+        engine.push_char(ch);
+    }
+    let cands3 = engine.candidates();
+    assert!(!cands3.is_empty());
+    assert_eq!(cands3[0].text, "我们的国务院", "首选词必须命中跨词三声母简拼合成短语‘我们的国务院’");
+}
+
+
 

@@ -75,6 +75,10 @@ fn test_bigram_mmap_end_to_end_typing() {
         ("xi'an", "西安"),
         ("fangan", "方案"),
         ("nihso", "你好"),
+        ("womendeshij", "我们的时间"),
+        ("womengongtongdegj", "我们共同的感觉"),
+        ("womendegwy", "我们的公务员"),
+        ("zheyangdergzn", "这样的人工智能"),
     ];
 
     println!("\n--- [阶段二] 端到端整句击键打字解码实测 ---");

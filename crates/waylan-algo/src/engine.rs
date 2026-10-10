@@ -482,6 +482,11 @@ impl AlgoEngine {
                     .lookup_prefix_extension(&best_path.syllables, &best_path.remaining);
                 raw_candidates.append(&mut prefix_matches);
 
+                // 2.2.1 跨词边界短语前缀合成检索（解决诸如 "womendeshij" 召回“我们的时间”、“我们的世界”等）
+                let mut phrase_matches = self
+                    .synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
+                raw_candidates.append(&mut phrase_matches);
+
                 // 若前序已完成音节非空，同时将首段已完成音节的候选词作为降级备选（如“数”、“书”、“树”）
                 if !best_path.syllables.is_empty() {
                     let base_key = best_path.syllables.join("'");
@@ -665,6 +670,138 @@ impl AlgoEngine {
         }
 
         self.current_candidates = candidates;
+    }
+
+    /// 通用跨词边界短语前缀与简拼链合成机制 (Unified Phrase Synthesis)
+    ///
+    /// # 设计原理
+    /// - **统一声母链模型 ($k \ge 1$)**：
+    ///   动态向前回溯切分流，提取所有连续的未闭合声母序列。
+    ///   - 当 $k = 1$ 时（单声母）：与倒数第 1 个音节结合，展开全拼词（如 shi + j -> 时间/世界）；
+    ///   - 当 $k \ge 2$ 时（多声母简拼链）：通过简拼索引展开对应长度的成词（如 gj -> 感觉，gwy -> 国务院，rgzn -> 人工智能）；
+    /// - **前驱与尾部短语合成**：
+    ///   与前驱 Viterbi 最优短语无缝拼接，并引入长度激励与 Bigram 语言模型亲和度加权。
+    fn synthesize_prefix_phrases(
+        &self,
+        syllables: &[String],
+        remaining: &str,
+    ) -> Vec<AlgoCandidate> {
+        let n = syllables.len();
+        if n == 0 || remaining.is_empty() {
+            return Vec::new();
+        }
+
+        // 1. 动态向前回溯提取尾部声母链 initial_chain
+        let mut initial_chain = vec![remaining.to_string()];
+        let mut split_idx = n;
+
+        while split_idx > 0 {
+            let prev_syl = &syllables[split_idx - 1];
+            // 若倒数音节不是合法的完整标准音节（即为单字母声母，如 g, w, r, z），吸收进声母链
+            if !crate::syllables::is_valid_syllable(prev_syl) {
+                initial_chain.insert(0, prev_syl.clone());
+                split_idx -= 1;
+            } else {
+                break;
+            }
+        }
+
+        let k = initial_chain.len();
+        let head_syls = &syllables[..split_idx];
+
+        // 2. 尾部展开候选词集合 (tail_cands)
+        let tail_cands: Vec<AlgoCandidate> = if k == 1 {
+            // k = 1 场景：单声母未完成态，与前驱最后 1 个完整音节结合展开全拼词 (如 shi + j* -> 时间/世界)
+            if split_idx == 0 {
+                return Vec::new();
+            }
+            let last_syl_idx = split_idx - 1;
+            let tail_syl = &syllables[last_syl_idx..split_idx];
+            self.table.lookup_prefix_extension(tail_syl, remaining)
+        } else {
+            // k >= 2 场景：连续声母简拼链，直接在简拼索引树上遍历 (如 gj -> 感觉, gwy -> 国务院, rgzn -> 人工智能)
+            let acronym_key = initial_chain.concat();
+            self.table.lookup_acronym(&acronym_key)
+        };
+
+        if tail_cands.is_empty() {
+            return Vec::new();
+        }
+
+        // 3. 确定真正的前驱短语音节切片 (effective_head_syls)
+        let effective_head_syls = if k == 1 {
+            // k = 1 时，最后 1 个完整音节已经被 tail 消耗，前驱为 split_idx - 1
+            if split_idx == 0 {
+                return Vec::new();
+            }
+            &syllables[..split_idx - 1]
+        } else {
+            // k >= 2 时，所有声母都被 tail 消耗，完整音节全部留作前驱
+            head_syls
+        };
+
+        if effective_head_syls.is_empty() {
+            return tail_cands;
+        }
+
+        // 4. 求解前驱段文本与得分 (如 wo'men'gong'tong'de -> 我们共同的)
+        let head_key = effective_head_syls.join("'");
+        let mut head_options: Vec<(String, String, u32)> = Vec::new();
+
+        if let Some(sentence) = ViterbiDecoder::decode_sentence_with_context(
+            effective_head_syls,
+            "",
+            &self.table,
+            self.last_commit_context.as_deref(),
+        ) {
+            head_options.push((sentence.text, head_key.clone(), sentence.score));
+        }
+
+        let exact_matches = self.table.lookup(&head_key);
+        if let Some(best_exact) = exact_matches.first() {
+            if !head_options.iter().any(|(t, _, _)| t == &best_exact.text) {
+                head_options.push((best_exact.text.clone(), head_key.clone(), best_exact.score));
+            }
+        }
+
+        // 5. 跨词短语笛卡尔积合成与打分
+        let mut results = Vec::new();
+        for (head_text, head_pinyin, head_score) in &head_options {
+            let head_last_char = head_text.chars().last().map(|c| c.to_string()).unwrap_or_default();
+            for tail in tail_cands.iter().take(5) {
+                let phrase_text = format!("{}{}", head_text, tail.text);
+                let phrase_pinyin = format!("{}'{}", head_pinyin, tail.pinyin);
+
+                let char_len = phrase_text.chars().count() as u32;
+                let length_boost = char_len.saturating_sub(1).saturating_mul(600_000);
+
+                // 获取二元搭配亲和度奖励（优先全词转移，次选显式高阶语义规则，再回退末字助词泛化转移）
+                let bigram_bonus = self
+                    .table
+                    .get_bigram_affinity(head_text, &tail.text)
+                    .unwrap_or_else(|| {
+                        let rule_score = BigramLanguageModel::estimate_bigram_affinity(head_text, &tail.text);
+                        if rule_score > 0 {
+                            rule_score
+                        } else {
+                            self.table.get_bigram_affinity(&head_last_char, &tail.text).unwrap_or(0)
+                        }
+                    });
+
+                let final_score = head_score
+                    .saturating_add(tail.score)
+                    .saturating_add(length_boost)
+                    .saturating_add((bigram_bonus.max(0) as u32).min(50_000));
+
+                let cand = AlgoCandidate::new(phrase_text, phrase_pinyin, final_score)
+                    .with_tier(CandidateTier::ExactWord);
+                results.push(cand);
+            }
+        }
+
+        results.sort_by_key(|c| std::cmp::Reverse(c.score));
+        results.truncate(10);
+        results
     }
 
     /// 生成基于 QWERTY 物理键盘邻键误触与相邻倒置的次位容错候选
