@@ -93,7 +93,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             FuzzyConfig::default()
         },
-        double_pinyin: cfg.double_pinyin,
         auto_pangu_spacing: cfg.auto_pangu_spacing,
         ..Default::default()
     };
@@ -175,7 +174,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 FuzzyConfig::default()
             };
-            s.engine.config.double_pinyin = new_cfg.double_pinyin;
             s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
             s.surface_manager.renderer.theme = match new_cfg.theme {
                 ThemeMode::Light => UiTheme::light(),
@@ -234,7 +232,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 FuzzyConfig::default()
             };
-            s.engine.config.double_pinyin = new_cfg.double_pinyin;
             s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
             s.surface_manager.renderer.theme = match new_cfg.theme {
                 ThemeMode::Light => UiTheme::light(),

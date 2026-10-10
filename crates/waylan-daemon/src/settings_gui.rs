@@ -3,38 +3,7 @@ use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichTex
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use waylan_algo::types::DoublePinyinSchema;
 
-/// 双拼方案界面选择辅助枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PinyinSchemaChoice {
-    /// 标准全拼
-    QuanPin,
-    /// 小鹤双拼
-    XiaoHe,
-    /// 自然码双拼
-    ZiRanMa,
-}
-
-impl From<Option<DoublePinyinSchema>> for PinyinSchemaChoice {
-    fn from(schema: Option<DoublePinyinSchema>) -> Self {
-        match schema {
-            None => PinyinSchemaChoice::QuanPin,
-            Some(DoublePinyinSchema::XiaoHe) => PinyinSchemaChoice::XiaoHe,
-            Some(DoublePinyinSchema::ZiRanMa) => PinyinSchemaChoice::ZiRanMa,
-        }
-    }
-}
-
-impl From<PinyinSchemaChoice> for Option<DoublePinyinSchema> {
-    fn from(choice: PinyinSchemaChoice) -> Self {
-        match choice {
-            PinyinSchemaChoice::QuanPin => None,
-            PinyinSchemaChoice::XiaoHe => Some(DoublePinyinSchema::XiaoHe),
-            PinyinSchemaChoice::ZiRanMa => Some(DoublePinyinSchema::ZiRanMa),
-        }
-    }
-}
 
 /// 偏好设置中心导航 Tab 标签页枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,8 +26,6 @@ pub struct SettingsApp {
     pub current_tab: SettingsTab,
     /// 内存中编辑的配置副本
     pub config: AppConfig,
-    /// 当前选择的拼音方案
-    pub schema_choice: PinyinSchemaChoice,
     /// 全局操作反馈提示信息
     pub status_message: Option<String>,
     /// 汉语拼音词库文件导入路径
@@ -94,7 +61,6 @@ pub struct SettingsApp {
 impl SettingsApp {
     pub fn new() -> Self {
         let config = AppConfig::load_or_create();
-        let schema_choice = PinyinSchemaChoice::from(config.double_pinyin);
 
         // 加载现有自定义短语
         let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
@@ -121,7 +87,6 @@ impl SettingsApp {
         Self {
             current_tab: SettingsTab::General,
             config,
-            schema_choice,
             status_message: None,
             import_file_path: String::new(),
             import_status_message: None,
@@ -257,17 +222,7 @@ impl eframe::App for SettingsApp {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 match self.current_tab {
                     SettingsTab::General => {
-                        // 1. 拼音方案配置
-                        ui.group(|ui| {
-                            ui.label(RichText::new("拼音输入方案").strong().size(14.0));
-                            ui.horizontal(|ui| {
-                                ui.radio_value(&mut self.schema_choice, PinyinSchemaChoice::QuanPin, "标准全拼");
-                                ui.radio_value(&mut self.schema_choice, PinyinSchemaChoice::XiaoHe, "小鹤双拼");
-                                ui.radio_value(&mut self.schema_choice, PinyinSchemaChoice::ZiRanMa, "自然码双拼");
-                            });
-                        });
-
-                        // 2. 候选外观与排版
+                        // 1. 候选外观与排版
                         ui.group(|ui| {
                             ui.label(RichText::new("候选框与排版外观").strong().size(14.0));
 
@@ -655,7 +610,6 @@ impl eframe::App for SettingsApp {
                 // 操作按钮与状态反馈栏
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("保存并应用配置").strong().color(Color32::from_rgb(5, 150, 105))).clicked() {
-                        self.config.double_pinyin = self.schema_choice.into();
                         match self.config.save_default() {
                             Ok(_) => {
                                 self.status_message = Some("配置已成功保存！微澜守护进程已即时应用。".to_string());
@@ -668,7 +622,6 @@ impl eframe::App for SettingsApp {
 
                     if ui.button("恢复默认设置").clicked() {
                         self.config = AppConfig::default();
-                        self.schema_choice = PinyinSchemaChoice::from(self.config.double_pinyin);
                         self.status_message = Some("已重置为系统默认配置，请点击保存生效。".to_string());
                     }
                 });

@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use waylan_algo::types::DoublePinyinSchema;
 
 /// 中英切换键选项
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -57,9 +56,6 @@ pub struct AppConfig {
     pub fuzzy_pinyin: bool,
     /// 是否默认输出繁体字
     pub traditional_chinese: bool,
-    /// 双拼方案配置（None 为全拼，Some(XiaoHe) 小鹤双拼，Some(ZiRanMa) 自然码双拼）
-    #[serde(default)]
-    pub double_pinyin: Option<DoublePinyinSchema>,
     /// 是否开启中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）
     #[serde(default)]
     pub auto_pangu_spacing: bool,
@@ -79,7 +75,6 @@ impl Default for AppConfig {
             v_mode: true,
             fuzzy_pinyin: false,
             traditional_chinese: false,
-            double_pinyin: None,
             auto_pangu_spacing: false,
         }
     }

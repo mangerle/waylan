@@ -1,5 +1,5 @@
 use crate::syllables::{has_syllable_prefix, is_valid_syllable, STANDARD_SYLLABLES};
-use crate::types::{DoublePinyinSchema, FuzzyConfig};
+use crate::types::FuzzyConfig;
 use std::sync::OnceLock;
 
 /// 有限状态机节点
@@ -129,18 +129,12 @@ impl PrismEngine {
     pub fn build_paths(
         input: &str,
         fuzzy: &FuzzyConfig,
-        double_pinyin: Option<DoublePinyinSchema>,
     ) -> Vec<SegmentPath> {
         if input.is_empty() {
             return Vec::new();
         }
 
-        // 1. 若启用了双拼方案，先进行双拼解码展开
-        if let Some(schema) = double_pinyin {
-            return Self::decode_double_pinyin(input, schema);
-        }
-
-        // 2. 检查是否有用户显式键入的单引号隔音符
+        // 1. 检查是否有用户显式键入的单引号隔音符
         if input.contains('\'') {
             return Self::build_explicit_split_paths(input, fuzzy);
         }
@@ -549,162 +543,7 @@ impl PrismEngine {
         is_valid_syllable(&combined)
     }
 
-    /// 双拼键位解码（支持小鹤双拼与自然码双拼）
-    fn decode_double_pinyin(input: &str, schema: DoublePinyinSchema) -> Vec<SegmentPath> {
-        let mut syllables = Vec::new();
-        let chars: Vec<char> = input.chars().collect();
-        let mut i = 0;
 
-        while i < chars.len() {
-            if i + 1 < chars.len() {
-                let initial = chars[i];
-                let final_char = chars[i + 1];
-                let decoded = match schema {
-                    DoublePinyinSchema::XiaoHe => Self::map_xiaohe_pair(initial, final_char),
-                    DoublePinyinSchema::ZiRanMa => Self::map_ziranma_pair(initial, final_char),
-                };
-                syllables.push(decoded);
-                i += 2;
-            } else {
-                let single = chars[i].to_string();
-                return vec![SegmentPath {
-                    syllables,
-                    remaining: single,
-                    cost: 1,
-                    is_typo: false,
-                }];
-            }
-        }
-
-        vec![SegmentPath {
-            syllables,
-            remaining: String::new(),
-            cost: 1,
-            is_typo: false,
-        }]
-    }
-
-    /// 小鹤双拼声韵母映射
-    fn map_xiaohe_pair(initial: char, final_char: char) -> String {
-        if matches!(initial, 'b' | 'p' | 'm' | 'f' | 'w' | 'y') && final_char == 'o' {
-            return format!("{}o", initial);
-        }
-        // 声母映射
-        let init_str = match initial {
-            'v' => "zh",
-            'i' => "ch",
-            'u' => "sh",
-            c => return format!("{}{}", c, Self::map_xiaohe_final(final_char)),
-        };
-        format!("{}{}", init_str, Self::map_xiaohe_final(final_char))
-    }
-
-    /// 小鹤双拼韵母映射
-    fn map_xiaohe_final(f: char) -> &'static str {
-        match f {
-            'q' => "iu",
-            'w' => "ei",
-            'e' => "e",
-            'r' => "uan",
-            't' => "ue",
-            'y' => "un",
-            'u' => "u",
-            'i' => "i",
-            'o' => "uo",
-            'p' => "ie",
-            'a' => "a",
-            's' => "ong",
-            'd' => "ai",
-            'f' => "en",
-            'g' => "eng",
-            'h' => "ang",
-            'j' => "an",
-            'k' => "uai",
-            'l' => "iang",
-            'z' => "ou",
-            'x' => "ia",
-            'c' => "ao",
-            'v' => "ui",
-            'b' => "in",
-            'n' => "iao",
-            'm' => "ian",
-            _ => "a",
-        }
-    }
-
-    /// 自然码双拼声韵母映射
-    fn map_ziranma_pair(initial: char, final_char: char) -> String {
-        let init_str = match initial {
-            'v' => "zh",
-            'i' => "ch",
-            'u' => "sh",
-            c => return format!("{}{}", c, Self::map_ziranma_final(c, final_char)),
-        };
-        format!("{}{}", init_str, Self::map_ziranma_final(initial, final_char))
-    }
-
-    /// 自然码双拼韵母映射
-    fn map_ziranma_final(initial: char, f: char) -> &'static str {
-        match f {
-            'q' => "iu",
-            'w' => {
-                if matches!(initial, 'j' | 'q' | 'x' | 'l' | 'd') {
-                    "ia"
-                } else {
-                    "ua"
-                }
-            }
-            'e' => "e",
-            'r' => "uan",
-            't' => "ue",
-            'y' => "ing",
-            'u' => "u",
-            'i' => "i",
-            'o' => {
-                if matches!(initial, 'b' | 'p' | 'm' | 'f' | 'w' | 'y') {
-                    "o"
-                } else {
-                    "uo"
-                }
-            }
-            'p' => "un",
-            'a' => "a",
-            's' => {
-                if matches!(initial, 'j' | 'q' | 'x') {
-                    "iong"
-                } else {
-                    "ong"
-                }
-            }
-            'd' => "ai",
-            'f' => "en",
-            'g' => "eng",
-            'h' => "ang",
-            'j' => "an",
-            'k' => "ao",
-            'l' => {
-                if matches!(initial, 'j' | 'q' | 'x' | 'l' | 'n') {
-                    "iang"
-                } else {
-                    "uang"
-                }
-            }
-            'z' => "ou",
-            'x' => {
-                if matches!(initial, 'j' | 'q' | 'x') {
-                    "ia"
-                } else {
-                    "ua"
-                }
-            }
-            'c' => "ao",
-            'v' => "ui",
-            'b' => "in",
-            'n' => "in",
-            'm' => "ian",
-            _ => "a",
-        }
-    }
 }
 
 #[cfg(test)]
@@ -714,7 +553,7 @@ mod tests {
     #[test]
     fn test_dag_ambiguity_xian() {
         let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("xian", &fuzzy, None);
+        let paths = PrismEngine::build_paths("xian", &fuzzy);
         let key_strings: Vec<String> = paths.iter().map(|p| p.to_key_string()).collect();
 
         // 必须同时包含单音节 xian 与双音节 xi'an
@@ -725,7 +564,7 @@ mod tests {
     #[test]
     fn test_explicit_split_quote() {
         let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("xi'an", &fuzzy, None);
+        let paths = PrismEngine::build_paths("xi'an", &fuzzy);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].syllables, vec!["xi", "an"]);
     }
@@ -733,31 +572,17 @@ mod tests {
     #[test]
     fn test_partial_remaining() {
         let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("nih", &fuzzy, None);
+        let paths = PrismEngine::build_paths("nih", &fuzzy);
         assert!(!paths.is_empty());
         assert_eq!(paths[0].syllables, vec!["ni"]);
         assert_eq!(paths[0].remaining, "h");
     }
 
     #[test]
-    fn test_xiaohe_double_pinyin() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("xm", &fuzzy, Some(DoublePinyinSchema::XiaoHe));
-        assert_eq!(paths[0].syllables, vec!["xian"]);
-    }
-
-    #[test]
-    fn test_ziranma_double_pinyin() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("xm", &fuzzy, Some(DoublePinyinSchema::ZiRanMa));
-        assert_eq!(paths[0].syllables, vec!["xian"]);
-    }
-
-    #[test]
     fn test_strict_raw_initials_segmentation() {
         let fuzzy = FuzzyConfig::default();
         // 用户输入纯声母长串 qwdwwqswsqw，测试切分是否 100% 原按键保真，绝不篡改任何字母
-        let paths = PrismEngine::build_paths("qwdwwqswsqw", &fuzzy, None);
+        let paths = PrismEngine::build_paths("qwdwwqswsqw", &fuzzy);
         assert!(!paths.is_empty(), "切分路径不应为空");
         let best_path = &paths[0];
         assert_eq!(
@@ -770,7 +595,7 @@ mod tests {
     #[test]
     fn test_zero_initial_borrowing_split_cost() {
         let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("jintianxingqitian", &fuzzy, None);
+        let paths = PrismEngine::build_paths("jintianxingqitian", &fuzzy);
         assert!(!paths.is_empty());
         // 最优主路径必须是完整的星期天，且代价值低于借音碎切的 ti'an
         assert_eq!(paths[0].to_key_string(), "jin'tian'xing'qi'tian");
@@ -783,7 +608,7 @@ mod tests {
     #[test]
     fn test_typo_adjacent_transpose_graph() {
         let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("cehng", &fuzzy, None);
+        let paths = PrismEngine::build_paths("cehng", &fuzzy);
         assert!(!paths.is_empty(), "切分路径不应为空");
         let has_cheng = paths.iter().any(|p| p.syllables.contains(&"cheng".to_string()));
         assert!(has_cheng, "输入 cehng 应通过相邻颠倒虚边成功容错切分出 cheng");
@@ -792,7 +617,7 @@ mod tests {
     #[test]
     fn test_typo_spatial_substitution_graph() {
         let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("nihso", &fuzzy, None);
+        let paths = PrismEngine::build_paths("nihso", &fuzzy);
         assert!(!paths.is_empty(), "切分路径不应为空");
         let has_ni_hao = paths.iter().any(|p| p.to_key_string() == "ni'hao");
         assert!(has_ni_hao, "输入 nihso 应通过高斯邻键虚边成功容错切分出 ni'hao");

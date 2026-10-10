@@ -89,7 +89,7 @@ fn test_timing_measurement() {
 
         // 阶段耗时细分测试
         let t_p = std::time::Instant::now();
-        let paths = PrismEngine::build_paths(input, &AlgoConfig::default().fuzzy, None);
+        let paths = PrismEngine::build_paths(input, &AlgoConfig::default().fuzzy);
         let p_dur = t_p.elapsed().as_micros();
         println!("  [Prism 耗时]: {} µs (切分出 {} 条路径)", p_dur, paths.len());
 

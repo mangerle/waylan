@@ -1,14 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// 双拼方案枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum DoublePinyinSchema {
-    /// 小鹤双拼
-    #[default]
-    XiaoHe,
-    /// 自然码双拼
-    ZiRanMa,
-}
 
 /// 模糊音细粒度配置
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -91,8 +82,6 @@ pub struct AlgoConfig {
     pub auto_dedup: bool,
     /// 模糊音配置
     pub fuzzy: FuzzyConfig,
-    /// 双拼方案配置（None 表示标准全拼模式）
-    pub double_pinyin: Option<DoublePinyinSchema>,
     /// 是否开启中西文智能空格（盘古之白，在中英文/数字交界处自动补齐半角空格）
     pub auto_pangu_spacing: bool,
 }
@@ -109,7 +98,6 @@ impl Default for AlgoConfig {
             show_pinyin_comment: true,
             auto_dedup: true,
             fuzzy: FuzzyConfig::default(),
-            double_pinyin: None,
             auto_pangu_spacing: false,
         }
     }

@@ -411,33 +411,9 @@ impl AlgoEngine {
             return len;
         }
 
-        // 双拼模式：每个完整音节固定消费 2 个原始双拼按键字符
-        if self.config.double_pinyin.is_some() {
-            let syl_count = pinyin.split('\'').filter(|s| !s.is_empty()).count();
-            if syl_count == 0 {
-                return raw.len();
-            }
-            let target_chars = syl_count.saturating_mul(2);
-            let mut seen_non_quote = 0usize;
-            let mut last_end = 0usize;
-            for (idx, ch) in raw.char_indices() {
-                last_end = idx.saturating_add(ch.len_utf8());
-                if ch != '\'' {
-                    seen_non_quote += 1;
-                    if seen_non_quote >= target_chars {
-                        if raw[last_end..].starts_with('\'') {
-                            last_end = last_end.saturating_add(1);
-                        }
-                        break;
-                    }
-                }
-            }
-            return last_end.min(raw.len());
-        }
-
         // 全拼与简拼混合模式：优先按候选音节逐段对齐原始输入或最优切分路径单元
         let cand_syls: Vec<&str> = pinyin.split('\'').filter(|s| !s.is_empty()).collect();
-        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy, None);
+        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy);
         let mut best_units: Vec<String> = Vec::new();
         if let Some(best) = paths.first() {
             best_units.extend(best.syllables.iter().cloned());
@@ -609,8 +585,7 @@ impl AlgoEngine {
         }
 
         // 2. 拼音模式：利用 Prism 构建 DAG 音节路径
-        let paths =
-            PrismEngine::build_paths(raw_input, &self.config.fuzzy, self.config.double_pinyin);
+        let paths = PrismEngine::build_paths(raw_input, &self.config.fuzzy);
 
         let mut raw_candidates = Vec::new();
 
@@ -1111,7 +1086,7 @@ impl AlgoEngine {
                 let mutated: String = mutated_chars.into_iter().collect();
 
                 let paths =
-                    PrismEngine::build_paths(&mutated, &types::FuzzyConfig::default(), None);
+                    PrismEngine::build_paths(&mutated, &types::FuzzyConfig::default());
                 if let Some(best) = paths.first() {
                     if best.remaining.is_empty() && !best.syllables.is_empty() {
                         let key = best.to_key_string();
@@ -1136,7 +1111,7 @@ impl AlgoEngine {
             let swapped: String = swapped_chars.into_iter().collect();
 
             let paths =
-                PrismEngine::build_paths(&swapped, &types::FuzzyConfig::default(), None);
+                PrismEngine::build_paths(&swapped, &types::FuzzyConfig::default());
             if let Some(best) = paths.first() {
                 if best.remaining.is_empty() && !best.syllables.is_empty() {
                     let key = best.to_key_string();
@@ -1190,7 +1165,7 @@ impl AlgoEngine {
             return String::new();
         }
 
-        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy, self.config.double_pinyin);
+        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy);
         if let Some(first_path) = paths.first() {
             return first_path.to_key_string();
         }
@@ -1235,9 +1210,8 @@ impl AlgoEngine {
             return offset.min(formatted.len());
         }
 
-        // 双拼展开场景：基于前缀切分路径长度计算字节偏移
-        let prefix_paths =
-            PrismEngine::build_paths(raw_prefix, &self.config.fuzzy, self.config.double_pinyin);
+        // 前缀切分场景：基于前缀切分路径长度计算字节偏移
+        let prefix_paths = PrismEngine::build_paths(raw_prefix, &self.config.fuzzy);
         if let Some(first) = prefix_paths.first() {
             let key_len = first.to_key_string().len().min(formatted.len());
             if formatted.is_char_boundary(key_len) {
@@ -1284,32 +1258,6 @@ impl AlgoEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::DoublePinyinSchema;
-
-    #[test]
-    fn test_double_pinyin_partial_commit_consumed_len() {
-        let mut config = AlgoConfig::default();
-        config.double_pinyin = Some(DoublePinyinSchema::XiaoHe);
-        let mut engine = AlgoEngine::with_sample_data(config);
-
-        // 小鹤双拼输入 womfvsgo -> wo'men'zhong'guo (我们中国)
-        for ch in "womfvsgo".chars() {
-            engine.push_char(ch);
-        }
-        let texts: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
-        let idx = texts.iter().position(|t| t == "我们").expect("候选列表应包含前缀短词 我们");
-        let (committed1, rem1) = engine.select_candidate(idx, 100).unwrap();
-        assert_eq!(committed1, "我们");
-        assert_eq!(rem1, 4, "双拼模式下选中二字词应精确消费 4 个双拼字符，剩余 vsgo");
-        assert_eq!(engine.raw_input(), "vsgo");
-
-        // 接着选中剩余 vsgo 对应的 中国
-        let texts2: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
-        let idx2 = texts2.iter().position(|t| t == "中国").expect("剩余双拼 vsgo 应召回 中国");
-        let (committed2, rem2) = engine.select_candidate(idx2, 101).unwrap();
-        assert_eq!(committed2, "中国");
-        assert_eq!(rem2, 0);
-    }
 
     #[test]
     fn test_pagination_truncate_and_last_page_guard() {
