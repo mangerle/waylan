@@ -40,6 +40,14 @@ pub struct WaylanV2Session {
     pub keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
     /// 悬浮候选弹出层 Surface
     pub popup_surface: Option<ZwpInputPopupSurfaceV2>,
+    /// 关联的共享内存管理器句柄
+    pub shm: Option<wayland_client::protocol::wl_shm::WlShm>,
+    /// 候选框渲染目标 Wayland 表面
+    pub popup_wl_surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    /// 当前挂载在表面上的活跃像素缓冲区
+    pub active_buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
+    /// Wayland 事件队列句柄
+    pub qhandle: Option<QueueHandle<Self>>,
     /// 当前跟踪的光标坐标
     pub current_cursor: CursorRect,
     /// 当前输入语言模式
@@ -68,6 +76,10 @@ impl WaylanV2Session {
             input_method: None,
             keyboard_grab: None,
             popup_surface: None,
+            shm: None,
+            popup_wl_surface: None,
+            active_buffer: None,
+            qhandle: None,
             current_cursor: CursorRect::default(),
             mode: InputMode::Chinese,
             shared_is_chinese: None,
@@ -173,10 +185,22 @@ impl WaylanV2Session {
         }
     }
 
-    /// 触发候选框悬浮表面重绘
+    /// 触发候选框悬浮表面重绘并提交至 Wayland 表面
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
-        let _ = self.surface_manager.render_state(&box_state);
+        self.surface_manager.commit_to_wayland(
+            &box_state,
+            self.shm.as_ref(),
+            self.popup_wl_surface.as_ref(),
+            self.qhandle.as_ref(),
+            &mut self.active_buffer,
+        );
+    }
+
+    /// 隐藏候选框并卸载 Wayland 表面缓冲
+    pub fn hide_candidate_surface(&mut self) {
+        self.surface_manager
+            .hide_wayland_surface(self.popup_wl_surface.as_ref(), &mut self.active_buffer);
     }
 
     /// 提交指定文本上屏，并重置预编辑状态
@@ -186,7 +210,7 @@ impl WaylanV2Session {
             im.set_preedit_string(String::new(), 0, 0);
             im.commit(self.done_serial);
         }
-        self.surface_manager.on_input_inactive();
+        self.hide_candidate_surface();
     }
 
     /// 更新当前 preedit 预编辑字符串到目标客户端
@@ -201,7 +225,7 @@ impl WaylanV2Session {
             im.commit(self.done_serial);
         }
         if preedit.is_empty() {
-            self.surface_manager.on_input_inactive();
+            self.hide_candidate_surface();
         } else {
             self.refresh_candidate_surface();
         }
@@ -255,7 +279,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                     grab.release();
                 }
                 state.engine.reset();
-                state.surface_manager.on_input_inactive();
+                state.hide_candidate_surface();
             }
             V2Event::SurroundingText { text, cursor, anchor } => {
                 info!(
@@ -585,6 +609,71 @@ impl
         _state: &mut Self,
         _proxy: &wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
         _event: <wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_compositor 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_compositor::WlCompositor, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_compositor::WlCompositor,
+        _event: <wayland_client::protocol::wl_compositor::WlCompositor as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_shm 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_shm::WlShm, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_shm::WlShm,
+        _event: <wayland_client::protocol::wl_shm::WlShm as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_surface 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_surface::WlSurface, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_surface::WlSurface,
+        _event: <wayland_client::protocol::wl_surface::WlSurface as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_shm_pool 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_shm_pool::WlShmPool,
+        _event: <wayland_client::protocol::wl_shm_pool::WlShmPool as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_buffer 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_buffer::WlBuffer, ()> for WaylanV2Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
+        _event: <wayland_client::protocol::wl_buffer::WlBuffer as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,

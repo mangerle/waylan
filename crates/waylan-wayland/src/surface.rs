@@ -1,8 +1,16 @@
 use log::info;
 use std::fs::File;
 use std::io::Write;
+use std::os::fd::AsFd;
 use waylan_core::CandidateBoxState;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
+use wayland_client::protocol::{
+    wl_buffer::WlBuffer,
+    wl_shm::{self, WlShm},
+    wl_shm_pool::WlShmPool,
+    wl_surface::WlSurface,
+};
+use wayland_client::{Dispatch, QueueHandle};
 
 /// 焦点应用中的光标位置矩形 (Cursor Rectangle)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -90,6 +98,64 @@ impl CandidateSurfaceManager {
         if self.is_visible {
             self.is_visible = false;
             info!("[悬浮窗口] 隐藏候选框悬浮图层。");
+        }
+    }
+
+    /// 隐藏并卸载绑定的 Wayland 候选框表面缓冲
+    pub fn hide_wayland_surface(
+        &mut self,
+        surface: Option<&WlSurface>,
+        active_buffer: &mut Option<WlBuffer>,
+    ) {
+        self.on_input_inactive();
+        if let Some(surf) = surface {
+            surf.attach(None, 0, 0);
+            surf.commit();
+        }
+        if let Some(old_buf) = active_buffer.take() {
+            old_buf.destroy();
+        }
+    }
+
+    /// 渲染候选框状态并将其通过 wl_shm 共享内存池挂载提交至 Wayland wl_surface
+    pub fn commit_to_wayland<S>(
+        &mut self,
+        state: &CandidateBoxState,
+        shm: Option<&WlShm>,
+        surface: Option<&WlSurface>,
+        qhandle: Option<&QueueHandle<S>>,
+        active_buffer: &mut Option<WlBuffer>,
+    ) where
+        S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
+    {
+        let Some((width, height, file)) = self.render_state(state) else {
+            self.hide_wayland_surface(surface, active_buffer);
+            return;
+        };
+
+        if let (Some(shm), Some(surf), Some(qh)) = (shm, surface, qhandle) {
+            let stride = (width * 4) as i32;
+            let pool_size = stride * (height as i32);
+            let pool = shm.create_pool(file.as_fd(), pool_size, qh, ());
+            let buffer = pool.create_buffer(
+                0,
+                width as i32,
+                height as i32,
+                stride,
+                wl_shm::Format::Argb8888,
+                qh,
+                (),
+            );
+            pool.destroy();
+
+            if let Some(old_buf) = active_buffer.take() {
+                old_buf.destroy();
+            }
+
+            surf.attach(Some(&buffer), 0, 0);
+            surf.damage(0, 0, width as i32, height as i32);
+            surf.commit();
+            *active_buffer = Some(buffer);
         }
     }
 

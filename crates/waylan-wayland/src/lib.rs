@@ -161,6 +161,16 @@ pub fn run_session_v1_loop(
 
     let _input_method: protocol_v1::input_method_v1::zwp_input_method_v1::ZwpInputMethodV1 =
         globals.bind(&qh, 1..=1, ())?;
+
+    if let Ok(compositor) = globals.bind::<WlCompositor, _, _>(&qh, 1..=6, ()) {
+        let wl_surface = compositor.create_surface(&qh, ());
+        session.popup_wl_surface = Some(wl_surface);
+    }
+    if let Ok(shm) = globals.bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&qh, 1..=1, ()) {
+        session.shm = Some(shm);
+    }
+    session.qhandle = Some(qh.clone());
+
     log::info!("[微澜 Wayland] 成功绑定 zwp_input_method_v1 接口，进入输入法事件分发循环。");
 
     loop {
@@ -179,10 +189,21 @@ pub fn run_session_v2_loop(
     let seat: WlSeat = globals.bind(&qh, 1..=7, ())?;
     let im_manager: ZwpInputMethodManagerV2 = globals.bind(&qh, 1..=1, ())?;
     let input_method = im_manager.get_input_method(&seat, &qh, ());
+
+    if let Ok(compositor) = globals.bind::<WlCompositor, _, _>(&qh, 1..=6, ()) {
+        let wl_surface = compositor.create_surface(&qh, ());
+        let popup_surface = input_method.get_input_popup_surface(&wl_surface, &qh, ());
+        session.popup_wl_surface = Some(wl_surface);
+        session.popup_surface = Some(popup_surface);
+    }
+    if let Ok(shm) = globals.bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&qh, 1..=1, ()) {
+        session.shm = Some(shm);
+    }
+    session.qhandle = Some(qh.clone());
     session.set_input_method(input_method);
 
     log::info!(
-        "[微澜 Wayland] 成功绑定 zwp_input_method_manager_v2 与 wl_seat，进入 V2 输入法事件分发循环。"
+        "[微澜 Wayland] 成功绑定 zwp_input_method_manager_v2、wl_compositor 与 wl_shm，进入 V2 输入法事件分发循环。"
     );
 
     loop {

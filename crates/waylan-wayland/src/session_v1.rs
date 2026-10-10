@@ -223,6 +223,14 @@ pub struct WaylanV1Session {
     pub active_context: Option<ZwpInputMethodContextV1>,
     /// 捕获的键盘对象
     pub grabbed_keyboard: Option<WlKeyboard>,
+    /// 关联的共享内存管理器句柄
+    pub shm: Option<wayland_client::protocol::wl_shm::WlShm>,
+    /// 候选框渲染目标 Wayland 表面
+    pub popup_wl_surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    /// 当前挂载在表面上的活跃像素缓冲区
+    pub active_buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
+    /// Wayland 事件队列句柄
+    pub qhandle: Option<QueueHandle<Self>>,
     /// 当前上下文递增序号
     pub current_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
@@ -243,6 +251,10 @@ impl Default for WaylanV1Session {
             reload_callback: None,
             active_context: None,
             grabbed_keyboard: None,
+            shm: None,
+            popup_wl_surface: None,
+            active_buffer: None,
+            qhandle: None,
             current_serial: 0,
             mods_depressed: 0,
         }
@@ -268,6 +280,10 @@ impl WaylanV1Session {
             reload_callback: None,
             active_context: None,
             grabbed_keyboard: None,
+            shm: None,
+            popup_wl_surface: None,
+            active_buffer: None,
+            qhandle: None,
             current_serial: 0,
             mods_depressed: 0,
         }
@@ -363,10 +379,22 @@ impl WaylanV1Session {
         }
     }
 
-    /// 触发候选框悬浮表面位图重绘并更新状态
+    /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
-        let _ = self.surface_manager.render_state(&box_state);
+        self.surface_manager.commit_to_wayland(
+            &box_state,
+            self.shm.as_ref(),
+            self.popup_wl_surface.as_ref(),
+            self.qhandle.as_ref(),
+            &mut self.active_buffer,
+        );
+    }
+
+    /// 隐藏候选框并卸载 Wayland 表面缓冲
+    pub fn hide_candidate_surface(&mut self) {
+        self.surface_manager
+            .hide_wayland_surface(self.popup_wl_surface.as_ref(), &mut self.active_buffer);
     }
 }
 
@@ -398,6 +426,7 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
                 state.grabbed_keyboard = None;
                 state.mods_depressed = 0;
                 state.engine.reset();
+                state.hide_candidate_surface();
             }
         }
     }
@@ -415,6 +444,7 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
     ) {
         if let ContextEvent::Reset = event {
             state.engine.reset();
+            state.hide_candidate_surface();
         }
     }
 }
@@ -516,7 +546,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                 .select_expanded_item(sel, state.engine.expanded_selected_index)
                             {
                                 state.punctuation_processor.record_commit(&committed);
-                                state.surface_manager.on_input_inactive();
+                                state.hide_candidate_surface();
                                 context.commit_string(serial, committed);
                                 context.preedit_string(serial, String::new(), String::new());
                                 return;
@@ -549,7 +579,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                     state.refresh_candidate_surface();
                                     context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
                                 } else {
-                                    state.surface_manager.on_input_inactive();
+                                    state.hide_candidate_surface();
                                     context.preedit_string(serial, String::new(), String::new());
                                 }
                                 return;
@@ -569,7 +599,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                 state.refresh_candidate_surface();
                                 context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
                             } else {
-                                state.surface_manager.on_input_inactive();
+                                state.hide_candidate_surface();
                                 context.preedit_string(serial, String::new(), String::new());
                             }
                             return;
@@ -580,7 +610,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     if key == KEY_ENTER {
                         let raw = state.engine.raw_input().to_string();
                         state.engine.reset();
-                        state.surface_manager.on_input_inactive();
+                        state.hide_candidate_surface();
                         context.commit_string(serial, raw);
                         context.preedit_string(serial, String::new(), String::new());
                         return;
@@ -591,7 +621,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         state.engine.pop_char();
                         let preedit = state.engine.formatted_preedit();
                         if preedit.is_empty() {
-                            state.surface_manager.on_input_inactive();
+                            state.hide_candidate_surface();
                         } else {
                             state.refresh_candidate_surface();
                         }
@@ -633,7 +663,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     // 3.9 ESC 键：取消当前输入并清空
                     if key == KEY_ESC {
                         state.engine.reset();
-                        state.surface_manager.on_input_inactive();
+                        state.hide_candidate_surface();
                         context.preedit_cursor(0);
                         context.preedit_string(serial, String::new(), String::new());
                         return;
@@ -727,6 +757,71 @@ impl Dispatch<wayland_client::protocol::wl_seat::WlSeat, ()> for WaylanV1Session
         _state: &mut Self,
         _proxy: &wayland_client::protocol::wl_seat::WlSeat,
         _event: <wayland_client::protocol::wl_seat::WlSeat as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_compositor 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_compositor::WlCompositor, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_compositor::WlCompositor,
+        _event: <wayland_client::protocol::wl_compositor::WlCompositor as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_shm 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_shm::WlShm, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_shm::WlShm,
+        _event: <wayland_client::protocol::wl_shm::WlShm as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_surface 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_surface::WlSurface, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_surface::WlSurface,
+        _event: <wayland_client::protocol::wl_surface::WlSurface as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_shm_pool 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_shm_pool::WlShmPool, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_shm_pool::WlShmPool,
+        _event: <wayland_client::protocol::wl_shm_pool::WlShmPool as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// 为 wl_buffer 实现 Dispatch
+impl Dispatch<wayland_client::protocol::wl_buffer::WlBuffer, ()> for WaylanV1Session {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
+        _event: <wayland_client::protocol::wl_buffer::WlBuffer as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
