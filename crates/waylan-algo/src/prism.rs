@@ -143,7 +143,7 @@ impl PrismEngine {
         let mut paths = Vec::new();
 
         // 3.1 专有名词与实体保护机制 (NER 原型)：若输入精确匹配受保护实体，直接生成零代价原子路径
-        let entity_mgr = crate::entity::EntityProtectionManager::new();
+        let entity_mgr = crate::entity::EntityProtectionManager::global();
         if let Some(entity) = entity_mgr.match_exact(input) {
             paths.push(SegmentPath {
                 syllables: vec![entity],

@@ -20,6 +20,12 @@ impl Default for EntityProtectionManager {
 }
 
 impl EntityProtectionManager {
+    /// 全局静态默认内置实体保护管理器单例
+    pub fn global() -> &'static EntityProtectionManager {
+        static INSTANCE: std::sync::OnceLock<EntityProtectionManager> = std::sync::OnceLock::new();
+        INSTANCE.get_or_init(Self::new)
+    }
+
     /// 创建带有默认核心技术专名与实体的保护管理器
     pub fn new() -> Self {
         let mut mgr = Self {
@@ -58,6 +64,9 @@ impl EntityProtectionManager {
 
     /// 检查输入字符串是否完全匹配受保护实体
     pub fn match_exact(&self, input: &str) -> Option<String> {
+        if self.entities.contains(input) {
+            return Some(input.to_string());
+        }
         let lower = input.to_lowercase();
         if self.entities.contains(&lower) {
             Some(lower)
