@@ -162,6 +162,41 @@ impl WaylanV1Session {
             current_serial: 0,
         }
     }
+
+    /// 构造当前候选框的渲染状态
+    pub fn build_candidate_box_state(&self) -> waylan_core::CandidateBoxState {
+        let candidates = self.engine.candidates();
+        let core_candidates: Vec<waylan_core::Candidate> = candidates
+            .iter()
+            .map(|c| waylan_core::Candidate {
+                text: c.text.clone(),
+                pinyin: c.pinyin.clone(),
+                score: c.score,
+                is_expandable: c.is_expandable,
+                sub_candidates: c.sub_candidates.clone(),
+            })
+            .collect();
+
+        waylan_core::CandidateBoxState {
+            visible: !self.engine.raw_input().is_empty(),
+            preedit: self.engine.formatted_preedit(),
+            candidates: core_candidates,
+            selected_index: 0,
+            is_expanded: self.engine.is_expanded,
+            expanded_selected_index: self.engine.expanded_selected_index,
+            mode_badge: match self.mode {
+                InputMode::Chinese => "中".to_string(),
+                InputMode::English => "英".to_string(),
+                InputMode::VMode => "V".to_string(),
+            },
+        }
+    }
+
+    /// 触发候选框悬浮表面位图重绘并更新状态
+    pub fn refresh_candidate_surface(&mut self) {
+        let box_state = self.build_candidate_box_state();
+        let _ = self.surface_manager.render_state(&box_state);
+    }
 }
 
 // 为 zwp_input_method_v1 实现事件分发
@@ -220,7 +255,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        let Some(context) = state.active_context.as_ref() else {
+        let Some(context) = state.active_context.clone() else {
             return;
         };
 
@@ -273,6 +308,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     // 3.1 Tab 键或方向键下：切换/展开二级动态格式卡片
                     if (key == KEY_TAB || (key == KEY_DOWN && !state.engine.is_expanded))
                         && state.engine.toggle_expand(0) {
+                            state.refresh_candidate_surface();
                             return;
                         }
 
@@ -280,10 +316,12 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     if state.engine.is_expanded {
                         if key == KEY_DOWN {
                             state.engine.next_expanded_item(0);
+                            state.refresh_candidate_surface();
                             return;
                         }
                         if key == KEY_UP {
                             state.engine.prev_expanded_item(0);
+                            state.refresh_candidate_surface();
                             return;
                         }
                         if key == KEY_ENTER || key == KEY_SPACE {
@@ -291,6 +329,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                                 state.engine.select_expanded_item(0, state.engine.expanded_selected_index)
                             {
                                 state.punctuation_processor.record_commit(&committed);
+                                state.surface_manager.on_input_inactive();
                                 context.commit_string(serial, committed);
                                 context.preedit_string(serial, String::new(), String::new());
                                 return;
@@ -306,12 +345,13 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         {
                             state.punctuation_processor.record_commit(&committed_text);
                             context.commit_string(serial, committed_text);
-                            let preedit = if remaining_len > 0 {
-                                state.engine.formatted_preedit()
+                            if remaining_len > 0 {
+                                state.refresh_candidate_surface();
+                                context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
                             } else {
-                                String::new()
-                            };
-                            context.preedit_string(serial, preedit, String::new());
+                                state.surface_manager.on_input_inactive();
+                                context.preedit_string(serial, String::new(), String::new());
+                            }
                             return;
                         }
                     }
@@ -323,12 +363,13 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         {
                             state.punctuation_processor.record_commit(&committed_text);
                             context.commit_string(serial, committed_text);
-                            let preedit = if remaining_len > 0 {
-                                state.engine.formatted_preedit()
+                            if remaining_len > 0 {
+                                state.refresh_candidate_surface();
+                                context.preedit_string(serial, state.engine.formatted_preedit(), String::new());
                             } else {
-                                String::new()
-                            };
-                            context.preedit_string(serial, preedit, String::new());
+                                state.surface_manager.on_input_inactive();
+                                context.preedit_string(serial, String::new(), String::new());
+                            }
                             return;
                         }
                     }
@@ -349,6 +390,8 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         let preedit = state.engine.formatted_preedit();
                         if preedit.is_empty() {
                             state.surface_manager.on_input_inactive();
+                        } else {
+                            state.refresh_candidate_surface();
                         }
                         context.preedit_string(serial, preedit, String::new());
                         return;
@@ -357,10 +400,12 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     // 3.7 候选词翻页（PageUp/PageDown, 减号/等号, 方括号）
                     if key == KEY_PAGEUP || key == KEY_MINUS || key == KEY_LEFTBRACE {
                         state.engine.prev_page();
+                        state.refresh_candidate_surface();
                         return;
                     }
                     if key == KEY_PAGEDOWN || key == KEY_EQUAL || key == KEY_RIGHTBRACE {
                         state.engine.next_page();
+                        state.refresh_candidate_surface();
                         return;
                     }
 
@@ -426,7 +471,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                 if let Some(ch) = keycode_to_char(key) {
                     state.engine.push_char(ch);
                     let preedit = state.engine.formatted_preedit();
-                    state.surface_manager.on_input_active(320, 42);
+                    state.refresh_candidate_surface();
                     context.preedit_string(serial, preedit, String::new());
                     return;
                 }

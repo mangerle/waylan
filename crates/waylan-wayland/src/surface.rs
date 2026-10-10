@@ -1,4 +1,8 @@
 use log::info;
+use std::fs::File;
+use std::io::Write;
+use waylan_core::CandidateBoxState;
+use waylan_ui::{CandidateBoxRenderer, UiTheme};
 
 /// 焦点应用中的光标位置矩形 (Cursor Rectangle)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,6 +50,8 @@ pub struct CandidateSurfaceManager {
     pub is_visible: bool,
     /// 最近一次渲染的位图宽高
     pub current_size: (u32, u32),
+    /// 候选框矢量渲染器实例
+    pub renderer: CandidateBoxRenderer,
 }
 
 impl Default for CandidateSurfaceManager {
@@ -60,6 +66,7 @@ impl CandidateSurfaceManager {
             cursor_rect: CursorRect::default(),
             is_visible: false,
             current_size: (0, 0),
+            renderer: CandidateBoxRenderer::new(UiTheme::light()),
         }
     }
 
@@ -84,6 +91,25 @@ impl CandidateSurfaceManager {
             self.is_visible = false;
             info!("[悬浮窗口] 隐藏候选框悬浮图层。");
         }
+    }
+
+    /// 根据当前候选框状态渲染位图并准备共享内存缓冲
+    pub fn render_state(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, File)> {
+        if !state.visible || state.candidates.is_empty() {
+            self.on_input_inactive();
+            return None;
+        }
+
+        let pixmap = self.renderer.render(state)?;
+        let width = pixmap.width();
+        let height = pixmap.height();
+        self.on_input_active(width, height);
+
+        let data = pixmap.data();
+        let mut file = Self::create_shm_fd(data.len()).ok()?;
+        file.write_all(data).ok()?;
+
+        Some((width, height, file))
     }
 
     /// 将 RGBA/BGRA 像素位图写入匿名内存映射文件（用于跨进程传递给 Wayland 合成器）
