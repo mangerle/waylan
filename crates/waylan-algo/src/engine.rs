@@ -1013,6 +1013,56 @@ impl AlgoEngine {
         raw.to_string()
     }
 
+    /// 计算当前光标在带隔音符的 `formatted_preedit()` 字符串中的精确 UTF-8 字节偏移
+    pub fn formatted_cursor_byte_offset(&self) -> usize {
+        let raw = self.composition.as_str();
+        let raw_cursor = self.composition.cursor().min(raw.len());
+        if raw.is_empty() || raw_cursor == 0 {
+            return 0;
+        }
+
+        let formatted = self.formatted_preedit();
+        if raw_cursor >= raw.len() {
+            return formatted.len();
+        }
+
+        let raw_prefix = &raw[..raw_cursor];
+        let mut raw_iter = raw_prefix.chars();
+        let mut target_opt = raw_iter.next();
+        let mut offset = 0;
+
+        for (idx, ch) in formatted.char_indices() {
+            if let Some(target) = target_opt {
+                if ch == target {
+                    offset = idx + ch.len_utf8();
+                    target_opt = raw_iter.next();
+                } else if ch == '\'' {
+                    continue;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if target_opt.is_none() {
+            return offset.min(formatted.len());
+        }
+
+        // 双拼展开场景：基于前缀切分路径长度计算字节偏移
+        let prefix_paths =
+            PrismEngine::build_paths(raw_prefix, &self.config.fuzzy, self.config.double_pinyin);
+        if let Some(first) = prefix_paths.first() {
+            let key_len = first.to_key_string().len().min(formatted.len());
+            if formatted.is_char_boundary(key_len) {
+                return key_len;
+            }
+        }
+
+        formatted.len()
+    }
+
     /// 获取内部词典表引用
     pub fn table(&self) -> &LexiconTable {
         &self.table

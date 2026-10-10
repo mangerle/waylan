@@ -595,6 +595,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         } else {
                             state.refresh_candidate_surface();
                         }
+                        context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
                         context.preedit_string(serial, preedit, String::new());
                         return;
                     }
@@ -615,12 +616,16 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     if key == KEY_LEFT {
                         state.engine.move_cursor_left();
                         let preedit = state.engine.formatted_preedit();
+                        state.refresh_candidate_surface();
+                        context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
                         context.preedit_string(serial, preedit, String::new());
                         return;
                     }
                     if key == KEY_RIGHT {
                         state.engine.move_cursor_right();
                         let preedit = state.engine.formatted_preedit();
+                        state.refresh_candidate_surface();
+                        context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
                         context.preedit_string(serial, preedit, String::new());
                         return;
                     }
@@ -629,6 +634,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     if key == KEY_ESC {
                         state.engine.reset();
                         state.surface_manager.on_input_inactive();
+                        context.preedit_cursor(0);
                         context.preedit_string(serial, String::new(), String::new());
                         return;
                     }
@@ -691,6 +697,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     state.engine.push_char(ch);
                     let preedit = state.engine.formatted_preedit();
                     state.refresh_candidate_surface();
+                    context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
                     context.preedit_string(serial, preedit, String::new());
                     return;
                 }

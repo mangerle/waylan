@@ -192,8 +192,12 @@ impl WaylanV2Session {
     /// 更新当前 preedit 预编辑字符串到目标客户端
     pub fn update_preedit(&mut self, preedit: &str) {
         if let Some(im) = &self.input_method {
-            let len = preedit.len() as i32;
-            im.set_preedit_string(preedit.to_string(), 0, len);
+            let cursor = if preedit.is_empty() {
+                0
+            } else {
+                self.engine.formatted_cursor_byte_offset() as i32
+            };
+            im.set_preedit_string(preedit.to_string(), cursor, cursor);
             im.commit(self.done_serial);
         }
         if preedit.is_empty() {
@@ -207,8 +211,8 @@ impl WaylanV2Session {
     pub fn commit_partial(&mut self, text: &str, remaining_preedit: &str) {
         if let Some(im) = &self.input_method {
             im.commit_string(text.to_string());
-            let len = remaining_preedit.len() as i32;
-            im.set_preedit_string(remaining_preedit.to_string(), 0, len);
+            let cursor = self.engine.formatted_cursor_byte_offset() as i32;
+            im.set_preedit_string(remaining_preedit.to_string(), cursor, cursor);
             im.commit(self.done_serial);
         }
         self.refresh_candidate_surface();
@@ -694,5 +698,26 @@ mod tests {
         assert_eq!(session.build_candidate_box_state().selected_index, 1);
         session.engine.prev_candidate();
         assert_eq!(session.build_candidate_box_state().selected_index, 0);
+    }
+
+    #[test]
+    fn test_formatted_cursor_byte_offset_sync() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        for ch in "women".chars() {
+            engine.push_char(ch);
+        }
+        assert_eq!(engine.formatted_preedit(), "wo'men");
+        // 光标在末尾："wo'men|" -> 6
+        assert_eq!(engine.formatted_cursor_byte_offset(), 6);
+
+        // 左移 3 次后位于 'o' 之后："wo|'men" -> 2
+        engine.move_cursor_left();
+        engine.move_cursor_left();
+        engine.move_cursor_left();
+        assert_eq!(engine.formatted_cursor_byte_offset(), 2);
+
+        // 再右移 1 次位于 'm' 之后："wo'm|en" -> 4
+        engine.move_cursor_right();
+        assert_eq!(engine.formatted_cursor_byte_offset(), 4);
     }
 }
