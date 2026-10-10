@@ -51,6 +51,16 @@ impl Composition {
         Some(removed)
     }
 
+    /// 删除光标后（右侧）的一个字符（Delete 键行为）
+    pub fn delete_char_at_cursor(&mut self) -> Option<char> {
+        if self.cursor_position >= self.raw_buffer.len() {
+            return None;
+        }
+
+        let removed = self.raw_buffer.remove(self.cursor_position);
+        Some(removed)
+    }
+
     /// 光标向左移动一个字符
     pub fn move_cursor_left(&mut self) -> bool {
         if self.cursor_position == 0 {

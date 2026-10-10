@@ -132,18 +132,29 @@ impl AlgoEngine {
 
     /// 键入一个字符
     pub fn push_char(&mut self, ch: char) -> &[AlgoCandidate] {
+        // 若在光标非末尾处插入字符，说明破坏了原有连续分段拼音流，清空自造词累积器
+        if self.composition.cursor() < self.composition.len() {
+            self.partial_commit_segments.clear();
+        }
         self.composition.push_char(ch);
         self.page_index = 0;
         self.recompute_candidates();
         &self.current_candidates
     }
 
-    /// 退格删除一个字符
+    /// 退格删除一个字符（修改输入时清空分段自造词累积器，防止拼装错误脏词）
     pub fn pop_char(&mut self) -> &[AlgoCandidate] {
         self.composition.pop_char();
-        if self.composition.is_empty() {
-            self.partial_commit_segments.clear();
-        }
+        self.partial_commit_segments.clear();
+        self.page_index = 0;
+        self.recompute_candidates();
+        &self.current_candidates
+    }
+
+    /// 向后删除光标右侧的一个字符（Delete 键行为，并清空分段自造词累积器）
+    pub fn delete_char_at_cursor(&mut self) -> &[AlgoCandidate] {
+        self.composition.delete_char_at_cursor();
+        self.partial_commit_segments.clear();
         self.page_index = 0;
         self.recompute_candidates();
         &self.current_candidates
@@ -1365,6 +1376,28 @@ mod tests {
         assert!(
             user_words.iter().any(|w| w.text == "北京西安"),
             "分段选词消费完整个拼音序列后应自动合成用户自造新词 北京西安"
+        );
+    }
+
+    #[test]
+    fn test_partial_commit_segments_cleared_on_edit() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+
+        for ch in "beijingxian".chars() {
+            engine.push_char(ch);
+        }
+        let texts1: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
+        let idx1 = texts1.iter().position(|t| t == "北京").expect("应包含前缀词 北京");
+        let (c1, rem1) = engine.select_candidate(idx1, 200).unwrap();
+        assert_eq!(c1, "北京");
+        assert_eq!(rem1, 4);
+        assert_eq!(engine.partial_commit_segments.len(), 1);
+
+        // 用户在剩余的拼音中按下退格键修改拼音
+        engine.pop_char();
+        assert!(
+            engine.partial_commit_segments.is_empty(),
+            "修改剩余拼音时必须立即清空自造词累积器，防止拼音错位合成脏词"
         );
     }
 }

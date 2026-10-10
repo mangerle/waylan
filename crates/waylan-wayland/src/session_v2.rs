@@ -539,6 +539,12 @@ impl WaylanV2Session {
                 self.update_preedit(&preedit);
                 return None;
             }
+            if key == KEY_DELETE {
+                self.engine.delete_char_at_cursor();
+                let preedit = self.engine.formatted_preedit();
+                self.update_preedit(&preedit);
+                return None;
+            }
 
             // 3.9 ESC 键：取消当前输入并清空
             if key == KEY_ESC {

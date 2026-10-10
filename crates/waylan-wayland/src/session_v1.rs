@@ -720,6 +720,21 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         return;
                     }
 
+                    if key == KEY_DELETE {
+                        state.engine.delete_char_at_cursor();
+                        if state.engine.raw_input().is_empty() {
+                            state.hide_candidate_surface();
+                            context.preedit_cursor(0);
+                            context.preedit_string(serial, String::new(), String::new());
+                        } else {
+                            let preedit = state.engine.formatted_preedit();
+                            state.refresh_candidate_surface();
+                            context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
+                            context.preedit_string(serial, preedit, String::new());
+                        }
+                        return;
+                    }
+
                     // 3.9 ESC 键：取消当前输入并清空
                     if key == KEY_ESC {
                         state.engine.reset();
