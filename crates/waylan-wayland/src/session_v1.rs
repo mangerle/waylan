@@ -14,6 +14,8 @@ use wayland_client::{Connection, Dispatch, QueueHandle};
 
 /// Linux 常见按键键码常量（基于 linux/input-event-codes.h）
 pub const KEY_ESC: u32 = 1;
+pub const KEY_MINUS: u32 = 12;
+pub const KEY_EQUAL: u32 = 13;
 pub const KEY_BACKSPACE: u32 = 14;
 pub const KEY_TAB: u32 = 15;
 pub const KEY_ENTER: u32 = 28;
@@ -21,7 +23,11 @@ pub const KEY_SPACE: u32 = 57;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_RIGHTSHIFT: u32 = 54;
 pub const KEY_UP: u32 = 103;
+pub const KEY_PAGEUP: u32 = 104;
+pub const KEY_LEFT: u32 = 105;
+pub const KEY_RIGHT: u32 = 106;
 pub const KEY_DOWN: u32 = 108;
+pub const KEY_PAGEDOWN: u32 = 109;
 pub const KEY_SLASH: u32 = 53;
 pub const KEY_COMMA: u32 = 51;
 pub const KEY_DOT: u32 = 52;
@@ -141,6 +147,20 @@ impl Default for WaylanV1Session {
 impl WaylanV1Session {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 使用外部预加载并配置好的算法引擎构造输入法会话
+    pub fn with_engine(engine: AlgoEngine) -> Self {
+        Self {
+            engine,
+            punctuation_processor: PunctuationProcessor::new(),
+            shift_sm: ShiftToggleStateMachine::new(),
+            surface_manager: crate::surface::CandidateSurfaceManager::new(),
+            mode: InputMode::Chinese,
+            active_context: None,
+            grabbed_keyboard: None,
+            current_serial: 0,
+        }
     }
 }
 
@@ -327,7 +347,42 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     if key == KEY_BACKSPACE {
                         state.engine.pop_char();
                         let preedit = state.engine.formatted_preedit();
+                        if preedit.is_empty() {
+                            state.surface_manager.on_input_inactive();
+                        }
                         context.preedit_string(serial, preedit, String::new());
+                        return;
+                    }
+
+                    // 3.7 候选词翻页（PageUp/PageDown, 减号/等号, 方括号）
+                    if key == KEY_PAGEUP || key == KEY_MINUS || key == KEY_LEFTBRACE {
+                        state.engine.prev_page();
+                        return;
+                    }
+                    if key == KEY_PAGEDOWN || key == KEY_EQUAL || key == KEY_RIGHTBRACE {
+                        state.engine.next_page();
+                        return;
+                    }
+
+                    // 3.8 预编辑区内光标左移/右移
+                    if key == KEY_LEFT {
+                        state.engine.move_cursor_left();
+                        let preedit = state.engine.formatted_preedit();
+                        context.preedit_string(serial, preedit, String::new());
+                        return;
+                    }
+                    if key == KEY_RIGHT {
+                        state.engine.move_cursor_right();
+                        let preedit = state.engine.formatted_preedit();
+                        context.preedit_string(serial, preedit, String::new());
+                        return;
+                    }
+
+                    // 3.9 ESC 键：取消当前输入并清空
+                    if key == KEY_ESC {
+                        state.engine.reset();
+                        state.surface_manager.on_input_inactive();
+                        context.preedit_string(serial, String::new(), String::new());
                         return;
                     }
                 }
