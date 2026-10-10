@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-
 /// 模糊音细粒度配置
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct FuzzyConfig {

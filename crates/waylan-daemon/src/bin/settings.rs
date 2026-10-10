@@ -1,6 +1,6 @@
 #[path = "../config.rs"]
 mod config;
-#[path = "../settings_gui.rs"]
+#[path = "../settings_gui/mod.rs"]
 mod settings_gui;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

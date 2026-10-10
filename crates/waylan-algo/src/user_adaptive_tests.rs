@@ -1,0 +1,193 @@
+use super::*;
+
+#[test]
+fn test_record_and_boost() {
+    let mut model = UserAdaptiveModel::new();
+    let now = 1_700_000_000;
+    model.record_commit("先", "xian", now);
+    model.record_commit("先", "xian", now + 10);
+
+    let mut candidate = AlgoCandidate::new("先", "xian", 7_200);
+    model.apply_boost(&mut candidate, now + 100);
+
+    assert!(candidate.score > 100_000);
+    assert_eq!(candidate.comment.as_deref(), Some("常用习惯"));
+}
+
+#[test]
+fn test_half_life_decay() {
+    let entry = UserEntry {
+        text: "测试".to_string(),
+        pinyin: "ce'shi".to_string(),
+        commit_count: 10,
+        last_used_timestamp: 1_000_000,
+    };
+    let score_immediate = UserAdaptiveModel::calculate_decay_score(&entry, 1_000_000);
+    // 30 天后 (30 * 86400 = 2,592,000)
+    let score_30_days = UserAdaptiveModel::calculate_decay_score(&entry, 1_000_000 + 2_592_000);
+
+    assert!((score_30_days as f64 - (score_immediate as f64 * 0.5)).abs() < 1000.0);
+}
+
+#[test]
+fn test_total_entries_and_clear() {
+    let mut model = UserAdaptiveModel::new();
+    assert_eq!(model.total_entries(), 0);
+    model.record_commit("测试", "ce'shi", 100);
+    model.record_commit("模型", "mo'xing", 100);
+    assert_eq!(model.total_entries(), 2);
+    model.clear();
+    assert_eq!(model.total_entries(), 0);
+}
+
+#[test]
+fn test_wal_append_replay_and_compaction() {
+    let temp_dir = std::env::temp_dir();
+    let wal_path = temp_dir.join("test_user_history.wal");
+    if wal_path.exists() {
+        let _ = std::fs::remove_file(&wal_path);
+    }
+
+    // 1. 流式追加记录
+    let mut model = UserAdaptiveModel::new();
+    model
+        .append_to_wal(&wal_path, "微澜", "wei'lan", 1_700_000_000)
+        .expect("写入第1条WAL");
+    model
+        .append_to_wal(&wal_path, "微澜", "wei'lan", 1_700_000_100)
+        .expect("写入第2条WAL");
+    model
+        .append_to_wal(&wal_path, "输入法", "shu'ru'fa", 1_700_000_200)
+        .expect("写入第3条WAL");
+
+    // 2. 从 WAL 文件重放
+    let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("WAL重放");
+    assert_eq!(restored.total_entries(), 2);
+    let wl_words = restored.lookup_user_words("wei'lan", 1_700_000_200);
+    assert_eq!(wl_words[0].text, "微澜");
+    let wl_entry = restored
+        .entries
+        .get("wei'lan")
+        .unwrap()
+        .iter()
+        .find(|e| e.text == "微澜")
+        .unwrap();
+    assert_eq!(wl_entry.commit_count, 2);
+
+    // 3. 压缩归并
+    restored.compact_wal(&wal_path).expect("WAL归并成功");
+    let compacted = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放归并后的WAL");
+    assert_eq!(compacted.total_entries(), 2);
+    let compacted_entry = compacted
+        .entries
+        .get("wei'lan")
+        .unwrap()
+        .iter()
+        .find(|e| e.text == "微澜")
+        .unwrap();
+    assert_eq!(compacted_entry.commit_count, 2, "压缩后词频必须忠实保留");
+
+    let _ = std::fs::remove_file(wal_path);
+}
+
+#[test]
+fn test_wal_runtime_auto_compaction() {
+    let temp_dir = std::env::temp_dir();
+    let wal_path = temp_dir.join("test_runtime_auto_compact.wal");
+    if wal_path.exists() {
+        let _ = std::fs::remove_file(&wal_path);
+    }
+
+    let mut model = UserAdaptiveModel::new();
+    // 设置较小阈值为 5，用于测试自动触发
+    model.set_compact_threshold(5);
+
+    for i in 0..4 {
+        model
+            .append_to_wal(&wal_path, "测试", "ce'shi", 1_700_000_000 + i)
+            .expect("追加写入");
+    }
+    assert_eq!(model.wal_append_counter(), 4);
+
+    // 第 5 次追加达到阈值，触发自动 compact 并清零计数器
+    model
+        .append_to_wal(&wal_path, "测试", "ce'shi", 1_700_000_010)
+        .expect("触发自动压缩");
+    assert_eq!(model.wal_append_counter(), 0);
+
+    // 重新加载验证数据完整无损
+    let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放验证");
+    assert_eq!(restored.total_entries(), 1);
+
+    let _ = std::fs::remove_file(wal_path);
+}
+
+#[test]
+fn test_wal_startup_auto_compaction() {
+    let temp_dir = std::env::temp_dir();
+    let wal_path = temp_dir.join("test_startup_auto_compact.wal");
+    if wal_path.exists() {
+        let _ = std::fs::remove_file(&wal_path);
+    }
+
+    let mut model = UserAdaptiveModel::new();
+    model.set_compact_threshold(100_000); // 运行期不触发
+
+    // 写入 60 条同一个词的流水（高冗余率：60 流水 vs 1 个词）
+    for i in 0..60 {
+        model
+            .append_to_wal(&wal_path, "高频词", "gao'pin'ci", 1_700_000_000 + i)
+            .expect("追加");
+    }
+
+    let size_before = std::fs::metadata(&wal_path).unwrap().len();
+
+    // 启动重放检测到流水数 >= 50 且 > 词条数*3，触发自动压缩
+    let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放触发启动压缩");
+    assert_eq!(restored.total_entries(), 1);
+
+    let size_after = std::fs::metadata(&wal_path).unwrap().len();
+    assert!(
+        size_after < size_before,
+        "自动压缩后文件体积应明显缩小 ({} -> {})",
+        size_before,
+        size_after
+    );
+
+    let _ = std::fs::remove_file(wal_path);
+}
+
+#[test]
+fn test_wal_truncation_and_corrupt_resilience() {
+    let temp_dir = std::env::temp_dir();
+    let wal_path = temp_dir.join("test_wal_corrupt.wal");
+    if wal_path.exists() {
+        let _ = std::fs::remove_file(&wal_path);
+    }
+
+    let mut model = UserAdaptiveModel::new();
+    model
+        .append_to_wal(&wal_path, "完整词", "wan'zheng", 1_700_000_000)
+        .expect("写入正常第一条");
+    model
+        .append_to_wal(&wal_path, "被截断词", "jie'duan", 1_700_000_001)
+        .expect("写入将被截断的第二条");
+
+    // 模拟断电或进程崩溃：向文件末尾随机截断 5 个字节
+    let mut data = std::fs::read(&wal_path).expect("读取WAL文件");
+    let truncated_len = data.len().saturating_sub(5);
+    data.truncate(truncated_len);
+    std::fs::write(&wal_path, &data).expect("写回截断数据");
+
+    // 重放应该安全跳过末尾损坏记录，且不 panic，完整恢复第一条
+    let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("容错重放成功");
+    assert_eq!(restored.total_entries(), 1);
+    let cands = restored.lookup_user_words("wan'zheng", 1_700_000_000);
+    assert_eq!(cands.len(), 1);
+    assert_eq!(cands[0].text, "完整词");
+    assert!(restored
+        .lookup_user_words("jie'duan", 1_700_000_001)
+        .is_empty());
+
+    let _ = std::fs::remove_file(wal_path);
+}

@@ -34,7 +34,10 @@ fn test_shux_prefix_expansion_end_to_end() {
     assert!(!candidates.is_empty(), "shux 应能匹配出前缀补全候选词");
 
     let texts: Vec<&str> = candidates.iter().map(|c| c.text.as_str()).collect();
-    assert!(texts.contains(&"熟悉") || texts.contains(&"数学"), "shux 应包含熟悉或数学");
+    assert!(
+        texts.contains(&"熟悉") || texts.contains(&"数学"),
+        "shux 应包含熟悉或数学"
+    );
 
     // 2. 测试 zhongg 展开召回 中国
     engine.reset();
@@ -83,15 +86,31 @@ fn test_timing_measurement() {
             println!("  [第 {:02} 键 '{}'] 耗时: {:5} µs", idx + 1, ch, elapsed);
         }
         let avg_us = total_us / input.len() as u128;
-        println!("  >> 逐键累积总耗时: {} µs (约 {:.2} ms)", total_us, total_us as f64 / 1000.0);
-        println!("  >> 平均每键延迟:   {} µs (约 {:.2} ms)", avg_us, avg_us as f64 / 1000.0);
-        println!("  >> 最终一击耗时:   {} µs (约 {:.2} ms)", last_char_us, last_char_us as f64 / 1000.0);
+        println!(
+            "  >> 逐键累积总耗时: {} µs (约 {:.2} ms)",
+            total_us,
+            total_us as f64 / 1000.0
+        );
+        println!(
+            "  >> 平均每键延迟:   {} µs (约 {:.2} ms)",
+            avg_us,
+            avg_us as f64 / 1000.0
+        );
+        println!(
+            "  >> 最终一击耗时:   {} µs (约 {:.2} ms)",
+            last_char_us,
+            last_char_us as f64 / 1000.0
+        );
 
         // 阶段耗时细分测试
         let t_p = std::time::Instant::now();
         let paths = PrismEngine::build_paths(input, &AlgoConfig::default().fuzzy);
         let p_dur = t_p.elapsed().as_micros();
-        println!("  [Prism 耗时]: {} µs (切分出 {} 条路径)", p_dur, paths.len());
+        println!(
+            "  [Prism 耗时]: {} µs (切分出 {} 条路径)",
+            p_dur,
+            paths.len()
+        );
 
         let t_v = std::time::Instant::now();
         for p in paths.iter().take(2) {
@@ -102,11 +121,11 @@ fn test_timing_measurement() {
 
         if let Some(best) = paths.first() {
             let t_ext = std::time::Instant::now();
-            let _ = engine.table().lookup_prefix_extension(&best.syllables, &best.remaining);
+            let _ = engine
+                .table()
+                .lookup_prefix_extension(&best.syllables, &best.remaining);
             let ext_dur = t_ext.elapsed().as_micros();
             println!("  [PrefixExt 耗时]: {} µs", ext_dur);
         }
     }
 }
-
-

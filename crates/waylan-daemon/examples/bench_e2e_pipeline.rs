@@ -1,5 +1,5 @@
 use std::time::Instant;
-use waylan_algo::{AlgoEngine, types::AlgoConfig, table::LexiconTable};
+use waylan_algo::{table::LexiconTable, types::AlgoConfig, AlgoEngine};
 use waylan_core::{Candidate, CandidateBoxState};
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 
@@ -11,7 +11,10 @@ fn main() {
     println!("[准备] 正在载入系统全量词库: {}", dict_path);
     let load_start = Instant::now();
     let table = LexiconTable::load_binary(dict_path).expect("加载全量字词库失败");
-    println!("  -> 词库载入完成，耗时: {:.2} ms", load_start.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "  -> 词库载入完成，耗时: {:.2} ms",
+        load_start.elapsed().as_secs_f64() * 1000.0
+    );
 
     let mut engine = AlgoEngine::new(table, AlgoConfig::default());
     let renderer = CandidateBoxRenderer::new(UiTheme::light());
@@ -62,8 +65,7 @@ fn main() {
             Candidate::new("线", "xian", 4000),
         ],
         selected_index: 0,
-        is_expanded: false,
-        expanded_selected_index: 0,
+        expanded_card: waylan_core::ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
     };
 
@@ -92,13 +94,37 @@ fn main() {
     println!("\n============================================================");
     println!("          微澜输入法实机端到端管线高精度实测数据           ");
     println!("============================================================");
-    println!("测试环境: WSL2 (x86_64, Release 优化编译, 循环 {} 次)", iterations);
-    println!("候选框尺寸: {} x {} 像素 (已渲染字节数: {} 字节)", sample_pixmap.width(), sample_pixmap.height(), rendered_bytes / iterations);
+    println!(
+        "测试环境: WSL2 (x86_64, Release 优化编译, 循环 {} 次)",
+        iterations
+    );
+    println!(
+        "候选框尺寸: {} x {} 像素 (已渲染字节数: {} 字节)",
+        sample_pixmap.width(),
+        sample_pixmap.height(),
+        rendered_bytes / iterations
+    );
     println!("------------------------------------------------------------");
-    println!("1. 算法检索平均耗时:        {:>8.2} µs  ({:.4} ms)", avg_algo_us, avg_algo_us / 1000.0);
-    println!("2. tiny-skia 矢量光栅化耗时: {:>8.2} µs  ({:.4} ms)", avg_render_us, avg_render_us / 1000.0);
-    println!("3. wl_shm 共享内存写入耗时:   {:>8.2} µs  ({:.4} ms)", avg_shm_us, avg_shm_us / 1000.0);
+    println!(
+        "1. 算法检索平均耗时:        {:>8.2} µs  ({:.4} ms)",
+        avg_algo_us,
+        avg_algo_us / 1000.0
+    );
+    println!(
+        "2. tiny-skia 矢量光栅化耗时: {:>8.2} µs  ({:.4} ms)",
+        avg_render_us,
+        avg_render_us / 1000.0
+    );
+    println!(
+        "3. wl_shm 共享内存写入耗时:   {:>8.2} µs  ({:.4} ms)",
+        avg_shm_us,
+        avg_shm_us / 1000.0
+    );
     println!("------------------------------------------------------------");
-    println!("微澜本地处理总耗时 (实测):   {:>8.2} µs  ({:.4} ms)", total_measured_us, total_measured_us / 1000.0);
+    println!(
+        "微澜本地处理总耗时 (实测):   {:>8.2} µs  ({:.4} ms)",
+        total_measured_us,
+        total_measured_us / 1000.0
+    );
     println!("============================================================");
 }

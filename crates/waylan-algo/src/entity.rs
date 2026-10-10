@@ -39,15 +39,46 @@ impl EntityProtectionManager {
     fn load_builtin_entities(&mut self) {
         let default_entities = [
             // 核心开发工具与语言
-            "rust", "cargo", "linux", "wayland", "waylan", "viterbi", "prism",
-            "docker", "github", "gitlab", "tokio", "egui", "sqlite", "bincode",
-            "python", "golang", "cplusplus", "wasm", "cmake",
+            "rust",
+            "cargo",
+            "linux",
+            "wayland",
+            "waylan",
+            "viterbi",
+            "prism",
+            "docker",
+            "github",
+            "gitlab",
+            "tokio",
+            "egui",
+            "sqlite",
+            "bincode",
+            "python",
+            "golang",
+            "cplusplus",
+            "wasm",
+            "cmake",
             // 现代 AI 与前沿实体
-            "deepseek", "gemini", "chatgpt", "openai", "claude", "transformer", "llama",
+            "deepseek",
+            "gemini",
+            "chatgpt",
+            "openai",
+            "claude",
+            "transformer",
+            "llama",
             // 系统与图形桌面实体
-            "ubuntu", "debian", "archlinux", "hyprland", "sway", "gnome", "kde",
+            "ubuntu",
+            "debian",
+            "archlinux",
+            "hyprland",
+            "sway",
+            "gnome",
+            "kde",
             // 中文专有品牌与项目
-            "微澜输入法", "微信键盘", "清华大学", "北京大学",
+            "微澜输入法",
+            "微信键盘",
+            "清华大学",
+            "北京大学",
         ];
         for &e in &default_entities {
             self.entities.insert(e.to_lowercase());

@@ -9,12 +9,12 @@ description = "微澜 (WayLan) Wayland 协议客户端通信模块"
 waylan-core = { path = "../waylan-core" }
 waylan-algo = { path = "../waylan-algo" }
 waylan-ui = { path = "../waylan-ui" }
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
-wayland-protocols-misc = { version = "0.3", features = ["client"] }
-wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-wayland-scanner = "0.31"
-wayland-backend = "0.3"
-tempfile = "3"
-log = "0.4"
-rustix = { version = "0.38", features = ["event"] }
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-misc.workspace = true
+wayland-protocols-wlr.workspace = true
+wayland-scanner.workspace = true
+wayland-backend.workspace = true
+tempfile.workspace = true
+log.workspace = true
+rustix.workspace = true

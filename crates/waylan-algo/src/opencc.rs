@@ -1,4 +1,5 @@
 use crate::error::AlgoError;
+use crate::opencc_compact::CompactPhraseTable;
 use crate::types::AlgoCandidate;
 use std::collections::HashMap;
 use std::fs;
@@ -13,62 +14,6 @@ pub const OPENCC_DICT_MAGIC: &[u8; 16] = b"WAYLAN_OPENCC001";
 static GLOBAL_OPENCC_DICT: OnceLock<Arc<OpenCcDict>> = OnceLock::new();
 
 /// 紧凑短语映射表（按 UTF-8 字节序连续存储，通过二分查找实现零堆分配极速查询）
-#[derive(Debug, Clone, Default)]
-pub struct CompactPhraseTable {
-    /// 紧凑短语条目列表：(simp_offset, simp_len, trad_offset, trad_len)
-    pub records: Vec<(u32, u16, u32, u16)>,
-    /// 连续字节字符串池
-    pub pool: Vec<u8>,
-}
-
-impl CompactPhraseTable {
-    /// 基于有序字节序二分查找简体短语对应的繁体短语
-    pub fn lookup(&self, simp: &str) -> Option<&str> {
-        let target_bytes = simp.as_bytes();
-        let idx = self
-            .records
-            .binary_search_by(|&(s_off, s_len, _, _)| {
-                let start = s_off as usize;
-                let end = start + s_len as usize;
-                if end > self.pool.len() {
-                    return std::cmp::Ordering::Less;
-                }
-                let cand = &self.pool[start..end];
-                cand.cmp(target_bytes)
-            })
-            .ok()?;
-
-        let (_, _, t_off, t_len) = self.records[idx];
-        let start = t_off as usize;
-        let end = start + t_len as usize;
-        if end > self.pool.len() {
-            return None;
-        }
-        std::str::from_utf8(&self.pool[start..end]).ok()
-    }
-
-    /// 获取短语总条目数
-    pub fn len(&self) -> usize {
-        self.records.len()
-    }
-
-    /// 判断是否为空
-    pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
-    }
-}
-
-/// 纯 Rust 简繁转换词库与正向最大匹配（FMM）引擎
-///
-/// # 设计原理
-/// - **两级词表架构**：
-///   1. `STCharacters`（单字规范表）：记录简化字到首选繁体字及多繁备选字的映射（如 `发 -> [發, 髮]`、`后 -> [後, 后]`）；
-///   2. `STPhrases`（一简对多繁短语消歧表）：记录多字词组的精确繁体映射及边界保护词条（如 `头发 -> 頭髮`、`皇后 -> 皇后`）。
-/// - **正向最大匹配（FMM）**：
-///   转换多字词或句子时，利用 `first_char_max_len` 首字最大词长索引，优先从最长可能窗口向下执行零拷贝 UTF-8 切片查表；
-///   命中的短语整体替换为对应繁体词并跨越游标，未命中的单字回退查询 `STCharacters` 首选繁体字。
-/// - **单字候选一简多繁展开**：
-///   当候选词为单个汉字且存在多个繁体映射时，首选字原位替换，次选繁体字自动派生为紧随其后的候选词，兼顾词组消歧与单字完备性。
 #[derive(Debug, Clone, Default)]
 pub struct OpenCcDict {
     /// 简化字单字 -> 繁体字序列（首元素为默认首选繁体字，后续元素为一简多繁备选字）
@@ -148,81 +93,10 @@ impl OpenCcDict {
     /// 内置核心简繁单字与一简多繁短语兜底表（供无外部词库文件时的轻量环境使用）
     pub fn with_builtin_fallback() -> Self {
         let mut dict = Self::new();
-        let builtin_chars: &[(char, &[char])] = &[
-            ('国', &['國']),
-            ('会', &['會']),
-            ('发', &['發', '髮']),
-            ('后', &['後', '后']),
-            ('干', &['干', '乾', '幹']),
-            ('面', &['面', '麪']),
-            ('表', &['表', '錶']),
-            ('里', &['裏', '里']),
-            ('历', &['歷', '曆']),
-            ('复', &['復', '複']),
-            ('系', &['系', '係', '繫']),
-            ('学', &['學']),
-            ('汉', &['漢']),
-            ('语', &['語']),
-            ('这', &['這']),
-            ('来', &['來']),
-            ('个', &['個']),
-            ('们', &['們']),
-            ('对', &['對']),
-            ('经', &['經']),
-            ('时', &['時']),
-            ('现', &['現']),
-            ('动', &['動']),
-            ('进', &['進']),
-            ('长', &['長']),
-            ('问', &['問']),
-            ('题', &['題']),
-            ('见', &['見']),
-            ('机', &['機']),
-            ('点', &['點']),
-            ('电', &['電']),
-            ('华', &['華']),
-            ('为', &['為']),
-            ('头', &['頭']),
-            ('条', &['條']),
-            ('钟', &['鐘', '鍾']),
-            ('净', &['淨']),
-            ('燥', &['燥']),
-            ('饼', &['餅']),
-        ];
-        for &(simp, trads) in builtin_chars {
+        for &(simp, trads) in crate::opencc_data::BUILTIN_CHARS {
             dict.insert_char_mapping(simp, trads.to_vec());
         }
-
-        let builtin_phrases: &[(&str, &str)] = &[
-            ("头发", "頭髮"),
-            ("理发", "理髮"),
-            ("白发", "白髮"),
-            ("洗发", "洗髮"),
-            ("假发", "假髮"),
-            ("发廊", "髮廊"),
-            ("皇后", "皇后"),
-            ("太后", "太后"),
-            ("王后", "王后"),
-            ("面条", "麪條"),
-            ("方便面", "方便麪"),
-            ("牛肉面", "牛肉麪"),
-            ("拉面", "拉麪"),
-            ("面包", "麪包"),
-            ("手表", "手錶"),
-            ("钟表", "鐘錶"),
-            ("干净", "乾淨"),
-            ("干燥", "乾燥"),
-            ("饼干", "餅乾"),
-            ("干部", "幹部"),
-            ("骨干", "骨幹"),
-            ("历史", "歷史"),
-            ("日历", "日曆"),
-            ("农历", "農曆"),
-            ("复习", "複習"),
-            ("复杂", "複雜"),
-            ("恢复", "恢復"),
-        ];
-        for &(simp, trad) in builtin_phrases {
+        for &(simp, trad) in crate::opencc_data::BUILTIN_PHRASES {
             dict.insert_phrase_mapping(simp.to_string(), trad.to_string());
         }
 
@@ -251,79 +125,25 @@ impl OpenCcDict {
         }
     }
 
-    /// 从 OpenCC 标准 TSV 文本文件（`STCharacters.txt` 与 `STPhrases.txt`）解析构建词典
+    /// 从 OpenCC 标准 TSV 文本文件解析构建词典
+    #[inline]
     pub fn from_tsv_files(
         chars_path: impl AsRef<Path>,
         phrases_path: impl AsRef<Path>,
     ) -> Result<Self, AlgoError> {
-        let chars_ref = chars_path.as_ref();
-        let phrases_ref = phrases_path.as_ref();
-
-        let chars_content = fs::read_to_string(chars_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(chars_ref),
-            source: e,
-        })?;
-        let phrases_content =
-            fs::read_to_string(phrases_ref).map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(phrases_ref),
-                source: e,
-            })?;
-
-        let mut dict = Self::new();
-        dict.parse_characters_tsv(&chars_content);
-        dict.parse_phrases_tsv(&phrases_content);
-        Ok(dict)
+        crate::opencc_tsv::OpenCcTsvParser::from_tsv_files(chars_path, phrases_path)
     }
 
-    /// 解析 `STCharacters.txt` 格式内容（每行：`简体字\t繁体1 [繁体2 ...]`）
+    /// 解析 `STCharacters.txt` 格式内容
+    #[inline]
     pub fn parse_characters_tsv(&mut self, content: &str) {
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let Some((key, vals)) = line.split_once('\t') else {
-                continue;
-            };
-            let mut key_chars = key.trim().chars();
-            let Some(simp_ch) = key_chars.next() else {
-                continue;
-            };
-            if key_chars.next().is_some() {
-                continue;
-            }
-
-            let mut trad_list = Vec::new();
-            for part in vals.split_whitespace() {
-                let mut p_chars = part.chars();
-                if let Some(tc) = p_chars.next() {
-                    if p_chars.next().is_none() && !trad_list.contains(&tc) {
-                        trad_list.push(tc);
-                    }
-                }
-            }
-            self.insert_char_mapping(simp_ch, trad_list);
-        }
+        crate::opencc_tsv::OpenCcTsvParser::parse_characters_tsv(self, content);
     }
 
-    /// 解析 `STPhrases.txt` 格式内容（每行：`简体短语\t繁体短语1 [繁体短语2 ...]`）
+    /// 解析 `STPhrases.txt` 格式内容
+    #[inline]
     pub fn parse_phrases_tsv(&mut self, content: &str) {
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let Some((key, vals)) = line.split_once('\t') else {
-                continue;
-            };
-            let simp = key.trim();
-            let Some(first_trad) = vals.split_whitespace().next() else {
-                continue;
-            };
-            if !simp.is_empty() && !first_trad.is_empty() {
-                self.insert_phrase_mapping(simp.to_string(), first_trad.to_string());
-            }
-        }
+        crate::opencc_tsv::OpenCcTsvParser::parse_phrases_tsv(self, content);
     }
 
     /// 编译并持久化保存为紧凑二进制词库文件 (`WAYLAN_OPENCC001`)
@@ -631,59 +451,5 @@ impl OpenCcDict {
         }
 
         *candidates = converted;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_fmm_disambiguation_phrases_and_chars() {
-        let dict = OpenCcDict::global();
-
-        // 一简对多繁词组消歧验证
-        assert_eq!(dict.convert_text("头发"), "頭髮");
-        assert_eq!(dict.convert_text("理发"), "理髮");
-        assert_eq!(dict.convert_text("发展"), "發展");
-        assert_eq!(dict.convert_text("皇后"), "皇后");
-        assert_eq!(dict.convert_text("以后"), "以後");
-        assert_eq!(dict.convert_text("面条"), "麪條");
-        assert_eq!(dict.convert_text("牛肉面"), "牛肉麪");
-        assert_eq!(dict.convert_text("手表"), "手錶");
-        assert_eq!(dict.convert_text("干净"), "乾淨");
-        assert_eq!(dict.convert_text("干部"), "幹部");
-    }
-
-    #[test]
-    fn test_single_char_multi_traditional_expansion() {
-        let dict = OpenCcDict::global();
-        let mut cands = vec![
-            AlgoCandidate::new("头发", "tou'fa", 1000),
-            AlgoCandidate::new("发", "fa", 800),
-            AlgoCandidate::new("后", "hou", 700),
-        ];
-
-        dict.convert_candidates(&mut cands);
-        let texts: Vec<&str> = cands.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(texts[0], "頭髮");
-        assert!(texts.contains(&"發"), "单字候选 发 应包含首选繁体 發");
-        assert!(texts.contains(&"髮"), "单字候选 发 应展开备选繁体 髮");
-        assert!(texts.contains(&"後"), "单字候选 后 应包含首选繁体 後");
-        assert!(texts.contains(&"后"), "单字候选 后 应展开备选繁体 后");
-    }
-
-    #[test]
-    fn test_opencc_binary_save_and_load_roundtrip() {
-        let dict = OpenCcDict::with_builtin_fallback();
-        let temp_path = std::env::temp_dir().join("waylan_test_opencc.dict.bin");
-        dict.save_to_file(&temp_path)
-            .expect("保存简繁二进制词库应成功");
-
-        let loaded = OpenCcDict::load_from_file(&temp_path).expect("加载简繁二进制词库应成功");
-        assert_eq!(loaded.convert_text("头发和牛肉面"), "頭髮和牛肉麪");
-        assert_eq!(loaded.convert_text("皇后的手表"), "皇后的手錶");
-
-        let _ = fs::remove_file(&temp_path);
     }
 }

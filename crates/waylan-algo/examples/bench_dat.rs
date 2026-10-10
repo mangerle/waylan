@@ -40,7 +40,11 @@ fn main() {
     println!("读取完成，原始合法拼音条数: {} 条", keys.len());
     keys.sort();
     keys.dedup();
-    println!("去重后唯一拼音键: {} 个，耗时: {:?}", keys.len(), t0.elapsed());
+    println!(
+        "去重后唯一拼音键: {} 个，耗时: {:?}",
+        keys.len(),
+        t0.elapsed()
+    );
 
     let values: Vec<u32> = (0..keys.len() as u32).collect();
     let t_dat = Instant::now();

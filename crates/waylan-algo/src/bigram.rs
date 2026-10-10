@@ -1,7 +1,7 @@
+use crate::error::AlgoError;
+use memmap2::Mmap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use memmap2::Mmap;
-use crate::error::AlgoError;
 
 /// 微澜 2-Gram 紧凑高密度转移概率矩阵魔数标识（16 字节对齐）
 pub const BIGRAM_MAGIC: &[u8; 16] = b"WAYLAN_BIGRAM02\0";
@@ -77,19 +77,40 @@ impl CompactMmapBigram {
             });
         }
 
-        let version = u32::from_le_bytes(mmap[16..20].try_into().unwrap());
+        let version = read_u32_le(&mmap, 16).ok_or_else(|| AlgoError::DeserializeFailed {
+            path: PathBuf::from(path),
+            source: bincode::ErrorKind::Custom("Bigram版本字段缺失".to_string()).into(),
+        })?;
         if version != 2 {
             return Err(AlgoError::DeserializeFailed {
                 path: PathBuf::from(path),
-                source: bincode::ErrorKind::Custom(format!("不支持的Bigram版本号: {}", version)).into(),
+                source: bincode::ErrorKind::Custom(format!("不支持的Bigram版本号: {}", version))
+                    .into(),
             });
         }
 
-        let vocab_size = u32::from_le_bytes(mmap[20..24].try_into().unwrap()) as usize;
-        let total_pairs = u32::from_le_bytes(mmap[24..28].try_into().unwrap()) as usize;
-        let codebook_offset = u64::from_le_bytes(mmap[28..36].try_into().unwrap()) as usize;
-        let row_offsets_offset = u64::from_le_bytes(mmap[36..44].try_into().unwrap()) as usize;
-        let cols_offset = u64::from_le_bytes(mmap[44..52].try_into().unwrap()) as usize;
+        let vocab_size = read_u32_le(&mmap, 20).ok_or_else(|| AlgoError::DeserializeFailed {
+            path: PathBuf::from(path),
+            source: bincode::ErrorKind::Custom("Bigram词表大小读取失败".to_string()).into(),
+        })? as usize;
+        let total_pairs = read_u32_le(&mmap, 24).ok_or_else(|| AlgoError::DeserializeFailed {
+            path: PathBuf::from(path),
+            source: bincode::ErrorKind::Custom("Bigram词对总数读取失败".to_string()).into(),
+        })? as usize;
+        let codebook_offset =
+            read_u64_le(&mmap, 28).ok_or_else(|| AlgoError::DeserializeFailed {
+                path: PathBuf::from(path),
+                source: bincode::ErrorKind::Custom("Bigram码本偏移读取失败".to_string()).into(),
+            })? as usize;
+        let row_offsets_offset =
+            read_u64_le(&mmap, 36).ok_or_else(|| AlgoError::DeserializeFailed {
+                path: PathBuf::from(path),
+                source: bincode::ErrorKind::Custom("Bigram行偏移表读取失败".to_string()).into(),
+            })? as usize;
+        let cols_offset = read_u64_le(&mmap, 44).ok_or_else(|| AlgoError::DeserializeFailed {
+            path: PathBuf::from(path),
+            source: bincode::ErrorKind::Custom("Bigram列数据偏移读取失败".to_string()).into(),
+        })? as usize;
 
         let expected_size = cols_offset.saturating_add(total_pairs.saturating_mul(4));
         if mmap.len() < expected_size {
@@ -113,7 +134,7 @@ impl CompactMmapBigram {
     #[inline]
     fn decode_score(&self, q_idx: u8) -> i64 {
         let off = self.codebook_offset + (q_idx as usize) * 4;
-        i32::from_le_bytes(self.mmap[off..off + 4].try_into().unwrap()) as i64
+        read_i32_le(&self.mmap, off).unwrap_or(0) as i64
     }
 
     /// 获取前驱词 ID 的后继词起始偏移索引与结束偏移索引 (start, end)
@@ -126,8 +147,8 @@ impl CompactMmapBigram {
 
         let off1 = self.row_offsets_offset + pid * 4;
         let off2 = off1 + 4;
-        let start = u32::from_le_bytes(self.mmap[off1..off1 + 4].try_into().unwrap()) as usize;
-        let end = u32::from_le_bytes(self.mmap[off2..off2 + 4].try_into().unwrap()) as usize;
+        let start = read_u32_le(&self.mmap, off1)? as usize;
+        let end = read_u32_le(&self.mmap, off2)? as usize;
         Some((start, end))
     }
 
@@ -145,8 +166,8 @@ impl CompactMmapBigram {
         while left < right {
             let mid = left + (right - left) / 2;
             let item_off = self.cols_offset + mid * 4;
-            let entry = u32::from_le_bytes(self.mmap[item_off..item_off + 4].try_into().unwrap());
-            
+            let entry = read_u32_le(&self.mmap, item_off)?;
+
             // 低 24 位为后继词 ID，高 8 位为量化分数
             let col_id = entry & 0x00FF_FFFF;
 
@@ -162,6 +183,33 @@ impl CompactMmapBigram {
 
         None
     }
+}
+
+#[inline]
+fn read_u32_le(slice: &[u8], offset: usize) -> Option<u32> {
+    slice
+        .get(offset..offset + 4)?
+        .try_into()
+        .ok()
+        .map(u32::from_le_bytes)
+}
+
+#[inline]
+fn read_u64_le(slice: &[u8], offset: usize) -> Option<u64> {
+    slice
+        .get(offset..offset + 8)?
+        .try_into()
+        .ok()
+        .map(u64::from_le_bytes)
+}
+
+#[inline]
+fn read_i32_le(slice: &[u8], offset: usize) -> Option<i32> {
+    slice
+        .get(offset..offset + 4)?
+        .try_into()
+        .ok()
+        .map(i32::from_le_bytes)
 }
 
 #[cfg(test)]

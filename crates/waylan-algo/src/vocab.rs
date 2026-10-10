@@ -1,8 +1,8 @@
+use crate::error::AlgoError;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use crate::error::AlgoError;
 
 /// 微澜全局词表魔数标识（16 字节）
 pub const VOCAB_MAGIC: &[u8; 16] = b"WAYLAN_VOCAB01\0\0";
@@ -90,7 +90,11 @@ impl Vocabulary {
                     Err(_) => continue,
                 };
                 let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("---") || trimmed.starts_with("...") {
+                if trimmed.is_empty()
+                    || trimmed.starts_with('#')
+                    || trimmed.starts_with("---")
+                    || trimmed.starts_with("...")
+                {
                     continue;
                 }
 
@@ -121,31 +125,41 @@ impl Vocabulary {
         let mut writer = BufWriter::new(file);
 
         // 1. 写入魔数与头部
-        writer.write_all(VOCAB_MAGIC).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
-        writer.write_all(&1u32.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
-        writer.write_all(&(self.words.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        writer
+            .write_all(VOCAB_MAGIC)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+        writer
+            .write_all(&1u32.to_le_bytes())
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+        writer
+            .write_all(&(self.words.len() as u32).to_le_bytes())
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         // 2. 依次写入各词条
         for word in &self.words {
             let bytes = word.as_bytes();
             let len = bytes.len() as u16;
-            writer.write_all(&len.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-            writer.write_all(bytes).map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+            writer
+                .write_all(&len.to_le_bytes())
+                .map_err(|e| AlgoError::DictionaryIo {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                })?;
+            writer
+                .write_all(bytes)
+                .map_err(|e| AlgoError::DictionaryIo {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                })?;
         }
 
         writer.flush().map_err(|e| AlgoError::DictionaryIo {
@@ -165,10 +179,12 @@ impl Vocabulary {
         let mut reader = BufReader::new(file);
 
         let mut magic = [0u8; 16];
-        reader.read_exact(&mut magic).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        reader
+            .read_exact(&mut magic)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         if &magic != VOCAB_MAGIC {
             return Err(AlgoError::DeserializeFailed {
@@ -178,17 +194,21 @@ impl Vocabulary {
         }
 
         let mut ver_bytes = [0u8; 4];
-        reader.read_exact(&mut ver_bytes).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        reader
+            .read_exact(&mut ver_bytes)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
         let _version = u32::from_le_bytes(ver_bytes);
 
         let mut count_bytes = [0u8; 4];
-        reader.read_exact(&mut count_bytes).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        reader
+            .read_exact(&mut count_bytes)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
         let count = u32::from_le_bytes(count_bytes) as usize;
 
         let mut words = Vec::with_capacity(count);
@@ -197,22 +217,28 @@ impl Vocabulary {
 
         for id in 0..count {
             let mut len_bytes = [0u8; 2];
-            reader.read_exact(&mut len_bytes).map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+            reader
+                .read_exact(&mut len_bytes)
+                .map_err(|e| AlgoError::DictionaryIo {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                })?;
             let len = u16::from_le_bytes(len_bytes) as usize;
 
             buf.resize(len, 0);
-            reader.read_exact(&mut buf).map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+            reader
+                .read_exact(&mut buf)
+                .map_err(|e| AlgoError::DictionaryIo {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                })?;
 
-            let s = std::str::from_utf8(&buf).map_err(|e| AlgoError::DeserializeFailed {
-                path: PathBuf::from(path_ref),
-                source: bincode::ErrorKind::Custom(format!("词条UTF8解析异常: {}", e)).into(),
-            })?.to_string();
+            let s = std::str::from_utf8(&buf)
+                .map_err(|e| AlgoError::DeserializeFailed {
+                    path: PathBuf::from(path_ref),
+                    source: bincode::ErrorKind::Custom(format!("词条UTF8解析异常: {}", e)).into(),
+                })?
+                .to_string();
 
             word_to_id.insert(s.clone(), id as u32);
             words.push(s);

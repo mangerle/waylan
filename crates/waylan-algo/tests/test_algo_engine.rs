@@ -105,7 +105,9 @@ fn test_engine_acronym_matching() {
 #[test]
 fn test_engine_custom_phrase_and_english_and_symbol() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    engine.custom_phrases.add_entry("mymail".to_string(), "user@waylan.org".to_string());
+    engine
+        .custom_phrases
+        .add_entry("mymail".to_string(), "user@waylan.org".to_string());
 
     // 1. 测试自定义短语置顶
     for ch in "mymail".chars() {
@@ -212,14 +214,21 @@ fn test_engine_spatial_typo_tolerance_nihso() {
     assert_ne!(engine.formatted_preedit(), "ni'hao");
 
     let candidates = engine.candidates();
-    assert!(candidates.len() >= 2, "应至少包含保真降级候选与次位容错备选");
+    assert!(
+        candidates.len() >= 2,
+        "应至少包含保真降级候选与次位容错备选"
+    );
 
     // 验证 3：第 2 位（次位）提供带有 [纠错] 标识的邻键候选词“你好”
     let typo_cand = &candidates[1];
     assert_eq!(typo_cand.text, "你好");
     assert_eq!(typo_cand.tier, CandidateTier::TypoCorrection);
     assert!(
-        typo_cand.comment.as_ref().unwrap().contains("[纠错: ni'hao]"),
+        typo_cand
+            .comment
+            .as_ref()
+            .unwrap()
+            .contains("[纠错: ni'hao]"),
         "注释应包含纠错提示"
     );
 
@@ -246,7 +255,9 @@ fn test_engine_typo_adjacent_transpose_cehng() {
     // 验证包含 cheng 纠错的候选
     assert!(candidates.iter().any(|c| {
         c.tier == CandidateTier::TypoCorrection
-            && c.comment.as_ref().is_some_and(|comm| comm.contains("[纠错: cheng]"))
+            && c.comment
+                .as_ref()
+                .is_some_and(|comm| comm.contains("[纠错: cheng]"))
     }));
 }
 
@@ -284,8 +295,12 @@ fn test_engine_auto_pangu_spacing_integration() {
     // 注入目标词条与英文短语（带音节分词符）
     engine.table.insert("ping'guo", "苹果", 10_000);
     engine.table.insert("ge", "个", 10_000);
-    engine.custom_phrases.add_entry("rust".to_string(), "Rust".to_string());
-    engine.custom_phrases.add_entry("100".to_string(), "100".to_string());
+    engine
+        .custom_phrases
+        .add_entry("rust".to_string(), "Rust".to_string());
+    engine
+        .custom_phrases
+        .add_entry("100".to_string(), "100".to_string());
 
     // 1. 默认情况下，auto_pangu_spacing 为 false，不自动追加空格
     assert!(!engine.config.auto_pangu_spacing);
@@ -317,7 +332,11 @@ fn test_engine_auto_pangu_spacing_integration() {
     }
     let (c2, _) = engine.select_candidate(0, 1_700_000_000).expect("选中Rust");
     assert_eq!(c2, " Rust", "中文接英文应自动补齐半角空格");
-    assert_eq!(engine.last_commit_context.as_deref(), Some("Rust"), "历史上下文应保存去除空格后的纯净词");
+    assert_eq!(
+        engine.last_commit_context.as_deref(),
+        Some("Rust"),
+        "历史上下文应保存去除空格后的纯净词"
+    );
 
     // 步骤 B：英文接中文（Rust -> 我们）
     for ch in "women".chars() {
@@ -337,7 +356,9 @@ fn test_engine_auto_pangu_spacing_integration() {
     for ch in "ge".chars() {
         engine.push_char(ch);
     }
-    let (clf_c, _) = engine.select_candidate(0, 1_700_000_000).expect("选中量词个");
+    let (clf_c, _) = engine
+        .select_candidate(0, 1_700_000_000)
+        .expect("选中量词个");
     assert_eq!(clf_c, "个", "数字接中文量词白名单应豁免，不加空格");
 
     // 步骤 D：数字接普通中文词（100 -> 苹果）
@@ -359,7 +380,9 @@ fn test_engine_auto_pangu_spacing_integration() {
 fn test_engine_best_path_only_no_garbage_sentence() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 注入词条
-    engine.table.insert("wo'men'de'shi'jie", "我们的世界", 50_000);
+    engine
+        .table
+        .insert("wo'men'de'shi'jie", "我们的世界", 50_000);
     engine.table.insert("wo'men", "我们", 20_000);
     engine.table.insert("shi'jie", "世界", 20_000);
     engine.table.insert("de", "的", 30_000);
@@ -382,7 +405,9 @@ fn test_engine_best_path_only_no_garbage_sentence() {
 fn test_engine_prefix_segment_candidate_injection_and_cascade() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 注入全词与前缀词
-    engine.table.insert("wo'men'de'shi'jie", "我们的世界", 50_000);
+    engine
+        .table
+        .insert("wo'men'de'shi'jie", "我们的世界", 50_000);
     engine.table.insert("wo'men'de", "我们的", 35_000);
     engine.table.insert("wo'men", "我们", 40_000);
     engine.table.insert("de'shi'jie", "的世界", 40_000);
@@ -400,8 +425,13 @@ fn test_engine_prefix_segment_candidate_injection_and_cascade() {
     assert!(candidates.iter().any(|c| c.text == "我们的"));
 
     // 3. 找到“我们”的索引进行分段确认选择
-    let women_idx = candidates.iter().position(|c| c.text == "我们").expect("应包含我们");
-    let (committed, remaining_len) = engine.select_candidate(women_idx, 1_700_000_000).expect("选中我们");
+    let women_idx = candidates
+        .iter()
+        .position(|c| c.text == "我们")
+        .expect("应包含我们");
+    let (committed, remaining_len) = engine
+        .select_candidate(women_idx, 1_700_000_000)
+        .expect("选中我们");
 
     assert_eq!(committed, "我们");
     assert!(remaining_len > 0);
@@ -414,7 +444,9 @@ fn test_engine_prefix_segment_candidate_injection_and_cascade() {
     assert_eq!(next_cands[0].text, "的世界");
 
     // 5. 选中后半段，完成整句录入
-    let (next_committed, next_remaining) = engine.select_candidate(0, 1_700_000_000).expect("选中的世界");
+    let (next_committed, next_remaining) = engine
+        .select_candidate(0, 1_700_000_000)
+        .expect("选中的世界");
     assert_eq!(next_committed, "的世界");
     assert_eq!(next_remaining, 0);
     assert!(engine.raw_input().is_empty());
@@ -482,7 +514,10 @@ fn test_engine_mixed_full_pinyin_and_tail_acronym_synthesis() {
     }
     let candidates = engine.candidates();
     assert!(!candidates.is_empty());
-    assert_eq!(candidates[0].text, "我们共同的感觉", "首选词必须命中跨词简拼合成短语‘我们共同的感觉’");
+    assert_eq!(
+        candidates[0].text, "我们共同的感觉",
+        "首选词必须命中跨词简拼合成短语‘我们共同的感觉’"
+    );
 
     // 2. 验证 k = 3（三声母）：womendegwy -> 我们的国务院
     engine.reset();
@@ -491,7 +526,10 @@ fn test_engine_mixed_full_pinyin_and_tail_acronym_synthesis() {
     }
     let cands3 = engine.candidates();
     assert!(!cands3.is_empty());
-    assert_eq!(cands3[0].text, "我们的国务院", "首选词必须命中跨词三声母简拼合成短语‘我们的国务院’");
+    assert_eq!(
+        cands3[0].text, "我们的国务院",
+        "首选词必须命中跨词三声母简拼合成短语‘我们的国务院’"
+    );
 }
 
 #[test]
@@ -510,7 +548,11 @@ fn test_engine_rgzn_multi_acronyms_and_prefix_injection() {
     }
 
     let cands = engine.candidates();
-    assert!(cands.len() >= 6, "rgzn 候选列表应包含全长词、二字前缀简拼与首声母单字: {:?}", cands);
+    assert!(
+        cands.len() >= 6,
+        "rgzn 候选列表应包含全长词、二字前缀简拼与首声母单字: {:?}",
+        cands
+    );
     assert_eq!(cands[0].text, "人工智能");
     assert_eq!(cands[1].text, "人过中年");
     assert_eq!(cands[2].text, "弱冠之年");
@@ -577,4 +619,3 @@ fn test_engine_user_dict_wal_persistence_across_restart() {
 
     let _ = std::fs::remove_file(&wal_path);
 }
-

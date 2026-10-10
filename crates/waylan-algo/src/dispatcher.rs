@@ -273,7 +273,8 @@ mod tests {
     #[test]
     fn test_v_mode_financial_amount() {
         let config = AlgoConfig::default();
-        let result = ModeDispatcher::try_dispatch("v12345.67", &config).expect("应触发V模式金额转换");
+        let result =
+            ModeDispatcher::try_dispatch("v12345.67", &config).expect("应触发V模式金额转换");
         assert_eq!(result[0].text, "壹万贰仟叁佰肆拾伍元陆角柒分");
         assert_eq!(result[0].comment.as_deref(), Some("人民币大写"));
         assert_eq!(result[1].text, "壹万贰仟叁佰肆拾伍点陆柒");

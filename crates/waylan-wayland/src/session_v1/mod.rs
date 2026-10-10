@@ -1,0 +1,341 @@
+use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::{
+    Event as ContextEvent, ZwpInputMethodContextV1,
+};
+use crate::protocol_v1::input_method_v1::zwp_input_method_v1::{
+    Event as MethodEvent, ZwpInputMethodV1,
+};
+use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1;
+use log::info;
+use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
+use waylan_algo::types::AlgoConfig;
+use waylan_algo::AlgoEngine;
+use waylan_core::InputMode;
+use wayland_client::protocol::wl_keyboard::WlKeyboard;
+use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
+
+pub use crate::input_core::*;
+
+/// 判断按键是否为向上翻页键（向前兼容封装）
+#[inline]
+pub fn is_prev_page_key(keycode: u32, page_keys: PageKeyConfig) -> bool {
+    page_keys.is_prev_page(keycode)
+}
+
+/// 判断按键是否为向下翻页键（向前兼容封装）
+#[inline]
+pub fn is_next_page_key(keycode: u32, page_keys: PageKeyConfig) -> bool {
+    page_keys.is_next_page(keycode)
+}
+
+/// V1 会话配置与词库热重载回调函数类型
+pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;
+
+/// 微澜输入法会话状态机
+pub struct WaylanV1Session {
+    /// 拼音算法引擎核心
+    pub engine: AlgoEngine,
+    /// 标点符号智能处理器
+    pub punctuation_processor: PunctuationProcessor,
+    /// Shift/Ctrl 防误触状态机
+    pub shift_sm: ShiftToggleStateMachine,
+    /// 候选词翻页快捷键模式
+    pub page_keys: PageKeyConfig,
+    /// 候选框悬浮图层管理器
+    pub surface_manager: crate::surface::CandidateSurfaceManager,
+    /// 当前输入语言模式
+    pub mode: InputMode,
+    /// 与外部系统托盘共享的中英文状态标志
+    pub shared_is_chinese: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// 与外部系统托盘共享的配置与词库重载请求标志
+    pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// 外部注入的配置与词库热重载回调函数
+    pub reload_callback: Option<V1ReloadCallback>,
+    /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
+    pub watched_paths: Vec<std::path::PathBuf>,
+    /// 上次记录的被监控文件最新修改时间戳
+    pub last_watched_mtime: Option<std::time::SystemTime>,
+    /// 当前激活的应用上下文引用
+    pub active_context: Option<ZwpInputMethodContextV1>,
+    /// 捕获的键盘对象
+    pub grabbed_keyboard: Option<WlKeyboard>,
+    /// 关联的共享内存管理器句柄
+    pub shm: Option<wayland_client::protocol::wl_shm::WlShm>,
+    /// 候选框渲染目标 Wayland 表面
+    pub popup_wl_surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    /// V1 输入面板表面角色对象 (zwp_input_panel_surface_v1)
+    pub panel_surface: Option<ZwpInputPanelSurfaceV1>,
+    /// WLR Layer Shell 表面角色对象（用于 Sway / wlroots 等环境）
+    pub layer_surface: Option<ZwlrLayerSurfaceV1>,
+    /// 当前挂载在表面上的活跃像素缓冲区
+    pub active_buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
+    /// Wayland 事件队列句柄
+    pub qhandle: Option<QueueHandle<Self>>,
+    /// 当前上下文递增序号
+    pub current_serial: u32,
+    /// 当前按下的修饰键位掩码（XKB mods_depressed）
+    pub mods_depressed: u32,
+    /// 与外部系统托盘共享的优雅退出请求标志
+    pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Default for WaylanV1Session {
+    fn default() -> Self {
+        Self {
+            engine: AlgoEngine::with_sample_data(AlgoConfig::default()),
+            punctuation_processor: PunctuationProcessor::new(),
+            shift_sm: ShiftToggleStateMachine::new(),
+            page_keys: PageKeyConfig::default(),
+            surface_manager: crate::surface::CandidateSurfaceManager::new(),
+            mode: InputMode::Chinese,
+            shared_is_chinese: None,
+            reload_requested: None,
+            reload_callback: None,
+            watched_paths: Vec::new(),
+            last_watched_mtime: None,
+            active_context: None,
+            grabbed_keyboard: None,
+            shm: None,
+            popup_wl_surface: None,
+            panel_surface: None,
+            layer_surface: None,
+            active_buffer: None,
+            qhandle: None,
+            current_serial: 0,
+            mods_depressed: 0,
+            exit_requested: None,
+        }
+    }
+}
+
+impl WaylanV1Session {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 使用外部预加载并配置好的算法引擎构造输入法会话
+    pub fn with_engine(engine: AlgoEngine) -> Self {
+        Self {
+            engine,
+            punctuation_processor: PunctuationProcessor::new(),
+            shift_sm: ShiftToggleStateMachine::new(),
+            page_keys: PageKeyConfig::default(),
+            surface_manager: crate::surface::CandidateSurfaceManager::new(),
+            mode: InputMode::Chinese,
+            shared_is_chinese: None,
+            reload_requested: None,
+            reload_callback: None,
+            watched_paths: Vec::new(),
+            last_watched_mtime: None,
+            active_context: None,
+            grabbed_keyboard: None,
+            shm: None,
+            popup_wl_surface: None,
+            panel_surface: None,
+            layer_surface: None,
+            active_buffer: None,
+            qhandle: None,
+            current_serial: 0,
+            mods_depressed: 0,
+            exit_requested: None,
+        }
+    }
+
+    /// 根据按键按下/释放事件更新修饰键位掩码
+    pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
+        let mask = match keycode {
+            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => MOD_SHIFT,
+            KEY_LEFTCTRL | KEY_RIGHTCTRL => MOD_CTRL,
+            KEY_LEFTALT | KEY_RIGHTALT => MOD_ALT,
+            _ => 0,
+        };
+        if mask != 0 {
+            if is_press {
+                self.mods_depressed |= mask;
+            } else {
+                self.mods_depressed &= !mask;
+            }
+        }
+    }
+
+    /// 判断当前是否处于 Shift 按下状态
+    pub fn is_shift_active(&self) -> bool {
+        (self.mods_depressed & MOD_SHIFT) != 0
+    }
+
+    /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
+    pub fn has_ctrl_or_alt(&self) -> bool {
+        (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
+    }
+
+    /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
+    pub fn sync_external_state(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        let mut should_reload = self
+            .reload_requested
+            .as_ref()
+            .map(|flag| flag.swap(false, Ordering::Relaxed))
+            .unwrap_or(false);
+
+        if !self.watched_paths.is_empty() {
+            let mut latest_mtime: Option<std::time::SystemTime> = None;
+            for p in &self.watched_paths {
+                if let Ok(meta) = std::fs::metadata(p) {
+                    if let Ok(mtime) = meta.modified() {
+                        latest_mtime = Some(match latest_mtime {
+                            Some(prev) => prev.max(mtime),
+                            None => mtime,
+                        });
+                    }
+                }
+            }
+            match (self.last_watched_mtime, latest_mtime) {
+                (Some(old), Some(new)) if new > old => {
+                    self.last_watched_mtime = Some(new);
+                    should_reload = true;
+                }
+                (None, Some(new)) => {
+                    self.last_watched_mtime = Some(new);
+                }
+                _ => {}
+            }
+        }
+
+        if should_reload {
+            if let Some(mut cb) = self.reload_callback.take() {
+                cb(self);
+                self.reload_callback = Some(cb);
+            } else {
+                let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+                self.engine.custom_phrases =
+                    waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+                let wal_opt = self.engine.user_dict_path.clone();
+                if let Some(ref wal_path) = wal_opt {
+                    self.engine.set_user_dict_path(wal_path);
+                }
+            }
+            info!("[微澜] 已完成用户词库与运行配置热重载。");
+        }
+
+        if let Some(ref zh_flag) = self.shared_is_chinese {
+            let external_zh = zh_flag.load(Ordering::Relaxed);
+            let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
+            if external_zh != current_zh {
+                self.mode = if external_zh {
+                    InputMode::Chinese
+                } else {
+                    InputMode::English
+                };
+            }
+        }
+    }
+
+    /// 构造当前候选框的渲染状态
+    pub fn build_candidate_box_state(&self) -> waylan_core::CandidateBoxState {
+        let candidates = self.engine.candidates();
+        let core_candidates: Vec<waylan_core::Candidate> = candidates
+            .iter()
+            .map(|c| waylan_core::Candidate {
+                text: c.text.clone(),
+                pinyin: c.pinyin.clone(),
+                score: c.score,
+                is_expandable: c.is_expandable,
+                sub_candidates: c.sub_candidates.clone(),
+            })
+            .collect();
+
+        let expanded_card = if self.engine.is_expanded {
+            waylan_core::ExpandedCardState::Expanded {
+                selected_index: self.engine.expanded_selected_index,
+            }
+        } else {
+            waylan_core::ExpandedCardState::Collapsed
+        };
+
+        waylan_core::CandidateBoxState {
+            visible: !self.engine.raw_input().is_empty(),
+            preedit: self.engine.formatted_preedit(),
+            candidates: core_candidates,
+            selected_index: self.engine.selected_index,
+            expanded_card,
+            mode_badge: match self.mode {
+                InputMode::Chinese => "中".to_string(),
+                InputMode::English => "英".to_string(),
+                InputMode::VMode => "V".to_string(),
+            },
+        }
+    }
+
+    /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
+    pub fn refresh_candidate_surface(&mut self) {
+        let box_state = self.build_candidate_box_state();
+        self.surface_manager.commit_to_wayland(
+            &box_state,
+            self.shm.as_ref(),
+            self.popup_wl_surface.as_ref(),
+            self.qhandle.as_ref(),
+            &mut self.active_buffer,
+        );
+    }
+
+    /// 隐藏候选框并卸载 Wayland 表面缓冲
+    pub fn hide_candidate_surface(&mut self) {
+        self.surface_manager
+            .hide_wayland_surface(self.popup_wl_surface.as_ref(), &mut self.active_buffer);
+    }
+}
+
+// 为 zwp_input_method_v1 实现事件分发
+impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputMethodV1,
+        event: MethodEvent,
+        _data: &(),
+        _conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            MethodEvent::Activate { id } => {
+                info!("[微澜] 收到焦点激活事件：用户已进入文本输入框。");
+                state.sync_external_state();
+                // 捕获硬件键盘输入
+                let keyboard = id.grab_keyboard(qhandle, ());
+                state.grabbed_keyboard = Some(keyboard);
+                state.active_context = Some(id);
+                state.mods_depressed = 0;
+                state.engine.reset();
+            }
+            MethodEvent::Deactivate { context } => {
+                info!("[微澜] 收到失焦事件：用户已离开文本输入框。");
+                context.destroy();
+                state.active_context = None;
+                state.grabbed_keyboard = None;
+                state.mods_depressed = 0;
+                state.engine.reset();
+                state.hide_candidate_surface();
+            }
+        }
+    }
+}
+
+// 为 zwp_input_method_context_v1 实现生命周期分发
+impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputMethodContextV1,
+        event: ContextEvent,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        if let ContextEvent::Reset = event {
+            state.engine.reset();
+            state.hide_candidate_surface();
+        }
+    }
+}
+
+mod dispatch;
+mod keyboard;

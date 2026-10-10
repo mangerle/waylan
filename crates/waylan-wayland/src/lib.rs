@@ -1,7 +1,17 @@
+pub mod input_core;
 pub mod protocol_v1;
 pub mod session_v1;
 pub mod session_v2;
 pub mod surface;
+
+pub use input_core::{
+    keycode_to_ascii_digit_char, keycode_to_char, keycode_to_digit, keycode_to_punctuation,
+    keycode_to_punctuation_with_shift, ModifierState, PageKeyConfig, KEY_APOSTROPHE, KEY_BACKSPACE,
+    KEY_COMMA, KEY_DELETE, KEY_DOT, KEY_DOWN, KEY_ENTER, KEY_EQUAL, KEY_ESC, KEY_LEFT, KEY_LEFTALT,
+    KEY_LEFTBRACE, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_MINUS, KEY_PAGEDOWN, KEY_PAGEUP, KEY_RIGHT,
+    KEY_RIGHTALT, KEY_RIGHTBRACE, KEY_RIGHTCTRL, KEY_RIGHTSHIFT, KEY_SEMICOLON, KEY_SLASH,
+    KEY_SPACE, KEY_TAB, KEY_UP, MOD_ALT, MOD_CTRL, MOD_SHIFT, MOD_SUPER,
+};
 
 use protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_seat::WlSeat};

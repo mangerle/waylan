@@ -161,9 +161,7 @@ impl AppConfig {
             return PathBuf::from(custom);
         }
         if let Ok(data_home) = env::var("XDG_DATA_HOME") {
-            return PathBuf::from(data_home)
-                .join("waylan")
-                .join("aux.dict.bin");
+            return PathBuf::from(data_home).join("waylan").join("aux.dict.bin");
         }
         if let Ok(home) = env::var("HOME") {
             return PathBuf::from(home)
@@ -212,7 +210,9 @@ impl AppConfig {
         }
         paths.push(PathBuf::from("/usr/share/waylan/data/opencc.dict.bin"));
         paths.push(PathBuf::from("/usr/share/waylan/opencc.dict.bin"));
-        paths.push(PathBuf::from("/usr/local/share/waylan/data/opencc.dict.bin"));
+        paths.push(PathBuf::from(
+            "/usr/local/share/waylan/data/opencc.dict.bin",
+        ));
         paths.push(PathBuf::from("/usr/local/share/waylan/opencc.dict.bin"));
         paths.push(PathBuf::from("data/opencc.dict.bin"));
         paths
@@ -252,7 +252,15 @@ impl AppConfig {
             fs::create_dir_all(parent)?;
         }
         let serialized = toml::to_string_pretty(self)?;
-        fs::write(path, serialized)?;
+        // 使用原子写入：写入同目录临时文件，刷盘后原子 rename 覆盖目标文件
+        let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+        {
+            use std::io::Write;
+            let mut file = fs::File::create(&tmp_path)?;
+            file.write_all(serialized.as_bytes())?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp_path, path)?;
         Ok(())
     }
 

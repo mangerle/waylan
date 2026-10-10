@@ -26,6 +26,10 @@ fn main() {
     println!("- 提取有效词条数:   {} 条", stats.total_words);
     println!("- 唯一拼音键总数:   {} 个", stats.total_keys);
     println!("- 输出文件:         {}", output_path);
-    println!("- 生成二进制大小:   {} 字节 ({:.2} MB)", file_size, file_size as f64 / (1024.0 * 1024.0));
+    println!(
+        "- 生成二进制大小:   {} 字节 ({:.2} MB)",
+        file_size,
+        file_size as f64 / (1024.0 * 1024.0)
+    );
     println!("============================================================");
 }

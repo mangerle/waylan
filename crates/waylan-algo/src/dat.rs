@@ -41,7 +41,11 @@ impl DoubleArrayTrie {
     /// - `sorted_keys`: 必须严格按字节序递增排序的拼音键列表
     /// - `values`: 每个拼音键对应的整数关联值（如候选列表起始索引）
     pub fn build(sorted_keys: &[String], values: &[u32]) -> Self {
-        assert_eq!(sorted_keys.len(), values.len(), "键集合与值集合长度必须严格一致");
+        assert_eq!(
+            sorted_keys.len(),
+            values.len(),
+            "键集合与值集合长度必须严格一致"
+        );
         if sorted_keys.is_empty() {
             return Self {
                 base: vec![0],
@@ -255,7 +259,7 @@ impl<'a> DatReader<'a> {
             return None;
         }
 
-        let leaf = b_val as usize ;
+        let leaf = b_val as usize;
         if leaf >= self.check.len() || self.check[leaf] != curr as u32 {
             return None;
         }

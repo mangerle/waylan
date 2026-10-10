@@ -162,7 +162,7 @@ pub fn char_substitution_cost(c1: char, c2: char) -> u32 {
         return 0;
     }
     let d = key_spatial_distance(c1, c2);
-    let gaussian_factor = 1.0 - (- (d * d) / 2.0).exp();
+    let gaussian_factor = 1.0 - (-(d * d) / 2.0).exp();
     let cost = 10.0 + 35.0 * gaussian_factor;
     cost.round() as u32
 }

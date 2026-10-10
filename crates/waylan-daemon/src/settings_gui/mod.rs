@@ -1,0 +1,307 @@
+mod phrases;
+mod views;
+
+use crate::config::AppConfig;
+use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichText};
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+
+/// 偏好设置中心导航 Tab 标签页枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    /// 常规设置（输入方案、候选外观、快捷键、标点特性）
+    General,
+    /// 汉字与拼音（基础单字库、核心词库、扩展词库统计与导入）
+    Pinyin,
+    /// 中英混输（英文单词库、混输特性、外部英文导入）
+    English,
+    /// 符号与表情（Emoji 符号、特殊符号与颜文字预览与导入）
+    Symbols,
+    /// 自定义短语（用户快捷短语增删改查、自造词统计与清空）
+    CustomPhrases,
+}
+
+/// 微澜图形化偏好设置应用状态
+pub struct SettingsApp {
+    /// 当前选中的导航 Tab
+    pub current_tab: SettingsTab,
+    /// 内存中编辑的配置副本
+    pub config: AppConfig,
+    /// 全局操作反馈提示信息
+    pub status_message: Option<String>,
+    /// 汉语拼音词库文件导入路径
+    pub import_file_path: String,
+    /// 汉语拼音词库导入反馈提示
+    pub import_status_message: Option<String>,
+
+    /// 辅助与混输词库（包含英文词库与符号表情库）
+    pub aux_dict: waylan_algo::AuxiliaryDict,
+    /// 外部英文词库导入路径
+    pub english_import_path: String,
+    /// 英文词库导入反馈提示
+    pub english_status_message: Option<String>,
+    /// 外部符号词库导入路径
+    pub symbols_import_path: String,
+    /// 符号词库导入反馈提示
+    pub symbols_status_message: Option<String>,
+
+    /// 当前已配置的自定义快捷短语列表 (快捷码, 展开内容)
+    pub custom_phrases: Vec<(String, String)>,
+    /// 新增短语的快捷代码输入
+    pub new_phrase_code: String,
+    /// 新增短语的展开文本输入
+    pub new_phrase_text: String,
+    /// 短语操作状态提示
+    pub phrase_status_message: Option<String>,
+    /// 用户自适应自造词库当前词条总数
+    pub user_dict_count: usize,
+    /// 用户自造词库操作状态提示
+    pub user_dict_status_message: Option<String>,
+}
+
+impl Default for SettingsApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SettingsApp {
+    pub fn new() -> Self {
+        let config = AppConfig::load_or_create();
+
+        // 加载现有自定义短语
+        let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+        let phrase_manager =
+            waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+        let custom_phrases = phrase_manager.all_entries();
+
+        // 加载用户自造词统计
+        let user_dict_path = AppConfig::user_dict_path();
+        let user_dict_count =
+            waylan_algo::user_adaptive::UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
+                .map(|m| m.total_entries())
+                .unwrap_or(0);
+
+        // 加载辅助与混输词库
+        let mut aux_dict = waylan_algo::AuxiliaryDict::with_default_data();
+        for path in AppConfig::aux_dict_search_paths() {
+            if path.exists() {
+                if let Ok(loaded) = waylan_algo::AuxiliaryDict::load_from_file(&path) {
+                    aux_dict = loaded;
+                    break;
+                }
+            }
+        }
+
+        Self {
+            current_tab: SettingsTab::General,
+            config,
+            status_message: None,
+            import_file_path: String::new(),
+            import_status_message: None,
+            aux_dict,
+            english_import_path: String::new(),
+            english_status_message: None,
+            symbols_import_path: String::new(),
+            symbols_status_message: None,
+            custom_phrases,
+            new_phrase_code: String::new(),
+            new_phrase_text: String::new(),
+            phrase_status_message: None,
+            user_dict_count,
+            user_dict_status_message: None,
+        }
+    }
+
+    /// 将当前的自定义短语同步保存写回 phrases.txt
+    pub fn sync_custom_phrases(&self) -> Result<(), String> {
+        let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+        let mut manager = waylan_algo::custom_phrase::CustomPhraseManager::new();
+        for (code, text) in &self.custom_phrases {
+            manager.add_entry(code.clone(), text.clone());
+        }
+        manager
+            .save_to_file(&phrase_path)
+            .map_err(|e| format!("写入短语配置失败: {}", e))
+    }
+
+    /// 配置系统与备选中文字体
+    pub fn configure_chinese_fonts(ctx: &egui::Context) {
+        let font_candidates = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/mnt/c/Windows/Fonts/msyh.ttc",
+            "/mnt/c/Windows/Fonts/simhei.ttf",
+        ];
+
+        for path_str in &font_candidates {
+            let path = Path::new(path_str);
+            if path.exists() {
+                if let Ok(font_data) = fs::read(path) {
+                    let mut fonts = FontDefinitions::default();
+                    fonts.font_data.insert(
+                        "cjk_fallback".to_owned(),
+                        Arc::new(FontData::from_owned(font_data).tweak(egui::FontTweak {
+                            scale: 1.0,
+                            ..Default::default()
+                        })),
+                    );
+
+                    fonts
+                        .families
+                        .entry(FontFamily::Proportional)
+                        .or_default()
+                        .insert(0, "cjk_fallback".to_owned());
+
+                    fonts
+                        .families
+                        .entry(FontFamily::Monospace)
+                        .or_default()
+                        .push("cjk_fallback".to_owned());
+
+                    ctx.set_fonts(fonts);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+impl eframe::App for SettingsApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+
+        // 头部标题区域（翡翠青绿主题强调）
+        ui.vertical_centered(|ui| {
+            ui.add_space(6.0);
+            ui.heading(
+                RichText::new("微澜输入法 · 偏好设置")
+                    .size(20.0)
+                    .color(Color32::from_rgb(5, 150, 105))
+                    .strong(),
+            );
+            ui.label(
+                RichText::new("专为 Wayland 打造的现代轻量纯 Rust 中文输入法")
+                    .size(12.0)
+                    .color(Color32::from_rgb(120, 120, 120)),
+            );
+            ui.add_space(4.0);
+        });
+
+        ui.separator();
+
+        // 顶层导航 Tab 切换条
+        ui.horizontal(|ui| {
+            ui.selectable_value(
+                &mut self.current_tab,
+                SettingsTab::General,
+                RichText::new("常规设置").strong(),
+            );
+            ui.selectable_value(
+                &mut self.current_tab,
+                SettingsTab::Pinyin,
+                RichText::new("汉字与拼音").strong(),
+            );
+            ui.selectable_value(
+                &mut self.current_tab,
+                SettingsTab::English,
+                RichText::new("中英混输").strong(),
+            );
+            ui.selectable_value(
+                &mut self.current_tab,
+                SettingsTab::Symbols,
+                RichText::new("符号与表情").strong(),
+            );
+            ui.selectable_value(
+                &mut self.current_tab,
+                SettingsTab::CustomPhrases,
+                RichText::new("自定义短语").strong(),
+            );
+        });
+
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            match self.current_tab {
+                SettingsTab::General => views::render_general_tab(self, ui),
+                SettingsTab::Pinyin => views::render_pinyin_tab(self, ui),
+                SettingsTab::English => views::render_english_tab(self, ui),
+                SettingsTab::Symbols => views::render_symbols_tab(self, ui),
+                SettingsTab::CustomPhrases => phrases::render_custom_phrases_tab(self, ui),
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+
+            // 操作按钮与状态反馈栏
+            ui.horizontal(|ui| {
+                if ui
+                    .button(
+                        RichText::new("保存并应用配置")
+                            .strong()
+                            .color(Color32::from_rgb(5, 150, 105)),
+                    )
+                    .clicked()
+                {
+                    match self.config.save_default() {
+                        Ok(_) => {
+                            self.status_message =
+                                Some("配置已成功保存！微澜守护进程已即时应用。".to_string());
+                        }
+                        Err(e) => {
+                            self.status_message = Some(format!("保存配置失败: {}", e));
+                        }
+                    }
+                }
+
+                if ui.button("恢复默认设置").clicked() {
+                    self.config = AppConfig::default();
+                    self.status_message =
+                        Some("已重置为系统默认配置，请点击保存生效。".to_string());
+                }
+            });
+
+            if let Some(msg) = &self.status_message {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(msg)
+                        .color(Color32::from_rgb(5, 150, 105))
+                        .size(13.0),
+                );
+            }
+        });
+    }
+}
+
+/// 运行偏好设置图形界面弹窗
+pub fn run_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
+    // 若系统无物理显卡设备 (/dev/dri 不存在)，自动回退到 CPU 软光栅渲染模式
+    if !std::path::Path::new("/dev/dri").exists() {
+        std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        std::env::set_var("GALLIUM_DRIVER", "llvmpipe");
+    }
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([540.0, 700.0])
+            .with_min_inner_size([460.0, 520.0])
+            .with_title("微澜输入法 · 偏好设置"),
+        renderer: eframe::Renderer::Glow,
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "微澜输入法 · 偏好设置",
+        native_options,
+        Box::new(|cc| {
+            SettingsApp::configure_chinese_fonts(&cc.egui_ctx);
+            Ok(Box::new(SettingsApp::new()))
+        }),
+    )?;
+
+    Ok(())
+}

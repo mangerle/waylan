@@ -1,3 +1,4 @@
+mod cli;
 mod config;
 mod logger;
 mod settings_gui;
@@ -6,13 +7,10 @@ mod tray;
 use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 use log::{info, warn};
 use std::env;
-use std::path::Path;
 use std::time::Instant;
-use waylan_algo::builder::DictBuilder;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
-use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AlgoEngine;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 use waylan_wayland::probe_wayland_environment;
@@ -34,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. 处理 dict 子命令（支持词库打包与用户自定义词库导入）
     if args.len() >= 2 && args[1] == "dict" {
-        return handle_dict_subcommand(&args[2..]);
+        return cli::handle_dict_subcommand(&args[2..]);
     }
 
     // 2. 初始化双通道日志系统（终端输出 + 文件落盘）
@@ -48,6 +46,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 e
             );
         }
+    }
+
+    // 注册进程系统退出信号拦截 (SIGINT / SIGTERM)，确保能够平滑停机并持久化数据
+    let term_now = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Err(e) = signal_hook::flag::register(
+        signal_hook::consts::SIGTERM,
+        std::sync::Arc::clone(&term_now),
+    ) {
+        warn!("[微澜守护进程] 注册 SIGTERM 信号拦截失败: {}", e);
+    }
+    if let Err(e) = signal_hook::flag::register(
+        signal_hook::consts::SIGINT,
+        std::sync::Arc::clone(&term_now),
+    ) {
+        warn!("[微澜守护进程] 注册 SIGINT 信号拦截失败: {}", e);
     }
 
     info!("============================================================");
@@ -125,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7. 执行环境自检（--check 参数）
     if args.len() > 1 && args[1] == "--check" {
-        run_self_check(&mut engine)?;
+        cli::run_self_check(&mut engine)?;
         return Ok(());
     }
 
@@ -345,17 +358,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("[微澜守护进程] Wayland 输入法事件循环已正常退出，所有资源已安全释放。");
         }
         Err(e) => {
-            if tray.is_exit_requested() {
-                info!("[微澜守护进程] 收到优雅退出请求，服务安全退场。");
+            if tray.is_exit_requested() || term_now.load(std::sync::atomic::Ordering::Relaxed) {
+                info!("[微澜守护进程] 收到退出信号或托盘退出请求，服务安全退场。");
                 return Ok(());
             }
-            warn!(
-                "[微澜守护进程 警告] 无法启动 Wayland 输入法事件循环 ({})，进入常驻等待模式。",
+            log::error!(
+                "[微澜守护进程 错误] Wayland 输入法事件循环异常退出或无法启动: {}，准备终止进程并释放资源。",
                 e
             );
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(3600));
-            }
+            return Err(e);
         }
     }
 
@@ -477,136 +488,4 @@ fn check_wayland_capabilities() -> waylan_wayland::WaylandCapabilities {
             waylan_wayland::WaylandCapabilities::default()
         }
     }
-}
-
-/// 处理 dict 命令行子命令（支持 build、build-opencc 和 import）
-fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    if sub_args.is_empty() {
-        print_dict_usage();
-        return Ok(());
-    }
-
-    match sub_args[0].as_str() {
-        "--help" | "-h" => {
-            print_dict_usage();
-        }
-        "build" => {
-            if sub_args.len() < 3 {
-                print_dict_usage();
-                return Ok(());
-            }
-            let output_path = &sub_args[sub_args.len() - 1];
-            let input_paths = &sub_args[1..sub_args.len() - 1];
-            println!(
-                "[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}",
-                output_path
-            );
-            let stats =
-                DictBuilder::build_compact_binary_dict(input_paths, Path::new(output_path))?;
-            println!(
-                "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
-                stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
-            );
-        }
-        "build-opencc" => {
-            let (chars_path, phrases_path, output_path) = if sub_args.len() >= 4 {
-                (
-                    sub_args[1].as_str(),
-                    sub_args[2].as_str(),
-                    sub_args[3].as_str(),
-                )
-            } else {
-                (
-                    "data/dicts/8_opencc/STCharacters.txt",
-                    "data/dicts/8_opencc/STPhrases.txt",
-                    "data/opencc.dict.bin",
-                )
-            };
-            let start = Instant::now();
-            println!(
-                "[简繁词库构建] 正在从 {} 与 {} 编译二进制词库: {}",
-                chars_path, phrases_path, output_path
-            );
-            let dict = waylan_algo::OpenCcDict::from_tsv_files(chars_path, phrases_path)?;
-            dict.save_to_file(output_path)?;
-            let elapsed_ms = start.elapsed().as_millis();
-            println!(
-                "[构建完成] 单字映射: {} 个, 一简多繁短语: {} 组, 耗时: {} ms",
-                dict.chars.len(),
-                dict.phrases_len(),
-                elapsed_ms
-            );
-        }
-        "import" => {
-            if sub_args.len() < 2 {
-                print_dict_usage();
-                return Ok(());
-            }
-            let import_file = &sub_args[1];
-            println!("[词库导入] 正在导入用户自定义词库: {}", import_file);
-            let user_dict_path = AppConfig::user_dict_path();
-            let mut user_model = UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
-                .unwrap_or_else(|_| UserAdaptiveModel::new());
-
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let count =
-                DictBuilder::import_user_text_dict(Path::new(import_file), &mut user_model, now)?;
-            user_model.compact_wal(&user_dict_path)?;
-            println!("[导入成功] 已将 {} 条自定义词条注入用户自适应词库！", count);
-        }
-        other => {
-            println!("未知的 dict 子命令: {}", other);
-        }
-    }
-    Ok(())
-}
-
-fn print_dict_usage() {
-    println!("用法:");
-    println!("  waylan dict build <输入文本1> [输入文本2...] <输出文件.dict.bin>");
-    println!("  waylan dict build-opencc [STCharacters.txt STPhrases.txt opencc.dict.bin]");
-    println!("  waylan dict import <用户自定义词库.txt>");
-}
-
-/// 执行自检测试
-fn run_self_check(engine: &mut AlgoEngine) -> Result<(), Box<dyn std::error::Error>> {
-    info!("------------------------------------------------------------");
-    info!("[自检] 正在测试拼音检索性能与首选项准确度...");
-    let test_queries = [
-        "xian", "women", "zhongguo", "weilan", "v1+2*3", "uhehe", "riqi", "shijian",
-    ];
-    for q in test_queries {
-        engine.reset();
-        let query_start = Instant::now();
-        for ch in q.chars() {
-            engine.push_char(ch);
-        }
-        let query_time = query_start.elapsed();
-        let cands = engine.candidates();
-        let formatted = engine.formatted_preedit();
-        let top7: Vec<String> = cands
-            .iter()
-            .take(7)
-            .map(|c| {
-                if c.is_expandable {
-                    format!("{}[扩展:{}项]", c.text, c.sub_candidates.len())
-                } else {
-                    c.text.clone()
-                }
-            })
-            .collect();
-        info!(
-            "  - 输入: {:<10} (切分: {:<10}) => 候选 ({}项): {} (耗时: {:.2} µs)",
-            q,
-            formatted,
-            top7.len(),
-            top7.join(" / "),
-            query_time.as_secs_f64() * 1_000_000.0
-        );
-    }
-    info!("[自检完成] 微澜输入法环境、全量字词库与核心算法模块全部就绪。");
-    Ok(())
 }

@@ -227,13 +227,20 @@ impl DateTimeEvaluator {
     /// 计算干支年及生肖（如：丙午[马]年）与农历月日
     fn to_lunar_chinese_str(year: i32, month: u32, day: u32) -> String {
         const TIAN_GAN: [&str; 10] = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"];
-        const DI_ZHI: [&str; 12] = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"];
-        const SHENG_XIAO: [&str; 12] = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"];
+        const DI_ZHI: [&str; 12] = [
+            "子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥",
+        ];
+        const SHENG_XIAO: [&str; 12] = [
+            "鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪",
+        ];
 
         let gan_idx = (((year - 4) % 10 + 10) % 10) as usize;
         let zhi_idx = (((year - 4) % 12 + 12) % 12) as usize;
 
-        let ganzhi_year = format!("{}{}[{}]年", TIAN_GAN[gan_idx], DI_ZHI[zhi_idx], SHENG_XIAO[zhi_idx]);
+        let ganzhi_year = format!(
+            "{}{}[{}]年",
+            TIAN_GAN[gan_idx], DI_ZHI[zhi_idx], SHENG_XIAO[zhi_idx]
+        );
 
         // 农历月日推导（内置公历到农历月日对应推导）
         let (lunar_month_str, lunar_day_str) = Self::estimate_lunar_month_day(year, month, day);
@@ -244,15 +251,15 @@ impl DateTimeEvaluator {
     fn estimate_lunar_month_day(year: i32, month: u32, day: u32) -> (&'static str, &'static str) {
         // 农历月份汉字
         const MONTH_NAMES: [&str; 12] = [
-            "正月", "二月", "三月", "四月", "五月", "六月",
-            "七月", "八月", "九月", "十月", "冬月", "腊月",
+            "正月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "冬月",
+            "腊月",
         ];
 
         // 农历日汉字
         const DAY_NAMES: [&str; 30] = [
-            "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十",
-            "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
-            "廿一", "廿二", "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十",
+            "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十", "十一",
+            "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十", "廿一", "廿二",
+            "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十",
         ];
 
         // 以 2026 年为例：2026年春节为 2026年2月17日 (正月初一)
@@ -262,8 +269,16 @@ impl DateTimeEvaluator {
         }
 
         // 通用简易换算（以当前公历偏移近似对齐农历）
-        let l_month = if month >= 2 { (month - 2) as usize } else { (month + 10) as usize };
-        let l_day = if day > 0 && day <= 30 { (day - 1) as usize } else { 0 };
+        let l_month = if month >= 2 {
+            (month - 2) as usize
+        } else {
+            (month + 10) as usize
+        };
+        let l_day = if day > 0 && day <= 30 {
+            (day - 1) as usize
+        } else {
+            0
+        };
 
         (MONTH_NAMES[l_month % 12], DAY_NAMES[l_day % 30])
     }
@@ -293,20 +308,13 @@ impl FinancialEvaluator {
         let accounting_num = Self::to_accounting_format(int_val, frac_val);
 
         let mut candidates = Vec::with_capacity(3);
-        candidates.push(
-            AlgoCandidate::new(rmb_capital, input, 100_000)
-                .with_comment("人民币大写"),
-        );
+        candidates.push(AlgoCandidate::new(rmb_capital, input, 100_000).with_comment("人民币大写"));
         if let Some(ch_digits) = chinese_digits {
-            candidates.push(
-                AlgoCandidate::new(ch_digits, input, 95_000)
-                    .with_comment("中文大写数字"),
-            );
+            candidates
+                .push(AlgoCandidate::new(ch_digits, input, 95_000).with_comment("中文大写数字"));
         }
-        candidates.push(
-            AlgoCandidate::new(accounting_num, input, 90_000)
-                .with_comment("财务千分位"),
-        );
+        candidates
+            .push(AlgoCandidate::new(accounting_num, input, 90_000).with_comment("财务千分位"));
 
         Some(candidates)
     }
@@ -338,7 +346,10 @@ impl FinancialEvaluator {
 
         let frac_val = if parts.len() == 2 {
             let frac_str = parts[1];
-            if frac_str.is_empty() || frac_str.len() > 2 || !frac_str.chars().all(|c| c.is_ascii_digit()) {
+            if frac_str.is_empty()
+                || frac_str.len() > 2
+                || !frac_str.chars().all(|c| c.is_ascii_digit())
+            {
                 return None;
             }
             if frac_str.len() == 1 {
@@ -468,7 +479,11 @@ impl FinancialEvaluator {
         const DIGITS: &[&str] = &["零", "壹", "贰", "叁", "肆", "伍", "陆", "柒", "捌", "玖"];
         let parts: Vec<&str> = raw.split('.').collect();
         let int_str = parts[0];
-        let int_val = if int_str.is_empty() { 0 } else { int_str.parse::<u64>().ok()? };
+        let int_val = if int_str.is_empty() {
+            0
+        } else {
+            int_str.parse::<u64>().ok()?
+        };
         let mut res = Self::convert_integer_part(int_val);
 
         if parts.len() == 2 && !parts[1].is_empty() {
@@ -495,80 +510,5 @@ impl FinancialEvaluator {
             }
         }
         format!("{}.{:02}", formatted_int, frac_val)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::TimeZone;
-
-    #[test]
-    fn test_date_evaluator_riqi() {
-        let cand = DateTimeEvaluator::try_evaluate("riqi").expect("应匹配日期");
-        assert_eq!(cand.text, "日期");
-        assert!(cand.is_expandable);
-        assert_eq!(cand.sub_candidates.len(), 7);
-        assert!(cand.sub_candidates[0].contains("年"));
-    }
-
-    #[test]
-    fn test_date_evaluator_shijian() {
-        let cand = DateTimeEvaluator::try_evaluate("shijian").expect("应匹配时间");
-        assert_eq!(cand.text, "时间");
-        assert!(cand.is_expandable);
-        assert!(!cand.sub_candidates.is_empty());
-    }
-
-    #[test]
-    fn test_chinese_date_format() {
-        let fake = Local.with_ymd_and_hms(2026, 10, 9, 16, 3, 26).unwrap();
-        let subs = DateTimeEvaluator::format_date_formats(fake);
-        assert_eq!(subs[0], "2026年10月9日");
-        assert_eq!(subs[1], "20261009");
-        assert_eq!(subs[2], "2026-10-09");
-        assert_eq!(subs[3], "2026/10/09");
-        assert_eq!(subs[4], "2026.10.09");
-        assert_eq!(subs[5], "二〇二六年十月九日");
-        assert_eq!(subs[6], "丙午[马]年八月廿九");
-    }
-
-    #[test]
-    fn test_datetime_formats() {
-        let fake = Local.with_ymd_and_hms(2026, 10, 9, 16, 3, 26).unwrap();
-        let subs = DateTimeEvaluator::format_datetime_formats(fake);
-        assert_eq!(subs[0], "2026年10月9日16:03:26");
-        assert_eq!(subs[1], "2026-10-09 16:03:26");
-        assert_eq!(subs[2], "20261009160326");
-        assert_eq!(subs[3], "16:03:26");
-    }
-
-    #[test]
-    fn test_financial_evaluator() {
-        // 1. 常见带角分金额
-        let cands = FinancialEvaluator::try_evaluate("12345.67").expect("应解析金额");
-        assert_eq!(cands[0].text, "壹万贰仟叁佰肆拾伍元陆角柒分");
-        assert_eq!(cands[0].comment.as_deref(), Some("人民币大写"));
-        assert_eq!(cands[1].text, "壹万贰仟叁佰肆拾伍点陆柒");
-        assert_eq!(cands[2].text, "12,345.67");
-
-        // 2. 整数金额（带整）
-        let cands_int = FinancialEvaluator::try_evaluate("1005").expect("应解析整数");
-        assert_eq!(cands_int[0].text, "壹仟零伍元整");
-        assert_eq!(cands_int[1].text, "壹仟零伍");
-
-        // 3. 亿级金额与零处理
-        let cands_billion = FinancialEvaluator::try_evaluate("100000000").expect("应解析亿级");
-        assert_eq!(cands_billion[0].text, "壹亿元整");
-
-        // 4. 纯角分小数
-        let cands_frac = FinancialEvaluator::try_evaluate("0.5").expect("应解析角");
-        assert_eq!(cands_frac[0].text, "伍角整");
-        let cands_fen = FinancialEvaluator::try_evaluate("0.05").expect("应解析分");
-        assert_eq!(cands_fen[0].text, "伍分");
-
-        // 5. 零元整
-        let cands_zero = FinancialEvaluator::try_evaluate("0").expect("应解析零");
-        assert_eq!(cands_zero[0].text, "零元整");
     }
 }

@@ -1,90 +1,7 @@
-use crate::syllables::{has_syllable_prefix, is_valid_syllable, STANDARD_SYLLABLES};
+use crate::prism_fsa::PrismFsa;
+use crate::syllables::{has_syllable_prefix, is_valid_syllable};
 use crate::types::FuzzyConfig;
-use std::sync::OnceLock;
 
-/// 有限状态机节点
-#[derive(Clone, Debug)]
-struct FsaNode {
-    next: [u16; 26],
-    syllable: Option<&'static str>,
-}
-
-/// 编译型音节投影有限状态机 (Prism FSA)
-///
-/// # 设计原理
-/// - 预编译所有 410 个标准普通话音节为紧凑字典树状态机；
-/// - 状态转移在 O(1) 数组索引内步进完成，彻底消灭每个前缀的重复二分查找；
-/// - 在输入流上单向步进，以严格 O(L) 复杂度提取所有合法音节切分。
-pub struct PrismFsa {
-    nodes: Vec<FsaNode>,
-}
-
-impl PrismFsa {
-    /// 全局静态编译单例
-    pub fn global() -> &'static PrismFsa {
-        static INSTANCE: OnceLock<PrismFsa> = OnceLock::new();
-        INSTANCE.get_or_init(Self::compile)
-    }
-
-    /// 编译全部合法标准拼音音节
-    fn compile() -> Self {
-        let mut nodes = vec![FsaNode {
-            next: [0; 26],
-            syllable: None,
-        }];
-
-        for &syl in STANDARD_SYLLABLES {
-            let mut curr = 0;
-            for b in syl.bytes() {
-                if b.is_ascii_lowercase() {
-                    let idx = (b - b'a') as usize;
-                    let next_state = nodes[curr].next[idx];
-                    if next_state == 0 {
-                        let new_state = nodes.len() as u16;
-                        nodes[curr].next[idx] = new_state;
-                        nodes.push(FsaNode {
-                            next: [0; 26],
-                            syllable: None,
-                        });
-                        curr = new_state as usize;
-                    } else {
-                        curr = next_state as usize;
-                    }
-                }
-            }
-            nodes[curr].syllable = Some(syl);
-        }
-
-        Self { nodes }
-    }
-
-    /// 在输入串上以单向步进方式匹配所有合法音节（返回 (标准音节, 匹配字节长度)）
-    pub fn match_syllables(&self, input: &str, start: usize) -> Vec<(&'static str, usize)> {
-        let mut matches = Vec::new();
-        let bytes = input.as_bytes();
-        let mut curr = 0;
-        let mut len = 0;
-
-        for &b in &bytes[start..] {
-            if !b.is_ascii_lowercase() {
-                break;
-            }
-            let idx = (b - b'a') as usize;
-            let next_state = self.nodes[curr].next[idx];
-            if next_state == 0 {
-                break;
-            }
-            curr = next_state as usize;
-            len += 1;
-            if let Some(syl) = self.nodes[curr].syllable {
-                matches.push((syl, len));
-            }
-        }
-        matches
-    }
-}
-
-/// 音节图中的一条候选切分路径
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentPath {
     /// 完整音节切分列表（如 ["xi", "an"] 或 ["xian"]）
@@ -301,7 +218,9 @@ impl PrismEngine {
         if fuzzy.has_active_rules() {
             for len in (1..=max_len).rev() {
                 let slice = &input[start..start + len];
-                if Self::is_fuzzy_valid(slice, fuzzy) && !fsa_matches.iter().any(|m| m.0 == slice) {
+                if crate::prism_fuzzy::PrismFuzzy::is_fuzzy_valid(slice, fuzzy)
+                    && !fsa_matches.iter().any(|m| m.0 == slice)
+                {
                     matched_full = true;
                     let mut step_cost = 12;
                     if let Some(prev) = current.last() {
@@ -455,7 +374,9 @@ impl PrismEngine {
         let mut paths = Vec::new();
 
         // 1. 若末尾片段本身是合法音节（或末尾输入了单引号强制确认），生成闭合音节路径
-        if is_valid_syllable(last_part) || Self::is_fuzzy_valid(last_part, fuzzy) {
+        if is_valid_syllable(last_part)
+            || crate::prism_fuzzy::PrismFuzzy::is_fuzzy_valid(last_part, fuzzy)
+        {
             let mut syls = base_syllables.clone();
             syls.push(last_part.to_string());
             let cost = syls.len() as u32;
@@ -493,330 +414,26 @@ impl PrismEngine {
 
         paths
     }
-
-    /// 展开单个音节在当前模糊音配置下的所有合法标准等价音节（不含原音节自身）
-    pub fn expand_fuzzy_syllables(slice: &str, fuzzy: &FuzzyConfig) -> Vec<String> {
-        if !fuzzy.has_active_rules() || slice.is_empty() {
-            return Vec::new();
-        }
-
-        // 1. 收集声母等价变体（含原切片自身）
-        let mut init_variants = vec![slice.to_string()];
-
-        if fuzzy.z_zh {
-            if let Some(rest) = slice.strip_prefix("zh") {
-                init_variants.push(format!("z{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('z') {
-                init_variants.push(format!("zh{}", rest));
-            }
-        }
-        if fuzzy.c_ch {
-            if let Some(rest) = slice.strip_prefix("ch") {
-                init_variants.push(format!("c{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('c') {
-                init_variants.push(format!("ch{}", rest));
-            }
-        }
-        if fuzzy.s_sh {
-            if let Some(rest) = slice.strip_prefix("sh") {
-                init_variants.push(format!("s{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('s') {
-                init_variants.push(format!("sh{}", rest));
-            }
-        }
-        if fuzzy.l_n {
-            if let Some(rest) = slice.strip_prefix('l') {
-                init_variants.push(format!("n{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('n') {
-                init_variants.push(format!("l{}", rest));
-            }
-        }
-        if fuzzy.f_h {
-            if let Some(rest) = slice.strip_prefix('f') {
-                init_variants.push(format!("h{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('h') {
-                init_variants.push(format!("f{}", rest));
-            }
-        }
-        if fuzzy.r_l {
-            if let Some(rest) = slice.strip_prefix('r') {
-                init_variants.push(format!("l{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('l') {
-                init_variants.push(format!("r{}", rest));
-            }
-        }
-
-        // 2. 在声母变体基础上叠加韵母等价变体
-        let mut all_variants = Vec::new();
-        for v in init_variants {
-            let mut final_cands = vec![v.clone()];
-            if fuzzy.an_ang {
-                if let Some(stem) = v.strip_suffix("ang") {
-                    final_cands.push(format!("{}an", stem));
-                } else if let Some(stem) = v.strip_suffix("an") {
-                    final_cands.push(format!("{}ang", stem));
-                }
-            }
-            if fuzzy.en_eng {
-                if let Some(stem) = v.strip_suffix("eng") {
-                    final_cands.push(format!("{}en", stem));
-                } else if let Some(stem) = v.strip_suffix("en") {
-                    final_cands.push(format!("{}eng", stem));
-                }
-            }
-            if fuzzy.in_ing {
-                if let Some(stem) = v.strip_suffix("ing") {
-                    final_cands.push(format!("{}in", stem));
-                } else if let Some(stem) = v.strip_suffix("in") {
-                    final_cands.push(format!("{}ing", stem));
-                }
-            }
-
-            for cand in final_cands {
-                if cand != slice && is_valid_syllable(&cand) && !all_variants.contains(&cand) {
-                    all_variants.push(cand);
-                }
-            }
-        }
-
-        all_variants
-    }
-
-    /// 展开一条切分路径在当前模糊音配置下的所有等价词典查询键（不含原始 `path.to_key_string()`）
-    pub fn expand_fuzzy_keys(path: &SegmentPath, fuzzy: &FuzzyConfig) -> Vec<String> {
-        if !fuzzy.has_active_rules() || path.syllables.is_empty() || !path.remaining.is_empty() {
-            return Vec::new();
-        }
-
-        let mut combos: Vec<Vec<String>> = vec![Vec::new()];
-        for syl in &path.syllables {
-            let mut syl_options = Vec::new();
-            if is_valid_syllable(syl) {
-                syl_options.push(syl.clone());
-            }
-            for alt in Self::expand_fuzzy_syllables(syl, fuzzy) {
-                if !syl_options.contains(&alt) {
-                    syl_options.push(alt);
-                }
-            }
-            if syl_options.is_empty() {
-                syl_options.push(syl.clone());
-            }
-
-            let mut next_combos = Vec::new();
-            for prefix in &combos {
-                for opt in &syl_options {
-                    if next_combos.len() >= 16 {
-                        break;
-                    }
-                    let mut next = prefix.clone();
-                    next.push(opt.clone());
-                    next_combos.push(next);
-                }
-                if next_combos.len() >= 16 {
-                    break;
-                }
-            }
-            combos = next_combos;
-        }
-
-        let orig_key = path.to_key_string();
-        combos
-            .into_iter()
-            .map(|parts| parts.join("'"))
-            .filter(|k| k != &orig_key)
-            .collect()
-    }
-
-    /// 模糊音等价性判定
-    fn is_fuzzy_valid(slice: &str, fuzzy: &FuzzyConfig) -> bool {
-        !Self::expand_fuzzy_syllables(slice, fuzzy).is_empty()
-    }
-
-    /// 零声母与特殊单辅音音节集合（以 a, o, e 开头，或特殊叹词音节 n, ng, m）
-    #[inline]
-    pub fn is_zero_initial_syllable(syl: &str) -> bool {
-        matches!(
-            syl,
-            "a" | "ai"
-                | "an"
-                | "ang"
-                | "ao"
-                | "e"
-                | "ei"
-                | "en"
-                | "eng"
-                | "er"
-                | "o"
-                | "ou"
-                | "n"
-                | "ng"
-                | "m"
-        )
-    }
-
-    /// 判定是否属于与前驱音节无隔音符借音碎切
-    ///
-    /// # 判定原理
-    /// 若当前音节为零声母音节或特殊叹词鼻辅音（如 n），且前驱音节与当前音节拼接在一起后，本身就是一个合法的标准拼音音节，
-    /// 说明用户在无隔音符情况下敲击的是连续拼音，把它们强行拆开属于无标记借音碎切（如 "ti"+"an"=>"tian", "me"+"n"=>"men"）。
-    #[inline]
-    pub fn is_zero_initial_borrowing_split(prev: &str, curr: &str) -> bool {
-        if !Self::is_zero_initial_syllable(curr) {
-            return false;
-        }
-        let mut combined = String::with_capacity(prev.len() + curr.len());
-        combined.push_str(prev);
-        combined.push_str(curr);
-        is_valid_syllable(&combined)
-    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dag_ambiguity_xian() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("xian", &fuzzy);
-        let key_strings: Vec<String> = paths.iter().map(|p| p.to_key_string()).collect();
-
-        // 必须同时包含单音节 xian 与双音节 xi'an
-        assert!(key_strings.contains(&"xian".to_string()));
-        assert!(key_strings.contains(&"xi'an".to_string()));
+impl PrismEngine {
+    #[inline]
+    pub fn expand_fuzzy_syllables(slice: &str, fuzzy: &FuzzyConfig) -> Vec<String> {
+        crate::prism_fuzzy::PrismFuzzy::expand_fuzzy_syllables(slice, fuzzy)
     }
 
-    #[test]
-    fn test_explicit_split_quote() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("xi'an", &fuzzy);
-        assert!(!paths.is_empty());
-        assert_eq!(paths[0].syllables, vec!["xi", "an"]);
-
-        // 验证 xi'a 能够同时切分出闭合的 xi'a 与带 remaining: a 的前缀扩展路径
-        let paths_prefix = PrismEngine::build_paths("xi'a", &fuzzy);
-        assert!(paths_prefix.iter().any(|p| p.syllables == vec!["xi", "a"]));
-        assert!(paths_prefix
-            .iter()
-            .any(|p| p.syllables == vec!["xi"] && p.remaining == "a"));
+    #[inline]
+    pub fn expand_fuzzy_keys(path: &SegmentPath, fuzzy: &FuzzyConfig) -> Vec<String> {
+        crate::prism_fuzzy::PrismFuzzy::expand_fuzzy_keys(path, fuzzy)
     }
 
-    #[test]
-    fn test_partial_remaining() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("nih", &fuzzy);
-        assert!(!paths.is_empty());
-        assert_eq!(paths[0].syllables, vec!["ni"]);
-        assert_eq!(paths[0].remaining, "h");
+    #[inline]
+    pub fn is_zero_initial_syllable(syl: &str) -> bool {
+        crate::prism_fuzzy::PrismFuzzy::is_zero_initial_syllable(syl)
     }
 
-    #[test]
-    fn test_strict_raw_initials_segmentation() {
-        let fuzzy = FuzzyConfig::default();
-        // 用户输入纯声母长串 qwdwwqswsqw，测试切分是否 100% 原按键保真，绝不篡改任何字母
-        let paths = PrismEngine::build_paths("qwdwwqswsqw", &fuzzy);
-        assert!(!paths.is_empty(), "切分路径不应为空");
-        let best_path = &paths[0];
-        assert_eq!(
-            best_path.to_key_string(),
-            "q'w'd'w'w'q's'w's'q'w",
-            "声母切分音节必须严格保持用户输入的原始字母，绝不允许换字母"
-        );
-    }
-
-    #[test]
-    fn test_zero_initial_borrowing_split_cost() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("jintianxingqitian", &fuzzy);
-        assert!(!paths.is_empty());
-        // 最优主路径必须是完整的星期天，且代价值低于借音碎切的 ti'an
-        assert_eq!(paths[0].to_key_string(), "jin'tian'xing'qi'tian");
-        let sub_split_opt = paths
-            .iter()
-            .find(|p| p.to_key_string() == "jin'tian'xing'qi'ti'an");
-        if let Some(sub_path) = sub_split_opt {
-            assert!(
-                paths[0].cost < sub_path.cost,
-                "正常长音节切分代价值必须严格低于借音碎切"
-            );
-        }
-    }
-
-    #[test]
-    fn test_typo_adjacent_transpose_graph() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("cehng", &fuzzy);
-        assert!(!paths.is_empty(), "切分路径不应为空");
-        let has_cheng = paths
-            .iter()
-            .any(|p| p.syllables.contains(&"cheng".to_string()));
-        assert!(
-            has_cheng,
-            "输入 cehng 应通过相邻颠倒虚边成功容错切分出 cheng"
-        );
-    }
-
-    #[test]
-    fn test_typo_spatial_substitution_graph() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("nihso", &fuzzy);
-        assert!(!paths.is_empty(), "切分路径不应为空");
-        let has_ni_hao = paths.iter().any(|p| p.to_key_string() == "ni'hao");
-        assert!(
-            has_ni_hao,
-            "输入 nihso 应通过高斯邻键虚边成功容错切分出 ni'hao"
-        );
-    }
-
-    #[test]
-    fn test_fuzzy_nine_rules_expansion() {
-        let fuzzy = FuzzyConfig::all_enabled();
-        let zong_alts = PrismEngine::expand_fuzzy_syllables("zong", &fuzzy);
-        assert!(zong_alts.contains(&"zhong".to_string()));
-
-        let lu_alts = PrismEngine::expand_fuzzy_syllables("lu", &fuzzy);
-        assert!(lu_alts.contains(&"nu".to_string()));
-        assert!(lu_alts.contains(&"ru".to_string()));
-
-        let fa_alts = PrismEngine::expand_fuzzy_syllables("fa", &fuzzy);
-        assert!(fa_alts.contains(&"ha".to_string()));
-
-        let lan_alts = PrismEngine::expand_fuzzy_syllables("lan", &fuzzy);
-        assert!(lan_alts.contains(&"lang".to_string()));
-        assert!(lan_alts.contains(&"nan".to_string()));
-        assert!(lan_alts.contains(&"nang".to_string()));
-
-        let sen_alts = PrismEngine::expand_fuzzy_syllables("sen", &fuzzy);
-        assert!(sen_alts.contains(&"seng".to_string()));
-        assert!(sen_alts.contains(&"shen".to_string()));
-        assert!(sen_alts.contains(&"sheng".to_string()));
-    }
-
-    #[test]
-    fn test_fuzzy_engine_lookup_zongguo() {
-        let config = crate::types::AlgoConfig {
-            fuzzy: FuzzyConfig::all_enabled(),
-            ..Default::default()
-        };
-        let mut engine = crate::AlgoEngine::with_sample_data(config);
-        for ch in "zongguo".chars() {
-            engine.push_char(ch);
-        }
-        assert_eq!(
-            engine.formatted_preedit(),
-            "zong'guo",
-            "模糊音模式下预编辑文本必须严格保持用户原始键入字母"
-        );
-        let texts: Vec<String> = engine.candidates().iter().map(|c| c.text.clone()).collect();
-        assert!(
-            texts.contains(&"中国".to_string()),
-            "开启模糊音后输入 zongguo 应能联合检索召回 中国，实际候选: {:?}",
-            texts
-        );
-        let idx = texts.iter().position(|t| t == "中国").unwrap();
-        let (committed, rem) = engine.select_candidate(idx, 100).unwrap();
-        assert_eq!(committed, "中国");
-        assert_eq!(rem, 0, "选中模糊音候选词后应完整消费原始按键序列");
+    #[inline]
+    pub fn is_zero_initial_borrowing_split(prev: &str, curr: &str) -> bool {
+        crate::prism_fuzzy::PrismFuzzy::is_zero_initial_borrowing_split(prev, curr)
     }
 }

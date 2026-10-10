@@ -2,7 +2,6 @@ use crate::bigram::CompactMmapBigram;
 use crate::dat::DatReader;
 use crate::error::AlgoError;
 use crate::prism::STANDARD_INITIALS;
-use crate::syllables::STANDARD_SYLLABLES;
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::vocab::Vocabulary;
 use memmap2::Mmap;
@@ -70,7 +69,10 @@ impl CompactMmapLexicon {
         if mmap.len() < 64 || &mmap[0..16] != COMPACT_DICT_MAGIC {
             return Err(AlgoError::DeserializeFailed {
                 path: path.to_path_buf(),
-                source: bincode::ErrorKind::Custom("无效的紧凑词典魔数标识 (需 WAYLAN_COMPACT02)".to_string()).into(),
+                source: bincode::ErrorKind::Custom(
+                    "无效的紧凑词典魔数标识 (需 WAYLAN_COMPACT02)".to_string(),
+                )
+                .into(),
             });
         }
 
@@ -78,7 +80,8 @@ impl CompactMmapLexicon {
         if version != 2 {
             return Err(AlgoError::DeserializeFailed {
                 path: path.to_path_buf(),
-                source: bincode::ErrorKind::Custom(format!("不支持的词库版本号: {}", version)).into(),
+                source: bincode::ErrorKind::Custom(format!("不支持的词库版本号: {}", version))
+                    .into(),
             });
         }
 
@@ -88,8 +91,10 @@ impl CompactMmapLexicon {
         let dat_node_count = u32::from_le_bytes(mmap[32..36].try_into().unwrap_or([0; 4])) as usize;
         let dat_tail_len = u32::from_le_bytes(mmap[36..40].try_into().unwrap_or([0; 4])) as usize;
 
-        let key_metas_offset = u64::from_le_bytes(mmap[40..48].try_into().unwrap_or([0; 8])) as usize;
-        let candidates_offset = u64::from_le_bytes(mmap[48..56].try_into().unwrap_or([0; 8])) as usize;
+        let key_metas_offset =
+            u64::from_le_bytes(mmap[40..48].try_into().unwrap_or([0; 8])) as usize;
+        let candidates_offset =
+            u64::from_le_bytes(mmap[48..56].try_into().unwrap_or([0; 8])) as usize;
         let vocab_offset = u64::from_le_bytes(mmap[56..64].try_into().unwrap_or([0; 8])) as usize;
 
         let dat_base_offset = 64;
@@ -154,8 +159,16 @@ impl CompactMmapLexicon {
 
         let off1_pos = self.vocab_offsets_offset + wid * 4;
         let off2_pos = off1_pos + 4;
-        let start = u32::from_le_bytes(self.mmap[off1_pos..off1_pos + 4].try_into().unwrap_or([0; 4])) as usize;
-        let end = u32::from_le_bytes(self.mmap[off2_pos..off2_pos + 4].try_into().unwrap_or([0; 4])) as usize;
+        let start = u32::from_le_bytes(
+            self.mmap[off1_pos..off1_pos + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        ) as usize;
+        let end = u32::from_le_bytes(
+            self.mmap[off2_pos..off2_pos + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        ) as usize;
 
         let s_start = self.vocab_strings_offset + start;
         let s_end = self.vocab_strings_offset + end;
@@ -178,7 +191,8 @@ impl CompactMmapLexicon {
         while left < right {
             let mid = left + (right - left) / 2;
             let id_pos = self.sorted_vocab_ids_offset + mid * 4;
-            let cand_id = u32::from_le_bytes(self.mmap[id_pos..id_pos + 4].try_into().unwrap_or([0; 4]));
+            let cand_id =
+                u32::from_le_bytes(self.mmap[id_pos..id_pos + 4].try_into().unwrap_or([0; 4]));
             let cand_word = self.get_word(cand_id).unwrap_or("");
 
             match cand_word.cmp(word) {
@@ -192,14 +206,26 @@ impl CompactMmapLexicon {
     }
 
     /// 获取指定 key_idx 的候选列表
-    fn get_candidates_by_key_idx(&self, key_idx: usize, expected_type: Option<u8>) -> Option<Vec<(String, u32)>> {
+    fn get_candidates_by_key_idx(
+        &self,
+        key_idx: usize,
+        expected_type: Option<u8>,
+    ) -> Option<Vec<(String, u32)>> {
         if key_idx >= self.num_keys {
             return None;
         }
 
         let meta_pos = self.key_metas_offset + key_idx * 8;
-        let cand_start = u32::from_le_bytes(self.mmap[meta_pos..meta_pos + 4].try_into().unwrap_or([0; 4])) as usize;
-        let cand_count = u16::from_le_bytes(self.mmap[meta_pos + 4..meta_pos + 6].try_into().unwrap_or([0; 2])) as usize;
+        let cand_start = u32::from_le_bytes(
+            self.mmap[meta_pos..meta_pos + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        ) as usize;
+        let cand_count = u16::from_le_bytes(
+            self.mmap[meta_pos + 4..meta_pos + 6]
+                .try_into()
+                .unwrap_or([0; 2]),
+        ) as usize;
         let key_type = self.mmap[meta_pos + 6];
 
         if let Some(exp_type) = expected_type {
@@ -211,8 +237,16 @@ impl CompactMmapLexicon {
         let mut res = Vec::with_capacity(cand_count);
         for i in 0..cand_count {
             let item_pos = self.candidates_offset + (cand_start + i) * 6;
-            let word_id = u32::from_le_bytes(self.mmap[item_pos..item_pos + 4].try_into().unwrap_or([0; 4]));
-            let score_u16 = u16::from_le_bytes(self.mmap[item_pos + 4..item_pos + 6].try_into().unwrap_or([0; 2]));
+            let word_id = u32::from_le_bytes(
+                self.mmap[item_pos..item_pos + 4]
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            );
+            let score_u16 = u16::from_le_bytes(
+                self.mmap[item_pos + 4..item_pos + 6]
+                    .try_into()
+                    .unwrap_or([0; 2]),
+            );
             // 还原静态分 (u16 线性映射回 1000..30000 范围)
             let score = score_u16 as u32;
 
@@ -459,82 +493,6 @@ impl LexiconTable {
         candidates
     }
 
-    /// 检索带末尾残存拼音前缀的补全候选词列表
-    pub fn lookup_prefix_extension(
-        &self,
-        prefix_syllables: &[String],
-        remaining_initial: &str,
-    ) -> Vec<AlgoCandidate> {
-        if remaining_initial.is_empty() {
-            return Vec::new();
-        }
-
-        let mut candidates = Vec::new();
-
-        if prefix_syllables.is_empty() {
-            for &syl in STANDARD_SYLLABLES {
-                if syl.starts_with(remaining_initial) {
-                    if let Some(matches) = self.get_raw_entries(syl) {
-                        for (text, score) in matches {
-                            if text.chars().count() == 1 {
-                                candidates.push(
-                                    AlgoCandidate::new(text, syl, score)
-                                        .with_tier(CandidateTier::ExactWord),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            let prefix_key = prefix_syllables.join("'");
-            for &syl in STANDARD_SYLLABLES {
-                if syl.starts_with(remaining_initial) {
-                    let full_key = format!("{}'{}", prefix_key, syl);
-                    if let Some(matches) = self.get_raw_entries(&full_key) {
-                        for (text, score) in matches {
-                            let char_len = text.chars().count() as u32;
-                            let boost = char_len.saturating_sub(1).saturating_mul(600_000);
-                            let final_score = score.saturating_add(boost);
-                            candidates.push(
-                                AlgoCandidate::new(text, full_key.clone(), final_score)
-                                    .with_tier(CandidateTier::ExactWord),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
-        candidates.truncate(20);
-        candidates
-    }
-
-    /// 创建内置测试词库
-    pub fn with_sample_data() -> Self {
-        let mut table = Self::new();
-        table.insert("ni'hao", "你好", 10_000);
-        table.insert("ni", "你", 9_500);
-        table.insert("hao", "好", 9_200);
-        table.insert("xian", "先", 7_200);
-        table.insert("xian", "现", 7_100);
-        table.insert("xian", "显", 6_800);
-        table.insert("xi'an", "西安", 7_500);
-        table.insert("xi", "西", 8_000);
-        table.insert("an", "安", 8_200);
-        table.insert("wo", "我", 9_900);
-        table.insert("wo'men", "我们", 11_000);
-        table.insert("zhong'guo", "中国", 12_000);
-        table.insert("zhong", "中", 8_000);
-        table.insert("guo", "国", 8_500);
-        table.insert("ri'qi", "日期", 10_000);
-        table.insert("shi'jian", "时间", 10_000);
-        table.insert("bei'jing", "北京", 15_000);
-        table.insert("yong'yuan'de'shen", "永远的神", 20_000);
-        table
-    }
-
     /// 获取索引中词条总数
     pub fn len(&self) -> usize {
         let compact_len = self.compact_mmap.as_ref().map(|c| c.num_keys).unwrap_or(0);
@@ -544,29 +502,5 @@ impl LexiconTable {
     /// 词库是否为空
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_lookup_length_boost() {
-        let table = LexiconTable::with_sample_data();
-        let candidates = table.lookup("wo'men");
-        assert!(!candidates.is_empty());
-        assert_eq!(candidates[0].text, "我们");
-        assert!(candidates[0].score >= 600_000);
-    }
-
-    #[test]
-    fn test_lookup_xian_vs_xi_an() {
-        let table = LexiconTable::with_sample_data();
-        let c_xian = table.lookup("xian");
-        let c_xi_an = table.lookup("xi'an");
-
-        assert!(c_xian.iter().any(|c| c.text == "先"));
-        assert!(c_xi_an.iter().any(|c| c.text == "西安"));
     }
 }

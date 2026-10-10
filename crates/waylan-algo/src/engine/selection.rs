@@ -1,0 +1,281 @@
+use super::pangu::PanguSpacing;
+use super::AlgoEngine;
+use crate::prism::PrismEngine;
+use crate::types::{AlgoCandidate, CandidateTier};
+
+impl AlgoEngine {
+    pub fn select_candidate(
+        &mut self,
+        index: usize,
+        current_timestamp: u64,
+    ) -> Option<(String, usize)> {
+        if index >= self.current_candidates.len() {
+            return None;
+        }
+
+        let selected = self.current_candidates[index].clone();
+
+        // 若选中的是可展开项，且直接按数字键确认（未展开时）：
+        // 优先将首个格式化子候选文本（如当前标准日期 2026年10月9日）上屏
+        let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
+            selected.sub_candidates[0].clone()
+        } else {
+            selected.text.clone()
+        };
+
+        // 记录用户选词并动态调频（若配置了持久化路径则同步追加至 WAL 日志）
+        if let Some(ref path) = self.user_dict_path {
+            let _ = self.user_model.append_to_wal(
+                path,
+                &selected.text,
+                &selected.pinyin,
+                current_timestamp,
+            );
+        } else {
+            self.user_model
+                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+        }
+
+        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
+        let commit_text = if self.config.auto_pangu_spacing {
+            if let Some(prev) = &self.last_commit_context {
+                if PanguSpacing::should_insert_pangu_space(prev, &raw_commit) {
+                    format!(" {}", raw_commit)
+                } else {
+                    raw_commit.clone()
+                }
+            } else {
+                raw_commit.clone()
+            }
+        } else {
+            raw_commit.clone()
+        };
+
+        // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
+        let trimmed_commit = raw_commit.trim();
+        if !trimmed_commit.is_empty() {
+            self.last_commit_context = Some(trimmed_commit.to_string());
+        }
+
+        // 计算消费的拼音字母长度并执行分段确认（动态功能项与容错纠错项消费全部输入）
+        let consumed_len =
+            if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
+                self.composition.len()
+            } else {
+                self.compute_consumed_len_for_candidate(&selected)
+            };
+
+        if !selected.is_expandable
+            && selected.tier != CandidateTier::TypoCorrection
+            && !selected.pinyin.is_empty()
+        {
+            self.partial_commit_segments
+                .push((selected.text.clone(), selected.pinyin.clone()));
+        } else {
+            self.partial_commit_segments.clear();
+        }
+
+        self.composition.consume_prefix(consumed_len);
+
+        // 若当前整串拼音已全部消费完毕，且通过 2 次及以上分段选词完成，自动合成为用户自造新词
+        if self.composition.is_empty() {
+            if self.partial_commit_segments.len() >= 2 {
+                let full_text: String = self
+                    .partial_commit_segments
+                    .iter()
+                    .map(|(t, _)| t.as_str())
+                    .collect();
+                let full_pinyin: String = self
+                    .partial_commit_segments
+                    .iter()
+                    .map(|(_, p)| p.as_str())
+                    .collect::<Vec<_>>()
+                    .join("'");
+                let char_len = full_text.chars().count();
+                if (2..=8).contains(&char_len) {
+                    if let Some(ref path) = self.user_dict_path {
+                        let _ = self.user_model.append_to_wal(
+                            path,
+                            &full_text,
+                            &full_pinyin,
+                            current_timestamp,
+                        );
+                    } else {
+                        self.user_model
+                            .record_commit(&full_text, &full_pinyin, current_timestamp);
+                    }
+                }
+            }
+            self.partial_commit_segments.clear();
+        }
+
+        self.page_index = 0;
+        self.recompute_candidates();
+
+        Some((commit_text, self.composition.len()))
+    }
+
+    /// 切换二级扩展卡片的展开状态（仅当当前选中的项支持二级展开时有效）
+    pub fn toggle_expand(&mut self, selected_candidate_index: usize) -> bool {
+        if let Some(cand) = self.current_candidates.get(selected_candidate_index) {
+            if cand.is_expandable && !cand.sub_candidates.is_empty() {
+                self.is_expanded = !self.is_expanded;
+                self.expanded_selected_index = 0;
+                return self.is_expanded;
+            }
+        }
+        self.is_expanded = false;
+        false
+    }
+
+    /// 在二级展开卡片中向下移动选中项
+    pub fn next_expanded_item(&mut self, selected_candidate_index: usize) {
+        if let Some(cand) = self.current_candidates.get(selected_candidate_index) {
+            if !cand.sub_candidates.is_empty() {
+                self.expanded_selected_index =
+                    (self.expanded_selected_index + 1) % cand.sub_candidates.len();
+            }
+        }
+    }
+
+    /// 在二级展开卡片中向上移动选中项
+    pub fn prev_expanded_item(&mut self, selected_candidate_index: usize) {
+        if let Some(cand) = self.current_candidates.get(selected_candidate_index) {
+            if !cand.sub_candidates.is_empty() {
+                if self.expanded_selected_index == 0 {
+                    self.expanded_selected_index = cand.sub_candidates.len().saturating_sub(1);
+                } else {
+                    self.expanded_selected_index = self.expanded_selected_index.saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    /// 在二级展开卡片中选中子项上屏
+    pub fn select_expanded_item(
+        &mut self,
+        main_index: usize,
+        sub_index: usize,
+    ) -> Option<(String, usize)> {
+        let cand = self.current_candidates.get(main_index)?;
+        let raw_text = cand.sub_candidates.get(sub_index)?.clone();
+
+        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
+        let commit_text = if self.config.auto_pangu_spacing {
+            if let Some(prev) = &self.last_commit_context {
+                if PanguSpacing::should_insert_pangu_space(prev, &raw_text) {
+                    format!(" {}", raw_text)
+                } else {
+                    raw_text.clone()
+                }
+            } else {
+                raw_text.clone()
+            }
+        } else {
+            raw_text.clone()
+        };
+
+        let trimmed_text = raw_text.trim();
+        if !trimmed_text.is_empty() {
+            self.last_commit_context = Some(trimmed_text.to_string());
+        }
+
+        self.composition.clear();
+        self.page_index = 0;
+        self.recompute_candidates();
+
+        Some((commit_text, 0))
+    }
+
+    /// 结合当前双拼/全拼模式与音节图计算选中候选词所消费的原始按键字节长度
+    fn compute_consumed_len_for_candidate(&self, selected: &AlgoCandidate) -> usize {
+        let raw = self.composition.as_str();
+        let pinyin = selected.pinyin.as_str();
+        if raw.is_empty() {
+            return 0;
+        }
+
+        if raw.starts_with(pinyin) && !pinyin.is_empty() {
+            let mut len = pinyin.len();
+            if raw[len..].starts_with('\'') {
+                len = len.saturating_add(1);
+            }
+            return len;
+        }
+
+        // 全拼与简拼混合模式：优先按候选音节逐段对齐原始输入或最优切分路径单元
+        let cand_syls: Vec<&str> = pinyin.split('\'').filter(|s| !s.is_empty()).collect();
+        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy);
+        let mut best_units: Vec<String> = Vec::new();
+        if let Some(best) = paths.first() {
+            best_units.extend(best.syllables.iter().cloned());
+            if !best.remaining.is_empty() {
+                best_units.push(best.remaining.clone());
+            }
+        }
+
+        let mut pos = 0usize;
+        for (i, &cs) in cand_syls.iter().enumerate() {
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+            if pos >= raw.len() {
+                break;
+            }
+            if raw[pos..].starts_with(cs) {
+                pos += cs.len();
+            } else if i < best_units.len() && raw[pos..].starts_with(best_units[i].as_str()) {
+                pos += best_units[i].len();
+            } else {
+                let first_len = cs.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                if raw[pos..].starts_with(&cs[..first_len]) {
+                    pos += first_len;
+                } else {
+                    return Self::compute_consumed_len(raw, pinyin);
+                }
+            }
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+        }
+
+        if pos > 0 {
+            pos.min(raw.len())
+        } else {
+            Self::compute_consumed_len(raw, pinyin)
+        }
+    }
+
+    /// 精确计算用户选词所消费的原始按键长度（含自动跳过隔音符）
+    fn compute_consumed_len(raw: &str, pinyin: &str) -> usize {
+        if raw.starts_with(pinyin) {
+            let mut len = pinyin.len();
+            if raw[len..].starts_with('\'') {
+                len = len.saturating_add(1);
+            }
+            return len;
+        }
+
+        let clean_pinyin: String = pinyin.chars().filter(|&c| c != '\'').collect();
+        let mut pinyin_iter = clean_pinyin.chars();
+        let mut target_opt = pinyin_iter.next();
+        let mut last_end = 0;
+
+        for (idx, ch) in raw.char_indices() {
+            if let Some(target) = target_opt {
+                if ch == target {
+                    last_end = idx.saturating_add(ch.len_utf8());
+                    target_opt = pinyin_iter.next();
+                } else if ch == '\'' {
+                    last_end = idx.saturating_add(ch.len_utf8());
+                }
+            } else {
+                if ch == '\'' {
+                    last_end = idx.saturating_add(ch.len_utf8());
+                }
+                break;
+            }
+        }
+        last_end
+    }
+}

@@ -19,11 +19,12 @@ waylan-core = { path = "../waylan-core" }
 waylan-algo = { path = "../waylan-algo" }
 waylan-ui = { path = "../waylan-ui" }
 waylan-wayland = { path = "../waylan-wayland" }
-toml = "0.8"
-serde = { version = "1.0", features = ["derive"] }
-log = "0.4"
-fern = "0.7"
-chrono = "0.4"
-zbus = "4"
-egui = "0.36"
-eframe = { version = "0.36", default-features = false, features = ["wayland", "x11", "glow", "default_fonts"] }
+toml.workspace = true
+serde.workspace = true
+log.workspace = true
+fern.workspace = true
+chrono.workspace = true
+zbus.workspace = true
+egui.workspace = true
+eframe.workspace = true
+signal-hook.workspace = true

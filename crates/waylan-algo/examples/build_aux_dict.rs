@@ -28,6 +28,10 @@ fn main() {
     println!("- 英文词库收录数:   {} 条", dict.english_words.len());
     println!("- 符号/Emoji/颜文字: {} 条", dict.symbols.len());
     println!("- 输出文件:         {}", output_path);
-    println!("- 生成二进制文件大小: {} 字节 ({:.2} KB)", file_size, file_size as f64 / 1024.0);
+    println!(
+        "- 生成二进制文件大小: {} 字节 ({:.2} KB)",
+        file_size,
+        file_size as f64 / 1024.0
+    );
     println!("============================================================");
 }

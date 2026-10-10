@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::time::Instant;
-use waylan_algo::{AlgoEngine, types::AlgoConfig, table::LexiconTable};
 use waylan_algo::custom_phrase::AuxiliaryDict;
+use waylan_algo::{table::LexiconTable, types::AlgoConfig, AlgoEngine};
 
 fn main() {
     println!("============================================================");
@@ -16,12 +16,21 @@ fn main() {
         "data/base.dict.bin"
     };
 
-    println!("[1/2] 正在载入全量汉语主词库 (172万词条): {} ...", dict_path);
+    println!(
+        "[1/2] 正在载入全量汉语主词库 (172万词条): {} ...",
+        dict_path
+    );
     let start_load = Instant::now();
     let table = LexiconTable::load_binary(dict_path).expect("主词库加载失败");
-    println!("      全量主词库载入成功！耗时: {:.2} ms", start_load.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "      全量主词库载入成功！耗时: {:.2} ms",
+        start_load.elapsed().as_secs_f64() * 1000.0
+    );
     if let Some(ref bg) = table.compact_bigram {
-        println!("      联动挂载高密度 CSR 统计语言模型: 收录 {} 万二元转移词对 (零拷贝 mmap)", bg.total_pairs / 10000);
+        println!(
+            "      联动挂载高密度 CSR 统计语言模型: 收录 {} 万二元转移词对 (零拷贝 mmap)",
+            bg.total_pairs / 10000
+        );
     }
 
     let mut engine = AlgoEngine::new(table, AlgoConfig::default());
@@ -89,7 +98,11 @@ fn main() {
         let preedit = engine.formatted_preedit();
         println!(
             "  切分音节: [{}]  (末键延迟: {} µs, 均键延迟: {} µs, {}键累积: {} µs)",
-            preedit, last_char_us, avg_us, input.len(), total_us
+            preedit,
+            last_char_us,
+            avg_us,
+            input.len(),
+            total_us
         );
         if candidates.is_empty() {
             println!("  [无匹配候选词]");

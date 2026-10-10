@@ -131,7 +131,9 @@ impl CustomPhraseManager {
 
     /// 将当前短语表保存写回文本文件
     pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
-        let mut content = String::from("# 微澜输入法自定义短语配置文件\n# 格式：快捷拼音/代码=上屏内容（每行一条）\n");
+        let mut content = String::from(
+            "# 微澜输入法自定义短语配置文件\n# 格式：快捷拼音/代码=上屏内容（每行一条）\n",
+        );
         let entries = self.all_entries();
         for (code, text) in entries {
             content.push_str(&format!("{}={}\n", code, text));
@@ -166,33 +168,7 @@ impl AuxiliaryDict {
 
     /// 获取默认英文高频词汇表
     pub fn default_english_words() -> Vec<(String, u32)> {
-        let base_words = [
-            "action", "admin", "android", "api", "apple", "app", "application", "async",
-            "base", "boolean", "branch", "build", "byte",
-            "cancel", "cargo", "channel", "checkout", "class", "client", "clone", "cloud", "code", "commit", "config", "const",
-            "daemon", "database", "date", "debug", "delete", "diff", "docker", "documentation",
-            "egui", "engine", "error", "event",
-            "false", "file", "float", "format", "function",
-            "git", "github", "gitlab", "google", "graph",
-            "hash", "header", "hello", "home", "html", "http", "https",
-            "icon", "import", "index", "init", "input", "insert", "install", "integer", "interface", "issue",
-            "json",
-            "key", "keyboard",
-            "layer", "layout", "license", "linux", "list", "log", "login",
-            "main", "manager", "master", "match", "menu", "message", "method", "model", "module",
-            "name", "native", "network", "node", "null", "number",
-            "object", "open", "option", "output",
-            "package", "page", "panel", "parser", "patch", "path", "pinyin", "plugin", "popup", "preedit", "print", "project", "protocol", "pull", "push",
-            "query", "queue",
-            "readme", "record", "release", "remote", "remove", "render", "repository", "request", "reset", "resource", "response", "result", "return", "rust",
-            "save", "scan", "schema", "scope", "screen", "script", "search", "select", "server", "service", "session", "setting", "settings", "shell", "signal", "size", "socket", "source", "start", "state", "status", "stop", "string", "struct", "style", "surface", "switch", "system",
-            "table", "task", "terminal", "test", "text", "theme", "time", "timer", "title", "token", "toml", "total", "trace", "tray", "true", "type",
-            "ubuntu", "unicode", "unit", "update", "upload", "url", "user", "util",
-            "value", "variable", "vector", "version", "view",
-            "wait", "warning", "waylan", "wayland", "web", "while", "window", "workspace", "write",
-            "yaml",
-        ];
-        base_words
+        crate::custom_phrase_data::DEFAULT_ENGLISH_WORDS
             .iter()
             .enumerate()
             .map(|(idx, w)| (w.to_string(), 100_000_u32.saturating_sub(idx as u32 * 100)))
@@ -201,32 +177,10 @@ impl AuxiliaryDict {
 
     /// 获取默认 Unicode 符号与表情映射表
     pub fn default_symbols() -> Vec<(String, String, String)> {
-        vec![
-            ("dianzan".to_string(), "\u{1F44D}".to_string(), "强/点赞".to_string()),
-            ("daxiao".to_string(), "\u{1F602}".to_string(), "大笑".to_string()),
-            ("weixiao".to_string(), "\u{1F60A}".to_string(), "微笑".to_string()),
-            ("shengri".to_string(), "\u{1F382}".to_string(), "生日蛋糕".to_string()),
-            ("hongxin".to_string(), "\u{2764}\u{FE0F}".to_string(), "红心".to_string()),
-            ("aixin".to_string(), "\u{1F495}".to_string(), "爱心".to_string()),
-            ("guzhang".to_string(), "\u{1F44F}".to_string(), "鼓掌".to_string()),
-            ("jiayou".to_string(), "\u{1F4AA}".to_string(), "加油/肌肉".to_string()),
-            ("xianhua".to_string(), "\u{1F339}".to_string(), "鲜花/玫瑰".to_string()),
-            ("taiyang".to_string(), "\u{2600}\u{FE0F}".to_string(), "太阳".to_string()),
-            ("yueliang".to_string(), "\u{1F319}".to_string(), "月亮".to_string()),
-            ("shengli".to_string(), "\u{270C}\u{FE0F}".to_string(), "胜利/剪刀手".to_string()),
-            ("woshou".to_string(), "\u{1F91D}".to_string(), "握手".to_string()),
-            ("fennu".to_string(), "\u{1F621}".to_string(), "愤怒".to_string()),
-            ("kuqi".to_string(), "\u{1F62D}".to_string(), "哭泣".to_string()),
-            ("sikao".to_string(), "\u{1F914}".to_string(), "思考".to_string()),
-            ("baiye".to_string(), "\u{1F31F}".to_string(), "星星".to_string()),
-            ("huoyan".to_string(), "\u{1F525}".to_string(), "火焰".to_string()),
-            ("zhadan".to_string(), "\u{1F4A3}".to_string(), "炸弹".to_string()),
-            ("liwu".to_string(), "\u{1F381}".to_string(), "礼物".to_string()),
-            ("jia".to_string(), "±".to_string(), "正负号".to_string()),
-            ("jifen".to_string(), "∫".to_string(), "积分".to_string()),
-            ("alpha".to_string(), "α".to_string(), "希腊字母".to_string()),
-            ("beta".to_string(), "β".to_string(), "希腊字母".to_string()),
-        ]
+        crate::custom_phrase_data::DEFAULT_SYMBOLS
+            .iter()
+            .map(|(py, sym, desc)| (py.to_string(), sym.to_string(), desc.to_string()))
+            .collect()
     }
 
     /// 持久化保存为紧凑二进制词库文件 (WAYLAN_AUXCOMP01)
@@ -257,13 +211,30 @@ impl AuxiliaryDict {
         };
 
         // 1. 写入魔数与头部
-        writer.write_all(AUX_DICT_MAGIC).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
-        writer.write_all(&(self.english_words.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
-        writer.write_all(&(self.symbols.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
-        writer.write_all(&0u64.to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        writer
+            .write_all(AUX_DICT_MAGIC)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+        writer
+            .write_all(&(self.english_words.len() as u32).to_le_bytes())
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+        writer
+            .write_all(&(self.symbols.len() as u32).to_le_bytes())
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+        writer
+            .write_all(&0u64.to_le_bytes())
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         // 2. 编码英文词库段
         let mut en_buf = Vec::with_capacity(self.english_words.len() * 12);
@@ -274,7 +245,12 @@ impl AuxiliaryDict {
             en_buf.extend_from_slice(&0u16.to_le_bytes());
             en_buf.extend_from_slice(&score.to_le_bytes());
         }
-        writer.write_all(&en_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        writer
+            .write_all(&en_buf)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         // 3. 编码符号表情段
         let mut sym_buf = Vec::with_capacity(self.symbols.len() * 18);
@@ -289,12 +265,30 @@ impl AuxiliaryDict {
             sym_buf.extend_from_slice(&d_off.to_le_bytes());
             sym_buf.extend_from_slice(&d_len.to_le_bytes());
         }
-        writer.write_all(&sym_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        writer
+            .write_all(&sym_buf)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         // 4. 编码字符串池
-        writer.write_all(&(string_pool.len() as u32).to_le_bytes()).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
-        writer.write_all(&string_pool).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
-        writer.flush().map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        writer
+            .write_all(&(string_pool.len() as u32).to_le_bytes())
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+        writer
+            .write_all(&string_pool)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+        writer.flush().map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path_ref),
+            source: e,
+        })?;
         Ok(())
     }
 
@@ -312,15 +306,17 @@ impl AuxiliaryDict {
         if metadata.len() < 32 {
             return Err(AlgoError::DeserializeFailed {
                 path: PathBuf::from(path_ref),
-                source: bincode::ErrorKind::Custom("辅助词典文件体积过小或已损坏".to_string()).into(),
+                source: bincode::ErrorKind::Custom("辅助词典文件体积过小或已损坏".to_string())
+                    .into(),
             });
         }
 
         let mut magic = [0u8; 16];
-        file.read_exact(&mut magic).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        file.read_exact(&mut magic)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
         if &magic != AUX_DICT_MAGIC {
             return Err(AlgoError::DeserializeFailed {
                 path: PathBuf::from(path_ref),
@@ -329,31 +325,50 @@ impl AuxiliaryDict {
         }
 
         let mut header = [0u8; 16];
-        file.read_exact(&mut header).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        file.read_exact(&mut header)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
         let num_english = u32::from_le_bytes(header[0..4].try_into().unwrap_or([0; 4])) as usize;
         let num_symbols = u32::from_le_bytes(header[4..8].try_into().unwrap_or([0; 4])) as usize;
 
         let en_bytes = num_english * 12;
         let mut en_buf = vec![0u8; en_bytes];
-        file.read_exact(&mut en_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        file.read_exact(&mut en_buf)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         let sym_bytes = num_symbols * 18;
         let mut sym_buf = vec![0u8; sym_bytes];
-        file.read_exact(&mut sym_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        file.read_exact(&mut sym_buf)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         let mut pool_len_buf = [0u8; 4];
-        file.read_exact(&mut pool_len_buf).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        file.read_exact(&mut pool_len_buf)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
         let pool_len = u32::from_le_bytes(pool_len_buf) as usize;
 
         let mut string_pool = vec![0u8; pool_len];
-        file.read_exact(&mut string_pool).map_err(|e| AlgoError::DictionaryIo { path: PathBuf::from(path_ref), source: e })?;
+        file.read_exact(&mut string_pool)
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
 
         let get_str = |off: usize, len: usize| -> String {
             if off + len <= string_pool.len() {
-                std::str::from_utf8(&string_pool[off..off + len]).unwrap_or("").to_string()
+                std::str::from_utf8(&string_pool[off..off + len])
+                    .unwrap_or("")
+                    .to_string()
             } else {
                 String::new()
             }
@@ -362,22 +377,39 @@ impl AuxiliaryDict {
         let mut english_words = Vec::with_capacity(num_english);
         for i in 0..num_english {
             let base = i * 12;
-            let off = u32::from_le_bytes(en_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
-            let len = u16::from_le_bytes(en_buf[base + 4..base + 6].try_into().unwrap_or([0; 2])) as usize;
-            let score = u32::from_le_bytes(en_buf[base + 8..base + 12].try_into().unwrap_or([0; 4]));
+            let off =
+                u32::from_le_bytes(en_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
+            let len = u16::from_le_bytes(en_buf[base + 4..base + 6].try_into().unwrap_or([0; 2]))
+                as usize;
+            let score =
+                u32::from_le_bytes(en_buf[base + 8..base + 12].try_into().unwrap_or([0; 4]));
             english_words.push((get_str(off, len), score));
         }
 
         let mut symbols = Vec::with_capacity(num_symbols);
         for i in 0..num_symbols {
             let base = i * 18;
-            let k_off = u32::from_le_bytes(sym_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
-            let k_len = u16::from_le_bytes(sym_buf[base + 4..base + 6].try_into().unwrap_or([0; 2])) as usize;
-            let s_off = u32::from_le_bytes(sym_buf[base + 6..base + 10].try_into().unwrap_or([0; 4])) as usize;
-            let s_len = u16::from_le_bytes(sym_buf[base + 10..base + 12].try_into().unwrap_or([0; 2])) as usize;
-            let d_off = u32::from_le_bytes(sym_buf[base + 12..base + 16].try_into().unwrap_or([0; 4])) as usize;
-            let d_len = u16::from_le_bytes(sym_buf[base + 16..base + 18].try_into().unwrap_or([0; 2])) as usize;
-            symbols.push((get_str(k_off, k_len), get_str(s_off, s_len), get_str(d_off, d_len)));
+            let k_off =
+                u32::from_le_bytes(sym_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
+            let k_len = u16::from_le_bytes(sym_buf[base + 4..base + 6].try_into().unwrap_or([0; 2]))
+                as usize;
+            let s_off =
+                u32::from_le_bytes(sym_buf[base + 6..base + 10].try_into().unwrap_or([0; 4]))
+                    as usize;
+            let s_len =
+                u16::from_le_bytes(sym_buf[base + 10..base + 12].try_into().unwrap_or([0; 2]))
+                    as usize;
+            let d_off =
+                u32::from_le_bytes(sym_buf[base + 12..base + 16].try_into().unwrap_or([0; 4]))
+                    as usize;
+            let d_len =
+                u16::from_le_bytes(sym_buf[base + 16..base + 18].try_into().unwrap_or([0; 2]))
+                    as usize;
+            symbols.push((
+                get_str(k_off, k_len),
+                get_str(s_off, s_len),
+                get_str(d_off, d_len),
+            ));
         }
 
         Ok(Self {
@@ -449,9 +481,10 @@ impl EnglishSuggestionManager {
 
         // 2. 前缀匹配（输入至少 3 个字母时提供补全联想，利用二分查找定位）
         if input_lower.len() >= 3 {
-            let idx = match self.words.binary_search_by(|(w, _)| {
-                w.to_lowercase().cmp(&input_lower)
-            }) {
+            let idx = match self
+                .words
+                .binary_search_by(|(w, _)| w.to_lowercase().cmp(&input_lower))
+            {
                 Ok(i) => i,
                 Err(i) => i,
             };
@@ -534,71 +567,5 @@ impl SymbolSuggestionManager {
             }
         }
         results
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_custom_phrase_parse_and_lookup() {
-        let mut manager = CustomPhraseManager::new();
-        manager.parse_content("mymail=test@test.com\naddr 北京市海淀区");
-        let mail_res = manager.lookup("mymail");
-        assert_eq!(mail_res.len(), 1);
-        assert_eq!(mail_res[0].text, "test@test.com");
-
-        let addr_res = manager.lookup("addr");
-        assert_eq!(addr_res.len(), 1);
-        assert_eq!(addr_res[0].text, "北京市海淀区");
-    }
-
-    #[test]
-    fn test_custom_phrase_all_entries_remove_save() {
-        let mut manager = CustomPhraseManager::new();
-        manager.add_entry("mymail".to_string(), "a@b.com".to_string());
-        manager.add_entry("addr".to_string(), "北京".to_string());
-
-        let entries = manager.all_entries();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0], ("addr".to_string(), "北京".to_string()));
-
-        assert!(manager.remove_entry("addr", "北京"));
-        assert_eq!(manager.all_entries().len(), 1);
-        assert!(!manager.remove_entry("non_exist", "none"));
-    }
-
-    #[test]
-    fn test_english_suggestions() {
-        let eng = EnglishSuggestionManager::new();
-        let exact = eng.lookup("rust");
-        assert_eq!(exact.len(), 1);
-        assert_eq!(exact[0].text, "rust");
-
-        let prefix = eng.lookup("way");
-        assert!(!prefix.is_empty());
-        assert!(prefix.iter().any(|c| c.text == "wayland" || c.text == "waylan"));
-    }
-
-    #[test]
-    fn test_symbol_suggestions() {
-        let sym = SymbolSuggestionManager::new();
-        let res = sym.lookup("dianzan");
-        assert_eq!(res.len(), 1);
-        assert_eq!(res[0].text, "\u{1F44D}");
-    }
-
-    #[test]
-    fn test_auxiliary_dict_save_and_load() {
-        let dict = AuxiliaryDict::with_default_data();
-        assert!(!dict.english_words.is_empty());
-        assert!(!dict.symbols.is_empty());
-
-        let temp_path = std::env::temp_dir().join("test_aux_dict.bin");
-        dict.save_to_file(&temp_path).expect("save aux dict");
-        let loaded = AuxiliaryDict::load_from_file(&temp_path).expect("load aux dict");
-        assert_eq!(dict, loaded);
-        let _ = std::fs::remove_file(temp_path);
     }
 }

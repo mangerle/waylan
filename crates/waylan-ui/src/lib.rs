@@ -21,8 +21,7 @@ mod tests {
                 Candidate::new("泥豪", "ni'hao", 6000),
             ],
             selected_index: 0,
-            is_expanded: false,
-            expanded_selected_index: 0,
+            expanded_card: waylan_core::ExpandedCardState::Collapsed,
             mode_badge: "中".to_string(),
         };
 
