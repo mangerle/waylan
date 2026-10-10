@@ -372,8 +372,8 @@ fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error:
             }
             let output_path = &sub_args[sub_args.len() - 1];
             let input_paths = &sub_args[1..sub_args.len() - 1];
-            println!("[词库构建] 正在将文本词库打包为二进制: {}", output_path);
-            let stats = DictBuilder::build_binary_dict(input_paths, Path::new(output_path))?;
+            println!("[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}", output_path);
+            let stats = DictBuilder::build_compact_binary_dict(input_paths, Path::new(output_path))?;
             println!(
                 "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
                 stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
