@@ -1,4 +1,3 @@
-use crate::clipboard::ClipboardManager;
 use crate::composition::Composition;
 use crate::custom_phrase::{
     AuxiliaryDict, CustomPhraseManager, EnglishSuggestionManager, SymbolSuggestionManager,
@@ -29,8 +28,6 @@ pub struct AlgoEngine {
     pub table: LexiconTable,
     /// 用户自适应词频模型
     pub user_model: UserAdaptiveModel,
-    /// 剪贴板历史管理器
-    clipboard: ClipboardManager,
     /// 自定义短语管理器
     pub custom_phrases: CustomPhraseManager,
     /// 英文单词联想管理器
@@ -69,7 +66,6 @@ impl AlgoEngine {
         Self {
             table,
             user_model: UserAdaptiveModel::new(),
-            clipboard: ClipboardManager::new(),
             custom_phrases: CustomPhraseManager::new(),
             english_suggester: EnglishSuggestionManager::new(),
             symbol_suggester: SymbolSuggestionManager::new(),
@@ -844,13 +840,7 @@ impl AlgoEngine {
                 candidates.insert(0, phrase);
             }
 
-            // 10. 剪贴板历史快捷粘贴候选注入（敲入 v、zt、niantie 时首位提示）
-            let clip_cands = self.clipboard.try_eval_candidates(raw_input);
-            for clip in clip_cands.into_iter().rev() {
-                candidates.insert(0, clip);
-            }
-
-            // 11. 前缀高频短词混排注入 (Prefix Segment Candidate Injection)：
+            // 10. 前缀高频短词混排注入 (Prefix Segment Candidate Injection)：
             // 当处于首未翻页状态 (page_index == 0) 且有效拼音达到 3 个及以上音节时，
             // 自动提取前 3 个音节（如 wo'men'de -> 我们的）与前 2 个音节（如 wo'men -> 我们，或简拼 r'g -> 如果/入股）的高频成词，
             // 紧随全长成词之后注入，支持分段确认 (Partial Commit)
@@ -1186,11 +1176,6 @@ impl AlgoEngine {
         for entry in entries {
             self.user_model.record_commit(&entry.text, &entry.pinyin, now);
         }
-    }
-
-    /// 记录外部系统剪贴板复制事件
-    pub fn record_clipboard_copy(&mut self, text: impl Into<String>) {
-        self.clipboard.record_copy(text);
     }
 
     /// 获取当前输入缓冲区内容

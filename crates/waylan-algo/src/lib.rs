@@ -1,6 +1,5 @@
 pub mod bigram;
 pub mod builder;
-pub mod clipboard;
 pub mod composition;
 pub mod custom_phrase;
 pub mod dat;

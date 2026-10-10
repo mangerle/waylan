@@ -103,24 +103,6 @@ fn test_engine_acronym_matching() {
 }
 
 #[test]
-fn test_engine_clipboard_paste_candidate() {
-    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    engine.record_clipboard_copy("微澜输入法新版本");
-
-    // 敲入 v 直接提示最近剪贴板
-    engine.push_char('v');
-    let candidates_v = engine.candidates();
-    assert!(!candidates_v.is_empty());
-    assert_eq!(candidates_v[0].text, "微澜输入法新版本");
-    assert!(candidates_v[0].comment.as_ref().unwrap().contains("剪贴板"));
-
-    // 选择上屏
-    let (committed, remaining) = engine.select_candidate(0, 1_700_000_000).expect("选中剪贴板");
-    assert_eq!(committed, "微澜输入法新版本");
-    assert_eq!(remaining, 0);
-}
-
-#[test]
 fn test_engine_custom_phrase_and_english_and_symbol() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     engine.custom_phrases.add_entry("mymail".to_string(), "user@waylan.org".to_string());
