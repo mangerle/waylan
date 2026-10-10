@@ -116,6 +116,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aux_dict = load_auxiliary_dict();
     engine.load_auxiliary_dict(aux_dict);
 
+    // 载入简繁转换两级词库 (opencc.dict.bin)
+    let opencc_dict = load_opencc_dict();
+    engine.load_opencc_dict(opencc_dict);
+
     // 6. 探测 Wayland 环境与合成器协议能力
     let caps = check_wayland_capabilities();
 
@@ -338,6 +342,37 @@ fn load_auxiliary_dict() -> waylan_algo::AuxiliaryDict {
     waylan_algo::AuxiliaryDict::with_default_data()
 }
 
+/// 按照多级搜索策略加载简繁转换两级词库（STPhrases + STCharacters）
+fn load_opencc_dict() -> waylan_algo::OpenCcDict {
+    info!("[简繁词库] 正在定位并加载简繁转换两级词库索引...");
+    let search_paths = AppConfig::opencc_dict_search_paths();
+
+    for path in &search_paths {
+        if path.exists() {
+            let load_start = Instant::now();
+            match waylan_algo::OpenCcDict::load_from_file(path) {
+                Ok(dict) => {
+                    let elapsed = load_start.elapsed();
+                    info!(
+                        "  - 成功加载简繁转换词库: {:?} (耗时: {:.2} ms, 单字映射: {} 个, 消歧短语: {} 组)",
+                        path,
+                        elapsed.as_secs_f64() * 1000.0,
+                        dict.chars.len(),
+                        dict.phrases.len()
+                    );
+                    return dict;
+                }
+                Err(e) => {
+                    warn!("  - 读取简繁词库文件 {:?} 失败: {}", path, e);
+                }
+            }
+        }
+    }
+
+    info!("  - 未检测到二进制简繁词库文件，回退加载开源 TSV 词表或内置核心表。");
+    waylan_algo::OpenCcDict::load_default()
+}
+
 /// 检查 Wayland 合成器协议能力
 fn check_wayland_capabilities() -> waylan_wayland::WaylandCapabilities {
     info!("[系统环境] 正在检查当前 Wayland 会话与合成器能力...");
@@ -363,7 +398,7 @@ fn check_wayland_capabilities() -> waylan_wayland::WaylandCapabilities {
     }
 }
 
-/// 处理 dict 命令行子命令（支持 build 和 import）
+/// 处理 dict 命令行子命令（支持 build、build-opencc 和 import）
 fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if sub_args.is_empty() {
         print_dict_usage();
@@ -386,6 +421,35 @@ fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error:
             println!(
                 "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
                 stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
+            );
+        }
+        "build-opencc" => {
+            let (chars_path, phrases_path, output_path) = if sub_args.len() >= 4 {
+                (
+                    sub_args[1].as_str(),
+                    sub_args[2].as_str(),
+                    sub_args[3].as_str(),
+                )
+            } else {
+                (
+                    "data/dicts/8_opencc/STCharacters.txt",
+                    "data/dicts/8_opencc/STPhrases.txt",
+                    "data/opencc.dict.bin",
+                )
+            };
+            let start = Instant::now();
+            println!(
+                "[简繁词库构建] 正在从 {} 与 {} 编译二进制词库: {}",
+                chars_path, phrases_path, output_path
+            );
+            let dict = waylan_algo::OpenCcDict::from_tsv_files(chars_path, phrases_path)?;
+            dict.save_to_file(output_path)?;
+            let elapsed_ms = start.elapsed().as_millis();
+            println!(
+                "[构建完成] 单字映射: {} 个, 一简多繁短语: {} 组, 耗时: {} ms",
+                dict.chars.len(),
+                dict.phrases.len(),
+                elapsed_ms
             );
         }
         "import" => {
@@ -418,6 +482,7 @@ fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error:
 fn print_dict_usage() {
     println!("用法:");
     println!("  waylan dict build <输入文本1> [输入文本2...] <输出文件.dict.bin>");
+    println!("  waylan dict build-opencc [STCharacters.txt STPhrases.txt opencc.dict.bin]");
     println!("  waylan dict import <用户自定义词库.txt>");
 }
 

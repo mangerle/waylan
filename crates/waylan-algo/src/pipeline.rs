@@ -1,3 +1,4 @@
+use crate::opencc::OpenCcDict;
 use crate::types::{AlgoCandidate, AlgoConfig};
 use std::collections::HashSet;
 
@@ -12,11 +13,21 @@ use std::collections::HashSet;
 pub struct CandidatePipeline;
 
 impl CandidatePipeline {
-    /// 执行完整候选词清洗与排序流水线
+    /// 执行完整候选词清洗与排序流水线（使用默认全局简繁词典）
     pub fn process(
         raw_candidates: Vec<AlgoCandidate>,
         config: &AlgoConfig,
         page_index: usize,
+    ) -> Vec<AlgoCandidate> {
+        Self::process_with_opencc(raw_candidates, config, page_index, None)
+    }
+
+    /// 执行完整候选词清洗与排序流水线（支持注入自定义简繁转换词典实例）
+    pub fn process_with_opencc(
+        raw_candidates: Vec<AlgoCandidate>,
+        config: &AlgoConfig,
+        page_index: usize,
+        opencc: Option<&OpenCcDict>,
     ) -> Vec<AlgoCandidate> {
         let mut candidates = raw_candidates;
 
@@ -25,9 +36,13 @@ impl CandidatePipeline {
             candidates.retain(|c| Self::is_standard_chinese_charset(&c.text));
         }
 
-        // 2. 简繁体转换
+        // 2. 简繁体转换（基于 STPhrases 正向最大匹配 FMM + STCharacters 单字表及一简多繁展开）
         if config.traditional_chinese {
-            Self::apply_traditional_conversion(&mut candidates);
+            if let Some(dict) = opencc {
+                dict.convert_candidates(&mut candidates);
+            } else {
+                OpenCcDict::global().convert_candidates(&mut candidates);
+            }
         }
 
         // 3. 多级综合排序：先比对优先级层级 Tier（成词 > 用户自造 > 拼句 > 前缀），同层级比对综合 score
@@ -58,49 +73,6 @@ impl CandidatePipeline {
             }
         }
         deduped
-    }
-
-    /// 简繁体转换（纯 Rust 轻量映射表）
-    fn apply_traditional_conversion(candidates: &mut [AlgoCandidate]) {
-        for candidate in candidates.iter_mut() {
-            let mut traditional = String::with_capacity(candidate.text.len());
-            for ch in candidate.text.chars() {
-                traditional.push(Self::simplified_to_traditional_char(ch));
-            }
-            candidate.text = traditional;
-        }
-    }
-
-    /// 单字简转繁映射表（高频核心字库示例表）
-    fn simplified_to_traditional_char(ch: char) -> char {
-        match ch {
-            '国' => '國',
-            '会' => '會',
-            '发' => '發',
-            '学' => '學',
-            '汉' => '漢',
-            '语' => '語',
-            '这' => '這',
-            '来' => '來',
-            '个' => '個',
-            '们' => '們',
-            '对' => '對',
-            '经' => '經',
-            '时' => '時',
-            '现' => '現',
-            '动' => '動',
-            '进' => '進',
-            '长' => '長',
-            '问' => '問',
-            '题' => '題',
-            '见' => '見',
-            '机' => '機',
-            '点' => '點',
-            '电' => '電',
-            '华' => '華',
-            '为' => '為',
-            _ => ch,
-        }
     }
 
     /// 检查是否在标准通用汉字字符集内（过滤非常规未编码符号与控制符）
@@ -158,7 +130,13 @@ mod tests {
 
     #[test]
     fn test_traditional_conversion() {
-        let raw = vec![AlgoCandidate::new("中国", "zhong'guo", 10_000)];
+        let raw = vec![
+            AlgoCandidate::new("中国", "zhong'guo", 10_000),
+            AlgoCandidate::new("头发", "tou'fa", 9_000),
+            AlgoCandidate::new("发展", "fa'zhan", 8_500),
+            AlgoCandidate::new("皇后", "huang'hou", 8_000),
+            AlgoCandidate::new("发", "fa", 7_000),
+        ];
         let config = AlgoConfig {
             traditional_chinese: true,
             ..Default::default()
@@ -166,6 +144,11 @@ mod tests {
 
         let result = CandidatePipeline::process(raw, &config, 0);
         assert_eq!(result[0].text, "中國");
+        assert_eq!(result[1].text, "頭髮");
+        assert_eq!(result[2].text, "發展");
+        assert_eq!(result[3].text, "皇后");
+        assert_eq!(result[4].text, "發");
+        assert_eq!(result[5].text, "髮");
     }
 
     #[test]

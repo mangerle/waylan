@@ -37,14 +37,18 @@ cp "${PROJECT_ROOT}/target/release/waylan-settings" "${BUILD_ROOT}/usr/bin/wayla
 chmod 755 "${BUILD_ROOT}/usr/bin/waylan"
 chmod 755 "${BUILD_ROOT}/usr/bin/waylan-settings"
 
-# 2. 安装全量字词库与辅助混输词库 (到 /usr/share/waylan/data/)
+# 2. 安装全量字词库、辅助混输词库与简繁转换词库 (到 /usr/share/waylan/data/)
 cp "${PROJECT_ROOT}/data/base.dict.bin" "${BUILD_ROOT}/usr/share/waylan/data/base.dict.bin"
 chmod 644 "${BUILD_ROOT}/usr/share/waylan/data/base.dict.bin"
 if [ -f "${PROJECT_ROOT}/data/aux.dict.bin" ]; then
     cp "${PROJECT_ROOT}/data/aux.dict.bin" "${BUILD_ROOT}/usr/share/waylan/data/aux.dict.bin"
     chmod 644 "${BUILD_ROOT}/usr/share/waylan/data/aux.dict.bin"
 fi
-# 同时安装 7 大类原始分类词库模板以备设置中心与用户扩展使用
+if [ -f "${PROJECT_ROOT}/data/opencc.dict.bin" ]; then
+    cp "${PROJECT_ROOT}/data/opencc.dict.bin" "${BUILD_ROOT}/usr/share/waylan/data/opencc.dict.bin"
+    chmod 644 "${BUILD_ROOT}/usr/share/waylan/data/opencc.dict.bin"
+fi
+# 同时安装 8 大类原始分类词库模板以备设置中心与用户扩展使用
 if [ -d "${PROJECT_ROOT}/data/dicts" ]; then
     mkdir -p "${BUILD_ROOT}/usr/share/waylan/dicts"
     cp -r "${PROJECT_ROOT}/data/dicts/"* "${BUILD_ROOT}/usr/share/waylan/dicts/"

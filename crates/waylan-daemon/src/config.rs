@@ -192,6 +192,37 @@ impl AppConfig {
         paths
     }
 
+    /// 获取简繁转换词库（STPhrases + STCharacters）的多级查找路径
+    #[allow(dead_code)]
+    pub fn opencc_dict_search_paths() -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if let Ok(custom) = env::var("WAYLAN_OPENCC_DICT_PATH") {
+            paths.push(PathBuf::from(custom));
+        }
+        if let Ok(data_home) = env::var("XDG_DATA_HOME") {
+            paths.push(
+                PathBuf::from(data_home)
+                    .join("waylan")
+                    .join("opencc.dict.bin"),
+            );
+        }
+        if let Ok(home) = env::var("HOME") {
+            paths.push(
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("waylan")
+                    .join("opencc.dict.bin"),
+            );
+        }
+        paths.push(PathBuf::from("/usr/share/waylan/data/opencc.dict.bin"));
+        paths.push(PathBuf::from("/usr/share/waylan/opencc.dict.bin"));
+        paths.push(PathBuf::from("/usr/local/share/waylan/data/opencc.dict.bin"));
+        paths.push(PathBuf::from("/usr/local/share/waylan/opencc.dict.bin"));
+        paths.push(PathBuf::from("data/opencc.dict.bin"));
+        paths
+    }
+
     /// 加载配置，若不存在则自动初始化默认配置文件
     pub fn load_or_create() -> Self {
         if let Some(path) = Self::config_path() {

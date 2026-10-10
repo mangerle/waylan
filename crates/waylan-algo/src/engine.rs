@@ -7,6 +7,7 @@ use crate::dict_importer::ImportedDictEntry;
 use crate::dispatcher::ModeDispatcher;
 use crate::entity::EntityProtectionManager;
 use crate::evaluator::DateTimeEvaluator;
+use crate::opencc::OpenCcDict;
 use crate::pipeline::CandidatePipeline;
 use crate::prism::PrismEngine;
 use crate::syllables;
@@ -38,6 +39,8 @@ pub struct AlgoEngine {
     symbol_suggester: SymbolSuggestionManager,
     /// 专有名词与实体保护管理器
     pub entity_manager: EntityProtectionManager,
+    /// 简繁转换两级词库引擎（STPhrases + STCharacters）
+    pub opencc_dict: std::sync::Arc<OpenCcDict>,
     /// 增量敲击编辑状态机
     composition: Composition,
     /// 全局算法配置
@@ -71,6 +74,7 @@ impl AlgoEngine {
             english_suggester: EnglishSuggestionManager::new(),
             symbol_suggester: SymbolSuggestionManager::new(),
             entity_manager: EntityProtectionManager::new(),
+            opencc_dict: OpenCcDict::global(),
             composition: Composition::new(),
             config,
             page_index: 0,
@@ -104,6 +108,11 @@ impl AlgoEngine {
     pub fn load_auxiliary_dict(&mut self, dict: AuxiliaryDict) {
         self.english_suggester = EnglishSuggestionManager::from_words(dict.english_words);
         self.symbol_suggester = SymbolSuggestionManager::from_symbols(dict.symbols);
+    }
+
+    /// 载入外部简繁转换二进制词库（STPhrases + STCharacters）
+    pub fn load_opencc_dict(&mut self, dict: OpenCcDict) {
+        self.opencc_dict = std::sync::Arc::new(dict);
     }
 
     /// 获取当前生效的高频英文混输词目数量
@@ -763,8 +772,12 @@ impl AlgoEngine {
         }
 
         // 4. 送入后处理流水线（去重、简繁、字符集、注释、分页）
-        let mut candidates =
-            CandidatePipeline::process(raw_candidates, &self.config, self.page_index);
+        let mut candidates = CandidatePipeline::process_with_opencc(
+            raw_candidates,
+            &self.config,
+            self.page_index,
+            Some(&self.opencc_dict),
+        );
 
         if self.page_index == 0 {
             // 5. 状态机感知与容错门禁控制：
@@ -776,7 +789,10 @@ impl AlgoEngine {
 
             if !has_exact_or_prefix_words {
                 let typo_cands = Self::generate_spatial_typo_candidates(raw_input, &self.table);
-                for (i, typo_cand) in typo_cands.into_iter().take(2).enumerate() {
+                for (i, mut typo_cand) in typo_cands.into_iter().take(2).enumerate() {
+                    if self.config.traditional_chinese {
+                        typo_cand.text = self.opencc_dict.convert_text(&typo_cand.text);
+                    }
                     // 若列表中已有同名候选但非容错词（例如 Viterbi 产生的不完全前缀预测），先将其剔除
                     candidates.retain(|c| c.text != typo_cand.text);
                     let target_pos = if candidates.is_empty() {
@@ -840,6 +856,9 @@ impl AlgoEngine {
                         for m in matches_3 {
                             if m.pinyin == key_3 {
                                 let mut cand = m.clone();
+                                if self.config.traditional_chinese {
+                                    cand.text = self.opencc_dict.convert_text(&cand.text);
+                                }
                                 cand.tier = CandidateTier::PrefixPartial;
                                 prefix_items.push(cand);
                                 break;
@@ -854,6 +873,9 @@ impl AlgoEngine {
                     for m in matches_2 {
                         if m.pinyin == key_2 {
                             let mut cand = m.clone();
+                            if self.config.traditional_chinese {
+                                cand.text = self.opencc_dict.convert_text(&cand.text);
+                            }
                             cand.tier = CandidateTier::PrefixPartial;
                             prefix_items.push(cand);
                             found_exact_2 = true;
@@ -865,6 +887,9 @@ impl AlgoEngine {
                         let acro_matches_2 = self.table.lookup_acronym(&acronym_2);
                         for m in acro_matches_2.into_iter().take(2) {
                             let mut cand = m;
+                            if self.config.traditional_chinese {
+                                cand.text = self.opencc_dict.convert_text(&cand.text);
+                            }
                             cand.pinyin = key_2.clone();
                             cand.tier = CandidateTier::PrefixPartial;
                             prefix_items.push(cand);
