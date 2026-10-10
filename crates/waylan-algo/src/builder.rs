@@ -40,7 +40,7 @@ pub fn normalize_pinyin_tones(pinyin: &str) -> String {
             'ḿ' => s.push('m'),
             ' ' => s.push('\''),
             c if c.is_ascii_alphabetic() => s.push(c.to_ascii_lowercase()),
-            c if c == '\'' => s.push('\''),
+            '\'' => s.push('\''),
             _ => {}
         }
     }
@@ -277,14 +277,10 @@ impl DictBuilder {
             combined_keys.insert(k, (0, v));
         }
         for (k, v) in acronym_map {
-            if !combined_keys.contains_key(&k) {
-                combined_keys.insert(k, (1, v));
-            }
+            combined_keys.entry(k).or_insert((1, v));
         }
         for (k, v) in initial_map {
-            if !combined_keys.contains_key(&k) {
-                combined_keys.insert(k, (2, v));
-            }
+            combined_keys.entry(k).or_insert((2, v));
         }
 
         // 严格按字典序排序所有键
@@ -439,36 +435,34 @@ impl DictBuilder {
             if p_ref.exists() {
                 if let Ok(file) = File::open(p_ref) {
                     let reader = BufReader::new(file);
-                    for line_res in reader.lines() {
-                        if let Ok(line) = line_res {
-                            let trimmed = line.trim();
-                            if trimmed.is_empty()
-                                || trimmed.starts_with('#')
-                                || trimmed.starts_with("---")
-                                || trimmed.starts_with("...")
-                                || trimmed.starts_with("name:")
-                                || trimmed.starts_with("version:")
-                                || trimmed.starts_with("sort:")
-                            {
+                    for line in reader.lines().map_while(Result::ok) {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty()
+                            || trimmed.starts_with('#')
+                            || trimmed.starts_with("---")
+                            || trimmed.starts_with("...")
+                            || trimmed.starts_with("name:")
+                            || trimmed.starts_with("version:")
+                            || trimmed.starts_with("sort:")
+                        {
+                            continue;
+                        }
+                        let parts: Vec<&str> = trimmed.split('\t').collect();
+                        if !parts.is_empty() {
+                            let word = parts[0].trim();
+                            if word.is_empty() {
                                 continue;
                             }
-                            let parts: Vec<&str> = trimmed.split('\t').collect();
-                            if !parts.is_empty() {
-                                let word = parts[0].trim();
-                                if word.is_empty() {
-                                    continue;
-                                }
-                                let score: u32 = if parts.len() >= 3 {
-                                    parts[2].trim().parse().unwrap_or(50_000)
-                                } else if parts.len() >= 2 {
-                                    parts[1].trim().parse().unwrap_or(50_000)
-                                } else {
-                                    50_000
-                                };
-                                let word_lower = word.to_lowercase();
-                                if !dict.english_words.iter().any(|(w, _)| w.to_lowercase() == word_lower) {
-                                    dict.english_words.push((word.to_string(), score));
-                                }
+                            let score: u32 = if parts.len() >= 3 {
+                                parts[2].trim().parse().unwrap_or(50_000)
+                            } else if parts.len() >= 2 {
+                                parts[1].trim().parse().unwrap_or(50_000)
+                            } else {
+                                50_000
+                            };
+                            let word_lower = word.to_lowercase();
+                            if !dict.english_words.iter().any(|(w, _)| w.to_lowercase() == word_lower) {
+                                dict.english_words.push((word.to_string(), score));
                             }
                         }
                     }
@@ -482,44 +476,42 @@ impl DictBuilder {
             if p_ref.exists() {
                 if let Ok(file) = File::open(p_ref) {
                     let reader = BufReader::new(file);
-                    for line_res in reader.lines() {
-                        if let Ok(line) = line_res {
-                            let trimmed = line.trim();
-                            if trimmed.is_empty()
-                                || trimmed.starts_with('#')
-                                || trimmed.starts_with("---")
-                                || trimmed.starts_with("...")
-                                || trimmed.starts_with("name:")
-                                || trimmed.starts_with("version:")
-                                || trimmed.starts_with("sort:")
-                            {
-                                continue;
-                            }
-                            let parts: Vec<&str> = trimmed.split('\t').collect();
-                            if parts.len() >= 2 {
-                                let (key, sym, desc) = if parts[0].chars().any(|c| !c.is_ascii_alphanumeric() && c != '\'' && c != '_') {
-                                    let py = parts[1].trim().to_lowercase().replace(' ', "");
-                                    let emoji_or_sym = parts[0].trim().to_string();
-                                    let d = if py == "vv" {
-                                        "颜文字".to_string()
-                                    } else {
-                                        "表情".to_string()
-                                    };
-                                    (py, emoji_or_sym, d)
+                    for line in reader.lines().map_while(Result::ok) {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty()
+                            || trimmed.starts_with('#')
+                            || trimmed.starts_with("---")
+                            || trimmed.starts_with("...")
+                            || trimmed.starts_with("name:")
+                            || trimmed.starts_with("version:")
+                            || trimmed.starts_with("sort:")
+                        {
+                            continue;
+                        }
+                        let parts: Vec<&str> = trimmed.split('\t').collect();
+                        if parts.len() >= 2 {
+                            let (key, sym, desc) = if parts[0].chars().any(|c| !c.is_ascii_alphanumeric() && c != '\'' && c != '_') {
+                                let py = parts[1].trim().to_lowercase().replace(' ', "");
+                                let emoji_or_sym = parts[0].trim().to_string();
+                                let d = if py == "vv" {
+                                    "颜文字".to_string()
                                 } else {
-                                    let k = parts[0].trim().to_lowercase();
-                                    let s = parts[1].trim().to_string();
-                                    let d = if parts.len() >= 3 {
-                                        parts[2].trim().to_string()
-                                    } else {
-                                        "符号".to_string()
-                                    };
-                                    (k, s, d)
+                                    "表情".to_string()
                                 };
+                                (py, emoji_or_sym, d)
+                            } else {
+                                let k = parts[0].trim().to_lowercase();
+                                let s = parts[1].trim().to_string();
+                                let d = if parts.len() >= 3 {
+                                    parts[2].trim().to_string()
+                                } else {
+                                    "符号".to_string()
+                                };
+                                (k, s, d)
+                            };
 
-                                if !key.is_empty() && !sym.is_empty() {
-                                    dict.symbols.push((key, sym, desc));
-                                }
+                            if !key.is_empty() && !sym.is_empty() {
+                                dict.symbols.push((key, sym, desc));
                             }
                         }
                     }

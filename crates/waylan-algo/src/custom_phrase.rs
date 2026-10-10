@@ -415,7 +415,7 @@ impl EnglishSuggestionManager {
             exact_index.insert(w.to_lowercase(), (w.clone(), *score));
         }
         let mut sorted_words = words;
-        sorted_words.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        sorted_words.sort_by_key(|a| a.0.to_lowercase());
         Self {
             words: sorted_words,
             exact_index,

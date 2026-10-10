@@ -85,7 +85,7 @@ impl Cleaner {
         for s in raw_sents {
             let trimmed = s.trim();
             let char_count = trimmed.chars().count();
-            if char_count >= 2 && char_count <= 80 {
+            if (2..=80).contains(&char_count) {
                 let zh_count = self.re_chinese.find_iter(trimmed).count();
                 if zh_count as f64 / char_count as f64 >= 0.6 {
                     valid_sents.push(trimmed.to_string());
@@ -113,9 +113,9 @@ fn export_csr_model(
     let mut codebook = [0i32; 256];
     let min_score = 1000i32;
     let max_score = 30000i32;
-    for i in 0..256 {
+    for (i, item) in codebook.iter_mut().enumerate() {
         let ratio = i as f64 / 255.0;
-        codebook[i] = (min_score as f64 + (max_score - min_score) as f64 * ratio) as i32;
+        *item = (min_score as f64 + (max_score - min_score) as f64 * ratio) as i32;
     }
 
     // 2. 统计行偏移量 Row Offsets: [u32; vocab_size + 1]

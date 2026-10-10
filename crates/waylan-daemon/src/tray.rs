@@ -90,6 +90,16 @@ impl StatusNotifierItem {
     }
 }
 
+/// DBusMenu 布局返回元组类型定义
+pub type DbusMenuLayout = (
+    u32,
+    (
+        i32,
+        std::collections::HashMap<String, zbus::zvariant::Value<'static>>,
+        Vec<zbus::zvariant::Value<'static>>,
+    ),
+);
+
 /// 标准 FreeDesktop DBusMenu 菜单实现
 pub struct DBusMenu {
     is_chinese: Arc<AtomicBool>,
@@ -113,7 +123,7 @@ impl DBusMenu {
         _parent_id: i32,
         _recursion_depth: i32,
         _property_names: Vec<String>,
-    ) -> (u32, (i32, std::collections::HashMap<String, zbus::zvariant::Value<'static>>, Vec<zbus::zvariant::Value<'static>>)) {
+    ) -> DbusMenuLayout {
         let mode_text = if self.is_chinese.load(Ordering::Relaxed) {
             "当前输入: 中文拼音 (点击切换)"
         } else {

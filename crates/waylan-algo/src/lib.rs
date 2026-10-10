@@ -488,7 +488,7 @@ impl AlgoEngine {
                     self.last_commit_context.as_deref(),
                 ) {
                     // 融合切分路径拓扑代价值：代价值越大（如包含借音碎切），扣除对应的似然惩罚，防止劣质路径反超优质整句
-                    sentence.score = sentence.score.saturating_sub((path.cost as u32).saturating_mul(100));
+                    sentence.score = sentence.score.saturating_sub(path.cost.saturating_mul(100));
                     raw_candidates.push(sentence);
                 }
             }
@@ -1035,7 +1035,7 @@ mod tests {
         // 验证包含 cheng 纠错的候选
         assert!(candidates.iter().any(|c| {
             c.tier == CandidateTier::TypoCorrection
-                && c.comment.as_ref().map_or(false, |comm| comm.contains("[纠错: cheng]"))
+                && c.comment.as_ref().is_some_and(|comm| comm.contains("[纠错: cheng]"))
         }));
     }
 

@@ -98,16 +98,13 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        match event {
-            PopupEvent::TextInputRectangle { x, y, width, height } => {
-                info!(
-                    "[Wayland v2 光标矩形] 捕获焦点光标变化: x={}, y={}, w={}, h={}",
-                    x, y, width, height
-                );
-                state.current_cursor = CursorRect::new(x, y, width, height);
-                state.surface_manager.update_cursor_rect(x, y, width, height);
-            }
-            _ => {}
+        if let PopupEvent::TextInputRectangle { x, y, width, height } = event {
+            info!(
+                "[Wayland v2 光标矩形] 捕获焦点光标变化: x={}, y={}, w={}, h={}",
+                x, y, width, height
+            );
+            state.current_cursor = CursorRect::new(x, y, width, height);
+            state.surface_manager.update_cursor_rect(x, y, width, height);
         }
     }
 }

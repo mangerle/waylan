@@ -211,6 +211,7 @@ impl PrismEngine {
     }
 
     /// 深度优先搜索构建音节与声母混合 DAG 路径（保证 100% 原始击键字母保真）
+    #[allow(clippy::too_many_arguments)]
     fn dfs_dag(
         input: &str,
         start: usize,

@@ -30,7 +30,7 @@ fn main() {
             let parts: Vec<&str> = trimmed.split('\t').collect();
             if parts.len() >= 2 {
                 let p = waylan_algo::builder::normalize_pinyin_tones(parts[1].trim());
-                if !p.is_empty() && p.bytes().all(|b| b == b'\'' || (b'a'..=b'z').contains(&b)) {
+                if !p.is_empty() && p.bytes().all(|b: u8| b == b'\'' || b.is_ascii_lowercase()) {
                     keys.push(p);
                 }
             }

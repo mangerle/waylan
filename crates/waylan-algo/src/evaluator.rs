@@ -233,7 +233,7 @@ impl DateTimeEvaluator {
         let gan_idx = (((year - 4) % 10 + 10) % 10) as usize;
         let zhi_idx = (((year - 4) % 12 + 12) % 12) as usize;
 
-        let ganzhi_year = format!("{}[{}]年", format!("{}{}", TIAN_GAN[gan_idx], DI_ZHI[zhi_idx]), SHENG_XIAO[zhi_idx]);
+        let ganzhi_year = format!("{}{}[{}]年", TIAN_GAN[gan_idx], DI_ZHI[zhi_idx], SHENG_XIAO[zhi_idx]);
 
         // 农历月日推导（内置公历到农历月日对应推导）
         let (lunar_month_str, lunar_day_str) = Self::estimate_lunar_month_day(year, month, day);
@@ -445,8 +445,7 @@ impl FinancialEvaluator {
         ];
 
         let mut started = false;
-        for i in 0..4 {
-            let d = digits[i];
+        for (i, &d) in digits.iter().enumerate() {
             let unit_idx = 3 - i;
             if d > 0 {
                 if zero_flag {
@@ -491,7 +490,7 @@ impl FinancialEvaluator {
         let len = s.len();
         for (i, ch) in s.chars().enumerate() {
             formatted_int.push(ch);
-            if (len - 1 - i) % 3 == 0 && i != len - 1 {
+            if (len - 1 - i).is_multiple_of(3) && i != len - 1 {
                 formatted_int.push(',');
             }
         }

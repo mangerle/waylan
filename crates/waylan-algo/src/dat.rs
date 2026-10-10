@@ -255,7 +255,7 @@ impl<'a> DatReader<'a> {
             return None;
         }
 
-        let leaf = (b_val as usize) + 0;
+        let leaf = b_val as usize ;
         if leaf >= self.check.len() || self.check[leaf] != curr as u32 {
             return None;
         }

@@ -251,11 +251,10 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         .unwrap_or(0);
 
                     // 3.1 Tab 键或方向键下：切换/展开二级动态格式卡片
-                    if key == KEY_TAB || (key == KEY_DOWN && !state.engine.is_expanded) {
-                        if state.engine.toggle_expand(0) {
+                    if (key == KEY_TAB || (key == KEY_DOWN && !state.engine.is_expanded))
+                        && state.engine.toggle_expand(0) {
                             return;
                         }
-                    }
 
                     // 3.2 处于展开二级状态下的导航与选择
                     if state.engine.is_expanded {

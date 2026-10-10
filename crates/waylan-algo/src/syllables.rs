@@ -162,11 +162,11 @@ pub fn weighted_edit_distance(source: &str, target: &str) -> u32 {
 
     let mut dp = vec![vec![0u32; n + 1]; m + 1];
 
-    for i in 0..=m {
-        dp[i][0] = (i as u32) * 26;
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = (i as u32) * 26;
     }
-    for j in 0..=n {
-        dp[0][j] = (j as u32) * 26;
+    for (j, item) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *item = (j as u32) * 26;
     }
 
     for i in 1..=m {
@@ -254,23 +254,23 @@ pub fn get_typo_corrections(slice: &str) -> Vec<String> {
     }
 
     // 3. 鼻音辅音结尾倒置: neg => eng, agn => ang, ign => ing, ogn => ong
-    if slice.ends_with("neg") {
-        let alt = format!("{}eng", &slice[..slice.len() - 3]);
+    if let Some(prefix) = slice.strip_suffix("neg") {
+        let alt = format!("{}eng", prefix);
         if is_valid_syllable(&alt) {
             results.push(alt);
         }
-    } else if slice.ends_with("agn") {
-        let alt = format!("{}ang", &slice[..slice.len() - 3]);
+    } else if let Some(prefix) = slice.strip_suffix("agn") {
+        let alt = format!("{}ang", prefix);
         if is_valid_syllable(&alt) {
             results.push(alt);
         }
-    } else if slice.ends_with("ign") {
-        let alt = format!("{}ing", &slice[..slice.len() - 3]);
+    } else if let Some(prefix) = slice.strip_suffix("ign") {
+        let alt = format!("{}ing", prefix);
         if is_valid_syllable(&alt) {
             results.push(alt);
         }
-    } else if slice.ends_with("ogn") {
-        let alt = format!("{}ong", &slice[..slice.len() - 3]);
+    } else if let Some(prefix) = slice.strip_suffix("ogn") {
+        let alt = format!("{}ong", prefix);
         if is_valid_syllable(&alt) {
             results.push(alt);
         }
