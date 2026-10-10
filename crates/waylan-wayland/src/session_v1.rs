@@ -548,6 +548,15 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         InputMode::VMode => "V模式",
                     };
                     info!("[微澜] 切换输入模式为：{}", mode_str);
+
+                    // 若正在输入拼音预编辑阶段切换至英文，直接上屏原始英文字母并清空预编辑与候选框
+                    if new_mode == InputMode::English && !state.engine.raw_input().is_empty() {
+                        let raw = state.engine.raw_input().to_string();
+                        state.engine.reset();
+                        state.hide_candidate_surface();
+                        context.commit_string(serial, raw);
+                        context.preedit_string(serial, String::new(), String::new());
+                    }
                     return;
                 }
 

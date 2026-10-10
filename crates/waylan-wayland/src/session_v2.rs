@@ -345,6 +345,14 @@ impl WaylanV2Session {
                 InputMode::VMode => "V模式",
             };
             info!("[Wayland v2] 切换输入模式为：{}", mode_str);
+
+            // 若在拼音预编辑状态下切换至英文模式，自动提交原始英文字符串并清空预编辑与候选框
+            if new_mode == InputMode::English && !self.engine.raw_input().is_empty() {
+                let raw = self.engine.raw_input().to_string();
+                self.commit_text(&raw);
+                self.engine.reset();
+                return Some(raw);
+            }
             return None;
         }
 
@@ -1061,5 +1069,27 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_shift_toggle_commits_raw_preedit() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut session = WaylanV2Session::new(engine);
+
+        // 输入拼音 "ni"
+        session.handle_key_event(49, true); // 'n'
+        session.handle_key_event(49, false);
+        session.handle_key_event(23, true); // 'i'
+        session.handle_key_event(23, false);
+        assert_eq!(session.engine.raw_input(), "ni");
+
+        // 单击 Shift 键切换中英文
+        session.handle_key_event(KEY_LEFTSHIFT, true);
+        let commit = session.handle_key_event(KEY_LEFTSHIFT, false);
+
+        assert_eq!(session.mode, InputMode::English);
+        assert_eq!(commit, Some("ni".to_string()));
+        assert!(session.engine.raw_input().is_empty());
+        assert!(!session.build_candidate_box_state().visible);
     }
 }
