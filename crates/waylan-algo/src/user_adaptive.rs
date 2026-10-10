@@ -31,7 +31,11 @@ pub struct UserEntry {
 /// - **实现初衷**：根据用户个人输入历史实现智能词频调优与自造新词记忆，使输入法越用越懂用户。
 /// - **核心优势**：结合使用频次与时间半衰期衰减算法，既能快速置顶常用词，又避免一次误选终身置顶。
 /// - **代价与局限**：需要定期落盘持久化，但通过内存缓存结合退出/定时写盘可消除 I/O 阻塞。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn default_wal_file() -> std::sync::Mutex<Option<(PathBuf, File)>> {
+    std::sync::Mutex::new(None)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UserAdaptiveModel {
     /// 键为拼音序列，值为该拼音下记录的用户词列表
     entries: HashMap<String, Vec<UserEntry>>,
@@ -41,6 +45,20 @@ pub struct UserAdaptiveModel {
     /// 触发自动压缩的追加条数阈值（默认为 1000 条）
     #[serde(skip)]
     compact_threshold: usize,
+    /// 常驻保持的 WAL 日志追加写入文件句柄（消除每次选词时的重复 open/stat/close 系统调用）
+    #[serde(skip, default = "default_wal_file")]
+    wal_file: std::sync::Mutex<Option<(PathBuf, File)>>,
+}
+
+impl Clone for UserAdaptiveModel {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            wal_append_counter: self.wal_append_counter,
+            compact_threshold: self.compact_threshold,
+            wal_file: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 impl Default for UserAdaptiveModel {
@@ -59,6 +77,7 @@ impl UserAdaptiveModel {
             entries: HashMap::new(),
             wal_append_counter: 0,
             compact_threshold: Self::DEFAULT_COMPACT_THRESHOLD,
+            wal_file: std::sync::Mutex::new(None),
         }
     }
 
@@ -156,42 +175,61 @@ impl UserAdaptiveModel {
         self.record_commit(text, pinyin, timestamp);
 
         let path_ref = path.as_ref();
-        if let Some(parent) = path_ref.parent() {
-            if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-        }
+        let mut guard = self
+            .wal_file
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        // 若目标文件已存在但并非当前 V2 WAL 格式，直接归并升级为标准 V2 WAL 格式
-        if path_ref.exists() {
-            if let Ok(mut existing_file) = File::open(path_ref) {
-                let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
-                if len > 0 {
-                    let mut magic = [0u8; 16];
-                    if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
-                        drop(existing_file);
-                        return self.compact_wal(path_ref);
+        let need_reopen = match &*guard {
+            Some((current_path, _)) => current_path != path_ref,
+            None => true,
+        };
+
+        if need_reopen {
+            if let Some(parent) = path_ref.parent() {
+                if !parent.as_os_str().is_empty() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+            }
+
+            // 若目标文件已存在但并非当前 V2 WAL 格式，直接归并升级为标准 V2 WAL 格式
+            if path_ref.exists() {
+                if let Ok(mut existing_file) = File::open(path_ref) {
+                    let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
+                    if len > 0 {
+                        let mut magic = [0u8; 16];
+                        if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
+                            drop(existing_file);
+                            drop(guard);
+                            self.compact_wal(path_ref)?;
+                            guard = self
+                                .wal_file
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        }
                     }
                 }
             }
-        }
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path_ref)
-            .map_err(|e| AlgoError::UserDictPersistFailed {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-
-        // 文件大小为 0 时写入魔数头
-        if file.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
-            file.write_all(WAL_MAGIC)
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path_ref)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: PathBuf::from(path_ref),
                     source: e,
                 })?;
+
+            // 文件大小为 0 时写入魔数头
+            if file.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+                file.write_all(WAL_MAGIC)
+                    .map_err(|e| AlgoError::UserDictPersistFailed {
+                        path: PathBuf::from(path_ref),
+                        source: e,
+                    })?;
+            }
+
+            *guard = Some((PathBuf::from(path_ref), file));
         }
 
         let py_bytes = pinyin.as_bytes();
@@ -212,11 +250,15 @@ impl UserAdaptiveModel {
         let checksum: u32 = buf.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
         buf.extend_from_slice(&checksum.to_le_bytes());
 
-        file.write_all(&buf)
-            .map_err(|e| AlgoError::UserDictPersistFailed {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+        if let Some((_, ref mut file)) = *guard {
+            file.write_all(&buf)
+                .map_err(|e| AlgoError::UserDictPersistFailed {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                })?;
+        }
+
+        drop(guard);
 
         // 运行期累计写入流水达到阈值时，自动触发一次原子压缩合并，避免 WAL 持续膨胀
         self.wal_append_counter += 1;
@@ -346,6 +388,11 @@ impl UserAdaptiveModel {
     /// 对 WAL 文件执行压缩归并快照，清除冗余流水记录
     pub fn compact_wal<P: AsRef<Path>>(&self, path: P) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
+        // 压缩前主动释放常驻写入句柄，避免占用文件妨碍原子 rename
+        if let Ok(mut guard) = self.wal_file.lock() {
+            *guard = None;
+        }
+
         if let Some(parent) = path_ref.parent() {
             if !parent.as_os_str().is_empty() {
                 let _ = std::fs::create_dir_all(parent);
