@@ -396,7 +396,7 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 测量一段文字的排版宽度
+    /// 测量一段文字的排版宽度（仅计算字形度量，避免触发无谓的位图光栅化分配）
     fn measure_text(&self, text: &str, size: f32) -> f32 {
         let Some(font) = self.font.as_ref() else {
             return text.chars().count() as f32 * size;
@@ -404,7 +404,7 @@ impl CandidateBoxRenderer {
 
         let mut width = 0.0;
         for ch in text.chars() {
-            let (metrics, _) = font.rasterize(ch, size);
+            let metrics = font.metrics(ch, size);
             width += metrics.advance_width;
         }
         width
@@ -541,7 +541,7 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 混合字形位图
+    /// 混合字形位图（采用标准 Porter-Duff Source-Over 预乘 Alpha 混合，消除文字抗锯齿黑边与底色镂空）
     fn blend_glyph(&self, pixmap: &mut Pixmap, params: GlyphBitmapParams, color: Color) {
         let pixmap_w = pixmap.width() as i32;
         let pixmap_h = pixmap.height() as i32;
@@ -567,16 +567,34 @@ impl CandidateBoxRenderer {
                 let pixel_idx = (py * pixmap_w + px) as usize;
                 let target = &mut pixels[pixel_idx];
 
-                let final_a = (color.a * alpha * 255.0) as u8;
-                let final_r = (color.r * 255.0) as u8;
-                let final_g = (color.g * 255.0) as u8;
-                let final_b = (color.b * 255.0) as u8;
+                let src_a = (color.a * alpha).clamp(0.0, 1.0);
+                let inv_sa = 1.0 - src_a;
 
-                if let Some(c) = tiny_skia::ColorU8::from_rgba(final_r, final_g, final_b, final_a)
-                    .premultiply()
-                    .into()
-                {
-                    *target = c;
+                let src_r = color.r * src_a * 255.0;
+                let src_g = color.g * src_a * 255.0;
+                let src_b = color.b * src_a * 255.0;
+                let src_a_255 = src_a * 255.0;
+
+                let out_a = (src_a_255 + target.alpha() as f32 * inv_sa)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                let out_r = (src_r + target.red() as f32 * inv_sa)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                let out_g = (src_g + target.green() as f32 * inv_sa)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                let out_b = (src_b + target.blue() as f32 * inv_sa)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+
+                if let Some(blended) = tiny_skia::PremultipliedColorU8::from_rgba(
+                    out_r.min(out_a),
+                    out_g.min(out_a),
+                    out_b.min(out_a),
+                    out_a,
+                ) {
+                    *target = blended;
                 }
             }
         }
@@ -639,6 +657,37 @@ mod tests {
         let pixmap = renderer.render(&state).expect("应成功渲染展开的二级卡片");
         // 包含主单行条（38px）加间距（6px）加垂直卡片（7项*28px+12px = 208px）
         assert!(pixmap.height() > 200);
+    }
+
+    #[test]
+    fn test_blend_glyph_source_over_preserves_opaque_background() {
+        let renderer = CandidateBoxRenderer::new(UiTheme::light());
+        let mut pixmap = Pixmap::new(4, 4).unwrap();
+        // 填充纯白不透明底图 (R=255, G=255, B=255, A=255)
+        pixmap.fill(tiny_skia::Color::WHITE);
+
+        // 叠绘 50% 抗锯齿透明度的纯黑字形像素
+        let bitmap = [128u8];
+        renderer.blend_glyph(
+            &mut pixmap,
+            GlyphBitmapParams {
+                bitmap: &bitmap,
+                x: 1,
+                y: 1,
+                width: 1,
+                height: 1,
+            },
+            Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+        );
+
+        let p = pixmap.pixel(1, 1).unwrap();
+        assert_eq!(p.alpha(), 255, "在纯白不透明背景上混合半透明抗锯齿字形后，底图必须保持 100% 不透明");
+        assert!(p.red() > 100 && p.red() < 150, "混合后的灰度值应平滑处于中间区间，实际: {}", p.red());
     }
 }
 
