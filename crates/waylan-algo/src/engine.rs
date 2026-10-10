@@ -503,7 +503,7 @@ impl AlgoEngine {
         let mut acronym_matches = self.table.lookup_acronym(raw_input);
         raw_candidates.append(&mut acronym_matches);
 
-        // 2.3 若多音节切分未能命中整词，将首段已完成合法音节作为保真降级备选（如 "ni" -> "你"）
+        // 2.3 若多音节切分未能命中整词，将首段已完成音节或首声母单字作为保真降级备选（如 "ni" -> "你", "r" -> "人"）
         let clean_raw_len = raw_input.chars().filter(|c| *c != '\'').count();
         let has_full_exact_match = raw_candidates.iter().any(|c| {
             c.tier == CandidateTier::ExactWord
@@ -514,8 +514,19 @@ impl AlgoEngine {
                 if !first_path.syllables.is_empty() {
                     let first_syl = &first_path.syllables[0];
                     let mut first_matches = self.table.lookup(first_syl);
-                    for fm in &mut first_matches {
-                        fm.tier = CandidateTier::PrefixPartial;
+                    if first_matches.is_empty() {
+                        if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl) {
+                            for (text, score) in initial_entries {
+                                first_matches.push(
+                                    AlgoCandidate::new(text, first_syl.clone(), score)
+                                        .with_tier(CandidateTier::PrefixPartial),
+                                );
+                            }
+                        }
+                    } else {
+                        for fm in &mut first_matches {
+                            fm.tier = CandidateTier::PrefixPartial;
+                        }
                     }
                     raw_candidates.append(&mut first_matches);
                 }
@@ -599,8 +610,8 @@ impl AlgoEngine {
 
         // 10. 前缀高频短词混排注入 (Prefix Segment Candidate Injection)：
         // 当处于首未翻页状态 (page_index == 0) 且有效拼音达到 3 个及以上音节时，
-        // 自动提取前 3 个音节（如 wo'men'de -> 我们的）与前 2 个音节（如 wo'men -> 我们）的高频成词，
-        // 注入到候选词列表的第 3、4 候选位，支持分段确认 (Partial Commit)
+        // 自动提取前 3 个音节（如 wo'men'de -> 我们的）与前 2 个音节（如 wo'men -> 我们，或简拼 r'g -> 如果/入股）的高频成词，
+        // 紧随全长成词之后注入，支持分段确认 (Partial Commit)
         if self.page_index == 0 {
             if let Some(best_path) = paths.first() {
                 let total_syls = best_path.syllables.len()
@@ -608,7 +619,7 @@ impl AlgoEngine {
                 if total_syls >= 3 && best_path.syllables.len() >= 2 {
                     let mut prefix_items = Vec::new();
 
-                    // 10.1 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节高频词（如 wo'men'de -> 我们的）
+                    // 10.1 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
                     if total_syls >= 4 && best_path.syllables.len() >= 3 {
                         let key_3 = best_path.syllables[..3].join("'");
                         let matches_3 = self.table.lookup(&key_3);
@@ -622,32 +633,52 @@ impl AlgoEngine {
                         }
                     }
 
-                    // 10.2 提取前 2 音节高频词（如 wo'men -> 我们）
+                    // 10.2 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，则回退查简拼召回 Top-2 二字高频词如 如果、入股）
                     let key_2 = best_path.syllables[..2].join("'");
                     let matches_2 = self.table.lookup(&key_2);
+                    let mut found_exact_2 = false;
                     for m in matches_2 {
                         if m.pinyin == key_2 {
                             let mut cand = m.clone();
                             cand.tier = CandidateTier::PrefixPartial;
                             prefix_items.push(cand);
+                            found_exact_2 = true;
                             break;
                         }
                     }
+                    if !found_exact_2 {
+                        let acronym_2 = best_path.syllables[..2].concat();
+                        let acro_matches_2 = self.table.lookup_acronym(&acronym_2);
+                        for m in acro_matches_2.into_iter().take(2) {
+                            let mut cand = m;
+                            cand.pinyin = key_2.clone();
+                            cand.tier = CandidateTier::PrefixPartial;
+                            prefix_items.push(cand);
+                        }
+                    }
 
-                    // 10.3 混排注入：保留前 2 个长句/整词候选，在第 3、4 位注入前缀短词，并保持去重
+                    // 10.3 混排注入：动态保留前序全长成词（2 至 3 个），随后注入前缀短词并保持去重
                     if !prefix_items.is_empty() {
                         let mut injected = Vec::with_capacity(candidates.len() + prefix_items.len());
                         let mut seen = std::collections::HashSet::new();
 
-                        // 优先保留前 2 个长句/整词候选（若总数不足 2 则全部保留）
-                        let keep_count = candidates.len().min(2);
+                        // 统计排在列表头部的全长匹配成词数量（如 rgzn 命中的 人工智能、人过中年、弱冠之年）
+                        let full_len_count = candidates
+                            .iter()
+                            .take_while(|c| {
+                                c.tier != CandidateTier::PrefixPartial
+                                    && c.text.chars().count() >= total_syls
+                            })
+                            .count();
+                        let keep_count = full_len_count.clamp(2, 3).min(candidates.len());
+
                         for c in candidates.drain(..keep_count) {
                             if seen.insert(c.text.clone()) {
                                 injected.push(c);
                             }
                         }
 
-                        // 注入前缀短词至第 3、4 候选位
+                        // 注入前缀短词
                         for pi in prefix_items {
                             if seen.insert(pi.text.clone()) {
                                 injected.push(pi);

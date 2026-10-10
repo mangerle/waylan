@@ -512,5 +512,34 @@ fn test_engine_mixed_full_pinyin_and_tail_acronym_synthesis() {
     assert_eq!(cands3[0].text, "我们的国务院", "首选词必须命中跨词三声母简拼合成短语‘我们的国务院’");
 }
 
+#[test]
+fn test_engine_rgzn_multi_acronyms_and_prefix_injection() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table.insert("ren'gong'zhi'neng", "人工智能", 31_607);
+    engine.table.insert("ren'guo'zhong'nian", "人过中年", 504);
+    engine.table.insert("ruo'guan'zhi'nian", "弱冠之年", 78);
+    engine.table.insert("ru'guo", "如果", 25_000);
+    engine.table.insert("ru'gu", "入股", 12_000);
+    engine.table.insert("zhi'neng", "智能", 20_000);
+    engine.table.insert("ren", "人", 18_000);
 
+    for ch in "rgzn".chars() {
+        engine.push_char(ch);
+    }
 
+    let cands = engine.candidates();
+    assert!(cands.len() >= 6, "rgzn 候选列表应包含全长词、二字前缀简拼与首声母单字: {:?}", cands);
+    assert_eq!(cands[0].text, "人工智能");
+    assert_eq!(cands[1].text, "人过中年");
+    assert_eq!(cands[2].text, "弱冠之年");
+    assert_eq!(cands[3].text, "如果");
+    assert_eq!(cands[4].text, "入股");
+    assert_eq!(cands[5].text, "人");
+
+    // 验证选中第 4 项“如果”后，分段确认消费前 2 键 "rg"，剩余 "zn" 自动重算召回“智能”
+    let (committed, rem_len) = engine.select_candidate(3, 1_700_000_000).expect("选中如果");
+    assert_eq!(committed, "如果");
+    assert_eq!(rem_len, 2);
+    assert_eq!(engine.raw_input(), "zn");
+    assert_eq!(engine.candidates()[0].text, "智能");
+}
