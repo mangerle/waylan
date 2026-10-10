@@ -397,6 +397,48 @@ fn test_engine_best_path_only_no_garbage_sentence() {
 }
 
 #[test]
+fn test_engine_prefix_segment_candidate_injection_and_cascade() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    // 注入全词与前缀词
+    engine.table.insert("wo'men'de'shi'jie", "我们的世界", 50_000);
+    engine.table.insert("wo'men'de", "我们的", 35_000);
+    engine.table.insert("wo'men", "我们", 40_000);
+    engine.table.insert("de'shi'jie", "的世界", 40_000);
+
+    for ch in "womendeshijie".chars() {
+        engine.push_char(ch);
+    }
+
+    let candidates = engine.candidates();
+    assert!(candidates.len() >= 3);
+    // 1. 首位保持长句
+    assert_eq!(candidates[0].text, "我们的世界");
+    // 2. 候选列表中成功混排注入前缀短词“我们”与“我们的”
+    assert!(candidates.iter().any(|c| c.text == "我们"));
+    assert!(candidates.iter().any(|c| c.text == "我们的"));
+
+    // 3. 找到“我们”的索引进行分段确认选择
+    let women_idx = candidates.iter().position(|c| c.text == "我们").expect("应包含我们");
+    let (committed, remaining_len) = engine.select_candidate(women_idx, 1_700_000_000).expect("选中我们");
+
+    assert_eq!(committed, "我们");
+    assert!(remaining_len > 0);
+    assert_eq!(engine.raw_input(), "deshijie");
+    assert_eq!(engine.formatted_preedit(), "de'shi'jie");
+
+    // 4. 接力验证：剩余拼音立刻刷新出针对 de'shi'jie 的候选
+    let next_cands = engine.candidates();
+    assert!(!next_cands.is_empty());
+    assert_eq!(next_cands[0].text, "的世界");
+
+    // 5. 选中后半段，完成整句录入
+    let (next_committed, next_remaining) = engine.select_candidate(0, 1_700_000_000).expect("选中的世界");
+    assert_eq!(next_committed, "的世界");
+    assert_eq!(next_remaining, 0);
+    assert!(engine.raw_input().is_empty());
+}
+
+#[test]
 fn test_engine_typo_guard_suppression_on_valid_prefix() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     engine.table.insert("shi'jian", "时间", 50_000);

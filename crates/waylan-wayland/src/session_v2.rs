@@ -125,6 +125,17 @@ impl WaylanV2Session {
         }
     }
 
+    /// 分段确认部分文本上屏，并以剩余拼音继续推进预编辑与候选渲染
+    pub fn commit_partial(&mut self, text: &str, remaining_preedit: &str) {
+        if let Some(im) = &self.input_method {
+            im.commit_string(text.to_string());
+            let len = remaining_preedit.len() as i32;
+            im.set_preedit_string(remaining_preedit.to_string(), 0, len);
+            im.commit(self.done_serial);
+        }
+        self.refresh_candidate_surface();
+    }
+
     /// 取消当前输入，重置引擎与预编辑区
     pub fn cancel_input(&mut self) {
         self.engine.reset();
@@ -298,7 +309,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                             state.punctuation_processor.record_commit(&committed_text);
                             if remaining_len > 0 {
                                 let preedit = state.engine.formatted_preedit();
-                                state.update_preedit(&preedit);
+                                state.commit_partial(&committed_text, &preedit);
                             } else {
                                 state.commit_text(&committed_text);
                             }
@@ -314,7 +325,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                             state.punctuation_processor.record_commit(&committed_text);
                             if remaining_len > 0 {
                                 let preedit = state.engine.formatted_preedit();
-                                state.update_preedit(&preedit);
+                                state.commit_partial(&committed_text, &preedit);
                             } else {
                                 state.commit_text(&committed_text);
                             }

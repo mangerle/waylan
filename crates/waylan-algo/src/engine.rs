@@ -592,6 +592,78 @@ impl AlgoEngine {
             candidates.insert(0, clip);
         }
 
+        // 10. 前缀高频短词混排注入 (Prefix Segment Candidate Injection)：
+        // 当处于首未翻页状态 (page_index == 0) 且有效拼音达到 3 个及以上音节时，
+        // 自动提取前 3 个音节（如 wo'men'de -> 我们的）与前 2 个音节（如 wo'men -> 我们）的高频成词，
+        // 注入到候选词列表的第 3、4 候选位，支持分段确认 (Partial Commit)
+        if self.page_index == 0 {
+            if let Some(best_path) = paths.first() {
+                let total_syls = best_path.syllables.len()
+                    + if best_path.remaining.is_empty() { 0 } else { 1 };
+                if total_syls >= 3 && best_path.syllables.len() >= 2 {
+                    let mut prefix_items = Vec::new();
+
+                    // 10.1 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节高频词（如 wo'men'de -> 我们的）
+                    if total_syls >= 4 && best_path.syllables.len() >= 3 {
+                        let key_3 = best_path.syllables[..3].join("'");
+                        let matches_3 = self.table.lookup(&key_3);
+                        for m in matches_3 {
+                            if m.pinyin == key_3 {
+                                let mut cand = m.clone();
+                                cand.tier = CandidateTier::PrefixPartial;
+                                prefix_items.push(cand);
+                                break;
+                            }
+                        }
+                    }
+
+                    // 10.2 提取前 2 音节高频词（如 wo'men -> 我们）
+                    let key_2 = best_path.syllables[..2].join("'");
+                    let matches_2 = self.table.lookup(&key_2);
+                    for m in matches_2 {
+                        if m.pinyin == key_2 {
+                            let mut cand = m.clone();
+                            cand.tier = CandidateTier::PrefixPartial;
+                            prefix_items.push(cand);
+                            break;
+                        }
+                    }
+
+                    // 10.3 混排注入：保留前 2 个长句/整词候选，在第 3、4 位注入前缀短词，并保持去重
+                    if !prefix_items.is_empty() {
+                        let mut injected = Vec::with_capacity(candidates.len() + prefix_items.len());
+                        let mut seen = std::collections::HashSet::new();
+
+                        // 优先保留前 2 个长句/整词候选（若总数不足 2 则全部保留）
+                        let keep_count = candidates.len().min(2);
+                        for c in candidates.drain(..keep_count) {
+                            if seen.insert(c.text.clone()) {
+                                injected.push(c);
+                            }
+                        }
+
+                        // 注入前缀短词至第 3、4 候选位
+                        for pi in prefix_items {
+                            if seen.insert(pi.text.clone()) {
+                                injected.push(pi);
+                            }
+                        }
+
+                        // 拼接剩余备选词
+                        for c in candidates.drain(..) {
+                            if seen.insert(c.text.clone()) {
+                                injected.push(c);
+                            }
+                        }
+
+                        // 保持每页大小限制
+                        injected.truncate(self.config.page_size);
+                        candidates = injected;
+                    }
+                }
+            }
+        }
+
         self.current_candidates = candidates;
     }
 
