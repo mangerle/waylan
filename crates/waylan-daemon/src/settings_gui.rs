@@ -103,7 +103,7 @@ impl SettingsApp {
 
         // 加载用户自造词统计
         let user_dict_path = AppConfig::user_dict_path();
-        let user_dict_count = waylan_algo::user_adaptive::UserAdaptiveModel::load_from_file(&user_dict_path)
+        let user_dict_count = waylan_algo::user_adaptive::UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
             .map(|m| m.total_entries())
             .unwrap_or(0);
 
@@ -368,13 +368,13 @@ impl eframe::App for SettingsApp {
                                             Ok(entries) => {
                                                 let count = entries.len();
                                                 let user_dict_path = AppConfig::user_dict_path();
-                                                let mut user_model = waylan_algo::user_adaptive::UserAdaptiveModel::load_from_file(&user_dict_path)
+                                                let mut user_model = waylan_algo::user_adaptive::UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
                                                     .unwrap_or_default();
                                                 let now = 1_700_000_000;
                                                 for entry in &entries {
                                                     user_model.record_commit(&entry.text, &entry.pinyin, now);
                                                 }
-                                                let _ = user_model.save_to_file(&user_dict_path);
+                                                let _ = user_model.compact_wal(&user_dict_path);
                                                 self.user_dict_count = user_model.total_entries();
                                                 self.import_status_message = Some(format!("成功导入 {} 条词目，并已即时合入专属用户词库！", count));
                                             }
@@ -629,7 +629,7 @@ impl eframe::App for SettingsApp {
                                 if ui.button("清空自造词历史").clicked() {
                                     let user_dict_path = AppConfig::user_dict_path();
                                     let empty_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
-                                    if let Err(e) = empty_model.save_to_file(&user_dict_path) {
+                                    if let Err(e) = empty_model.compact_wal(&user_dict_path) {
                                         self.user_dict_status_message = Some(format!("清空失败: {}", e));
                                     } else {
                                         self.user_dict_count = 0;

@@ -543,3 +543,56 @@ fn test_engine_rgzn_multi_acronyms_and_prefix_injection() {
     assert_eq!(engine.raw_input(), "zn");
     assert_eq!(engine.candidates()[0].text, "智能");
 }
+
+#[test]
+fn test_engine_user_dict_wal_persistence_across_restart() {
+    let wal_path = std::env::temp_dir().join("test_engine_user_wal_persistence.wal");
+    if wal_path.exists() {
+        let _ = std::fs::remove_file(&wal_path);
+    }
+
+    // 1. 第一个引擎实例：绑定 WAL 路径，选择次位同音候选词触发自动追加落盘
+    {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        engine.table.insert("ji'shu", "技术", 14_000);
+        engine.table.insert("ji'shu", "基数", 10_000);
+        engine.set_user_dict_path(&wal_path);
+
+        for ch in "jishu".chars() {
+            engine.push_char(ch);
+        }
+        assert_eq!(engine.candidates()[0].text, "技术");
+        let idx = engine
+            .candidates()
+            .iter()
+            .position(|c| c.text == "基数")
+            .expect("找到基数");
+
+        // 选择“基数”上屏，自动写入 WAL
+        let (committed, _) = engine
+            .select_candidate(idx, 1_750_000_000)
+            .expect("选中基数");
+        assert_eq!(committed, "基数");
+    }
+
+    // 2. 模拟重启：新建第二个引擎实例并绑定同一 WAL 路径，验证历史词频已恢复且“基数”升至首位
+    {
+        let mut engine2 = AlgoEngine::with_sample_data(AlgoConfig::default());
+        engine2.table.insert("ji'shu", "技术", 14_000);
+        engine2.table.insert("ji'shu", "基数", 10_000);
+        engine2.set_user_dict_path(&wal_path);
+        assert_eq!(engine2.user_model.total_entries(), 1);
+
+        for ch in "jishu".chars() {
+            engine2.push_char(ch);
+        }
+        assert_eq!(
+            engine2.candidates()[0].text,
+            "基数",
+            "重启后从 WAL 恢复的用户词频应将‘基数’提权至首位"
+        );
+    }
+
+    let _ = std::fs::remove_file(&wal_path);
+}
+

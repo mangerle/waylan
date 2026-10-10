@@ -115,6 +115,26 @@ impl UserAdaptiveModel {
         self.record_commit(text, pinyin, timestamp);
 
         let path_ref = path.as_ref();
+        if let Some(parent) = path_ref.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+
+        // 若目标文件已存在但并非 WAL 格式（如旧版 bincode 快照），直接归并升级为标准 WAL 格式
+        if path_ref.exists() {
+            if let Ok(mut existing_file) = File::open(path_ref) {
+                let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
+                if len > 0 {
+                    let mut magic = [0u8; 16];
+                    if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
+                        drop(existing_file);
+                        return self.compact_wal(path_ref);
+                    }
+                }
+            }
+        }
+
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -215,6 +235,11 @@ impl UserAdaptiveModel {
     /// 对 WAL 文件执行压缩归并快照，清除冗余流水记录
     pub fn compact_wal<P: AsRef<Path>>(&self, path: P) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
+        if let Some(parent) = path_ref.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
         let temp_path = path_ref.with_extension("wal.tmp");
 
         {
@@ -271,6 +296,11 @@ impl UserAdaptiveModel {
     /// 当文件路径无法写入时返回 [`AlgoError::UserDictPersistFailed`]。
     pub fn save_to_file(&self, path: impl AsRef<Path>) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
+        if let Some(parent) = path_ref.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
         let file = File::create(path_ref).map_err(|e| AlgoError::UserDictPersistFailed {
             path: PathBuf::from(path_ref),
             source: e,
@@ -305,6 +335,15 @@ impl UserAdaptiveModel {
     /// 获取记录的用户词条总数
     pub fn total_entries(&self) -> usize {
         self.entries.values().map(|list| list.len()).sum()
+    }
+
+    /// 获取所有历史记录中最新的使用时间戳（若无记录则返回默认基准时间戳）
+    pub fn latest_timestamp(&self) -> u64 {
+        self.entries
+            .values()
+            .flat_map(|list| list.iter().map(|e| e.last_used_timestamp))
+            .max()
+            .unwrap_or(1_700_000_000)
     }
 
     /// 清空所有历史自造词与调频数据

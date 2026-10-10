@@ -96,11 +96,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
     engine.custom_phrases = waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
     let user_dict = AppConfig::user_dict_path();
+    engine.set_user_dict_path(&user_dict);
     if user_dict.exists() {
-        if let Ok(model) = waylan_algo::user_adaptive::UserAdaptiveModel::load_from_file(&user_dict) {
-            info!("[字库引擎] 成功载入用户自适应个性化历史词库: {:?}", user_dict);
-            engine.user_model = model;
-        }
+        info!(
+            "[字库引擎] 成功载入用户自适应个性化历史词库: {:?} (词条数: {})",
+            user_dict,
+            engine.user_model.total_entries()
+        );
     }
 
     // 载入混输与辅助符号词库 (aux.dict.bin)
@@ -258,7 +260,7 @@ fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error:
             let import_file = &sub_args[1];
             println!("[词库导入] 正在导入用户自定义词库: {}", import_file);
             let user_dict_path = AppConfig::user_dict_path();
-            let mut user_model = UserAdaptiveModel::load_from_file(&user_dict_path)
+            let mut user_model = UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
                 .unwrap_or_else(|_| UserAdaptiveModel::new());
 
             let now = std::time::SystemTime::now()
@@ -267,7 +269,7 @@ fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn std::error:
                 .unwrap_or(0);
             let count =
                 DictBuilder::import_user_text_dict(Path::new(import_file), &mut user_model, now)?;
-            user_model.save_to_file(&user_dict_path)?;
+            user_model.compact_wal(&user_dict_path)?;
             println!("[导入成功] 已将 {} 条自定义词条注入用户自适应词库！", count);
         }
         other => {

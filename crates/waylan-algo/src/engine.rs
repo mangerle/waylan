@@ -52,6 +52,8 @@ pub struct AlgoEngine {
     pub is_expanded: bool,
     /// 二级扩展卡片中当前选中的子项索引（0-indexed）
     pub expanded_selected_index: usize,
+    /// 用户自适应词库 WAL 持久化文件路径（若设置则每次选词自动追加写盘）
+    pub user_dict_path: Option<std::path::PathBuf>,
 }
 
 impl AlgoEngine {
@@ -72,7 +74,19 @@ impl AlgoEngine {
             last_commit_context: None,
             is_expanded: false,
             expanded_selected_index: 0,
+            user_dict_path: None,
         }
+    }
+
+    /// 设置用户自适应词库持久化文件路径并自动重放加载已有 WAL 记录
+    pub fn set_user_dict_path(&mut self, path: impl Into<std::path::PathBuf>) {
+        let p = path.into();
+        if p.exists() {
+            if let Ok(model) = UserAdaptiveModel::load_or_replay_wal(&p) {
+                self.user_model = model;
+            }
+        }
+        self.user_dict_path = Some(p);
     }
 
     /// 使用内置样例数据创建算法引擎（用于测试）
@@ -170,9 +184,18 @@ impl AlgoEngine {
             selected.text.clone()
         };
 
-        // 记录用户选词并动态调频
-        self.user_model
-            .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+        // 记录用户选词并动态调频（若配置了持久化路径则同步追加至 WAL 日志）
+        if let Some(ref path) = self.user_dict_path {
+            let _ = self.user_model.append_to_wal(
+                path,
+                &selected.text,
+                &selected.pinyin,
+                current_timestamp,
+            );
+        } else {
+            self.user_model
+                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+        }
 
         // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
         let commit_text = if self.config.auto_pangu_spacing {
@@ -424,6 +447,8 @@ impl AlgoEngine {
             raw_candidates.push(cand);
         }
 
+        let eval_ts = self.user_model.latest_timestamp();
+
         for path in &paths {
             let key = path.to_key_string();
 
@@ -438,7 +463,7 @@ impl AlgoEngine {
             raw_candidates.append(&mut matches);
 
             // 用户自造词检索
-            let mut user_matches = self.user_model.lookup_user_words(&key, 1_700_000_000);
+            let mut user_matches = self.user_model.lookup_user_words(&key, eval_ts);
             if path.is_typo {
                 for m in &mut user_matches {
                     m.tier = CandidateTier::TypoCorrection;
@@ -535,7 +560,7 @@ impl AlgoEngine {
 
         // 3. 动态应用用户习惯提权与上屏历史上下文亲和度加权
         for c in &mut raw_candidates {
-            self.user_model.apply_boost(c, 1_700_000_000);
+            self.user_model.apply_boost(c, eval_ts);
             if let Some(ref prev) = self.last_commit_context {
                 let affinity = self
                     .table
