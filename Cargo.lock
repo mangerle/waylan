@@ -3389,6 +3389,7 @@ name = "waylan-ui"
 version = "0.1.0"
 dependencies = [
  "fontdue",
+ "log",
  "tiny-skia",
  "waylan-core",
 ]

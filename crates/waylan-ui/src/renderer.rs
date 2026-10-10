@@ -1,5 +1,6 @@
 use crate::theme::{Color, UiTheme};
 use fontdue::{Font, FontSettings};
+use log::{info, warn};
 use std::fs;
 use std::path::Path;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -42,28 +43,129 @@ impl CandidateBoxRenderer {
         renderer
     }
 
-    /// 尝试按优先级加载本地中文字体
-    fn load_default_fonts(&mut self) {
-        let candidate_paths = [
+    /// 查询当前是否已加载有效字体
+    pub fn has_font(&self) -> bool {
+        self.font.is_some()
+    }
+
+    /// 手动从指定文件路径加载字体
+    pub fn load_font_from_path(&mut self, path: &Path) -> bool {
+        if let Ok(data) = fs::read(path) {
+            self.load_font_from_bytes(&data)
+        } else {
+            false
+        }
+    }
+
+    /// 从内存字节流中加载字体
+    pub fn load_font_from_bytes(&mut self, bytes: &[u8]) -> bool {
+        if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
+            self.font = Some(font);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 获取平台默认的字体检索路径列表（覆盖 Ubuntu/Debian/Arch/Fedora/openSUSE/WSL）
+    pub fn default_font_search_paths() -> Vec<std::path::PathBuf> {
+        let mut paths = Vec::new();
+        if let Ok(home) = std::env::var("HOME") {
+            let p_home = std::path::PathBuf::from(home);
+            paths.push(p_home.join(".local/share/fonts/NotoSansCJK-Regular.ttc"));
+            paths.push(p_home.join(".local/share/fonts/NotoSansSC-Regular.otf"));
+            paths.push(p_home.join(".local/share/fonts/SourceHanSansCN-Regular.otf"));
+            paths.push(p_home.join(".fonts/NotoSansCJK-Regular.ttc"));
+            paths.push(p_home.join(".fonts/wqy-microhei.ttc"));
+        }
+
+        let system_paths = [
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-sans-cjk-vf/NotoSansCJK-VF.ttf.ttc",
+            "/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-            "/mnt/c/Windows/Fonts/msyh.ttc", // Windows 宿主微软雅黑
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
+            "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
+            "/usr/share/fonts/wqy-microhei-fonts/wqy-microhei.ttc",
+            "/usr/share/fonts/wqy-zenhei-fonts/wqy-zenhei.ttc",
+            "/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf",
+            "/usr/share/fonts/truetype/SourceHanSansCN-Regular.otf",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/mnt/c/Windows/Fonts/msyh.ttc",
             "/mnt/c/Windows/Fonts/simhei.ttf",
+            "/mnt/c/Windows/Fonts/simsun.ttc",
+            "/mnt/c/Windows/Fonts/arial.ttf",
         ];
 
-        for path_str in &candidate_paths {
-            let path = Path::new(path_str);
+        for p in &system_paths {
+            paths.push(std::path::PathBuf::from(p));
+        }
+        paths
+    }
+
+    /// 在常见字体根目录下进行浅层探测扫描以寻找任意可用字体
+    fn scan_fallback_fonts() -> Option<Font> {
+        let font_dirs = ["/usr/share/fonts", "/usr/local/share/fonts"];
+        for dir in &font_dirs {
+            let path = Path::new(dir);
+            if !path.is_dir() {
+                continue;
+            }
+            if let Ok(entries) = fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() {
+                        if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                            if matches!(ext, "ttf" | "otf" | "ttc") {
+                                if let Ok(data) = fs::read(&p) {
+                                    if let Ok(font) =
+                                        Font::from_bytes(data, FontSettings::default())
+                                    {
+                                        info!("[矢量渲染] 降级匹配成功载入字体: {:?}", p);
+                                        return Some(font);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// 尝试按优先级加载本地中文字体
+    fn load_default_fonts(&mut self) {
+        let candidate_paths = Self::default_font_search_paths();
+
+        for path in &candidate_paths {
             if path.exists() {
                 if let Ok(data) = fs::read(path) {
                     if let Ok(font) = Font::from_bytes(data, FontSettings::default()) {
+                        info!("[矢量渲染] 成功载入系统字体: {:?}", path);
                         self.font = Some(font);
                         return;
                     }
                 }
             }
         }
+
+        // 降级兜底：若预设字体全未命中，尝试在常见系统字体目录中进行浅层匹配扫描
+        if let Some(font) = Self::scan_fallback_fonts() {
+            self.font = Some(font);
+            return;
+        }
+
+        warn!("[矢量渲染] 警告：系统中未检测到任何中西文字体，已自动启用豆腐块几何占位降级模式。建议安装 noto-fonts-cjk 或 wqy-microhei。");
     }
 
     /// 渲染单行胶囊候选栏
@@ -399,7 +501,7 @@ impl CandidateBoxRenderer {
     /// 测量一段文字的排版宽度（仅计算字形度量，避免触发无谓的位图光栅化分配）
     fn measure_text(&self, text: &str, size: f32) -> f32 {
         let Some(font) = self.font.as_ref() else {
-            return text.chars().count() as f32 * size;
+            return text.chars().count() as f32 * (size * 0.8 + 3.0);
         };
 
         let mut width = 0.0;
@@ -411,7 +513,14 @@ impl CandidateBoxRenderer {
     }
 
     /// 绘制指定坐标外层卡片背景（纯白微阴影与细描边）
-    fn draw_card_background_at(&self, pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32) {
+    fn draw_card_background_at(
+        &self,
+        pixmap: &mut Pixmap,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
         let r = 10.0; // 圆角
         let mut pb = PathBuilder::new();
         pb.move_to(x + r, y);
@@ -515,6 +624,23 @@ impl CandidateBoxRenderer {
     /// 绘制文本
     fn draw_text(&self, pixmap: &mut Pixmap, text: &str, x: f32, y: f32, size: f32, color: Color) {
         let Some(font) = self.font.as_ref() else {
+            // 字体缺失降级：绘制字符占位小圆角线框（豆腐块），确保排版可见不白屏
+            let mut current_x = x;
+            let glyph_w = size * 0.8;
+            let glyph_h = size;
+            let placeholder_color =
+                Color::from_rgba(color.r, color.g, color.b, (color.a * 0.35).clamp(0.0, 1.0));
+            for _ in text.chars() {
+                let rect_params = RoundedRectParams {
+                    x: current_x,
+                    y: y - glyph_h,
+                    w: glyph_w,
+                    h: glyph_h,
+                    r: 2.0,
+                };
+                self.draw_rounded_rect(pixmap, rect_params, placeholder_color);
+                current_x += glyph_w + 3.0;
+            }
             return;
         };
 
@@ -614,10 +740,8 @@ mod tests {
             preedit: "ri'qi".to_string(),
             candidates: vec![
                 Candidate::new("日期", "ri'qi", 10_000),
-                Candidate::new("日期", "ri'qi", 999_999).with_sub_candidates(vec![
-                    "2026年10月9日".to_string(),
-                    "20261009".to_string(),
-                ]),
+                Candidate::new("日期", "ri'qi", 999_999)
+                    .with_sub_candidates(vec!["2026年10月9日".to_string(), "20261009".to_string()]),
             ],
             selected_index: 0,
             is_expanded: false,
@@ -686,8 +810,47 @@ mod tests {
         );
 
         let p = pixmap.pixel(1, 1).unwrap();
-        assert_eq!(p.alpha(), 255, "在纯白不透明背景上混合半透明抗锯齿字形后，底图必须保持 100% 不透明");
-        assert!(p.red() > 100 && p.red() < 150, "混合后的灰度值应平滑处于中间区间，实际: {}", p.red());
+        assert_eq!(
+            p.alpha(),
+            255,
+            "在纯白不透明背景上混合半透明抗锯齿字形后，底图必须保持 100% 不透明"
+        );
+        assert!(
+            p.red() > 100 && p.red() < 150,
+            "混合后的灰度值应平滑处于中间区间，实际: {}",
+            p.red()
+        );
+    }
+
+    #[test]
+    fn test_font_fallback_and_missing_font_render() {
+        // 1. 验证默认字体检索路径包含多平台路径
+        let search_paths = CandidateBoxRenderer::default_font_search_paths();
+        assert!(search_paths.len() >= 10, "预设字体路径应覆盖主流桌面发行版");
+
+        // 2. 模拟完全无字体的极端环境
+        let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
+        renderer.font = None;
+        assert!(!renderer.has_font());
+
+        let state = CandidateBoxState {
+            visible: true,
+            preedit: "ce'shi".to_string(),
+            candidates: vec![
+                Candidate::new("测试", "ce'shi", 100),
+                Candidate::new("侧视", "ce'shi", 90),
+            ],
+            selected_index: 0,
+            is_expanded: false,
+            expanded_selected_index: 0,
+            mode_badge: "中".to_string(),
+        };
+
+        // 必须成功光栅化，并利用豆腐块安全呈现，绝不返回 None 或触发 Panic
+        let pixmap = renderer
+            .render(&state)
+            .expect("无字体极端环境下仍应成功渲染占位降级界面");
+        assert!(pixmap.width() > 50);
+        assert_eq!(pixmap.height(), 38);
     }
 }
-
