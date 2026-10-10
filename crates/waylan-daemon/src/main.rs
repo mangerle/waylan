@@ -87,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         enable_v_mode: cfg.v_mode,
         traditional_chinese: cfg.traditional_chinese,
         double_pinyin: cfg.double_pinyin,
+        auto_pangu_spacing: cfg.auto_pangu_spacing,
         ..Default::default()
     };
     let mut engine = AlgoEngine::new(table, algo_config);

@@ -336,6 +336,7 @@ impl eframe::App for SettingsApp {
                             ui.checkbox(&mut self.config.fuzzy_pinyin, "开启模糊拼音 (平翘舌、前后鼻音)");
                             ui.checkbox(&mut self.config.v_mode, "开启 V 模式 (输入 v1+2 快捷计算求值)");
                             ui.checkbox(&mut self.config.traditional_chinese, "繁体中文模式 (默认输出繁体汉字)");
+                            ui.checkbox(&mut self.config.auto_pangu_spacing, "中西文智能空格 (盘古之白，汉字与英文/数字自动空格)");
                         });
                     }
 

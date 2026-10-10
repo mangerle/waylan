@@ -60,6 +60,9 @@ pub struct AppConfig {
     /// 双拼方案配置（None 为全拼，Some(XiaoHe) 小鹤双拼，Some(ZiRanMa) 自然码双拼）
     #[serde(default)]
     pub double_pinyin: Option<DoublePinyinSchema>,
+    /// 是否开启中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）
+    #[serde(default)]
+    pub auto_pangu_spacing: bool,
 }
 
 impl Default for AppConfig {
@@ -77,6 +80,7 @@ impl Default for AppConfig {
             fuzzy_pinyin: false,
             traditional_chinese: false,
             double_pinyin: None,
+            auto_pangu_spacing: false,
         }
     }
 }
@@ -152,7 +156,6 @@ impl AppConfig {
         paths.push(PathBuf::from("/usr/local/share/waylan/data/base.dict.bin"));
         paths.push(PathBuf::from("/usr/local/share/waylan/base.dict.bin"));
         paths.push(PathBuf::from("data/base.dict.bin"));
-        paths.push(PathBuf::from("/home/wsl/waylan/data/base.dict.bin"));
         paths
     }
 
@@ -184,7 +187,6 @@ impl AppConfig {
         paths.push(PathBuf::from("/usr/local/share/waylan/data/aux.dict.bin"));
         paths.push(PathBuf::from("/usr/local/share/waylan/aux.dict.bin"));
         paths.push(PathBuf::from("data/aux.dict.bin"));
-        paths.push(PathBuf::from("/home/wsl/waylan/data/aux.dict.bin"));
         paths
     }
 
@@ -251,6 +253,7 @@ mod tests {
         assert_eq!(deserialized.page_size, 7);
         assert_eq!(deserialized.switch_key, SwitchKey::Shift);
         assert_eq!(deserialized.page_keys, PageKeys::MinusEqual);
+        assert!(!deserialized.auto_pangu_spacing);
 
         // 测试临时文件保存
         let temp_dir = std::env::temp_dir().join("waylan_test_cfg");
