@@ -1,10 +1,22 @@
 use crate::theme::{Color, UiTheme};
 use fontdue::{Font, FontSettings};
 use log::{info, warn};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use waylan_core::CandidateBoxState;
+
+/// 最大字形位图缓存条目数（覆盖绝大多数常用汉字与符号，占用内存不足 1MB）
+const MAX_GLYPH_CACHE_SIZE: usize = 2048;
+
+/// 缓存的单字形光栅化位图与度量信息
+#[derive(Debug, Clone)]
+pub struct CachedGlyph {
+    pub metrics: fontdue::Metrics,
+    pub bitmap: Vec<u8>,
+}
 
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式）
 pub struct CandidateBoxRenderer {
@@ -12,6 +24,8 @@ pub struct CandidateBoxRenderer {
     font: Option<Font>,
     /// 基础候选字号大小
     pub font_size: f32,
+    /// 字形位图与度量信息缓存（避免高频字符每次击键重复矢量光栅化）
+    glyph_cache: Mutex<HashMap<(char, u32), CachedGlyph>>,
 }
 
 /// 圆角矩形几何参数
@@ -38,6 +52,7 @@ impl CandidateBoxRenderer {
             theme,
             font: None,
             font_size: 15.0,
+            glyph_cache: Mutex::new(HashMap::with_capacity(256)),
         };
         renderer.load_default_fonts();
         renderer
@@ -61,10 +76,48 @@ impl CandidateBoxRenderer {
     pub fn load_font_from_bytes(&mut self, bytes: &[u8]) -> bool {
         if let Ok(font) = Font::from_bytes(bytes, FontSettings::default()) {
             self.font = Some(font);
+            self.clear_glyph_cache();
             true
         } else {
             false
         }
+    }
+
+    /// 获取当前字形缓存条目总数（用于诊断与测试）
+    pub fn glyph_cache_len(&self) -> usize {
+        self.glyph_cache.lock().map(|c| c.len()).unwrap_or(0)
+    }
+
+    /// 清空字形缓存
+    pub fn clear_glyph_cache(&self) {
+        if let Ok(mut cache) = self.glyph_cache.lock() {
+            cache.clear();
+        }
+    }
+
+    /// 获取字形位图与度量（优先从缓存中获取，未命中则触发矢量光栅化并写入缓存）
+    fn get_or_rasterize_glyph(&self, ch: char, size: f32) -> Option<CachedGlyph> {
+        let font = self.font.as_ref()?;
+        let size_key = (size * 100.0).round() as u32;
+
+        if let Ok(cache) = self.glyph_cache.lock() {
+            if let Some(cached) = cache.get(&(ch, size_key)) {
+                return Some(cached.clone());
+            }
+        }
+
+        // 未命中：执行 CPU 矢量光栅化并写入缓存
+        let (metrics, bitmap) = font.rasterize(ch, size);
+        let cached = CachedGlyph { metrics, bitmap };
+
+        if let Ok(mut cache) = self.glyph_cache.lock() {
+            if cache.len() >= MAX_GLYPH_CACHE_SIZE {
+                cache.clear();
+            }
+            cache.insert((ch, size_key), cached.clone());
+        }
+
+        Some(cached)
     }
 
     /// 获取平台默认的字体检索路径列表（覆盖 Ubuntu/Debian/Arch/Fedora/openSUSE/WSL）
@@ -498,14 +551,21 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 测量一段文字的排版宽度（仅计算字形度量，避免触发无谓的位图光栅化分配）
+    /// 测量一段文字的排版宽度（优先从字形缓存中获取 advance_width，避免重复计算）
     fn measure_text(&self, text: &str, size: f32) -> f32 {
         let Some(font) = self.font.as_ref() else {
             return text.chars().count() as f32 * (size * 0.8 + 3.0);
         };
 
+        let size_key = (size * 100.0).round() as u32;
         let mut width = 0.0;
         for ch in text.chars() {
+            if let Ok(cache) = self.glyph_cache.lock() {
+                if let Some(cached) = cache.get(&(ch, size_key)) {
+                    width += cached.metrics.advance_width;
+                    continue;
+                }
+            }
             let metrics = font.metrics(ch, size);
             width += metrics.advance_width;
         }
@@ -623,7 +683,7 @@ impl CandidateBoxRenderer {
 
     /// 绘制文本
     fn draw_text(&self, pixmap: &mut Pixmap, text: &str, x: f32, y: f32, size: f32, color: Color) {
-        let Some(font) = self.font.as_ref() else {
+        if self.font.is_none() {
             // 字体缺失降级：绘制字符占位小圆角线框（豆腐块），确保排版可见不白屏
             let mut current_x = x;
             let glyph_w = size * 0.8;
@@ -646,24 +706,26 @@ impl CandidateBoxRenderer {
 
         let mut current_x = x;
         for ch in text.chars() {
-            let (metrics, bitmap) = font.rasterize(ch, size);
-            if metrics.width > 0 && metrics.height > 0 {
-                let glyph_x = (current_x + metrics.xmin as f32) as i32;
-                let glyph_y = (y - metrics.height as f32 - metrics.ymin as f32) as i32;
+            if let Some(glyph) = self.get_or_rasterize_glyph(ch, size) {
+                if glyph.metrics.width > 0 && glyph.metrics.height > 0 {
+                    let glyph_x = (current_x + glyph.metrics.xmin as f32) as i32;
+                    let glyph_y =
+                        (y - glyph.metrics.height as f32 - glyph.metrics.ymin as f32) as i32;
 
-                self.blend_glyph(
-                    pixmap,
-                    GlyphBitmapParams {
-                        bitmap: &bitmap,
-                        x: glyph_x,
-                        y: glyph_y,
-                        width: metrics.width,
-                        height: metrics.height,
-                    },
-                    color,
-                );
+                    self.blend_glyph(
+                        pixmap,
+                        GlyphBitmapParams {
+                            bitmap: &glyph.bitmap,
+                            x: glyph_x,
+                            y: glyph_y,
+                            width: glyph.metrics.width,
+                            height: glyph.metrics.height,
+                        },
+                        color,
+                    );
+                }
+                current_x += glyph.metrics.advance_width;
             }
-            current_x += metrics.advance_width;
         }
     }
 
@@ -852,5 +914,45 @@ mod tests {
             .expect("无字体极端环境下仍应成功渲染占位降级界面");
         assert!(pixmap.width() > 50);
         assert_eq!(pixmap.height(), 38);
+    }
+
+    #[test]
+    fn test_glyph_cache_hit_and_reuse() {
+        let renderer = CandidateBoxRenderer::new(UiTheme::light());
+        if !renderer.has_font() {
+            return;
+        }
+
+        renderer.clear_glyph_cache();
+        assert_eq!(renderer.glyph_cache_len(), 0);
+
+        let state = CandidateBoxState {
+            visible: true,
+            preedit: "ce".to_string(),
+            candidates: vec![
+                Candidate::new("测试", "ce'shi", 100),
+                Candidate::new("侧视", "ce'shi", 90),
+            ],
+            selected_index: 0,
+            is_expanded: false,
+            expanded_selected_index: 0,
+            mode_badge: "中".to_string(),
+        };
+
+        // 首次渲染：填充字形缓存
+        let _ = renderer.render(&state);
+        let cache_len_1 = renderer.glyph_cache_len();
+        assert!(
+            cache_len_1 > 0,
+            "首次渲染后字形缓存中应包含已光栅化的字形位图"
+        );
+
+        // 二次渲染完全相同的候选词条：全部命中缓存，缓存数量不再增加，消除重复矢量运算
+        let _ = renderer.render(&state);
+        let cache_len_2 = renderer.glyph_cache_len();
+        assert_eq!(
+            cache_len_1, cache_len_2,
+            "再次渲染相同字形应 100% 命中缓存，避免重复矢量光栅化"
+        );
     }
 }
