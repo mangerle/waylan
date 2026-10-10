@@ -11,6 +11,13 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
     Event as PopupEvent, ZwpInputPopupSurfaceV2,
 };
 
+use waylan_core::{CandidateBoxState, InputMode, TextAction};
+use crate::session_v1::{
+    keycode_to_char, keycode_to_digit, keycode_to_punctuation, KEY_BACKSPACE, KEY_DOWN, KEY_ENTER,
+    KEY_EQUAL, KEY_ESC, KEY_LEFT, KEY_LEFTBRACE, KEY_MINUS, KEY_PAGEDOWN, KEY_PAGEUP, KEY_RIGHT,
+    KEY_RIGHTBRACE, KEY_SPACE, KEY_TAB, KEY_UP,
+};
+
 /// 微澜面向现代 Wayland 合成器 (KDE Plasma 6 / GNOME 46+ / Hyprland) 的 V2 会话状态
 pub struct WaylanV2Session {
     /// 核心拼音算法引擎
@@ -23,12 +30,18 @@ pub struct WaylanV2Session {
     pub surface_manager: CandidateSurfaceManager,
     /// 当前是否处于激活会话
     pub is_active: bool,
+    /// 关联的 zwp_input_method_v2 协议句柄
+    pub input_method: Option<ZwpInputMethodV2>,
     /// 硬件键盘捕获句柄
     pub keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
     /// 悬浮候选弹出层 Surface
     pub popup_surface: Option<ZwpInputPopupSurfaceV2>,
     /// 当前跟踪的光标坐标
     pub current_cursor: CursorRect,
+    /// 当前输入语言模式
+    pub mode: InputMode,
+    /// Done 事件累计序列号（用于 commit 请求原子同步）
+    pub done_serial: u32,
 }
 
 impl WaylanV2Session {
@@ -39,10 +52,83 @@ impl WaylanV2Session {
             punctuation_processor: PunctuationProcessor::new(),
             surface_manager: CandidateSurfaceManager::new(),
             is_active: false,
+            input_method: None,
             keyboard_grab: None,
             popup_surface: None,
             current_cursor: CursorRect::default(),
+            mode: InputMode::Chinese,
+            done_serial: 0,
         }
+    }
+
+    /// 设置关联的 V2 输入法实例
+    pub fn set_input_method(&mut self, im: ZwpInputMethodV2) {
+        self.input_method = Some(im);
+    }
+
+    /// 根据当前算法引擎与输入模式构建候选框渲染状态
+    pub fn build_candidate_box_state(&self) -> CandidateBoxState {
+        let candidates = self.engine.candidates();
+        let core_candidates: Vec<waylan_core::Candidate> = candidates
+            .iter()
+            .map(|c| waylan_core::Candidate {
+                text: c.text.clone(),
+                pinyin: c.pinyin.clone(),
+                score: c.score,
+                is_expandable: c.is_expandable,
+                sub_candidates: c.sub_candidates.clone(),
+            })
+            .collect();
+
+        CandidateBoxState {
+            visible: self.is_active && !self.engine.raw_input().is_empty(),
+            preedit: self.engine.formatted_preedit(),
+            candidates: core_candidates,
+            selected_index: 0,
+            is_expanded: self.engine.is_expanded,
+            expanded_selected_index: self.engine.expanded_selected_index,
+            mode_badge: match self.mode {
+                InputMode::Chinese => "中".to_string(),
+                InputMode::English => "英".to_string(),
+                InputMode::VMode => "V".to_string(),
+            },
+        }
+    }
+
+    /// 触发候选框悬浮表面重绘
+    pub fn refresh_candidate_surface(&mut self) {
+        let box_state = self.build_candidate_box_state();
+        let _ = self.surface_manager.render_state(&box_state);
+    }
+
+    /// 提交指定文本上屏，并重置预编辑状态
+    pub fn commit_text(&mut self, text: &str) {
+        if let Some(im) = &self.input_method {
+            im.commit_string(text.to_string());
+            im.set_preedit_string(String::new(), 0, 0);
+            im.commit(self.done_serial);
+        }
+        self.surface_manager.on_input_inactive();
+    }
+
+    /// 更新当前 preedit 预编辑字符串到目标客户端
+    pub fn update_preedit(&mut self, preedit: &str) {
+        if let Some(im) = &self.input_method {
+            let len = preedit.len() as i32;
+            im.set_preedit_string(preedit.to_string(), 0, len);
+            im.commit(self.done_serial);
+        }
+        if preedit.is_empty() {
+            self.surface_manager.on_input_inactive();
+        } else {
+            self.refresh_candidate_surface();
+        }
+    }
+
+    /// 取消当前输入，重置引擎与预编辑区
+    pub fn cancel_input(&mut self) {
+        self.engine.reset();
+        self.update_preedit("");
     }
 }
 
@@ -77,7 +163,8 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
             V2Event::TextChangeCause { cause: _ } => {}
             V2Event::ContentType { hint: _, purpose: _ } => {}
             V2Event::Done => {
-                // 批次状态同步已完成
+                // 批次状态同步已完成，原子序列号递增
+                state.done_serial = state.done_serial.wrapping_add(1);
             }
             V2Event::Unavailable => {
                 info!("[Wayland v2] 输入法 v2 协议不可用，正在自动降级兼容模式。");
@@ -112,12 +199,266 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
 // 为 zwp_input_method_keyboard_grab_v2 实现事件分发
 impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
     fn event(
-        _state: &mut Self,
+        state: &mut Self,
         _proxy: &ZwpInputMethodKeyboardGrabV2,
-        _event: <ZwpInputMethodKeyboardGrabV2 as wayland_client::Proxy>::Event,
+        event: wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::Event as GrabEvent;
+        match event {
+            GrabEvent::Keymap { format, fd, size } => {
+                info!(
+                    "[Wayland v2 键盘抓取] 收到键盘映射配置: format={:?}, 大小={} 字节",
+                    format, size
+                );
+                let _ = fd;
+            }
+            GrabEvent::Key {
+                serial: _,
+                time: _,
+                key,
+                state: key_state,
+            } => {
+                let is_press = matches!(
+                    key_state,
+                    wayland_client::WEnum::Value(
+                        wayland_client::protocol::wl_keyboard::KeyState::Pressed
+                    )
+                );
+
+                // 1. 优先经由 Shift 防误触状态机判定
+                if let Some(new_mode) = state.shift_state.on_key_event(key, is_press, state.mode) {
+                    state.mode = new_mode;
+                    let mode_str = match new_mode {
+                        InputMode::Chinese => "中文",
+                        InputMode::English => "英文",
+                        InputMode::VMode => "V模式",
+                    };
+                    info!("[Wayland v2] 切换输入模式为：{}", mode_str);
+                    return;
+                }
+
+                // 只在按键按下时处理拼音与候选交互
+                if !is_press {
+                    return;
+                }
+
+                // 2. 如果处于英文模式，跳过拼音组合拦截
+                if state.mode == InputMode::English {
+                    return;
+                }
+
+                // 3. 正在组合拼音状态下的专门按键拦截
+                if !state.engine.raw_input().is_empty() {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+
+                    // 3.1 Tab 键或方向键下：切换/展开二级动态格式卡片
+                    if (key == KEY_TAB || (key == KEY_DOWN && !state.engine.is_expanded))
+                        && state.engine.toggle_expand(0)
+                    {
+                        state.refresh_candidate_surface();
+                        return;
+                    }
+
+                    // 3.2 处于展开二级状态下的导航与选择
+                    if state.engine.is_expanded {
+                        if key == KEY_DOWN {
+                            state.engine.next_expanded_item(0);
+                            state.refresh_candidate_surface();
+                            return;
+                        }
+                        if key == KEY_UP {
+                            state.engine.prev_expanded_item(0);
+                            state.refresh_candidate_surface();
+                            return;
+                        }
+                        if key == KEY_ENTER || key == KEY_SPACE {
+                            if let Some((committed, _)) = state
+                                .engine
+                                .select_expanded_item(0, state.engine.expanded_selected_index)
+                            {
+                                state.punctuation_processor.record_commit(&committed);
+                                state.commit_text(&committed);
+                                return;
+                            }
+                        }
+                    }
+
+                    // 3.3 数字键 1-9：选择对应位候选词
+                    if let Some(digit) = keycode_to_digit(key) {
+                        let cand_idx = digit.saturating_sub(1);
+                        if let Some((committed_text, remaining_len)) =
+                            state.engine.select_candidate(cand_idx, now)
+                        {
+                            state.punctuation_processor.record_commit(&committed_text);
+                            if remaining_len > 0 {
+                                let preedit = state.engine.formatted_preedit();
+                                state.update_preedit(&preedit);
+                            } else {
+                                state.commit_text(&committed_text);
+                            }
+                            return;
+                        }
+                    }
+
+                    // 3.4 空格键：首选项上屏
+                    if key == KEY_SPACE {
+                        if let Some((committed_text, remaining_len)) =
+                            state.engine.select_candidate(0, now)
+                        {
+                            state.punctuation_processor.record_commit(&committed_text);
+                            if remaining_len > 0 {
+                                let preedit = state.engine.formatted_preedit();
+                                state.update_preedit(&preedit);
+                            } else {
+                                state.commit_text(&committed_text);
+                            }
+                            return;
+                        }
+                    }
+
+                    // 3.5 回车键（Enter）：直接上屏原始拼音字母
+                    if key == KEY_ENTER {
+                        let raw = state.engine.raw_input().to_string();
+                        state.engine.reset();
+                        state.commit_text(&raw);
+                        return;
+                    }
+
+                    // 3.6 退格键（Backspace）：删除一个拼文字母
+                    if key == KEY_BACKSPACE {
+                        state.engine.pop_char();
+                        let preedit = state.engine.formatted_preedit();
+                        state.update_preedit(&preedit);
+                        return;
+                    }
+
+                    // 3.7 候选词翻页（PageUp/PageDown, 减号/等号, 方括号）
+                    if key == KEY_PAGEUP || key == KEY_MINUS || key == KEY_LEFTBRACE {
+                        state.engine.prev_page();
+                        state.refresh_candidate_surface();
+                        return;
+                    }
+                    if key == KEY_PAGEDOWN || key == KEY_EQUAL || key == KEY_RIGHTBRACE {
+                        state.engine.next_page();
+                        state.refresh_candidate_surface();
+                        return;
+                    }
+
+                    // 3.8 预编辑区内光标左移/右移
+                    if key == KEY_LEFT {
+                        state.engine.move_cursor_left();
+                        let preedit = state.engine.formatted_preedit();
+                        state.update_preedit(&preedit);
+                        return;
+                    }
+                    if key == KEY_RIGHT {
+                        state.engine.move_cursor_right();
+                        let preedit = state.engine.formatted_preedit();
+                        state.update_preedit(&preedit);
+                        return;
+                    }
+
+                    // 3.9 ESC 键：取消当前输入并清空
+                    if key == KEY_ESC {
+                        state.cancel_input();
+                        return;
+                    }
+                }
+
+                // 4. 输入缓冲区为空时的中文标点符号处理
+                if state.engine.raw_input().is_empty() {
+                    if let Some(punct_char) = keycode_to_punctuation(key) {
+                        if let Some(actions) =
+                            state.punctuation_processor.process_punctuation(punct_char)
+                        {
+                            for action in actions {
+                                match action {
+                                    TextAction::Commit(text) => {
+                                        state.commit_text(&text);
+                                    }
+                                    TextAction::MoveCursor(_) => {}
+                                    _ => {}
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                // 5. 字母键输入（A-Z）：进入拼音算法管线
+                if let Some(ch) = keycode_to_char(key) {
+                    state.engine.push_char(ch);
+                    let preedit = state.engine.formatted_preedit();
+                    state.update_preedit(&preedit);
+                }
+            }
+            GrabEvent::Modifiers {
+                serial: _,
+                mods_depressed,
+                mods_latched: _,
+                mods_locked: _,
+                group: _,
+            } => {
+                info!(
+                    "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}",
+                    mods_depressed
+                );
+            }
+            GrabEvent::RepeatInfo { rate, delay } => {
+                info!(
+                    "[Wayland v2 键盘抓取] 收到按键连击设置: rate={}, delay={}",
+                    rate, delay
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use waylan_algo::types::AlgoConfig;
+
+    #[test]
+    fn test_v2_session_initialization() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let session = WaylanV2Session::new(engine);
+
+        assert!(!session.is_active);
+        assert_eq!(session.mode, InputMode::Chinese);
+        assert_eq!(session.done_serial, 0);
+        assert!(session.keyboard_grab.is_none());
+        assert!(session.input_method.is_none());
+
+        let box_state = session.build_candidate_box_state();
+        assert!(!box_state.visible);
+        assert_eq!(box_state.mode_badge, "中");
+    }
+
+    #[test]
+    fn test_v2_session_preedit_and_cancel() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut session = WaylanV2Session::new(engine);
+        session.is_active = true;
+
+        session.engine.push_char('n');
+        session.engine.push_char('i');
+
+        let box_state = session.build_candidate_box_state();
+        assert!(box_state.visible);
+        assert!(!box_state.candidates.is_empty());
+        assert_eq!(box_state.candidates[0].text, "你");
+
+        session.cancel_input();
+        let box_state_after = session.build_candidate_box_state();
+        assert!(!box_state_after.visible);
+        assert!(session.engine.raw_input().is_empty());
     }
 }
