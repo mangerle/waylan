@@ -124,7 +124,13 @@ impl BigramLanguageModel {
             ("你好", "世界") => 18_000,
             ("我们", "来了") | ("我们", "走") | ("我们", "去") => 16_000,
             ("中国", "人民") | ("中国", "历史") | ("中国", "特色") => 18_000,
-            ("清华", "大学") | ("北京", "时间") | ("北京", "大学") | ("我们的", "时间") | ("我们的", "世界") | ("我们共同的", "感觉") | ("共同的", "感觉") => 20_000,
+            ("清华", "大学")
+            | ("北京", "时间")
+            | ("北京", "大学")
+            | ("我们的", "时间")
+            | ("我们的", "世界")
+            | ("我们共同的", "感觉")
+            | ("共同的", "感觉") => 20_000,
             ("的", "时间") | ("的", "世界") | ("的", "感觉") => 18_000,
             ("开发", "软件") | ("操作", "系统") | ("人工", "智能") => 18_000,
             ("永远", "的") | ("很好", "的") => 14_000,
@@ -142,13 +148,38 @@ impl BigramLanguageModel {
     }
 }
 
-/// 束搜索动态规划格点状态
+/// 束搜索动态规划格点状态（引入反向指针拓扑，彻底消除中间路径字符串集合深拷贝）
 #[derive(Debug, Clone)]
 struct ViterbiBeamNode {
-    /// 构词文本序列
-    words: Vec<String>,
+    /// 当前步转移的构词文本
+    word: String,
+    /// 前驱步在 dp 中的索引（0 表示虚拟根节点）
+    prev_step: usize,
+    /// 前驱节点在 dp[prev_step] 束集合中的下标
+    prev_beam_idx: usize,
     /// 累计对数语言模型得分
     total_score: i64,
+}
+
+/// 沿反向指针逆向回溯拼装整句文本，仅在选出全局最优解时触发一次聚合
+fn backtrack_sentence(
+    dp: &[Vec<ViterbiBeamNode>],
+    mut step: usize,
+    mut beam_idx: usize,
+    tail_word: Option<&str>,
+) -> String {
+    let mut words = Vec::new();
+    if let Some(tail) = tail_word {
+        words.push(tail);
+    }
+    while step > 0 {
+        let node = &dp[step][beam_idx];
+        words.push(&node.word);
+        step = node.prev_step;
+        beam_idx = node.prev_beam_idx;
+    }
+    words.reverse();
+    words.concat()
 }
 
 /// 维特比整句动态规划解码器 (Viterbi Beam Search Decoder)
@@ -189,7 +220,9 @@ impl ViterbiDecoder {
 
         // 虚拟起始根节点
         dp[0].push(ViterbiBeamNode {
-            words: Vec::new(),
+            word: String::new(),
+            prev_step: 0,
+            prev_beam_idx: 0,
             total_score: 0,
         });
 
@@ -199,7 +232,20 @@ impl ViterbiDecoder {
                 continue;
             }
 
-            let prev_nodes = dp[start_idx].clone();
+            // 提取前驱状态的最小元组 (prev_beam_idx, prev_word, total_score)，避免持有借用冲突
+            let prev_states: Vec<(usize, String, i64)> = dp[start_idx]
+                .iter()
+                .enumerate()
+                .map(|(idx, node)| {
+                    let prev_word = if start_idx == 0 {
+                        prev_context.unwrap_or("").to_string()
+                    } else {
+                        node.word.clone()
+                    };
+                    (idx, prev_word, node.total_score)
+                })
+                .collect();
+
             let max_span = (n - start_idx).min(5);
 
             for span in 1..=max_span {
@@ -224,21 +270,16 @@ impl ViterbiDecoder {
 
                 for (text, raw_score) in raw_entries.iter().take(3) {
                     let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
-                    for prev in &prev_nodes {
-                        // 若为句首（无句内前驱词），无缝采用上屏历史上下文 prev_context
-                        let prev_word = prev.words.last().map(|s| s.as_str()).or(prev_context).unwrap_or("");
+                    for &(prev_beam_idx, ref prev_word, prev_score) in &prev_states {
                         let trans_score = BigramLanguageModel::transition_score(
-                            prev_word,
-                            text,
-                            freq_score,
-                            table,
+                            prev_word, text, freq_score, table,
                         );
 
-                        let mut new_words = prev.words.clone();
-                        new_words.push(text.clone());
                         dp[end_idx].push(ViterbiBeamNode {
-                            words: new_words,
-                            total_score: prev.total_score + trans_score,
+                            word: text.clone(),
+                            prev_step: start_idx,
+                            prev_beam_idx,
+                            total_score: prev_score + trans_score,
                         });
                     }
                 }
@@ -251,7 +292,8 @@ impl ViterbiDecoder {
 
         // 末尾残缺音节与声母扩展（处理未完成键入态，如 "shi'zhong'g" 中的 "g"，或多声母 "de'g'j"）
         if !remaining.is_empty() {
-            let mut ext_candidates = Vec::new();
+            // 候选记录: (prev_step, prev_beam_idx, 扩展词, 总得分)
+            let mut ext_candidates: Vec<(usize, usize, String, i64)> = Vec::new();
 
             // 1. 动态回溯提取尾部声母链 initial_chain
             let mut initial_chain = vec![remaining.to_string()];
@@ -274,50 +316,51 @@ impl ViterbiDecoder {
                 if !dp[split_idx].is_empty() {
                     let acronym_key = initial_chain.concat();
                     let acronym_cands = table.lookup_acronym(&acronym_key);
-                    let prev_nodes = dp[split_idx].clone();
                     for cand in acronym_cands.iter().take(3) {
                         let freq_score = ((cand.score as f64 + 1.0).ln() * 1000.0) as i64;
-                        for prev in &prev_nodes {
-                            let prev_word = prev.words.last().map(|s| s.as_str()).or(prev_context).unwrap_or("");
+                        for (prev_beam_idx, prev) in dp[split_idx].iter().enumerate() {
+                            let prev_word = if split_idx == 0 {
+                                prev_context.unwrap_or("")
+                            } else {
+                                &prev.word
+                            };
                             let trans_score = BigramLanguageModel::transition_score(
-                                prev_word,
-                                &cand.text,
-                                freq_score,
-                                table,
+                                prev_word, &cand.text, freq_score, table,
                             );
-                            let mut new_words = prev.words.clone();
-                            new_words.push(cand.text.clone());
-                            ext_candidates.push(ViterbiBeamNode {
-                                words: new_words,
-                                total_score: prev.total_score + trans_score,
-                            });
+                            ext_candidates.push((
+                                split_idx,
+                                prev_beam_idx,
+                                cand.text.clone(),
+                                prev.total_score + trans_score,
+                            ));
                         }
                     }
                 }
             } else if split_idx >= 1 && !dp[split_idx - 1].is_empty() {
                 // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词（如 shi + j -> 时间）
                 let last_syl = &syllables[split_idx - 1];
-                let prev_nodes_n1 = dp[split_idx - 1].clone();
+                let prev_step = split_idx - 1;
                 for &syl in STANDARD_SYLLABLES {
                     if syl.starts_with(remaining) {
                         let key = format!("{}'{}", last_syl, syl);
                         if let Some(entries) = table.get_raw_entries(&key) {
                             for (text, raw_score) in entries.iter().take(2) {
                                 let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
-                                for prev in &prev_nodes_n1 {
-                                    let prev_word = prev.words.last().map(|s| s.as_str()).or(prev_context).unwrap_or("");
+                                for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
+                                    let prev_word = if prev_step == 0 {
+                                        prev_context.unwrap_or("")
+                                    } else {
+                                        &prev.word
+                                    };
                                     let trans_score = BigramLanguageModel::transition_score(
-                                        prev_word,
-                                        text,
-                                        freq_score,
-                                        table,
+                                        prev_word, text, freq_score, table,
                                     );
-                                    let mut new_words = prev.words.clone();
-                                    new_words.push(text.clone());
-                                    ext_candidates.push(ViterbiBeamNode {
-                                        words: new_words,
-                                        total_score: prev.total_score + trans_score,
-                                    });
+                                    ext_candidates.push((
+                                        prev_step,
+                                        prev_beam_idx,
+                                        text.clone(),
+                                        prev.total_score + trans_score,
+                                    ));
                                 }
                             }
                         }
@@ -327,37 +370,39 @@ impl ViterbiDecoder {
 
             // 策略 B：降级回退（仅当策略 A1/A2 均无法组合成词时，才允许单字母枚举为高频单字）
             if ext_candidates.is_empty() && !dp[n].is_empty() {
-                let prev_nodes_n = dp[n].clone();
                 if let Some(entries) = table.get_initial_raw_entries(remaining) {
                     for (text, raw_score) in entries.iter().take(3) {
                         let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
-                        for prev in &prev_nodes_n {
-                            let prev_word = prev.words.last().map(|s| s.as_str()).or(prev_context).unwrap_or("");
+                        for (prev_beam_idx, prev) in dp[n].iter().enumerate() {
+                            let prev_word = if n == 0 {
+                                prev_context.unwrap_or("")
+                            } else {
+                                &prev.word
+                            };
                             let trans_score = BigramLanguageModel::transition_score(
-                                prev_word,
-                                text,
-                                freq_score,
-                                table,
+                                prev_word, text, freq_score, table,
                             );
-                            let mut new_words = prev.words.clone();
-                            new_words.push(text.clone());
-                            ext_candidates.push(ViterbiBeamNode {
-                                words: new_words,
-                                total_score: prev.total_score + trans_score,
-                            });
+                            ext_candidates.push((
+                                n,
+                                prev_beam_idx,
+                                text.clone(),
+                                prev.total_score + trans_score,
+                            ));
                         }
                     }
                 }
             }
 
-            if let Some(best) = ext_candidates.into_iter().max_by_key(|n| n.total_score) {
-                let full_text = best.words.concat();
+            if let Some((best_step, best_beam_idx, best_word, best_score)) =
+                ext_candidates.into_iter().max_by_key(|cand| cand.3)
+            {
+                let full_text = backtrack_sentence(&dp, best_step, best_beam_idx, Some(&best_word));
                 let pinyin_str = if syllables.is_empty() {
                     remaining.to_string()
                 } else {
                     format!("{}'{}", syllables.join("'"), remaining)
                 };
-                let positive_score = (best.total_score + 100_000).max(1) as u32;
+                let positive_score = (best_score + 100_000).max(1) as u32;
                 return Some(
                     AlgoCandidate::new(full_text, pinyin_str, positive_score)
                         .with_comment("整句预测")
@@ -372,7 +417,7 @@ impl ViterbiDecoder {
         }
 
         let best = &dp[n][0];
-        let full_text = best.words.concat();
+        let full_text = backtrack_sentence(&dp, n, 0, None);
         let pinyin_str = syllables.join("'");
         let positive_score = (best.total_score + 100_000).max(1) as u32;
 
@@ -434,7 +479,10 @@ mod tests {
             "shi".to_string(),
         ];
         let best = ViterbiDecoder::decode_sentence(&syllables, "j", &table).expect("应解码成功");
-        assert_eq!(best.text, "我们的时间", "末尾音节与声母应优先绑定为双字词‘时间’，而非碎字");
+        assert_eq!(
+            best.text, "我们的时间",
+            "末尾音节与声母应优先绑定为双字词‘时间’，而非碎字"
+        );
     }
 
     #[test]
@@ -453,7 +501,10 @@ mod tests {
             "g".to_string(),
         ];
         let best = ViterbiDecoder::decode_sentence(&syllables, "j", &table).expect("应解码成功");
-        assert_eq!(best.text, "我们共同的感觉", "末尾多声母应整体绑定为简拼‘感觉’，绝不碎拼为‘个及’");
+        assert_eq!(
+            best.text, "我们共同的感觉",
+            "末尾多声母应整体绑定为简拼‘感觉’，绝不碎拼为‘个及’"
+        );
     }
 
     #[test]
@@ -465,7 +516,10 @@ mod tests {
 
         let syllables = vec!["bei'jing".to_string(), "shi'jian".to_string()];
         let best = ViterbiDecoder::decode_sentence(&syllables, "", &table).expect("应解码成功");
-        assert_eq!(best.text, "北京时间", "由于Bigram转移亲和度，应优先命中北京时间");
+        assert_eq!(
+            best.text, "北京时间",
+            "由于Bigram转移亲和度，应优先命中北京时间"
+        );
     }
 
     #[test]
@@ -481,13 +535,12 @@ mod tests {
         assert_eq!(no_ctx.text, "事件");
 
         // 当注入上屏历史上下文“北京”时，由于（北京->时间）具有高亲和度，“时间”将逆袭胜出
-        let with_ctx = ViterbiDecoder::decode_sentence_with_context(
-            &syllables,
-            "",
-            &table,
-            Some("北京"),
-        )
-        .expect("应解码成功");
-        assert_eq!(with_ctx.text, "时间", "注入上屏上下文北京后，应优先推荐时间");
+        let with_ctx =
+            ViterbiDecoder::decode_sentence_with_context(&syllables, "", &table, Some("北京"))
+                .expect("应解码成功");
+        assert_eq!(
+            with_ctx.text, "时间",
+            "注入上屏上下文北京后，应优先推荐时间"
+        );
     }
 }
