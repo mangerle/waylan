@@ -247,6 +247,247 @@ impl WaylanV2Session {
         self.engine.reset();
         self.update_preedit("");
     }
+
+    /// 处理单个硬件按键按下/释放事件（返回本次直接上屏的文本，便于无合成器环境下单元测试验证）
+    pub fn handle_key_event(&mut self, key: u32, is_press: bool) -> Option<String> {
+        self.update_modifier_by_key(key, is_press);
+
+        // 1. 优先经由 Shift/Ctrl 防误触状态机判定
+        if let Some(new_mode) = self.shift_state.on_key_event(key, is_press, self.mode) {
+            self.mode = new_mode;
+            if let Some(ref zh_flag) = self.shared_is_chinese {
+                zh_flag.store(
+                    matches!(new_mode, InputMode::Chinese | InputMode::VMode),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+            let mode_str = match new_mode {
+                InputMode::Chinese => "中文",
+                InputMode::English => "英文",
+                InputMode::VMode => "V模式",
+            };
+            info!("[Wayland v2] 切换输入模式为：{}", mode_str);
+            return None;
+        }
+
+        // 只在按键按下时处理字符与候选交互
+        if !is_press || self.has_ctrl_or_alt() {
+            return None;
+        }
+
+        // 2. 英文模式：直接将字母（含 Shift 大写）、数字、标点与空格提交上屏
+        if self.mode == InputMode::English {
+            if let Some(ch) = keycode_to_char(key) {
+                let out = if self.is_shift_active() {
+                    ch.to_ascii_uppercase().to_string()
+                } else {
+                    ch.to_string()
+                };
+                self.punctuation_processor.record_commit(&out);
+                self.commit_text(&out);
+                return Some(out);
+            }
+            if !self.is_shift_active() {
+                if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
+                    let out = digit_ch.to_string();
+                    self.punctuation_processor.record_commit(&out);
+                    self.commit_text(&out);
+                    return Some(out);
+                }
+            }
+            if let Some(punct_ch) = keycode_to_punctuation_with_shift(key, self.is_shift_active()) {
+                let out = punct_ch.to_string();
+                self.punctuation_processor.record_commit(&out);
+                self.commit_text(&out);
+                return Some(out);
+            }
+            if key == KEY_SPACE {
+                self.commit_text(" ");
+                return Some(" ".to_string());
+            }
+            return None;
+        }
+
+        // 3. 正在组合拼音状态下的专门按键拦截
+        if !self.engine.raw_input().is_empty() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            // 3.1 Tab 键：切换/展开当前高亮候选词的二级动态格式卡片
+            if key == KEY_TAB {
+                let sel = self.engine.selected_index;
+                self.engine.toggle_expand(sel);
+                self.refresh_candidate_surface();
+                return None;
+            }
+
+            // 3.2 处于展开二级状态下的导航与选择
+            if self.engine.is_expanded {
+                let sel = self.engine.selected_index;
+                if key == KEY_DOWN {
+                    self.engine.next_expanded_item(sel);
+                    self.refresh_candidate_surface();
+                    return None;
+                }
+                if key == KEY_UP {
+                    self.engine.prev_expanded_item(sel);
+                    self.refresh_candidate_surface();
+                    return None;
+                }
+                if key == KEY_ENTER || key == KEY_SPACE {
+                    if let Some((committed, _)) = self
+                        .engine
+                        .select_expanded_item(sel, self.engine.expanded_selected_index)
+                    {
+                        self.punctuation_processor.record_commit(&committed);
+                        self.commit_text(&committed);
+                        return Some(committed);
+                    }
+                }
+            } else {
+                // 非展开态下，上下方向键在当前页候选词间循环移动高亮胶囊
+                if key == KEY_DOWN {
+                    self.engine.next_candidate();
+                    self.refresh_candidate_surface();
+                    return None;
+                }
+                if key == KEY_UP {
+                    self.engine.prev_candidate();
+                    self.refresh_candidate_surface();
+                    return None;
+                }
+            }
+
+            // 3.3 数字键 1-9（未按 Shift 时）：选择对应位候选词
+            if !self.is_shift_active() {
+                if let Some(digit) = keycode_to_digit(key) {
+                    let cand_idx = digit.saturating_sub(1);
+                    if let Some((committed_text, remaining_len)) =
+                        self.engine.select_candidate(cand_idx, now)
+                    {
+                        self.punctuation_processor.record_commit(&committed_text);
+                        if remaining_len > 0 {
+                            let preedit = self.engine.formatted_preedit();
+                            self.commit_partial(&committed_text, &preedit);
+                        } else {
+                            self.commit_text(&committed_text);
+                        }
+                        return Some(committed_text);
+                    }
+                }
+            }
+
+            // 3.4 空格键：当前高亮候选词上屏
+            if key == KEY_SPACE {
+                let sel = self.engine.selected_index;
+                if let Some((committed_text, remaining_len)) =
+                    self.engine.select_candidate(sel, now)
+                {
+                    self.punctuation_processor.record_commit(&committed_text);
+                    if remaining_len > 0 {
+                        let preedit = self.engine.formatted_preedit();
+                        self.commit_partial(&committed_text, &preedit);
+                    } else {
+                        self.commit_text(&committed_text);
+                    }
+                    return Some(committed_text);
+                }
+            }
+
+            // 3.5 回车键（Enter）：直接上屏原始拼音字母
+            if key == KEY_ENTER {
+                let raw = self.engine.raw_input().to_string();
+                self.engine.reset();
+                self.commit_text(&raw);
+                return Some(raw);
+            }
+
+            // 3.6 退格键（Backspace）：删除一个拼文字母
+            if key == KEY_BACKSPACE {
+                self.engine.pop_char();
+                let preedit = self.engine.formatted_preedit();
+                self.update_preedit(&preedit);
+                return None;
+            }
+
+            // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
+            if !self.is_shift_active() && is_prev_page_key(key, self.page_keys) {
+                self.engine.prev_page();
+                self.refresh_candidate_surface();
+                return None;
+            }
+            if !self.is_shift_active() && is_next_page_key(key, self.page_keys) {
+                self.engine.next_page();
+                self.refresh_candidate_surface();
+                return None;
+            }
+
+            // 3.8 预编辑区内光标左移/右移
+            if key == KEY_LEFT {
+                self.engine.move_cursor_left();
+                let preedit = self.engine.formatted_preedit();
+                self.update_preedit(&preedit);
+                return None;
+            }
+            if key == KEY_RIGHT {
+                self.engine.move_cursor_right();
+                let preedit = self.engine.formatted_preedit();
+                self.update_preedit(&preedit);
+                return None;
+            }
+
+            // 3.9 ESC 键：取消当前输入并清空
+            if key == KEY_ESC {
+                self.cancel_input();
+                return None;
+            }
+        }
+
+        // 4. 输入缓冲区为空时的中文标点符号、数字与空格上屏处理
+        if self.engine.raw_input().is_empty() {
+            if key == KEY_SPACE {
+                self.commit_text(" ");
+                return Some(" ".to_string());
+            }
+
+            if let Some(punct_char) =
+                keycode_to_punctuation_with_shift(key, self.is_shift_active())
+            {
+                if let Some(actions) =
+                    self.punctuation_processor.process_punctuation(punct_char)
+                {
+                    let mut committed_out = None;
+                    for action in actions {
+                        if let TextAction::Commit(text) = action {
+                            self.commit_text(&text);
+                            committed_out = Some(text);
+                        }
+                    }
+                    return committed_out;
+                }
+            }
+
+            if !self.is_shift_active() {
+                if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
+                    let s = digit_ch.to_string();
+                    self.punctuation_processor.record_commit(&s);
+                    self.commit_text(&s);
+                    return Some(s);
+                }
+            }
+        }
+
+        // 5. 字母键输入（A-Z）：进入拼音算法管线
+        if let Some(ch) = keycode_to_char(key) {
+            self.engine.push_char(ch);
+            let preedit = self.engine.formatted_preedit();
+            self.update_preedit(&preedit);
+        }
+
+        None
+    }
 }
 
 // 为 zwp_input_method_v2 实现事件分发
@@ -355,211 +596,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         wayland_client::protocol::wl_keyboard::KeyState::Pressed
                     )
                 );
-
-                state.update_modifier_by_key(key, is_press);
-
-                // 1. 优先经由 Shift/Ctrl 防误触状态机判定
-                if let Some(new_mode) = state.shift_state.on_key_event(key, is_press, state.mode) {
-                    state.mode = new_mode;
-                    if let Some(ref zh_flag) = state.shared_is_chinese {
-                        zh_flag.store(
-                            matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                    }
-                    let mode_str = match new_mode {
-                        InputMode::Chinese => "中文",
-                        InputMode::English => "英文",
-                        InputMode::VMode => "V模式",
-                    };
-                    info!("[Wayland v2] 切换输入模式为：{}", mode_str);
-                    return;
-                }
-
-                // 只在按键按下时处理拼音与候选交互
-                if !is_press {
-                    return;
-                }
-
-                // 2. 如果处于英文模式，或按下了 Ctrl/Alt/Super 快捷键（如 Ctrl+C/V），跳过拼音组合拦截
-                if state.mode == InputMode::English || state.has_ctrl_or_alt() {
-                    return;
-                }
-
-                // 3. 正在组合拼音状态下的专门按键拦截
-                if !state.engine.raw_input().is_empty() {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-
-                    // 3.1 Tab 键：切换/展开当前高亮候选词的二级动态格式卡片
-                    if key == KEY_TAB {
-                        let sel = state.engine.selected_index;
-                        state.engine.toggle_expand(sel);
-                        state.refresh_candidate_surface();
-                        return;
-                    }
-
-                    // 3.2 处于展开二级状态下的导航与选择
-                    if state.engine.is_expanded {
-                        let sel = state.engine.selected_index;
-                        if key == KEY_DOWN {
-                            state.engine.next_expanded_item(sel);
-                            state.refresh_candidate_surface();
-                            return;
-                        }
-                        if key == KEY_UP {
-                            state.engine.prev_expanded_item(sel);
-                            state.refresh_candidate_surface();
-                            return;
-                        }
-                        if key == KEY_ENTER || key == KEY_SPACE {
-                            if let Some((committed, _)) = state
-                                .engine
-                                .select_expanded_item(sel, state.engine.expanded_selected_index)
-                            {
-                                state.punctuation_processor.record_commit(&committed);
-                                state.commit_text(&committed);
-                                return;
-                            }
-                        }
-                    } else {
-                        // 非展开态下，上下方向键在当前页候选词间循环移动高亮胶囊
-                        if key == KEY_DOWN {
-                            state.engine.next_candidate();
-                            state.refresh_candidate_surface();
-                            return;
-                        }
-                        if key == KEY_UP {
-                            state.engine.prev_candidate();
-                            state.refresh_candidate_surface();
-                            return;
-                        }
-                    }
-
-                    // 3.3 数字键 1-9（未按 Shift 时）：选择对应位候选词
-                    if !state.is_shift_active() {
-                        if let Some(digit) = keycode_to_digit(key) {
-                            let cand_idx = digit.saturating_sub(1);
-                            if let Some((committed_text, remaining_len)) =
-                                state.engine.select_candidate(cand_idx, now)
-                            {
-                                state.punctuation_processor.record_commit(&committed_text);
-                                if remaining_len > 0 {
-                                    let preedit = state.engine.formatted_preedit();
-                                    state.commit_partial(&committed_text, &preedit);
-                                } else {
-                                    state.commit_text(&committed_text);
-                                }
-                                return;
-                            }
-                        }
-                    }
-
-                    // 3.4 空格键：当前高亮候选词上屏
-                    if key == KEY_SPACE {
-                        let sel = state.engine.selected_index;
-                        if let Some((committed_text, remaining_len)) =
-                            state.engine.select_candidate(sel, now)
-                        {
-                            state.punctuation_processor.record_commit(&committed_text);
-                            if remaining_len > 0 {
-                                let preedit = state.engine.formatted_preedit();
-                                state.commit_partial(&committed_text, &preedit);
-                            } else {
-                                state.commit_text(&committed_text);
-                            }
-                            return;
-                        }
-                    }
-
-                    // 3.5 回车键（Enter）：直接上屏原始拼音字母
-                    if key == KEY_ENTER {
-                        let raw = state.engine.raw_input().to_string();
-                        state.engine.reset();
-                        state.commit_text(&raw);
-                        return;
-                    }
-
-                    // 3.6 退格键（Backspace）：删除一个拼文字母
-                    if key == KEY_BACKSPACE {
-                        state.engine.pop_char();
-                        let preedit = state.engine.formatted_preedit();
-                        state.update_preedit(&preedit);
-                        return;
-                    }
-
-                    // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
-                    if !state.is_shift_active() && is_prev_page_key(key, state.page_keys) {
-                        state.engine.prev_page();
-                        state.refresh_candidate_surface();
-                        return;
-                    }
-                    if !state.is_shift_active() && is_next_page_key(key, state.page_keys) {
-                        state.engine.next_page();
-                        state.refresh_candidate_surface();
-                        return;
-                    }
-
-                    // 3.8 预编辑区内光标左移/右移
-                    if key == KEY_LEFT {
-                        state.engine.move_cursor_left();
-                        let preedit = state.engine.formatted_preedit();
-                        state.update_preedit(&preedit);
-                        return;
-                    }
-                    if key == KEY_RIGHT {
-                        state.engine.move_cursor_right();
-                        let preedit = state.engine.formatted_preedit();
-                        state.update_preedit(&preedit);
-                        return;
-                    }
-
-                    // 3.9 ESC 键：取消当前输入并清空
-                    if key == KEY_ESC {
-                        state.cancel_input();
-                        return;
-                    }
-                }
-
-                // 4. 输入缓冲区为空时的中文标点符号与数字上下文处理
-                if state.engine.raw_input().is_empty() {
-                    if let Some(punct_char) =
-                        keycode_to_punctuation_with_shift(key, state.is_shift_active())
-                    {
-                        if let Some(actions) =
-                            state.punctuation_processor.process_punctuation(punct_char)
-                        {
-                            for action in actions {
-                                match action {
-                                    TextAction::Commit(text) => {
-                                        state.commit_text(&text);
-                                    }
-                                    TextAction::MoveCursor(_) => {}
-                                    _ => {}
-                                }
-                            }
-                            return;
-                        }
-                    }
-
-                    if !state.is_shift_active() {
-                        if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
-                            state
-                                .punctuation_processor
-                                .record_commit(&digit_ch.to_string());
-                            return;
-                        }
-                    }
-                }
-
-                // 5. 字母键输入（A-Z）：进入拼音算法管线
-                if let Some(ch) = keycode_to_char(key) {
-                    state.engine.push_char(ch);
-                    let preedit = state.engine.formatted_preedit();
-                    state.update_preedit(&preedit);
-                }
+                state.handle_key_event(key, is_press);
             }
             GrabEvent::Modifiers {
                 serial: _,
@@ -809,4 +846,29 @@ mod tests {
         engine.move_cursor_right();
         assert_eq!(engine.formatted_cursor_byte_offset(), 4);
     }
+
+    #[test]
+    fn test_v2_english_mode_and_empty_buffer_commits() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut session = WaylanV2Session::new(engine);
+
+        // 1. 中文模式空缓冲区：数字键 1 (KEY_1) 与空格键 (KEY_SPACE) 应直接上屏
+        assert_eq!(session.handle_key_event(KEY_1, true), Some("1".to_string()));
+        session.handle_key_event(KEY_1, false);
+        assert_eq!(session.handle_key_event(KEY_SPACE, true), Some(" ".to_string()));
+        session.handle_key_event(KEY_SPACE, false);
+
+        // 2. 切换至英文模式：普通字母键 a (keycode 30)、Shift+a、数字及标点直接以英文上屏
+        session.mode = InputMode::English;
+        assert_eq!(session.handle_key_event(30, true), Some("a".to_string()));
+        session.handle_key_event(30, false);
+
+        session.handle_key_event(KEY_LEFTSHIFT, true);
+        assert_eq!(session.handle_key_event(30, true), Some("A".to_string()));
+        session.handle_key_event(30, false);
+        assert_eq!(session.handle_key_event(KEY_1, true), Some("!".to_string()));
+        session.handle_key_event(KEY_1, false);
+        session.handle_key_event(KEY_LEFTSHIFT, false);
+    }
+
 }
