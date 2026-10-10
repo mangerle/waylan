@@ -219,6 +219,10 @@ pub struct WaylanV1Session {
     pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
     pub reload_callback: Option<Box<dyn FnMut(&mut Self) + Send>>,
+    /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
+    pub watched_paths: Vec<std::path::PathBuf>,
+    /// 上次记录的被监控文件最新修改时间戳
+    pub last_watched_mtime: Option<std::time::SystemTime>,
     /// 当前激活的应用上下文引用
     pub active_context: Option<ZwpInputMethodContextV1>,
     /// 捕获的键盘对象
@@ -249,6 +253,8 @@ impl Default for WaylanV1Session {
             shared_is_chinese: None,
             reload_requested: None,
             reload_callback: None,
+            watched_paths: Vec::new(),
+            last_watched_mtime: None,
             active_context: None,
             grabbed_keyboard: None,
             shm: None,
@@ -278,6 +284,8 @@ impl WaylanV1Session {
             shared_is_chinese: None,
             reload_requested: None,
             reload_callback: None,
+            watched_paths: Vec::new(),
+            last_watched_mtime: None,
             active_context: None,
             grabbed_keyboard: None,
             shm: None,
@@ -316,25 +324,53 @@ impl WaylanV1Session {
         (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
     }
 
-    /// 同步外部系统托盘的中英文状态与热重载请求
+    /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
     pub fn sync_external_state(&mut self) {
         use std::sync::atomic::Ordering;
 
-        if let Some(ref reload_flag) = self.reload_requested {
-            if reload_flag.swap(false, Ordering::Relaxed) {
-                if let Some(mut cb) = self.reload_callback.take() {
-                    cb(self);
-                    self.reload_callback = Some(cb);
-                } else {
-                    let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-                    self.engine.custom_phrases =
-                        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
-                    if let Some(ref wal_path) = self.engine.user_dict_path.clone() {
-                        self.engine.set_user_dict_path(wal_path);
+        let mut should_reload = self
+            .reload_requested
+            .as_ref()
+            .map(|flag| flag.swap(false, Ordering::Relaxed))
+            .unwrap_or(false);
+
+        if !self.watched_paths.is_empty() {
+            let mut latest_mtime: Option<std::time::SystemTime> = None;
+            for p in &self.watched_paths {
+                if let Ok(meta) = std::fs::metadata(p) {
+                    if let Ok(mtime) = meta.modified() {
+                        latest_mtime = Some(match latest_mtime {
+                            Some(prev) => prev.max(mtime),
+                            None => mtime,
+                        });
                     }
                 }
-                info!("[微澜] 已完成用户词库与运行配置热重载。");
             }
+            match (self.last_watched_mtime, latest_mtime) {
+                (Some(old), Some(new)) if new > old => {
+                    self.last_watched_mtime = Some(new);
+                    should_reload = true;
+                }
+                (None, Some(new)) => {
+                    self.last_watched_mtime = Some(new);
+                }
+                _ => {}
+            }
+        }
+
+        if should_reload {
+            if let Some(mut cb) = self.reload_callback.take() {
+                cb(self);
+                self.reload_callback = Some(cb);
+            } else {
+                let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+                self.engine.custom_phrases =
+                    waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+                if let Some(ref wal_path) = self.engine.user_dict_path.clone() {
+                    self.engine.set_user_dict_path(wal_path);
+                }
+            }
+            info!("[微澜] 已完成用户词库与运行配置热重载。");
         }
 
         if let Some(ref zh_flag) = self.shared_is_chinese {

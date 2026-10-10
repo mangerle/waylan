@@ -58,6 +58,10 @@ pub struct WaylanV2Session {
     pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
     pub reload_callback: Option<Box<dyn FnMut(&mut Self) + Send>>,
+    /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
+    pub watched_paths: Vec<std::path::PathBuf>,
+    /// 上次记录的被监控文件最新修改时间戳
+    pub last_watched_mtime: Option<std::time::SystemTime>,
     /// Done 事件累计序列号（用于 commit 请求原子同步）
     pub done_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
@@ -85,6 +89,8 @@ impl WaylanV2Session {
             shared_is_chinese: None,
             reload_requested: None,
             reload_callback: None,
+            watched_paths: Vec::new(),
+            last_watched_mtime: None,
             done_serial: 0,
             mods_depressed: 0,
         }
@@ -117,25 +123,53 @@ impl WaylanV2Session {
         (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
     }
 
-    /// 同步外部系统托盘的中英文状态与热重载请求
+    /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
     pub fn sync_external_state(&mut self) {
         use std::sync::atomic::Ordering;
 
-        if let Some(ref reload_flag) = self.reload_requested {
-            if reload_flag.swap(false, Ordering::Relaxed) {
-                if let Some(mut cb) = self.reload_callback.take() {
-                    cb(self);
-                    self.reload_callback = Some(cb);
-                } else {
-                    let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-                    self.engine.custom_phrases =
-                        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
-                    if let Some(ref wal_path) = self.engine.user_dict_path.clone() {
-                        self.engine.set_user_dict_path(wal_path);
+        let mut should_reload = self
+            .reload_requested
+            .as_ref()
+            .map(|flag| flag.swap(false, Ordering::Relaxed))
+            .unwrap_or(false);
+
+        if !self.watched_paths.is_empty() {
+            let mut latest_mtime: Option<std::time::SystemTime> = None;
+            for p in &self.watched_paths {
+                if let Ok(meta) = std::fs::metadata(p) {
+                    if let Ok(mtime) = meta.modified() {
+                        latest_mtime = Some(match latest_mtime {
+                            Some(prev) => prev.max(mtime),
+                            None => mtime,
+                        });
                     }
                 }
-                info!("[Wayland v2] 已完成用户词库与运行配置热重载。");
             }
+            match (self.last_watched_mtime, latest_mtime) {
+                (Some(old), Some(new)) if new > old => {
+                    self.last_watched_mtime = Some(new);
+                    should_reload = true;
+                }
+                (None, Some(new)) => {
+                    self.last_watched_mtime = Some(new);
+                }
+                _ => {}
+            }
+        }
+
+        if should_reload {
+            if let Some(mut cb) = self.reload_callback.take() {
+                cb(self);
+                self.reload_callback = Some(cb);
+            } else {
+                let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+                self.engine.custom_phrases =
+                    waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+                if let Some(ref wal_path) = self.engine.user_dict_path.clone() {
+                    self.engine.set_user_dict_path(wal_path);
+                }
+            }
+            info!("[Wayland v2] 已完成用户词库与运行配置热重载。");
         }
 
         if let Some(ref zh_flag) = self.shared_is_chinese {
@@ -871,4 +905,32 @@ mod tests {
         session.handle_key_event(KEY_LEFTSHIFT, false);
     }
 
+    #[test]
+    fn test_watched_paths_mtime_triggers_reload() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut session = WaylanV2Session::new(engine);
+
+        let temp_file = std::env::temp_dir().join("waylan_test_mtime_watch.toml");
+        let _ = std::fs::write(&temp_file, "page_size = 7\n");
+
+        session.watched_paths = vec![temp_file.clone()];
+        session.reload_callback = Some(Box::new(|s| {
+            s.engine.config.page_size = 9;
+        }));
+
+        // 首次同步仅记录基准时间戳，不触发重载
+        session.sync_external_state();
+        assert_eq!(session.engine.config.page_size, 7);
+
+        // 模拟外部进程将历史时间戳退后，使得当前文件时间戳更新于基准时间戳
+        session.last_watched_mtime =
+            Some(std::time::SystemTime::now() - std::time::Duration::from_secs(60));
+        session.sync_external_state();
+        assert_eq!(
+            session.engine.config.page_size, 9,
+            "检测到被监控文件修改时间更新后应自动触发 reload_callback"
+        );
+
+        let _ = std::fs::remove_file(&temp_file);
+    }
 }

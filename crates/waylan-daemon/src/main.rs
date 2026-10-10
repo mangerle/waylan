@@ -132,11 +132,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
     info!("------------------------------------------------------------");
 
+    let mut watched_paths = Vec::new();
+    if let Some(c_path) = AppConfig::config_path() {
+        watched_paths.push(c_path);
+    }
+    watched_paths.push(waylan_algo::custom_phrase::CustomPhraseManager::default_path());
+    watched_paths.push(AppConfig::user_aux_dict_path());
+
     // 9. 构造并驱动 Wayland 输入法会话事件循环（优先协商 V2 协议，不支持时自动回退 V1 协议）
     let loop_result = if caps.has_input_method_v2 && caps.has_seat {
         info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
         let mut session_v2 = waylan_wayland::session_v2::WaylanV2Session::new(engine);
         session_v2.surface_manager.renderer = renderer;
+        session_v2.watched_paths = watched_paths;
         session_v2.shift_state = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
             SwitchKey::Shift => ToggleKeyMode::Shift,
             SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
@@ -195,6 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
         session.surface_manager.renderer = renderer;
+        session.watched_paths = watched_paths;
         session.shift_sm = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
             SwitchKey::Shift => ToggleKeyMode::Shift,
             SwitchKey::Ctrl => ToggleKeyMode::Ctrl,

@@ -1,7 +1,7 @@
 use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichText};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use waylan_algo::types::DoublePinyinSchema;
 
@@ -426,7 +426,7 @@ impl eframe::App for SettingsApp {
                                                     added += 1;
                                                 }
                                             }
-                                            let aux_path = PathBuf::from("data/aux.dict.bin");
+                                            let aux_path = AppConfig::user_aux_dict_path();
                                             let _ = self.aux_dict.save_to_file(&aux_path);
                                             self.english_status_message = Some(format!("成功导入 {} 个新英文词汇并已更新！", added));
                                         } else {
@@ -508,7 +508,7 @@ impl eframe::App for SettingsApp {
                                                     added += 1;
                                                 }
                                             }
-                                            let aux_path = PathBuf::from("data/aux.dict.bin");
+                                            let aux_path = AppConfig::user_aux_dict_path();
                                             let _ = self.aux_dict.save_to_file(&aux_path);
                                             self.symbols_status_message = Some(format!("成功导入 {} 条符号映射并已更新！", added));
                                         } else {

@@ -159,29 +159,31 @@ impl AppConfig {
         paths
     }
 
+    /// 获取符合 XDG 规范的用户辅助与混输词库存储路径 (~/.local/share/waylan/aux.dict.bin)
+    #[allow(dead_code)]
+    pub fn user_aux_dict_path() -> PathBuf {
+        if let Ok(custom) = env::var("WAYLAN_AUX_DICT_PATH") {
+            return PathBuf::from(custom);
+        }
+        if let Ok(data_home) = env::var("XDG_DATA_HOME") {
+            return PathBuf::from(data_home)
+                .join("waylan")
+                .join("aux.dict.bin");
+        }
+        if let Ok(home) = env::var("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("waylan")
+                .join("aux.dict.bin");
+        }
+        PathBuf::from("data/aux.dict.bin")
+    }
+
     /// 获取辅助与混输词库（英文与符号表情）的多级查找路径
     #[allow(dead_code)]
     pub fn aux_dict_search_paths() -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-        if let Ok(custom) = env::var("WAYLAN_AUX_DICT_PATH") {
-            paths.push(PathBuf::from(custom));
-        }
-        if let Ok(data_home) = env::var("XDG_DATA_HOME") {
-            paths.push(
-                PathBuf::from(data_home)
-                    .join("waylan")
-                    .join("aux.dict.bin"),
-            );
-        }
-        if let Ok(home) = env::var("HOME") {
-            paths.push(
-                PathBuf::from(home)
-                    .join(".local")
-                    .join("share")
-                    .join("waylan")
-                    .join("aux.dict.bin"),
-            );
-        }
+        let mut paths = vec![Self::user_aux_dict_path()];
         paths.push(PathBuf::from("/usr/share/waylan/data/aux.dict.bin"));
         paths.push(PathBuf::from("/usr/share/waylan/aux.dict.bin"));
         paths.push(PathBuf::from("/usr/local/share/waylan/data/aux.dict.bin"));
