@@ -13,9 +13,9 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 
 use waylan_core::{CandidateBoxState, InputMode, TextAction};
 use crate::session_v1::{
-    keycode_to_char, keycode_to_digit, keycode_to_punctuation, KEY_BACKSPACE, KEY_DOWN, KEY_ENTER,
-    KEY_EQUAL, KEY_ESC, KEY_LEFT, KEY_LEFTBRACE, KEY_MINUS, KEY_PAGEDOWN, KEY_PAGEUP, KEY_RIGHT,
-    KEY_RIGHTBRACE, KEY_SPACE, KEY_TAB, KEY_UP,
+    is_next_page_key, is_prev_page_key, keycode_to_char, keycode_to_digit, keycode_to_punctuation,
+    PageKeyConfig, KEY_BACKSPACE, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
+    KEY_TAB, KEY_UP,
 };
 
 /// 微澜面向现代 Wayland 合成器 (KDE Plasma 6 / GNOME 46+ / Hyprland) 的 V2 会话状态
@@ -26,6 +26,8 @@ pub struct WaylanV2Session {
     pub shift_state: ShiftToggleStateMachine,
     /// 智能标点符号处理器
     pub punctuation_processor: PunctuationProcessor,
+    /// 候选词翻页快捷键模式
+    pub page_keys: PageKeyConfig,
     /// 候选框透明悬浮 Surface 管理器
     pub surface_manager: CandidateSurfaceManager,
     /// 当前是否处于激活会话
@@ -50,6 +52,7 @@ impl WaylanV2Session {
             engine,
             shift_state: ShiftToggleStateMachine::new(),
             punctuation_processor: PunctuationProcessor::new(),
+            page_keys: PageKeyConfig::default(),
             surface_manager: CandidateSurfaceManager::new(),
             is_active: false,
             input_method: None,
@@ -349,13 +352,13 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         return;
                     }
 
-                    // 3.7 候选词翻页（PageUp/PageDown, 减号/等号, 方括号）
-                    if key == KEY_PAGEUP || key == KEY_MINUS || key == KEY_LEFTBRACE {
+                    // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
+                    if is_prev_page_key(key, state.page_keys) {
                         state.engine.prev_page();
                         state.refresh_candidate_surface();
                         return;
                     }
-                    if key == KEY_PAGEDOWN || key == KEY_EQUAL || key == KEY_RIGHTBRACE {
+                    if is_next_page_key(key, state.page_keys) {
                         state.engine.next_page();
                         state.refresh_candidate_surface();
                         return;

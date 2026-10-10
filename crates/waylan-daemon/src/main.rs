@@ -3,18 +3,20 @@ mod logger;
 mod settings_gui;
 mod tray;
 
-use config::{AppConfig, ThemeMode};
+use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 use log::{info, warn};
 use std::env;
 use std::path::Path;
 use std::time::Instant;
 use waylan_algo::builder::DictBuilder;
+use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::table::LexiconTable;
-use waylan_algo::types::AlgoConfig;
+use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AlgoEngine;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 use waylan_wayland::probe_wayland_environment;
+use waylan_wayland::session_v1::PageKeyConfig;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -86,6 +88,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         page_size: cfg.page_size,
         enable_v_mode: cfg.v_mode,
         traditional_chinese: cfg.traditional_chinese,
+        fuzzy: if cfg.fuzzy_pinyin {
+            FuzzyConfig::all_enabled()
+        } else {
+            FuzzyConfig::default()
+        },
         double_pinyin: cfg.double_pinyin,
         auto_pangu_spacing: cfg.auto_pangu_spacing,
         ..Default::default()
@@ -126,7 +133,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("------------------------------------------------------------");
 
     // 9. 构造并驱动 Wayland 输入法会话事件循环
-    let session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
+    let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
+    session.surface_manager.renderer = renderer;
+    session.shift_sm = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
+        SwitchKey::Shift => ToggleKeyMode::Shift,
+        SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+    });
+    session.punctuation_processor = PunctuationProcessor::with_options(
+        cfg.slash_to_dunhao,
+        cfg.protect_digits_punctuation,
+        cfg.auto_complete_pairs,
+    );
+    session.page_keys = match cfg.page_keys {
+        PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+        PageKeys::Bracket => PageKeyConfig::Bracket,
+        PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+    };
+
     match waylan_wayland::run_session_v1_loop(session) {
         Ok(_) => {}
         Err(e) => {

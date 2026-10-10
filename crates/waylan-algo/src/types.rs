@@ -30,6 +30,19 @@ pub struct FuzzyConfig {
 }
 
 impl FuzzyConfig {
+    /// 创建开启全部模糊音规则（平翘舌、前后鼻音、边鼻音）的配置
+    pub fn all_enabled() -> Self {
+        Self {
+            z_zh: true,
+            c_ch: true,
+            s_sh: true,
+            an_ang: true,
+            en_eng: true,
+            in_ing: true,
+            l_n: true,
+        }
+    }
+
     /// 检查是否存在任一激活的模糊音规则
     pub fn has_active_rules(&self) -> bool {
         self.z_zh || self.c_ch || self.s_sh || self.an_ang || self.en_eng || self.in_ing || self.l_n

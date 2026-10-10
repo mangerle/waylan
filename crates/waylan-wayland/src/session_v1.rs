@@ -109,14 +109,52 @@ pub fn keycode_to_punctuation(keycode: u32) -> Option<char> {
     }
 }
 
+/// 候选词翻页快捷键模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageKeyConfig {
+    /// 减号与等号 (- / =)
+    #[default]
+    MinusEqual,
+    /// 左右中括号 ([ / ])
+    Bracket,
+    /// 逗号与句号 (, / .)
+    CommaPeriod,
+}
+
+/// 判断按键是否为向上翻页键
+pub fn is_prev_page_key(keycode: u32, page_keys: PageKeyConfig) -> bool {
+    if keycode == KEY_PAGEUP {
+        return true;
+    }
+    match page_keys {
+        PageKeyConfig::MinusEqual => keycode == KEY_MINUS,
+        PageKeyConfig::Bracket => keycode == KEY_LEFTBRACE,
+        PageKeyConfig::CommaPeriod => keycode == KEY_COMMA,
+    }
+}
+
+/// 判断按键是否为向下翻页键
+pub fn is_next_page_key(keycode: u32, page_keys: PageKeyConfig) -> bool {
+    if keycode == KEY_PAGEDOWN {
+        return true;
+    }
+    match page_keys {
+        PageKeyConfig::MinusEqual => keycode == KEY_EQUAL,
+        PageKeyConfig::Bracket => keycode == KEY_RIGHTBRACE,
+        PageKeyConfig::CommaPeriod => keycode == KEY_DOT,
+    }
+}
+
 /// 微澜输入法会话状态机
 pub struct WaylanV1Session {
     /// 拼音算法引擎核心
     pub engine: AlgoEngine,
     /// 标点符号智能处理器
     pub punctuation_processor: PunctuationProcessor,
-    /// Shift 防误触状态机
+    /// Shift/Ctrl 防误触状态机
     pub shift_sm: ShiftToggleStateMachine,
+    /// 候选词翻页快捷键模式
+    pub page_keys: PageKeyConfig,
     /// 候选框悬浮图层管理器
     pub surface_manager: crate::surface::CandidateSurfaceManager,
     /// 当前输入语言模式
@@ -135,6 +173,7 @@ impl Default for WaylanV1Session {
             engine: AlgoEngine::with_sample_data(AlgoConfig::default()),
             punctuation_processor: PunctuationProcessor::new(),
             shift_sm: ShiftToggleStateMachine::new(),
+            page_keys: PageKeyConfig::default(),
             surface_manager: crate::surface::CandidateSurfaceManager::new(),
             mode: InputMode::Chinese,
             active_context: None,
@@ -155,6 +194,7 @@ impl WaylanV1Session {
             engine,
             punctuation_processor: PunctuationProcessor::new(),
             shift_sm: ShiftToggleStateMachine::new(),
+            page_keys: PageKeyConfig::default(),
             surface_manager: crate::surface::CandidateSurfaceManager::new(),
             mode: InputMode::Chinese,
             active_context: None,
@@ -397,13 +437,13 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         return;
                     }
 
-                    // 3.7 候选词翻页（PageUp/PageDown, 减号/等号, 方括号）
-                    if key == KEY_PAGEUP || key == KEY_MINUS || key == KEY_LEFTBRACE {
+                    // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
+                    if is_prev_page_key(key, state.page_keys) {
                         state.engine.prev_page();
                         state.refresh_candidate_surface();
                         return;
                     }
-                    if key == KEY_PAGEDOWN || key == KEY_EQUAL || key == KEY_RIGHTBRACE {
+                    if is_next_page_key(key, state.page_keys) {
                         state.engine.next_page();
                         state.refresh_candidate_surface();
                         return;
