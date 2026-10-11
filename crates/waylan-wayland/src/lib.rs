@@ -1,4 +1,6 @@
+pub mod input_constants;
 pub mod input_core;
+pub mod keymap;
 pub mod protocol_v1;
 pub mod session_v1;
 pub mod session_v2;
