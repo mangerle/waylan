@@ -22,6 +22,11 @@ pub enum SettingsTab {
     CustomPhrases,
 }
 
+/// 英文词库异步导入结果类型
+pub type EnglishImportResult = Result<(usize, Vec<(String, u32)>), String>;
+/// 符号词库异步导入结果类型
+pub type SymbolsImportResult = Result<(usize, Vec<(String, String, String)>), String>;
+
 /// 微澜图形化偏好设置应用状态
 pub struct SettingsApp {
     /// 当前选中的导航 Tab
@@ -62,6 +67,10 @@ pub struct SettingsApp {
     pub import_rx: Option<std::sync::mpsc::Receiver<Result<(usize, usize), String>>>,
     /// 是否正在后台异步执行词库导入
     pub import_in_progress: bool,
+    /// 英文词库异步导入接收端 (新增词数, 最新词库列表)
+    pub english_import_rx: Option<std::sync::mpsc::Receiver<EnglishImportResult>>,
+    /// 符号词库异步导入接收端 (新增符号数, 最新符号列表)
+    pub symbols_import_rx: Option<std::sync::mpsc::Receiver<SymbolsImportResult>>,
 }
 
 impl Default for SettingsApp {
@@ -117,6 +126,8 @@ impl SettingsApp {
             user_dict_status_message: None,
             import_rx: None,
             import_in_progress: false,
+            english_import_rx: None,
+            symbols_import_rx: None,
         }
     }
 
@@ -196,6 +207,38 @@ impl eframe::App for SettingsApp {
                     }
                 }
                 self.import_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = self.english_import_rx {
+            if let Ok(res) = rx.try_recv() {
+                match res {
+                    Ok((added, words)) => {
+                        self.aux_dict.english_words = words;
+                        self.english_status_message =
+                            Some(format!("成功导入 {} 个新英文词汇并已更新！", added));
+                    }
+                    Err(e) => {
+                        self.english_status_message = Some(format!("导入英文词库失败: {}", e));
+                    }
+                }
+                self.english_import_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = self.symbols_import_rx {
+            if let Ok(res) = rx.try_recv() {
+                match res {
+                    Ok((added, syms)) => {
+                        self.aux_dict.symbols = syms;
+                        self.symbols_status_message =
+                            Some(format!("成功导入 {} 条符号映射并已更新！", added));
+                    }
+                    Err(e) => {
+                        self.symbols_status_message = Some(format!("导入符号词库失败: {}", e));
+                    }
+                }
+                self.symbols_import_rx = None;
             }
         }
 

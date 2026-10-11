@@ -1,4 +1,5 @@
 use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
+use crate::settings_gui::{EnglishImportResult, SymbolsImportResult};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
 use std::fs;
@@ -229,49 +230,18 @@ pub fn render_english_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
                 {
                     app.english_status_message =
                         Some("英文词库文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
-                } else if let Ok(content) = fs::read_to_string(path) {
-                    let mut existing: HashSet<String> = app
-                        .aux_dict
-                        .english_words
-                        .iter()
-                        .map(|(w, _)| w.to_lowercase())
-                        .collect();
-                    let mut added = 0;
-                    let mut in_yaml_header = false;
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if trimmed == "---" {
-                            in_yaml_header = true;
-                            continue;
-                        }
-                        if trimmed == "..." {
-                            in_yaml_header = false;
-                            continue;
-                        }
-                        if in_yaml_header || trimmed.is_empty() || trimmed.starts_with('#') {
-                            continue;
-                        }
-                        let word = trimmed.split('\t').next().unwrap_or("").trim();
-                        if !word.is_empty()
-                            && word.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
-                            && existing.insert(word.to_lowercase())
-                        {
-                            app.aux_dict.english_words.push((word.to_string(), 50_000));
-                            added += 1;
-                        }
-                    }
-                    let aux_path = AppConfig::user_aux_dict_path();
-                    match app.aux_dict.save_to_file(&aux_path) {
-                        Ok(()) => {
-                            app.english_status_message =
-                                Some(format!("成功导入 {} 个新英文词汇并已更新！", added));
-                        }
-                        Err(e) => {
-                            app.english_status_message = Some(format!("保存英文词库失败: {}", e));
-                        }
-                    }
                 } else {
-                    app.english_status_message = Some("读取英文词库文件失败。".to_string());
+                    let path_buf = path.to_path_buf();
+                    let mut aux_clone = app.aux_dict.clone();
+                    let (tx, rx) = sync_channel(1);
+                    app.english_import_rx = Some(rx);
+                    app.english_status_message =
+                        Some("正在后台异步解析与合入英文词库，请稍候...".to_string());
+
+                    std::thread::spawn(move || {
+                        let res = parse_and_import_english(&path_buf, &mut aux_clone);
+                        let _ = tx.send(res);
+                    });
                 }
             }
         });
@@ -344,46 +314,18 @@ pub fn render_symbols_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
                 {
                     app.symbols_status_message =
                         Some("符号文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
-                } else if let Ok(content) = fs::read_to_string(path) {
-                    let mut existing: HashSet<(String, String)> = app
-                        .aux_dict
-                        .symbols
-                        .iter()
-                        .map(|(k, s, _)| (k.clone(), s.clone()))
-                        .collect();
-                    let mut added = 0;
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() || trimmed.starts_with('#') {
-                            continue;
-                        }
-                        let parts: Vec<&str> = trimmed.split('\t').collect();
-                        if parts.len() >= 2 {
-                            let key = parts[0].trim().to_string();
-                            let sym = parts[1].trim().to_string();
-                            let desc = if parts.len() >= 3 {
-                                parts[2].trim().to_string()
-                            } else {
-                                "外部符号".to_string()
-                            };
-                            if existing.insert((key.clone(), sym.clone())) {
-                                app.aux_dict.symbols.push((key, sym, desc));
-                                added += 1;
-                            }
-                        }
-                    }
-                    let aux_path = AppConfig::user_aux_dict_path();
-                    match app.aux_dict.save_to_file(&aux_path) {
-                        Ok(()) => {
-                            app.symbols_status_message =
-                                Some(format!("成功导入 {} 条符号映射并已更新！", added));
-                        }
-                        Err(e) => {
-                            app.symbols_status_message = Some(format!("保存符号词库失败: {}", e));
-                        }
-                    }
                 } else {
-                    app.symbols_status_message = Some("读取符号文件失败。".to_string());
+                    let path_buf = path.to_path_buf();
+                    let mut aux_clone = app.aux_dict.clone();
+                    let (tx, rx) = sync_channel(1);
+                    app.symbols_import_rx = Some(rx);
+                    app.symbols_status_message =
+                        Some("正在后台异步解析与合入符号词库，请稍候...".to_string());
+
+                    std::thread::spawn(move || {
+                        let res = parse_and_import_symbols(&path_buf, &mut aux_clone);
+                        let _ = tx.send(res);
+                    });
                 }
             }
         });
@@ -396,4 +338,83 @@ pub fn render_symbols_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
             );
         }
     });
+}
+
+/// 解析外部英文词表并持久化保存至用户辅助词库
+fn parse_and_import_english(
+    path: &Path,
+    aux: &mut waylan_algo::AuxiliaryDict,
+) -> EnglishImportResult {
+    let content = fs::read_to_string(path).map_err(|e| format!("读取英文词库文件失败: {}", e))?;
+    let mut existing: HashSet<String> = aux
+        .english_words
+        .iter()
+        .map(|(w, _)| w.to_lowercase())
+        .collect();
+    let mut added = 0;
+    let mut in_yaml_header = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            in_yaml_header = true;
+            continue;
+        }
+        if trimmed == "..." {
+            in_yaml_header = false;
+            continue;
+        }
+        if in_yaml_header || trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let word = trimmed.split('\t').next().unwrap_or("").trim();
+        if !word.is_empty()
+            && word.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
+            && existing.insert(word.to_lowercase())
+        {
+            aux.english_words.push((word.to_string(), 50_000));
+            added += 1;
+        }
+    }
+    let aux_path = AppConfig::user_aux_dict_path();
+    aux.save_to_file(&aux_path)
+        .map_err(|e| format!("保存英文词库失败: {}", e))?;
+    Ok((added, aux.english_words.clone()))
+}
+
+/// 解析外部符号映射表并持久化保存至用户辅助词库
+fn parse_and_import_symbols(
+    path: &Path,
+    aux: &mut waylan_algo::AuxiliaryDict,
+) -> SymbolsImportResult {
+    let content = fs::read_to_string(path).map_err(|e| format!("读取符号文件失败: {}", e))?;
+    let mut existing: HashSet<(String, String)> = aux
+        .symbols
+        .iter()
+        .map(|(k, s, _)| (k.clone(), s.clone()))
+        .collect();
+    let mut added = 0;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.split('\t').collect();
+        if parts.len() >= 2 {
+            let key = parts[0].trim().to_string();
+            let sym = parts[1].trim().to_string();
+            let desc = if parts.len() >= 3 {
+                parts[2].trim().to_string()
+            } else {
+                "外部符号".to_string()
+            };
+            if existing.insert((key.clone(), sym.clone())) {
+                aux.symbols.push((key, sym, desc));
+                added += 1;
+            }
+        }
+    }
+    let aux_path = AppConfig::user_aux_dict_path();
+    aux.save_to_file(&aux_path)
+        .map_err(|e| format!("保存符号词库失败: {}", e))?;
+    Ok((added, aux.symbols.clone()))
 }
