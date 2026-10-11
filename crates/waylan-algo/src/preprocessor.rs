@@ -45,6 +45,12 @@ impl ShiftToggleStateMachine {
         }
     }
 
+    /// 重置切换修饰键按下与组合键记忆状态（用于焦点切换或会话失焦）
+    pub fn reset(&mut self) {
+        self.modifier_pressed = false;
+        self.other_key_pressed = false;
+    }
+
     /// 接收原始按键扫描码事件并判定是否应当翻转中英文模式
     pub fn on_key_event(
         &mut self,
@@ -143,6 +149,13 @@ impl PunctuationProcessor {
 
     /// 重置成对引号的开闭记忆状态
     pub fn reset_quote_states(&mut self) {
+        self.double_quote_open = false;
+        self.single_quote_open = false;
+    }
+
+    /// 重置标点上下文与成对引号开闭状态（用于窗口焦点切换或会话失焦）
+    pub fn reset(&mut self) {
+        self.last_char_was_digit = false;
         self.double_quote_open = false;
         self.single_quote_open = false;
     }

@@ -284,3 +284,70 @@ fn test_calculate_delete_range_utf8_and_selection() {
         "反向选区存在时 Delete 应删除光标后方的整个选区 6 字节"
     );
 }
+
+#[test]
+fn test_v2_double_buffered_done_atomic_commit() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let mut session = WaylanV2Session::new(engine);
+
+    // 挂起 Activate 与 SurroundingText，但在 Done 之前不应提前修改生效状态
+    session.stage_activate();
+    session.stage_surrounding_text("测试文本".to_string(), 6, 6);
+    assert!(!session.is_active);
+    assert!(session.surrounding_text.is_none());
+    assert_eq!(session.done_serial, 0);
+
+    // 触发 Done 原子生效
+    assert!(session.apply_done_state());
+    assert!(session.is_active);
+    assert_eq!(session.done_serial, 1);
+    assert_eq!(
+        session.surrounding_text,
+        Some(("测试文本".to_string(), 6, 6))
+    );
+
+    // 模拟输入拼音与残留引号状态后，在同一批次内收到 Deactivate + Activate 焦点切换
+    session.engine.push_char('n');
+    session.punctuation_processor.double_quote_open = true;
+    session.stage_deactivate();
+    session.stage_activate();
+    assert!(session.apply_done_state());
+    assert!(session.is_active);
+    assert_eq!(session.done_serial, 2);
+    assert!(session.engine.raw_input().is_empty());
+    assert!(!session.punctuation_processor.double_quote_open);
+    assert!(session.surrounding_text.is_none());
+}
+
+#[test]
+fn test_key_press_release_symmetry() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let mut session = WaylanV2Session::new(engine);
+
+    // 1. 输入 "ni" 并按空格上屏清空预编辑，随后释放空格键：空格键释放也必须被消费而不泄漏给客户端
+    assert!(session.process_key_event(49, true).0); // 'n' press
+    assert!(session.process_key_event(49, false).0); // 'n' release
+    assert!(session.process_key_event(23, true).0); // 'i' press
+    assert!(session.process_key_event(23, false).0); // 'i' release
+
+    let (space_press_consumed, committed) = session.process_key_event(KEY_SPACE, true);
+    assert!(space_press_consumed);
+    assert_eq!(committed, Some("你".to_string()));
+    assert!(session.engine.raw_input().is_empty());
+
+    let (space_release_consumed, _) = session.process_key_event(KEY_SPACE, false);
+    assert!(
+        space_release_consumed,
+        "空格按下完成选词清空预编辑后，其对应的松开事件仍应被消费而非透传给客户端"
+    );
+
+    // 2. Shift 键按下时未消费（透传给席位），松开触发中英切换时也应返回未消费以释放席位 Shift 状态
+    let (shift_press_consumed, _) = session.process_key_event(KEY_LEFTSHIFT, true);
+    assert!(!shift_press_consumed);
+    let (shift_release_consumed, _) = session.process_key_event(KEY_LEFTSHIFT, false);
+    assert!(
+        !shift_release_consumed,
+        "Shift 按下透传给客户端后，松开事件也必须透传以防客户端 Shift 卡死"
+    );
+    assert_eq!(session.mode, InputMode::English);
+}

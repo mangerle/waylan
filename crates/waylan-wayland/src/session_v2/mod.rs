@@ -68,10 +68,28 @@ pub struct WaylanV2Session {
     pub last_watched_mtime: Option<std::time::SystemTime>,
     /// 客户端同步的上下文环境文本及光标位置 (text, cursor_byte_idx, anchor_byte_idx)
     pub surrounding_text: Option<(String, u32, u32)>,
+    /// 双缓冲挂起的会话激活状态（在收到 Done 事件时原子生效）
+    pub pending_active: bool,
+    /// 双缓冲挂起的上下文环境文本（在收到 Done 事件时原子生效）
+    pub pending_surrounding_text: Option<(String, u32, u32)>,
+    /// 标记当前批次是否发生了焦点激活/失焦切换（用于在 Done 事件中重置状态机）
+    pub pending_focus_reset: bool,
     /// Done 事件累计序列号（用于 commit 请求原子同步）
     pub done_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
     pub mods_depressed: u32,
+    /// 左右物理修饰键独立按下位掩码
+    pub phys_mods: u8,
+    /// 按键按下与释放对称消费跟踪器
+    pub consumed_keys: ConsumedKeyTracker,
+    /// 当前锁存的修饰键位掩码（XKB mods_latched）
+    pub mods_latched: u32,
+    /// 当前锁定的修饰键位掩码（XKB mods_locked，如 CapsLock / NumLock）
+    pub mods_locked: u32,
+    /// 当前激活的键盘布局组索引（XKB group）
+    pub mods_group: u32,
+    /// 标记虚拟键盘是否已完成 keymap 映射表初始化（防止未发送 keymap 即调用 key 引发协议错误）
+    pub has_virtual_keymap: bool,
     /// 标记 V2 会话是否已被合成器宣告不可用（触发自动降级）
     pub is_unavailable: bool,
     /// 与外部系统托盘共享的优雅退出请求标志
@@ -104,28 +122,92 @@ impl WaylanV2Session {
             watched_paths: Vec::new(),
             last_watched_mtime: None,
             surrounding_text: None,
+            pending_active: false,
+            pending_surrounding_text: None,
+            pending_focus_reset: false,
             done_serial: 0,
             mods_depressed: 0,
+            phys_mods: 0,
+            consumed_keys: ConsumedKeyTracker::new(),
+            mods_latched: 0,
+            mods_locked: 0,
+            mods_group: 0,
+            has_virtual_keymap: false,
             is_unavailable: false,
             exit_requested: None,
         }
     }
 
-    /// 根据按键按下/释放事件更新修饰键位掩码
-    pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
-        let mask = match keycode {
-            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => MOD_SHIFT,
-            KEY_LEFTCTRL | KEY_RIGHTCTRL => MOD_CTRL,
-            KEY_LEFTALT | KEY_RIGHTALT => MOD_ALT,
-            _ => 0,
-        };
-        if mask != 0 {
-            if is_press {
-                self.mods_depressed |= mask;
-            } else {
-                self.mods_depressed &= !mask;
+    /// 挂起 Activate 事件（等待 Done 事件原子提交）
+    pub fn stage_activate(&mut self) {
+        self.pending_active = true;
+        self.pending_focus_reset = true;
+        self.pending_surrounding_text = None;
+    }
+
+    /// 挂起 Deactivate 事件（等待 Done 事件原子提交）
+    pub fn stage_deactivate(&mut self) {
+        self.pending_active = false;
+        self.pending_focus_reset = true;
+        self.pending_surrounding_text = None;
+    }
+
+    /// 挂起 SurroundingText 事件（等待 Done 事件原子提交）
+    pub fn stage_surrounding_text(&mut self, text: String, cursor: u32, anchor: u32) {
+        self.pending_surrounding_text = Some((text, cursor, anchor));
+    }
+
+    /// 在收到 Done 事件时原子应用挂起的双缓冲状态并递增 done_serial，返回生效后的激活状态
+    pub fn apply_done_state(&mut self) -> bool {
+        self.done_serial = self.done_serial.wrapping_add(1);
+        let was_active = self.is_active;
+        let now_active = self.pending_active;
+        let focus_reset = self.pending_focus_reset;
+        self.is_active = now_active;
+        self.pending_focus_reset = false;
+
+        if now_active {
+            self.surrounding_text = self.pending_surrounding_text.clone();
+            self.sync_external_state();
+            if !was_active || focus_reset {
+                self.mods_depressed = 0;
+                self.phys_mods = 0;
+                self.consumed_keys.clear();
+                self.mods_latched = 0;
+                self.mods_locked = 0;
+                self.mods_group = 0;
+                self.shift_state.reset();
+                self.punctuation_processor.reset();
+                self.engine.reset();
+                self.hide_candidate_surface();
+            }
+        } else {
+            self.pending_surrounding_text = None;
+            self.surrounding_text = None;
+            if was_active || focus_reset {
+                self.mods_depressed = 0;
+                self.phys_mods = 0;
+                self.consumed_keys.clear();
+                self.mods_latched = 0;
+                self.mods_locked = 0;
+                self.mods_group = 0;
+                self.shift_state.reset();
+                self.punctuation_processor.reset();
+                self.engine.reset();
+                self.hide_candidate_surface();
             }
         }
+        now_active
+    }
+
+    /// 根据按键按下/释放事件更新修饰键位掩码
+    pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
+        update_modifier_masks(
+            &mut self.mods_depressed,
+            &mut self.phys_mods,
+            keycode,
+            is_press,
+        );
     }
 
     /// 判断当前是否处于 Shift 按下状态
@@ -329,8 +411,16 @@ impl WaylanV2Session {
 
     /// 将未被输入法消费的原始物理按键通过虚拟键盘协议回投到席位，确保快捷键与控制键正常透传
     pub fn forward_key_to_seat(&mut self, time: u32, key: u32, is_press: bool) {
+        if !self.has_virtual_keymap {
+            return;
+        }
         if let Some(ref vk) = self.virtual_keyboard {
-            vk.modifiers(self.mods_depressed, 0, 0, 0);
+            vk.modifiers(
+                self.mods_depressed,
+                self.mods_latched,
+                self.mods_locked,
+                self.mods_group,
+            );
             let state_val = if is_press { 1 } else { 0 };
             vk.key(time, key, state_val);
         }
@@ -356,39 +446,46 @@ impl WaylanV2Session {
         self.update_modifier_by_key(key, is_press);
 
         // 1. 优先经由 Shift/Ctrl 防误触状态机判定
-        if let Some(new_mode) = self.shift_state.on_key_event(key, is_press, self.mode) {
-            self.mode = new_mode;
-            if let Some(ref zh_flag) = self.shared_is_chinese {
-                zh_flag.store(
-                    matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                    std::sync::atomic::Ordering::Release,
-                );
-            }
-            if let Some(ref notify_tx) = self.mode_notify_tx {
-                let _ = notify_tx.try_send(());
-            }
-            let mode_str = match new_mode {
-                InputMode::Chinese => "中文",
-                InputMode::English => "英文",
-                InputMode::VMode => "V模式",
-            };
-            info!("[Wayland v2] 切换输入模式为：{}", mode_str);
+        let toggled_mode = self.shift_state.on_key_event(key, is_press, self.mode);
 
-            if new_mode == InputMode::English && !self.engine.raw_input().is_empty() {
-                let raw = self.engine.raw_input().to_string();
-                self.commit_text(&raw);
-                self.engine.reset();
-                return (true, Some(raw));
-            }
-            return (true, None);
-        }
-
-        // 按键释放阶段：若处于拼音组词状态则吞掉释放事件
+        // 按键释放阶段：依据该按键按下阶段是否被输入法消费决定是否消费释放事件，确保 Press/Release 严格对称
         if !is_press {
-            let in_composition = !self.engine.raw_input().is_empty();
-            return (in_composition, None);
+            let was_press_consumed = self.consumed_keys.take_release(key);
+            if let Some(new_mode) = toggled_mode {
+                self.mode = new_mode;
+                if let Some(ref zh_flag) = self.shared_is_chinese {
+                    zh_flag.store(
+                        matches!(new_mode, InputMode::Chinese | InputMode::VMode),
+                        std::sync::atomic::Ordering::Release,
+                    );
+                }
+                if let Some(ref notify_tx) = self.mode_notify_tx {
+                    let _ = notify_tx.try_send(());
+                }
+                let mode_str = match new_mode {
+                    InputMode::Chinese => "中文",
+                    InputMode::English => "英文",
+                    InputMode::VMode => "V模式",
+                };
+                info!("[Wayland v2] 切换输入模式为：{}", mode_str);
+
+                if new_mode == InputMode::English && !self.engine.raw_input().is_empty() {
+                    let raw = self.engine.raw_input().to_string();
+                    self.commit_text(&raw);
+                    self.engine.reset();
+                    return (was_press_consumed, Some(raw));
+                }
+            }
+            return (was_press_consumed, None);
         }
 
+        let result = self.process_key_press_inner(key);
+        self.consumed_keys.record_press(key, result.0);
+        result
+    }
+
+    /// 处理按键按下阶段的核心分发逻辑
+    fn process_key_press_inner(&mut self, key: u32) -> (bool, Option<String>) {
         // 快捷键穿透：Ctrl / Alt / Super 等修饰组合键透传
         if self.has_ctrl_or_alt() {
             return (false, None);

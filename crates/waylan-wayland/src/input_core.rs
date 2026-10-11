@@ -38,6 +38,8 @@ pub const KEY_LEFTCTRL: u32 = 29;
 pub const KEY_RIGHTCTRL: u32 = 97;
 pub const KEY_LEFTALT: u32 = 56;
 pub const KEY_RIGHTALT: u32 = 100;
+pub const KEY_LEFTMETA: u32 = 125;
+pub const KEY_RIGHTMETA: u32 = 126;
 
 /// 标准 XKB 修饰键位掩码常量
 pub const MOD_SHIFT: u32 = 1;
@@ -212,27 +214,103 @@ pub enum KeyProcessAction {
     Reset,
 }
 
+/// 根据物理按键按下/释放事件独立维护左右修饰键状态并同步更新 XKB 位掩码
+///
+/// # 设计原理
+/// - **实现初衷**：解决左右两侧同名修饰键（如 LeftShift 与 RightShift）同时按下后松开其中一侧导致整个修饰键标志位被提前清空的缺陷，并补全 Super/Meta 键跟踪。
+/// - **核心优势**：使用 1 字节位掩码 `phys_mods` 独立记录 8 个左右物理修饰键，零堆内存分配。
+pub fn update_modifier_masks(
+    depressed: &mut u32,
+    phys_mods: &mut u8,
+    keycode: u32,
+    is_press: bool,
+) {
+    let (phys_bit, group_bits, xkb_mask) = match keycode {
+        KEY_LEFTSHIFT => (0b0000_0001u8, 0b0000_0011u8, MOD_SHIFT),
+        KEY_RIGHTSHIFT => (0b0000_0010u8, 0b0000_0011u8, MOD_SHIFT),
+        KEY_LEFTCTRL => (0b0000_0100u8, 0b0000_1100u8, MOD_CTRL),
+        KEY_RIGHTCTRL => (0b0000_1000u8, 0b0000_1100u8, MOD_CTRL),
+        KEY_LEFTALT => (0b0001_0000u8, 0b0011_0000u8, MOD_ALT),
+        KEY_RIGHTALT => (0b0010_0000u8, 0b0011_0000u8, MOD_ALT),
+        KEY_LEFTMETA => (0b0100_0000u8, 0b1100_0000u8, MOD_SUPER),
+        KEY_RIGHTMETA => (0b1000_0000u8, 0b1100_0000u8, MOD_SUPER),
+        _ => return,
+    };
+
+    if is_press {
+        *phys_mods |= phys_bit;
+        *depressed |= xkb_mask;
+    } else {
+        *phys_mods &= !phys_bit;
+        if (*phys_mods & group_bits) == 0 {
+            *depressed &= !xkb_mask;
+        }
+    }
+}
+
+/// 按键按下与释放对称消费跟踪器（基于栈位图的零分配实现）
+///
+/// # 设计原理
+/// - **实现初衷**：确保输入法对同一个物理按键的 Press 与 Release 事件做出严格对称的拦截或透传决策。
+///   防止：1) Shift 按下透传给客户端但松开触发中英切换被吞掉，导致客户端 Shift 卡死；
+///   2) 空格/数字/回车按下完成选词清空预编辑后，松开事件因 `raw_input` 已空而泄漏给客户端触发误操作。
+/// - **核心优势**：采用 `[u64; 4]` 栈上位图覆盖 0..256 全部标准键盘扫描码，查询与更新均为 $O(1)$ 位运算且无堆分配。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ConsumedKeyTracker {
+    bits: [u64; 4],
+}
+
+impl ConsumedKeyTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 记录按键按下（Press）阶段是否被输入法内部消费
+    #[inline]
+    pub fn record_press(&mut self, keycode: u32, consumed: bool) {
+        let idx = (keycode / 64) as usize;
+        let bit = keycode % 64;
+        if let Some(word) = self.bits.get_mut(idx) {
+            if consumed {
+                *word |= 1u64 << bit;
+            } else {
+                *word &= !(1u64 << bit);
+            }
+        }
+    }
+
+    /// 在按键释放（Release）阶段查询并清除该键的消费标记，返回按下阶段是否曾被输入法消费
+    #[inline]
+    pub fn take_release(&mut self, keycode: u32) -> bool {
+        let idx = (keycode / 64) as usize;
+        let bit = keycode % 64;
+        if let Some(word) = self.bits.get_mut(idx) {
+            let mask = 1u64 << bit;
+            let was_consumed = (*word & mask) != 0;
+            *word &= !mask;
+            was_consumed
+        } else {
+            false
+        }
+    }
+
+    /// 清空所有按键消费记录（用于会话激活、失焦或重置）
+    #[inline]
+    pub fn clear(&mut self) {
+        self.bits = [0; 4];
+    }
+}
+
 /// 共享修饰键状态跟踪器
 #[derive(Debug, Default, Clone)]
 pub struct ModifierState {
     pub depressed: u32,
+    pub phys_mods: u8,
 }
 
 impl ModifierState {
     pub fn update(&mut self, keycode: u32, is_press: bool) {
-        let mask = match keycode {
-            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => MOD_SHIFT,
-            KEY_LEFTCTRL | KEY_RIGHTCTRL => MOD_CTRL,
-            KEY_LEFTALT | KEY_RIGHTALT => MOD_ALT,
-            _ => 0,
-        };
-        if mask != 0 {
-            if is_press {
-                self.depressed |= mask;
-            } else {
-                self.depressed &= !mask;
-            }
-        }
+        update_modifier_masks(&mut self.depressed, &mut self.phys_mods, keycode, is_press);
     }
 
     #[inline]
@@ -248,6 +326,7 @@ impl ModifierState {
     #[inline]
     pub fn reset(&mut self) {
         self.depressed = 0;
+        self.phys_mods = 0;
     }
 }
 
@@ -285,17 +364,38 @@ mod tests {
         assert!(!mods.is_shift_active());
         assert!(!mods.has_ctrl_or_alt());
 
+        // 同时按下左 Shift 与右 Shift，松开左 Shift 后仍应保持 Shift 激活
         mods.update(KEY_LEFTSHIFT, true);
+        mods.update(KEY_RIGHTSHIFT, true);
         assert!(mods.is_shift_active());
+        mods.update(KEY_LEFTSHIFT, false);
+        assert!(
+            mods.is_shift_active(),
+            "松开单侧 Shift 时若另一侧仍按下，不应清除 MOD_SHIFT"
+        );
+        mods.update(KEY_RIGHTSHIFT, false);
+        assert!(!mods.is_shift_active());
+
+        // 测试 Super/Meta 键跟踪
+        mods.update(KEY_LEFTMETA, true);
+        assert!(mods.has_ctrl_or_alt());
+        mods.update(KEY_LEFTMETA, false);
+        assert!(!mods.has_ctrl_or_alt());
 
         mods.update(KEY_LEFTCTRL, true);
         assert!(mods.has_ctrl_or_alt());
-
-        mods.update(KEY_LEFTSHIFT, false);
-        assert!(!mods.is_shift_active());
-        assert!(mods.has_ctrl_or_alt());
-
         mods.reset();
         assert!(!mods.has_ctrl_or_alt());
+    }
+
+    #[test]
+    fn test_consumed_key_tracker_symmetry() {
+        let mut tracker = ConsumedKeyTracker::new();
+        tracker.record_press(KEY_SPACE, true);
+        tracker.record_press(KEY_LEFTSHIFT, false);
+
+        assert!(tracker.take_release(KEY_SPACE));
+        assert!(!tracker.take_release(KEY_SPACE));
+        assert!(!tracker.take_release(KEY_LEFTSHIFT));
     }
 }

@@ -11,7 +11,7 @@ use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
 use waylan_core::InputMode;
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
 pub use crate::input_core::*;
@@ -73,10 +73,16 @@ pub struct WaylanV1Session {
     pub active_buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
     /// Wayland 事件队列句柄
     pub qhandle: Option<QueueHandle<Self>>,
-    /// 当前上下文递增序号
+    /// 当前硬件按键事件序号
     pub current_serial: u32,
+    /// 文本输入上下文状态同步序号（由 commit_state 事件更新，用于 commit_string 与 preedit_string）
+    pub commit_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
     pub mods_depressed: u32,
+    /// 左右物理修饰键独立按下位掩码
+    pub phys_mods: u8,
+    /// 按键按下与释放对称消费跟踪器
+    pub consumed_keys: ConsumedKeyTracker,
     /// 与外部系统托盘共享的优雅退出请求标志
     pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -105,7 +111,10 @@ impl Default for WaylanV1Session {
             active_buffer: None,
             qhandle: None,
             current_serial: 0,
+            commit_serial: 0,
             mods_depressed: 0,
+            phys_mods: 0,
+            consumed_keys: ConsumedKeyTracker::new(),
             exit_requested: None,
         }
     }
@@ -140,26 +149,22 @@ impl WaylanV1Session {
             active_buffer: None,
             qhandle: None,
             current_serial: 0,
+            commit_serial: 0,
             mods_depressed: 0,
+            phys_mods: 0,
+            consumed_keys: ConsumedKeyTracker::new(),
             exit_requested: None,
         }
     }
 
     /// 根据按键按下/释放事件更新修饰键位掩码
     pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
-        let mask = match keycode {
-            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => MOD_SHIFT,
-            KEY_LEFTCTRL | KEY_RIGHTCTRL => MOD_CTRL,
-            KEY_LEFTALT | KEY_RIGHTALT => MOD_ALT,
-            _ => 0,
-        };
-        if mask != 0 {
-            if is_press {
-                self.mods_depressed |= mask;
-            } else {
-                self.mods_depressed &= !mask;
-            }
-        }
+        update_modifier_masks(
+            &mut self.mods_depressed,
+            &mut self.phys_mods,
+            keycode,
+            is_press,
+        );
     }
 
     /// 判断当前是否处于 Shift 按下状态
@@ -304,21 +309,46 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
             MethodEvent::Activate { id } => {
                 info!("[微澜] 收到焦点激活事件：用户已进入文本输入框。");
                 state.sync_external_state();
+                if let Some(old_kb) = state.grabbed_keyboard.take() {
+                    if old_kb.version() >= 3 {
+                        old_kb.release();
+                    }
+                }
+                if let Some(old_ctx) = state.active_context.take() {
+                    old_ctx.destroy();
+                }
                 // 捕获硬件键盘输入
                 let keyboard = id.grab_keyboard(qhandle, ());
                 state.grabbed_keyboard = Some(keyboard);
                 state.active_context = Some(id);
+                state.commit_serial = 0;
                 state.mods_depressed = 0;
+                state.phys_mods = 0;
+                state.consumed_keys.clear();
+                state.shift_sm.reset();
+                state.punctuation_processor.reset();
                 state.engine.reset();
             }
             MethodEvent::Deactivate { context } => {
                 info!("[微澜] 收到失焦事件：用户已离开文本输入框。");
+                let is_current = state.active_context.as_ref() == Some(&context);
                 context.destroy();
-                state.active_context = None;
-                state.grabbed_keyboard = None;
-                state.mods_depressed = 0;
-                state.engine.reset();
-                state.hide_candidate_surface();
+                if is_current {
+                    state.active_context = None;
+                    if let Some(old_kb) = state.grabbed_keyboard.take() {
+                        if old_kb.version() >= 3 {
+                            old_kb.release();
+                        }
+                    }
+                    state.commit_serial = 0;
+                    state.mods_depressed = 0;
+                    state.phys_mods = 0;
+                    state.consumed_keys.clear();
+                    state.shift_sm.reset();
+                    state.punctuation_processor.reset();
+                    state.engine.reset();
+                    state.hide_candidate_surface();
+                }
             }
         }
     }
@@ -334,9 +364,18 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        if let ContextEvent::Reset = event {
-            state.engine.reset();
-            state.hide_candidate_surface();
+        match event {
+            ContextEvent::CommitState { serial } => {
+                state.commit_serial = serial;
+            }
+            ContextEvent::Reset => {
+                state.consumed_keys.clear();
+                state.shift_sm.reset();
+                state.punctuation_processor.reset();
+                state.engine.reset();
+                state.hide_candidate_surface();
+            }
+            _ => {}
         }
     }
 }

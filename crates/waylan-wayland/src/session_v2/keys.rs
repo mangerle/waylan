@@ -158,12 +158,10 @@ pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool
                         committed_out = Some(text);
                     }
                     TextAction::MoveCursor(offset) => {
-                        if let Some(ref vk) = session.virtual_keyboard {
-                            let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
-                            for _ in 0..offset.unsigned_abs() {
-                                vk.key(0, dir_key, 1);
-                                vk.key(0, dir_key, 0);
-                            }
+                        let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
+                        for _ in 0..offset.unsigned_abs() {
+                            session.forward_key_to_seat(0, dir_key, true);
+                            session.forward_key_to_seat(0, dir_key, false);
                         }
                     }
                     _ => {}

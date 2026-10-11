@@ -1,5 +1,6 @@
 use crate::surface::CursorRect;
 use log::info;
+use std::os::fd::AsFd;
 use wayland_client::protocol::wl_keyboard::KeyState;
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::{
@@ -26,26 +27,12 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
     ) {
         match event {
             V2Event::Activate => {
-                info!("[Wayland v2] 收到会话激活事件：输入焦点已建立。");
-                state.sync_external_state();
-                state.is_active = true;
-                state.mods_depressed = 0;
-                if state.keyboard_grab.is_none() {
-                    let grab = proxy.grab_keyboard(qhandle, ());
-                    state.keyboard_grab = Some(grab);
-                }
-                state.engine.reset();
+                info!("[Wayland v2] 收到会话激活挂起事件（等待 Done 原子生效）。");
+                state.stage_activate();
             }
             V2Event::Deactivate => {
-                info!("[Wayland v2] 收到会话失焦事件：输入焦点已离开。");
-                state.is_active = false;
-                state.mods_depressed = 0;
-                state.surrounding_text = None;
-                if let Some(grab) = state.keyboard_grab.take() {
-                    grab.release();
-                }
-                state.engine.reset();
-                state.hide_candidate_surface();
+                info!("[Wayland v2] 收到会话失焦挂起事件（等待 Done 原子生效）。");
+                state.stage_deactivate();
             }
             V2Event::SurroundingText {
                 text,
@@ -53,12 +40,12 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 anchor,
             } => {
                 info!(
-                    "[Wayland v2] 上下文环境文本更新: 长度={}, 光标={}, 锚点={}",
+                    "[Wayland v2] 收到挂起上下文环境文本: 长度={}, 光标={}, 锚点={}",
                     text.len(),
                     cursor,
                     anchor
                 );
-                state.surrounding_text = Some((text, cursor, anchor));
+                state.stage_surrounding_text(text, cursor, anchor);
             }
             V2Event::TextChangeCause { cause: _ } => {}
             V2Event::ContentType {
@@ -66,13 +53,24 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 purpose: _,
             } => {}
             V2Event::Done => {
-                // 批次状态同步已完成，原子序列号递增
-                state.done_serial = state.done_serial.wrapping_add(1);
+                let now_active = state.apply_done_state();
+                if now_active {
+                    if state.keyboard_grab.is_none() {
+                        let grab = proxy.grab_keyboard(qhandle, ());
+                        state.keyboard_grab = Some(grab);
+                    }
+                } else if let Some(grab) = state.keyboard_grab.take() {
+                    grab.release();
+                }
             }
             V2Event::Unavailable => {
                 info!("[Wayland v2] 输入法 v2 协议不可用，正在自动降级兼容模式。");
+                state.pending_active = false;
                 state.is_active = false;
                 state.is_unavailable = true;
+                if let Some(grab) = state.keyboard_grab.take() {
+                    grab.release();
+                }
                 proxy.destroy();
             }
             _ => {}
@@ -126,7 +124,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     "[Wayland v2 键盘抓取] 收到键盘映射配置: format={:?}, 大小={} 字节",
                     format, size
                 );
-                let _ = fd;
+                if let Some(ref vk) = state.virtual_keyboard {
+                    vk.keymap(u32::from(format), fd.as_fd(), size);
+                    state.has_virtual_keymap = true;
+                }
             }
             GrabEvent::Key {
                 serial: _,
@@ -143,14 +144,22 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
             GrabEvent::Modifiers {
                 serial: _,
                 mods_depressed,
-                mods_latched: _,
-                mods_locked: _,
-                group: _,
+                mods_latched,
+                mods_locked,
+                group,
             } => {
                 state.mods_depressed = mods_depressed;
+                state.mods_latched = mods_latched;
+                state.mods_locked = mods_locked;
+                state.mods_group = group;
+                if state.has_virtual_keymap {
+                    if let Some(ref vk) = state.virtual_keyboard {
+                        vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
+                    }
+                }
                 info!(
-                    "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}",
-                    mods_depressed
+                    "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}, latched={}, locked={}, group={}",
+                    mods_depressed, mods_latched, mods_locked, group
                 );
             }
             GrabEvent::RepeatInfo { rate, delay } => {
