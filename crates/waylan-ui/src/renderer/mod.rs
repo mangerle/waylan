@@ -155,15 +155,19 @@ impl CandidateBoxRenderer {
         self.clear_glyph_cache();
     }
 
-    /// 寻找能够渲染给定字符的最佳字体（优先主中文字体，若未覆盖则依次查询回退字体链）
+    /// 寻找能够渲染给定字符的最佳字体（优先主中文字体，若未覆盖或无有效矢量轮廓则依次查询回退字体链）
     pub fn get_font_for_char(&self, ch: char) -> Option<&Font> {
+        let has_valid_outline = |font: &Font| -> bool {
+            font.lookup_glyph_index(ch) != 0
+                && (ch.is_whitespace() || font.metrics(ch, 15.0).width > 0)
+        };
         if let Some(font) = self.font.as_deref() {
-            if font.lookup_glyph_index(ch) != 0 {
+            if has_valid_outline(font) {
                 return Some(font);
             }
         }
         for fb in &self.fallback_fonts {
-            if fb.lookup_glyph_index(ch) != 0 {
+            if has_valid_outline(fb) {
                 return Some(fb.as_ref());
             }
         }

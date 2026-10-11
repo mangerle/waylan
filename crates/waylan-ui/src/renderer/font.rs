@@ -36,15 +36,11 @@ impl FontManager {
 
     fn load_fallback_fonts_impl() -> Vec<Arc<Font>> {
         let candidates = [
-            // Emoji 彩色/黑白字体
-            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/truetype/ancient-scripts/Symbola.ttf",
-            // 特殊符号与数学符号字体
+            // 特殊符号、数学符号与单色符号矢量字体（移除纯 CBDT 位图字体，确保 fontdue 提取有效矢量轮廓）
             "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
             "/usr/share/fonts/opentype/noto/NotoSansSymbols-Regular.otf",
             "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/truetype/ancient-scripts/Symbola.ttf",
             // 常见通用备选西文字体
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
