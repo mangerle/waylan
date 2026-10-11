@@ -54,7 +54,7 @@ impl BigramLanguageModel {
     ) -> i64 {
         let (prev_word, prev_id) = prev;
         let (curr_word, curr_id, curr_char_len) = curr;
-        let length_bonus = (curr_char_len - 1) * 7_000;
+        let length_bonus = (curr_char_len - 1) * 14_000;
 
         if prev_word.is_empty() {
             return curr_unigram + length_bonus - Self::BASE_WORD_PENALTY;

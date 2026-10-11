@@ -67,8 +67,13 @@ impl ShiftToggleStateMachine {
 
         if is_target_mod {
             if is_press {
-                self.modifier_pressed = true;
-                self.other_key_pressed = false;
+                if !self.modifier_pressed {
+                    self.modifier_pressed = true;
+                    self.other_key_pressed = false;
+                } else {
+                    // 双侧同名修饰键交叠按下（如按住 LeftShift 时再按 RightShift），判定为组合键，不重置状态
+                    self.other_key_pressed = true;
+                }
             } else {
                 let should_toggle = self.modifier_pressed && !self.other_key_pressed;
                 self.modifier_pressed = false;
@@ -82,8 +87,8 @@ impl ShiftToggleStateMachine {
                     });
                 }
             }
-        } else if self.modifier_pressed && is_press {
-            // 在目标修饰键保持按下期间按下了其它键，判定为大写输入或组合热键
+        } else if self.modifier_pressed {
+            // 在目标修饰键保持按下期间收到任何非目标键的按下或释放事件，均判定为组合操作
             self.other_key_pressed = true;
         }
 
@@ -192,20 +197,44 @@ impl PunctuationProcessor {
         }
     }
 
-    /// 检查输入缓冲区或上下文前缀是否属于网址模式或邮箱模式
+    /// 检查输入缓冲区或上下文前缀末尾是否属于网址模式或邮箱模式
     pub fn is_url_or_email_mode(buffer: &str) -> bool {
-        let trimmed = buffer.trim();
+        let trimmed = buffer.trim_end();
         if trimmed.is_empty() {
             return false;
         }
-        let lower = trimmed.to_lowercase();
+        // 若末尾字符不是 ASCII 或为空白，光标前紧邻的不是网络词法单元，直接返回 false
+        let last_char = match trimmed.chars().next_back() {
+            Some(c) => c,
+            None => return false,
+        };
+        if !last_char.is_ascii() || last_char.is_whitespace() {
+            return false;
+        }
+
+        // 提取末尾紧邻的连续非空白 ASCII Token
+        let token_start = trimmed
+            .rfind(|c: char| c.is_whitespace() || !c.is_ascii())
+            .map(|i| {
+                let ch_len = trimmed[i..]
+                    .chars()
+                    .next()
+                    .map(|c| c.len_utf8())
+                    .unwrap_or(1);
+                i + ch_len
+            })
+            .unwrap_or(0);
+        let last_token = &trimmed[token_start..];
+        if last_token.is_empty() {
+            return false;
+        }
+        let lower = last_token.to_lowercase();
         lower.contains("://")
             || lower.starts_with("http://")
             || lower.starts_with("https://")
             || lower.starts_with("ftp://")
             || lower.starts_with("file://")
             || lower.starts_with("www.")
-            || lower.contains("www.")
             || lower.starts_with("git@")
             || lower.contains('@')
             || lower.ends_with("http")
@@ -239,8 +268,9 @@ impl PunctuationProcessor {
         ch: char,
         buffer: &str,
     ) -> Option<Vec<TextAction>> {
-        // 1. 网址与邮箱模式感知：当前缓冲区为 URL 或 Email 时，常见网络标点强制保持半角 ASCII
+        // 1. 网址与邮箱模式感知：当前缓冲区末尾为 URL 或 Email 时，常见网络标点强制保持半角 ASCII
         if Self::is_url_or_email_mode(buffer) && ".:/_?#&=@~-+".contains(ch) {
+            self.last_char_was_digit = false;
             return Some(vec![TextAction::Commit(ch.to_string())]);
         }
 
@@ -249,6 +279,7 @@ impl PunctuationProcessor {
             && self.last_char_was_digit
             && (ch == ':' || ch == '.' || ch == '/')
         {
+            self.last_char_was_digit = false;
             return Some(vec![TextAction::Commit(ch.to_string())]);
         }
 

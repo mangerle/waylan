@@ -78,12 +78,12 @@ impl AlgoEngine {
             }
             raw_candidates.append(&mut user_matches);
 
-            // 模糊音等价查询键联合检索（将候选词 pinyin 映射回原始输入切分键以保证选词消费长度一致）
+            // 模糊音等价查询键联合检索（设置候选词显式 consumed_len 以保证选词消费长度一致，同时保留标准拼音）
             if self.config.fuzzy.has_active_rules() && !path.is_typo {
                 for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
                     let mut fuzzy_matches = self.table.lookup(&fuzzy_key);
                     for fm in &mut fuzzy_matches {
-                        fm.pinyin = key.clone();
+                        fm.consumed_len = Some(key.len());
                         fm.score = fm.score.saturating_sub(50);
                     }
                     raw_candidates.append(&mut fuzzy_matches);
@@ -91,7 +91,7 @@ impl AlgoEngine {
                     let mut fuzzy_user_matches =
                         self.user_model.lookup_user_words(&fuzzy_key, eval_ts);
                     for fum in &mut fuzzy_user_matches {
-                        fum.pinyin = key.clone();
+                        fum.consumed_len = Some(key.len());
                         fum.score = fum.score.saturating_sub(50);
                     }
                     raw_candidates.append(&mut fuzzy_user_matches);
@@ -169,7 +169,7 @@ impl AlgoEngine {
         let mut acronym_matches = self.table.lookup_acronym(&acronym_query);
         if raw_input.contains('\'') {
             for am in &mut acronym_matches {
-                am.pinyin = raw_input.to_string();
+                am.consumed_len = Some(raw_input.len());
             }
         }
         raw_candidates.append(&mut acronym_matches);
@@ -186,7 +186,7 @@ impl AlgoEngine {
                     {
                         let mut alt_matches = self.table.lookup(&alt_syl);
                         for am in &mut alt_matches {
-                            am.pinyin = first_syl.clone();
+                            am.consumed_len = Some(first_syl.len());
                             am.score = am.score.saturating_sub(50);
                         }
                         first_matches.append(&mut alt_matches);
@@ -217,7 +217,9 @@ impl AlgoEngine {
             .map(|prev| (prev, self.table.get_word_id(prev)));
 
         for c in &mut raw_candidates {
-            self.user_model.apply_boost(c, eval_ts);
+            if c.tier != CandidateTier::UserHistory {
+                self.user_model.apply_boost(c, eval_ts);
+            }
             if let Some((prev, prev_id_opt)) = prev_context_info {
                 let affinity = if let Some(prev_id) = prev_id_opt {
                     self.table

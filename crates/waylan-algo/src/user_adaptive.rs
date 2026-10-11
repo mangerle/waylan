@@ -122,6 +122,9 @@ impl UserAdaptiveModel {
 
     /// 根据用户历史为候选词附加动态习惯提权分
     pub fn apply_boost(&self, candidate: &mut AlgoCandidate, current_timestamp: u64) {
+        if candidate.tier == CandidateTier::UserHistory {
+            return;
+        }
         if let Some(list) = self.entries.get(&candidate.pinyin) {
             if let Some(entry) = list.iter().find(|e| e.text == candidate.text) {
                 let boost = Self::calculate_decay_score(entry, current_timestamp);

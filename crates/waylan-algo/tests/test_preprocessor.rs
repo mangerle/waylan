@@ -40,6 +40,53 @@ fn test_shift_toggle() {
         ),
         None
     );
+
+    // 其它键在 Shift 期间释放也不切换
+    sm.reset();
+    assert_eq!(
+        sm.on_key_event(
+            ShiftToggleStateMachine::KEY_LEFTSHIFT,
+            true,
+            InputMode::Chinese
+        ),
+        None
+    );
+    assert_eq!(sm.on_key_event(30, false, InputMode::Chinese), None); // Release A
+    assert_eq!(
+        sm.on_key_event(
+            ShiftToggleStateMachine::KEY_LEFTSHIFT,
+            false,
+            InputMode::Chinese
+        ),
+        None
+    );
+
+    // 左右 Shift 交叠按下不切换
+    sm.reset();
+    assert_eq!(
+        sm.on_key_event(
+            ShiftToggleStateMachine::KEY_LEFTSHIFT,
+            true,
+            InputMode::Chinese
+        ),
+        None
+    );
+    assert_eq!(
+        sm.on_key_event(
+            ShiftToggleStateMachine::KEY_RIGHTSHIFT,
+            true,
+            InputMode::Chinese
+        ),
+        None
+    );
+    assert_eq!(
+        sm.on_key_event(
+            ShiftToggleStateMachine::KEY_LEFTSHIFT,
+            false,
+            InputMode::Chinese
+        ),
+        None
+    );
 }
 
 #[test]
@@ -120,6 +167,12 @@ fn test_punctuation_conversion() {
     assert_eq!(
         pp.process_punctuation_with_context('.', "user@example"),
         Some(vec![TextAction::Commit(".".to_string())])
+    );
+
+    // 历史前序 URL 不应污染后续中文标点
+    assert_eq!(
+        pp.process_punctuation_with_context('.', "访问了 https://github 之后，我们继续"),
+        Some(vec![TextAction::Commit("。".to_string())])
     );
 }
 

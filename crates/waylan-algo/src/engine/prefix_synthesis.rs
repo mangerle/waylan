@@ -147,7 +147,10 @@ impl AlgoEngine {
         if !found_exact_2 {
             let acronym_2 = best_path.syllables[..2].concat();
             for mut cand in self.table.lookup_acronym(&acronym_2).into_iter().take(2) {
-                cand.pinyin = key_2.clone();
+                cand.consumed_len = Some(Self::compute_consumed_len(
+                    self.composition.as_str(),
+                    &key_2,
+                ));
                 prefix_items.push(self.format_prefix_candidate(cand));
             }
         }

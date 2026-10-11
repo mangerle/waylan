@@ -141,6 +141,9 @@ pub struct AlgoCandidate {
     pub is_expandable: bool,
     /// 二级子候选列表（如多种展开的日期或时间格式）
     pub sub_candidates: Vec<String>,
+    /// 选词时显式消费的原始输入按键字节长度（若为 None 则回退至按 pinyin 自动推断）
+    #[serde(default)]
+    pub consumed_len: Option<usize>,
 }
 
 impl AlgoCandidate {
@@ -154,12 +157,19 @@ impl AlgoCandidate {
             tier: CandidateTier::ExactWord,
             is_expandable: false,
             sub_candidates: Vec::new(),
+            consumed_len: None,
         }
     }
 
     /// 附加注释说明
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
+        self
+    }
+
+    /// 设置显式按键消费长度
+    pub fn with_consumed_len(mut self, len: usize) -> Self {
+        self.consumed_len = Some(len);
         self
     }
 

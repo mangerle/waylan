@@ -123,7 +123,9 @@ impl AlgoEngine {
         }
 
         // 计算消费的拼音字母长度并执行分段确认（动态功能项、容错纠错项与特殊模式分发项全量消费输入）
-        let consumed_len = if selected.is_expandable
+        let consumed_len = if let Some(len) = selected.consumed_len {
+            len.min(self.composition.len())
+        } else if selected.is_expandable
             || selected.tier == CandidateTier::TypoCorrection
             || self.composition.as_str().starts_with('v')
             || ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config).is_some()
@@ -317,7 +319,7 @@ impl AlgoEngine {
     }
 
     /// 精确计算用户选词所消费的原始按键长度（含自动跳过隔音符）
-    fn compute_consumed_len(raw: &str, pinyin: &str) -> usize {
+    pub(crate) fn compute_consumed_len(raw: &str, pinyin: &str) -> usize {
         if raw.starts_with(pinyin) {
             let mut len = pinyin.len();
             if raw.is_char_boundary(len) && raw[len..].starts_with('\'') {
