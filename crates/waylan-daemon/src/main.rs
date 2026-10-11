@@ -25,13 +25,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 1. 处理 settings 子命令（图形化偏好设置界面，内部自建日志或直接启动 GUI）
+    // 1. 初始化双通道日志系统（终端输出 + 文件落盘），确保后续 CLI 子命令、设置 GUI 与主服务日志正常输出
+    let log_init_res = logger::init_logger();
+    match log_init_res {
+        Ok(ref path) => {
+            info!("微澜 (WayLan) 日志系统初始化完成，持久化文件: {:?}", path);
+        }
+        Err(ref e) => {
+            eprintln!("[微澜] 日志系统初始化失败: {}", e);
+        }
+    }
+
+    // 2. 处理 settings 子命令（图形化偏好设置界面）
     if args.len() >= 2 && (args[1] == "settings" || args[1] == "--settings") {
         return settings_gui::run_settings_gui();
     }
-
-    // 2. 初始化双通道日志系统（终端输出 + 文件落盘），确保后续 CLI 子命令与主服务日志正常输出
-    let log_init_res = logger::init_logger();
 
     // 3. 处理帮助查询参数
     if args.len() >= 2 && (args[1] == "--help" || args[1] == "-h" || args[1] == "help") {
@@ -44,8 +52,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return cli::handle_dict_subcommand(&args[2..]);
     }
 
-    if let Ok(path) = log_init_res {
-        info!("微澜 (WayLan) 日志系统初始化完成，持久化文件: {:?}", path);
+    // 处理自检参数或未知参数检查（排除合法的无参启动或合法选项）
+    if args.len() >= 2 && args[1] != "--check" {
+        eprintln!("错误: 未知的命令行参数 '{}'", args[1]);
+        cli::print_main_usage();
+        std::process::exit(2);
     }
 
     // 注册进程系统退出信号拦截 (SIGINT / SIGTERM)：

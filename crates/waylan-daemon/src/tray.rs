@@ -2,6 +2,8 @@ use crate::config::AppConfig;
 use crate::logger::log_file_path;
 use log::{debug, info, warn};
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -208,9 +210,15 @@ impl DBusMenu {
                     return;
                 }
                 info!("[系统托盘] 唤起微澜偏好设置界面...");
-                let spawned = Command::new("waylan-settings")
-                    .spawn()
-                    .or_else(|_| Command::new("waylan").arg("settings").spawn());
+                let mut cmd1 = Command::new("waylan-settings");
+                #[cfg(unix)]
+                cmd1.process_group(0);
+                let mut cmd2 = Command::new("waylan");
+                cmd2.arg("settings");
+                #[cfg(unix)]
+                cmd2.process_group(0);
+
+                let spawned = cmd1.spawn().or_else(|_| cmd2.spawn());
 
                 match spawned {
                     Ok(child) => {
@@ -219,7 +227,11 @@ impl DBusMenu {
                     Err(_) => {
                         self.settings_running.store(false, Ordering::Release);
                         if let Some(path) = AppConfig::config_path() {
-                            if let Ok(child) = Command::new("xdg-open").arg(path).spawn() {
+                            let mut xdg_cmd = Command::new("xdg-open");
+                            xdg_cmd.arg(path);
+                            #[cfg(unix)]
+                            xdg_cmd.process_group(0);
+                            if let Ok(child) = xdg_cmd.spawn() {
                                 reap_child_process(child, None);
                             }
                         }
@@ -229,7 +241,11 @@ impl DBusMenu {
             4 => {
                 let log_path = log_file_path();
                 info!("[系统托盘] 查看运行日志: {:?}", log_path);
-                if let Ok(child) = Command::new("xdg-open").arg(log_path).spawn() {
+                let mut log_cmd = Command::new("xdg-open");
+                log_cmd.arg(log_path);
+                #[cfg(unix)]
+                log_cmd.process_group(0);
+                if let Ok(child) = log_cmd.spawn() {
                     reap_child_process(child, None);
                 }
             }
