@@ -588,6 +588,40 @@ impl ModifierState {
     }
 }
 
+/// 检查监控文件列表中是否有任何文件发生修改，并在检测到变更时更新基准时间戳
+pub fn check_watched_paths_changed(
+    watched_paths: &[std::path::PathBuf],
+    last_watched_mtime: &mut Option<std::time::SystemTime>,
+) -> bool {
+    if watched_paths.is_empty() {
+        return false;
+    }
+
+    let mut latest_mtime: Option<std::time::SystemTime> = None;
+    for p in watched_paths {
+        if let Ok(meta) = std::fs::metadata(p) {
+            if let Ok(mtime) = meta.modified() {
+                latest_mtime = Some(match latest_mtime {
+                    Some(prev) => prev.max(mtime),
+                    None => mtime,
+                });
+            }
+        }
+    }
+
+    match (*last_watched_mtime, latest_mtime) {
+        (Some(old), Some(new)) if new > old => {
+            *last_watched_mtime = Some(new);
+            true
+        }
+        (None, Some(new)) => {
+            *last_watched_mtime = Some(new);
+            false
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

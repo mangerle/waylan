@@ -161,28 +161,10 @@ impl WaylanV1Session {
             .map(|flag| flag.swap(false, Ordering::Relaxed))
             .unwrap_or(false);
 
-        if !self.watched_paths.is_empty() {
-            let mut latest_mtime: Option<std::time::SystemTime> = None;
-            for p in &self.watched_paths {
-                if let Ok(meta) = std::fs::metadata(p) {
-                    if let Ok(mtime) = meta.modified() {
-                        latest_mtime = Some(match latest_mtime {
-                            Some(prev) => prev.max(mtime),
-                            None => mtime,
-                        });
-                    }
-                }
-            }
-            match (self.last_watched_mtime, latest_mtime) {
-                (Some(old), Some(new)) if new > old => {
-                    self.last_watched_mtime = Some(new);
-                    should_reload = true;
-                }
-                (None, Some(new)) => {
-                    self.last_watched_mtime = Some(new);
-                }
-                _ => {}
-            }
+        let changed =
+            check_watched_paths_changed(&self.watched_paths, &mut self.last_watched_mtime);
+        if changed {
+            should_reload = true;
         }
 
         if should_reload {
