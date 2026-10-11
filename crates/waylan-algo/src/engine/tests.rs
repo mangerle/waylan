@@ -158,3 +158,31 @@ fn test_special_and_traditional_candidates_do_not_pollute_user_dict() {
         "繁体模式下转换后的候选词不得污染底层简体用户词库"
     );
 }
+
+#[test]
+fn test_cjk_extension_ideographs_recorded_to_user_dict() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+
+    // 扩展 A 区生僻字（如 "䶮" U+4DAE）、扩展 B 区（"𤧛" U+249DB）、扩展 G 区（"𰻝" U+30EDE）
+    let ext_a_cand = AlgoCandidate::new("䶮", "yan", 500);
+    assert!(
+        engine.should_record_to_user_dict(&ext_a_cand),
+        "CJK 扩展 A 区生僻字应允许记入用户词库"
+    );
+
+    let ext_b_cand = AlgoCandidate::new("𤧛", "kun", 500);
+    assert!(
+        engine.should_record_to_user_dict(&ext_b_cand),
+        "CJK 扩展 B 区生僻字应允许记入用户词库"
+    );
+
+    let ext_g_cand = AlgoCandidate::new("𰻝𰻝面", "biang'biang'mian", 500);
+    assert!(
+        engine.should_record_to_user_dict(&ext_g_cand),
+        "CJK 扩展 G 区生僻字词组应允许记入用户词库"
+    );
+
+    // 含英文或标点的混合项不应记入纯汉字用户词库
+    let mixed_cand = AlgoCandidate::new("Hello世界", "hello", 500);
+    assert!(!engine.should_record_to_user_dict(&mixed_cand));
+}
