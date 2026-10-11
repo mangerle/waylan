@@ -275,70 +275,12 @@ impl ModeDispatcher {
 
     /// U 模式：拆字与笔画反查
     fn eval_u_mode(input: &str) -> Vec<AlgoCandidate> {
-        let mut candidates = Vec::new();
-        let table: &[(&str, &str, &str)] = &[
-            ("hehe", "囍", "拆字: 喜+喜"),
-            ("rrrr", "叕", "拆字: 又x4"),
-            ("sun", "昍", "拆字: 日+日"),
-            ("mumu", "林", "拆字: 木+木"),
-            ("mux3", "森", "拆字: 木x3"),
-            ("koukou", "回", "拆字: 口+口"),
-            ("koux3", "品", "拆字: 口x3"),
-            ("xian", "鱻", "拆字: 鱼x3"),
-            ("niu", "犇", "拆字: 牛x3"),
-            ("yang", "羴", "拆字: 羊x3"),
-            ("huo", "焱", "拆字: 火x3"),
-            ("jin", "鑫", "拆字: 金x3"),
-            ("tu", "垚", "拆字: 土x3"),
-            ("shui", "淼", "拆字: 水x3"),
-            ("che", "轰", "拆字: 车x3"),
-        ];
-
-        for &(code, text, comment) in table {
-            if code == input || code.starts_with(input) {
-                candidates.push(
-                    AlgoCandidate::new(text, format!("u{}", code), 10_000).with_comment(comment),
-                );
-            }
-        }
-        candidates
+        crate::dispatcher_symbols::query_u_mode(input)
     }
 
     /// I 模式：特殊序号与符号输出
     fn eval_i_mode(input: &str) -> Vec<AlgoCandidate> {
-        let mut candidates = Vec::new();
-        match input {
-            "1" => {
-                candidates.push(AlgoCandidate::new("①", "i1", 10_000).with_comment("带圈序号"));
-                candidates.push(AlgoCandidate::new("㈠", "i1", 9_000).with_comment("括号序号"));
-                candidates.push(AlgoCandidate::new("壹", "i1", 8_000).with_comment("大写数字"));
-                candidates.push(AlgoCandidate::new("第一", "i1", 7_000).with_comment("中文序数"));
-            }
-            "2" => {
-                candidates.push(AlgoCandidate::new("②", "i2", 10_000).with_comment("带圈序号"));
-                candidates.push(AlgoCandidate::new("㈡", "i2", 9_000).with_comment("括号序号"));
-                candidates.push(AlgoCandidate::new("贰", "i2", 8_000).with_comment("大写数字"));
-                candidates.push(AlgoCandidate::new("第二", "i2", 7_000).with_comment("中文序数"));
-            }
-            "3" => {
-                candidates.push(AlgoCandidate::new("③", "i3", 10_000).with_comment("带圈序号"));
-                candidates.push(AlgoCandidate::new("㈢", "i3", 9_000).with_comment("括号序号"));
-                candidates.push(AlgoCandidate::new("叁", "i3", 8_000).with_comment("大写数字"));
-                candidates.push(AlgoCandidate::new("第三", "i3", 7_000).with_comment("中文序数"));
-            }
-            "+" => {
-                candidates.push(AlgoCandidate::new("±", "i+", 10_000).with_comment("正负号"));
-                candidates
-                    .push(AlgoCandidate::new("\u{2795}", "i+", 9_000).with_comment("运算符号"));
-            }
-            "*" => {
-                candidates.push(AlgoCandidate::new("×", "i*", 10_000).with_comment("乘号"));
-                candidates.push(AlgoCandidate::new("★", "i*", 9_000).with_comment("五角星"));
-                candidates.push(AlgoCandidate::new("☆", "i*", 8_000).with_comment("空心星"));
-            }
-            _ => {}
-        }
-        candidates
+        crate::dispatcher_symbols::query_i_mode(input)
     }
 }
 
@@ -387,6 +329,16 @@ mod tests {
         let result = ModeDispatcher::try_dispatch("uhehe", &config).expect("应触发U模式");
         assert_eq!(result[0].text, "囍");
 
+        // 验证三叠字与左右结构拼字
+        let mux3 = ModeDispatcher::try_dispatch("umux3", &config).expect("应支持三叠字拆字");
+        assert!(mux3.iter().any(|c| c.text == "森"));
+
+        let yux3 = ModeDispatcher::try_dispatch("uyux3", &config).expect("应支持鱼x3拆字");
+        assert!(yux3.iter().any(|c| c.text == "鱻"));
+
+        let riyue = ModeDispatcher::try_dispatch("uriyue", &config).expect("应支持日月明拆字");
+        assert!(riyue.iter().any(|c| c.text == "明"));
+
         // 未命中任何拆字规则时应返回 None，不能返回 Some(vec![]) 拦截拼音
         assert!(ModeDispatcher::try_dispatch("ui", &config).is_none());
         assert!(ModeDispatcher::try_dispatch("uzz", &config).is_none());
@@ -397,6 +349,15 @@ mod tests {
         let config = AlgoConfig::default();
         let result = ModeDispatcher::try_dispatch("i1", &config).expect("应触发I模式");
         assert_eq!(result[0].text, "①");
+
+        let res_10 = ModeDispatcher::try_dispatch("i10", &config).expect("应支持两位数序号");
+        assert!(res_10.iter().any(|c| c.text == "⑩"));
+
+        let res_jt = ModeDispatcher::try_dispatch("ijt", &config).expect("应支持箭头符号");
+        assert!(res_jt.iter().any(|c| c.text == "→"));
+
+        let res_money = ModeDispatcher::try_dispatch("irmb", &config).expect("应支持货币符号");
+        assert!(res_money.iter().any(|c| c.text == "¥"));
     }
 
     #[test]

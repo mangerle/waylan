@@ -8,6 +8,7 @@ mod custom_phrase_data;
 pub mod dat;
 pub mod dict_importer;
 pub mod dispatcher;
+pub(crate) mod dispatcher_symbols;
 pub mod engine;
 pub mod entity;
 pub mod error;
