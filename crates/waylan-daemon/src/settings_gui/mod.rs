@@ -140,8 +140,8 @@ impl SettingsApp {
             "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
             "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-            "/mnt/c/Windows/Fonts/msyh.ttc",
-            "/mnt/c/Windows/Fonts/simhei.ttf",
+            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf",
         ];
 
         for path_str in &font_candidates {
