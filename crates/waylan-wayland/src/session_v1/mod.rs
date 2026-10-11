@@ -132,13 +132,23 @@ impl WaylanV1Session {
     }
 
     /// 判断当前是否处于 Shift 按下状态
+    #[inline]
     pub fn is_shift_active(&self) -> bool {
-        (self.mods_depressed & MOD_SHIFT) != 0
+        ModifierState {
+            depressed: self.mods_depressed,
+            phys_mods: self.phys_mods,
+        }
+        .is_shift_active()
     }
 
     /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
+    #[inline]
     pub fn has_ctrl_or_alt(&self) -> bool {
-        (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
+        ModifierState {
+            depressed: self.mods_depressed,
+            phys_mods: self.phys_mods,
+        }
+        .has_ctrl_or_alt()
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
