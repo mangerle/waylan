@@ -27,11 +27,15 @@ impl PanguSpacing {
         }
 
         let is_cjk = |c: char| -> bool {
-            matches!(c,
-                '\u{4e00}'..='\u{9fff}' |
-                '\u{3400}'..='\u{4dbf}' |
-                '\u{20000}'..='\u{2a6df}' |
-                '\u{f900}'..='\u{faff}'
+            matches!(
+                c,
+                '\u{3007}'
+                    | '\u{3400}'..='\u{4dbf}'
+                    | '\u{4e00}'..='\u{9fff}'
+                    | '\u{f900}'..='\u{faff}'
+                    | '\u{20000}'..='\u{2ebef}'
+                    | '\u{2f800}'..='\u{2fa1f}'
+                    | '\u{30000}'..='\u{323af}'
             )
         };
 
@@ -194,6 +198,31 @@ impl PanguSpacing {
             "兆",
         ];
 
-        CLASSIFIERS.iter().any(|&c| word.starts_with(c))
+        CLASSIFIERS.contains(&word)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pangu_spacing_classifier_and_cjk() {
+        // 数字接单字量词/单位豁免空格
+        assert!(!PanguSpacing::should_insert_pangu_space("100", "个"));
+        assert!(!PanguSpacing::should_insert_pangu_space("100", "米"));
+        assert!(!PanguSpacing::should_insert_pangu_space("5", "分钟"));
+
+        // 数字接以量词开头的普通名词不得豁免空格
+        assert!(PanguSpacing::should_insert_pangu_space("100", "个人"));
+        assert!(PanguSpacing::should_insert_pangu_space("100", "点心"));
+        assert!(PanguSpacing::should_insert_pangu_space("10", "门口"));
+
+        // 中西文之间应插入空格
+        assert!(PanguSpacing::should_insert_pangu_space("测试", "Rust"));
+        assert!(PanguSpacing::should_insert_pangu_space("Rust", "代码"));
+
+        // 汉字零“〇”应正确识别为 CJK 字符
+        assert!(PanguSpacing::should_insert_pangu_space("二〇二六", "Rust"));
     }
 }

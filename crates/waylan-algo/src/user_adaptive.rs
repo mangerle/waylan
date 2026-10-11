@@ -39,6 +39,9 @@ fn default_wal_file() -> std::sync::Mutex<Option<(PathBuf, File)>> {
 pub struct UserAdaptiveModel {
     /// 键为拼音序列，值为该拼音下记录的用户词列表
     entries: HashMap<String, Vec<UserEntry>>,
+    /// 维护的最新的使用时间戳（用于实现 O(1) 检索）
+    #[serde(default)]
+    latest_ts: u64,
     /// 运行期向 WAL 追加记录的计数器（用于触发周期性自动压缩）
     #[serde(skip)]
     wal_append_counter: usize,
@@ -54,6 +57,7 @@ impl Clone for UserAdaptiveModel {
     fn clone(&self) -> Self {
         Self {
             entries: self.entries.clone(),
+            latest_ts: self.latest_ts,
             wal_append_counter: self.wal_append_counter,
             compact_threshold: self.compact_threshold,
             wal_file: std::sync::Mutex::new(None),
@@ -75,6 +79,7 @@ impl UserAdaptiveModel {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            latest_ts: 0,
             wal_append_counter: 0,
             compact_threshold: Self::DEFAULT_COMPACT_THRESHOLD,
             wal_file: std::sync::Mutex::new(None),
@@ -91,6 +96,20 @@ impl UserAdaptiveModel {
         self.wal_append_counter
     }
 
+    /// 合并另一个模型的所有用户词条记录
+    pub fn merge(&mut self, other: &Self) {
+        for (py, list) in &other.entries {
+            for entry in list {
+                self.record_commit_count(
+                    &entry.text,
+                    py,
+                    entry.last_used_timestamp,
+                    entry.commit_count,
+                );
+            }
+        }
+    }
+
     /// 记录一次用户选词上屏动作
     pub fn record_commit(&mut self, text: &str, pinyin: &str, current_timestamp: u64) {
         self.record_commit_count(text, pinyin, current_timestamp, 1);
@@ -104,6 +123,7 @@ impl UserAdaptiveModel {
         current_timestamp: u64,
         count: u32,
     ) {
+        self.latest_ts = self.latest_ts.max(current_timestamp);
         let key = pinyin.to_string();
         let list = self.entries.entry(key).or_default();
 
@@ -194,12 +214,20 @@ impl UserAdaptiveModel {
             source: e,
         })?;
         let reader = BufReader::new(file);
-        let model: Self = bincode::DefaultOptions::new()
+        let mut model: Self = bincode::DefaultOptions::new()
             .with_fixint_encoding()
             .allow_trailing_bytes()
             .with_limit(MAX_USER_DICT_BYTES)
             .deserialize_from(reader)
             .map_err(|e| AlgoError::deserialize_failed(path_ref, e.to_string()))?;
+        if model.latest_ts == 0 {
+            model.latest_ts = model
+                .entries
+                .values()
+                .flat_map(|list| list.iter().map(|e| e.last_used_timestamp))
+                .max()
+                .unwrap_or(0);
+        }
         Ok(model)
     }
 
@@ -209,17 +237,19 @@ impl UserAdaptiveModel {
     }
 
     /// 获取所有历史记录中最新的使用时间戳（若无记录则返回默认基准时间戳）
+    #[inline]
     pub fn latest_timestamp(&self) -> u64 {
-        self.entries
-            .values()
-            .flat_map(|list| list.iter().map(|e| e.last_used_timestamp))
-            .max()
-            .unwrap_or(1_700_000_000)
+        if self.latest_ts > 0 {
+            self.latest_ts
+        } else {
+            1_700_000_000
+        }
     }
 
     /// 清空所有历史自造词与调频数据
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.latest_ts = 0;
     }
 }
 

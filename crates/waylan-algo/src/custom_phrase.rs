@@ -60,7 +60,7 @@ impl CustomPhraseManager {
         manager
     }
 
-    /// 解析文本内容
+    /// 解析文本内容（支持 \\n、\\r、\\t 转义）
     pub fn parse_content(&mut self, content: &str) {
         for line in content.lines() {
             let line = line.trim();
@@ -69,13 +69,52 @@ impl CustomPhraseManager {
             }
 
             if let Some((code, text)) = line.split_once('=') {
-                self.add_entry(code.trim().to_lowercase(), text.trim().to_string());
+                self.add_entry(code.trim().to_lowercase(), Self::unescape_text(text.trim()));
             } else if let Some((code, text)) = line.split_once(' ') {
-                self.add_entry(code.trim().to_lowercase(), text.trim().to_string());
+                self.add_entry(code.trim().to_lowercase(), Self::unescape_text(text.trim()));
             } else if let Some((code, text)) = line.split_once('\t') {
-                self.add_entry(code.trim().to_lowercase(), text.trim().to_string());
+                self.add_entry(code.trim().to_lowercase(), Self::unescape_text(text.trim()));
             }
         }
+    }
+
+    /// 对配置文本中的 \\n、\\r、\\t 转义字符进行解码
+    pub(crate) fn unescape_text(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('r') => out.push('\r'),
+                    Some('t') => out.push('\t'),
+                    Some('\\') => out.push('\\'),
+                    Some(other) => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                    None => out.push('\\'),
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// 将多行文本转义为单行存储格式
+    pub(crate) fn escape_text(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\\' => out.push_str("\\\\"),
+                _ => out.push(c),
+            }
+        }
+        out
     }
 
     /// 插入一条快捷短语
@@ -136,7 +175,7 @@ impl CustomPhraseManager {
         );
         let entries = self.all_entries();
         for (code, text) in entries {
-            content.push_str(&format!("{}={}\n", code, text));
+            content.push_str(&format!("{}={}\n", code, Self::escape_text(&text)));
         }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

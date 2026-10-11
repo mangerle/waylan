@@ -64,3 +64,30 @@ fn test_auxiliary_dict_save_and_load() {
     assert_eq!(dict, loaded);
     let _ = std::fs::remove_file(temp_path);
 }
+
+#[test]
+fn test_custom_phrase_newline_escape_roundtrip() {
+    let mut manager = CustomPhraseManager::new();
+    manager.parse_content("sign=第一行\\n第二行\\t第三行\nmultiline 多行内容\\n第二行");
+
+    let sign_cands = manager.lookup("sign");
+    assert_eq!(sign_cands.len(), 1);
+    assert_eq!(sign_cands[0].text, "第一行\n第二行\t第三行");
+
+    let multi_cands = manager.lookup("multiline");
+    assert_eq!(multi_cands.len(), 1);
+    assert_eq!(multi_cands[0].text, "多行内容\n第二行");
+
+    let temp_path = std::env::temp_dir().join(format!("test_phrase_{}.txt", std::process::id()));
+    manager.save_to_file(&temp_path).expect("save phrase file");
+
+    let mut reloaded = CustomPhraseManager::new();
+    let content = std::fs::read_to_string(&temp_path).expect("read phrase file");
+    reloaded.parse_content(&content);
+
+    let reloaded_sign = reloaded.lookup("sign");
+    assert_eq!(reloaded_sign.len(), 1);
+    assert_eq!(reloaded_sign[0].text, "第一行\n第二行\t第三行");
+
+    let _ = std::fs::remove_file(temp_path);
+}

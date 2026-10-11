@@ -51,10 +51,10 @@ impl ModeDispatcher {
     /// V 模式：财务金额大写、算术表达式求值、日期时间与便捷工具箱
     fn eval_v_mode(expr: &str) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::new();
-        let now = chrono::Local::now();
 
         // 1. 若只输入了 "v"，提供快捷功能入口引导
         if expr.is_empty() {
+            let now = chrono::Local::now();
             let today = now.format("%Y年%m月%d日").to_string();
             let time_str = now.format("%H:%M:%S").to_string();
             candidates.push(AlgoCandidate::new(today, "v", 99_000).with_comment("当前日期"));
@@ -73,6 +73,7 @@ impl ModeDispatcher {
             expr_lower.as_str(),
             "sd" | "sj" | "rq" | "time" | "date" | "now" | "xq"
         ) {
+            let now = chrono::Local::now();
             let date_list = DateTimeEvaluator::format_date_formats(now);
             let time_list = DateTimeEvaluator::format_time_formats(now);
             let dt_list = DateTimeEvaluator::format_datetime_formats(now);
@@ -384,6 +385,9 @@ mod tests {
 
         let riyue = ModeDispatcher::try_dispatch("uriyue", &config).expect("应支持日月明拆字");
         assert!(riyue.iter().any(|c| c.text == "明"));
+
+        let uh = ModeDispatcher::try_dispatch("uh", &config).expect("应支持单笔画h拆字");
+        assert_eq!(uh[0].text, "一", "精确匹配的单笔画横应排在首位");
 
         // 未命中任何拆字规则时应返回 None，不能返回 Some(vec![]) 拦截拼音
         assert!(ModeDispatcher::try_dispatch("ui", &config).is_none());

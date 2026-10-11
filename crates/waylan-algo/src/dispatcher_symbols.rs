@@ -380,13 +380,19 @@ const CHAIZI_TABLE: &[ChaiziEntry] = &[
 pub(crate) fn query_u_mode(input: &str) -> Vec<AlgoCandidate> {
     let mut candidates = Vec::with_capacity(8);
     for entry in CHAIZI_TABLE {
-        if entry.code == input || entry.code.starts_with(input) {
+        if entry.code == input {
+            candidates.push(
+                AlgoCandidate::new(entry.text, format!("u{}", entry.code), 20_000)
+                    .with_comment(entry.comment),
+            );
+        } else if entry.code.starts_with(input) {
             candidates.push(
                 AlgoCandidate::new(entry.text, format!("u{}", entry.code), 10_000)
                     .with_comment(entry.comment),
             );
         }
     }
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
     candidates
 }
 
