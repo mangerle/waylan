@@ -19,12 +19,8 @@ pub enum AlgoError {
     },
 
     /// 二进制反序列化解析错误
-    #[error("二进制词库反序列化解析失败，路径: {path}，原因: {source}")]
-    DeserializeFailed {
-        path: PathBuf,
-        #[source]
-        source: bincode::Error,
-    },
+    #[error("二进制词库反序列化解析失败，路径: {path}，原因: {reason}")]
+    DeserializeFailed { path: PathBuf, reason: String },
 
     /// 算术表达式求值语法错误（V 模式）
     #[error("表达式求值失败，表达式: {expression}，详情: {reason}")]
@@ -52,6 +48,16 @@ pub enum AlgoError {
     /// 词库解析格式损坏或内容非法
     #[error("解析第三方词库失败，详情: {reason}")]
     DictParseFailed { reason: String },
+}
+
+impl AlgoError {
+    /// 构造二进制反序列化解析失败领域错误
+    pub fn deserialize_failed(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        Self::DeserializeFailed {
+            path: path.into(),
+            reason: reason.into(),
+        }
+    }
 }
 
 #[cfg(test)]

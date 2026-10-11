@@ -24,6 +24,16 @@ impl Composition {
         }
     }
 
+    /// 基于给定初始输入内容构造编辑状态机
+    pub fn with_buffer(raw: impl Into<String>) -> Self {
+        let raw_buffer = raw.into();
+        let cursor_position = raw_buffer.len();
+        Self {
+            raw_buffer,
+            cursor_position,
+        }
+    }
+
     /// 在当前光标位置插入字符
     pub fn push_char(&mut self, ch: char) {
         if self.cursor_position == self.raw_buffer.len() {
@@ -204,6 +214,13 @@ mod tests {
         }
         // "测" 是 3 字节 UTF-8，传入偏移 1 或 2 是非字符边界，断言不会 panic 且安全对齐
         comp.consume_prefix(1);
+        assert_eq!(comp.as_str(), "nihao");
+        assert_eq!(comp.cursor(), 5);
+    }
+
+    #[test]
+    fn test_with_buffer() {
+        let comp = Composition::with_buffer("nihao");
         assert_eq!(comp.as_str(), "nihao");
         assert_eq!(comp.cursor(), 5);
     }

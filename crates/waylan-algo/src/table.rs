@@ -101,6 +101,9 @@ impl LexiconTable {
     /// 从预编译二进制紧凑词库文件中加载（零拷贝内存映射）
     ///
     /// 自动校验 DAT 一体化格式（魔数 `WAYLAN_COMPACT02`），并自动探测挂载同目录下的 `bigram.table.bin`。
+    ///
+    /// # Errors
+    /// 当词库文件不存在、读取失败或格式魔数/头部校验不通过时返回 [`AlgoError`]。
     pub fn load_binary(path: impl AsRef<Path>) -> Result<Self, AlgoError> {
         let path_ref = path.as_ref();
         let compact = CompactMmapLexicon::open(path_ref)?;

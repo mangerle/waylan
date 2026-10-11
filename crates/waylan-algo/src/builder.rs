@@ -53,6 +53,9 @@ pub struct DictBuilder;
 
 impl DictBuilder {
     /// 从多个文本词库源编译生成向后兼容的传统 bincode 二进制词库文件
+    ///
+    /// # Errors
+    /// 当读取源文件或创建输出文件失败，或序列化输出失败时返回 [`AlgoError`]。
     pub fn build_binary_dict<P: AsRef<Path>, Q: AsRef<Path>>(
         input_paths: &[P],
         output_path: Q,
@@ -132,6 +135,9 @@ impl DictBuilder {
     }
 
     /// 构建包含英文补全与表情符号的辅助词典二进制文件
+    ///
+    /// # Errors
+    /// 当写出辅助词典持久化文件失败时返回 [`AlgoError`]。
     pub fn build_auxiliary_dict<P: AsRef<Path>, Q: AsRef<Path>, R: AsRef<Path>>(
         en_paths: &[P],
         sym_paths: &[Q],

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// 模糊音细粒度配置
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct FuzzyConfig {
     /// 平翘舌: z <=> zh
     pub z_zh: bool,
@@ -62,6 +63,7 @@ impl FuzzyConfig {
 /// - **核心优势**：字段明确，具备标准 Default 实现，支持序列化并与配置文件无缝对接。
 /// - **代价与局限**：新增细分配置项需扩展结构体，需保持与外层 config.toml 映射一致。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AlgoConfig {
     /// 单页候选词数量（默认 7）
     pub page_size: usize,

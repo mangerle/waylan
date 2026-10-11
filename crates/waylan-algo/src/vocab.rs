@@ -196,10 +196,10 @@ impl Vocabulary {
             })?;
 
         if &magic != VOCAB_MAGIC {
-            return Err(AlgoError::DeserializeFailed {
-                path: PathBuf::from(path_ref),
-                source: bincode::ErrorKind::Custom("词表文件魔数不匹配".to_string()).into(),
-            });
+            return Err(AlgoError::deserialize_failed(
+                path_ref,
+                "词表文件魔数不匹配",
+            ));
         }
 
         let mut ver_bytes = [0u8; 4];
@@ -211,11 +211,10 @@ impl Vocabulary {
             })?;
         let version = u32::from_le_bytes(ver_bytes);
         if version != Self::FORMAT_VERSION {
-            return Err(AlgoError::DeserializeFailed {
-                path: PathBuf::from(path_ref),
-                source: bincode::ErrorKind::Custom(format!("不支持的词表格式版本: {}", version))
-                    .into(),
-            });
+            return Err(AlgoError::deserialize_failed(
+                path_ref,
+                format!("不支持的词表格式版本: {}", version),
+            ));
         }
 
         let mut count_bytes = [0u8; 4];
@@ -229,14 +228,10 @@ impl Vocabulary {
         // 每个词条至少包含 2 字节长度前缀，校验剩余字节数可容纳的最大条目数防止伪造大数触发 OOM
         let max_possible = file_len.saturating_sub(24) / 2;
         if count > max_possible || count > Self::MAX_VOCAB_ENTRIES {
-            return Err(AlgoError::DeserializeFailed {
-                path: PathBuf::from(path_ref),
-                source: bincode::ErrorKind::Custom(format!(
-                    "词表头部声明的词条数量异常越界: {}",
-                    count
-                ))
-                .into(),
-            });
+            return Err(AlgoError::deserialize_failed(
+                path_ref,
+                format!("词表头部声明的词条数量异常越界: {}", count),
+            ));
         }
 
         let mut words = Vec::with_capacity(count);
@@ -262,9 +257,8 @@ impl Vocabulary {
                 })?;
 
             let s = std::str::from_utf8(&buf)
-                .map_err(|e| AlgoError::DeserializeFailed {
-                    path: PathBuf::from(path_ref),
-                    source: bincode::ErrorKind::Custom(format!("词条UTF8解析异常: {}", e)).into(),
+                .map_err(|e| {
+                    AlgoError::deserialize_failed(path_ref, format!("词条UTF8解析异常: {}", e))
                 })?
                 .to_string();
 

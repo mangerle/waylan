@@ -196,10 +196,7 @@ impl UserAdaptiveModel {
             .allow_trailing_bytes()
             .with_limit(MAX_USER_DICT_BYTES)
             .deserialize_from(reader)
-            .map_err(|e| AlgoError::DeserializeFailed {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+            .map_err(|e| AlgoError::deserialize_failed(path_ref, e.to_string()))?;
         Ok(model)
     }
 

@@ -66,22 +66,18 @@ impl CompactMmapLexicon {
     /// 从已就绪的内存切片解析紧凑只读词典结构
     pub fn from_mmap(mmap: Mmap, path: &Path) -> Result<Self, AlgoError> {
         if mmap.len() < 64 || &mmap[0..16] != COMPACT_DICT_MAGIC {
-            return Err(AlgoError::DeserializeFailed {
-                path: path.to_path_buf(),
-                source: bincode::ErrorKind::Custom(
-                    "无效的紧凑词典魔数标识 (需 WAYLAN_COMPACT02)".to_string(),
-                )
-                .into(),
-            });
+            return Err(AlgoError::deserialize_failed(
+                path,
+                "无效的紧凑词典魔数标识 (需 WAYLAN_COMPACT02)",
+            ));
         }
 
         let version = u32::from_le_bytes(mmap[16..20].try_into().unwrap_or([0; 4]));
         if version != 2 {
-            return Err(AlgoError::DeserializeFailed {
-                path: path.to_path_buf(),
-                source: bincode::ErrorKind::Custom(format!("不支持的词库版本号: {}", version))
-                    .into(),
-            });
+            return Err(AlgoError::deserialize_failed(
+                path,
+                format!("不支持的词库版本号: {}", version),
+            ));
         }
 
         let num_keys = u32::from_le_bytes(mmap[20..24].try_into().unwrap_or([0; 4])) as usize;
@@ -115,33 +111,26 @@ impl CompactMmapLexicon {
             .max(vocab_strings_offset);
 
         if mmap.len() < min_required_len {
-            return Err(AlgoError::DeserializeFailed {
-                path: path.to_path_buf(),
-                source: bincode::ErrorKind::Custom("紧凑词典数据区截断".to_string()).into(),
-            });
+            return Err(AlgoError::deserialize_failed(path, "紧凑词典数据区截断"));
         }
 
         // 校验内存映射基地址及内部 32 位整数切片偏移量是否符合 4 字节对齐契约（杜绝未对齐引发 UB）
         let base_ptr = mmap.as_ptr() as usize;
         if !base_ptr.is_multiple_of(std::mem::align_of::<u32>()) {
-            return Err(AlgoError::DeserializeFailed {
-                path: path.to_path_buf(),
-                source: bincode::ErrorKind::Custom("内存映射基地址未按 4 字节对齐".to_string())
-                    .into(),
-            });
+            return Err(AlgoError::deserialize_failed(
+                path,
+                "内存映射基地址未按 4 字节对齐",
+            ));
         }
         if !dat_base_offset.is_multiple_of(std::mem::align_of::<i32>())
             || !dat_check_offset.is_multiple_of(std::mem::align_of::<u32>())
             || !sorted_vocab_ids_offset.is_multiple_of(std::mem::align_of::<u32>())
             || !vocab_offsets_offset.is_multiple_of(std::mem::align_of::<u32>())
         {
-            return Err(AlgoError::DeserializeFailed {
-                path: path.to_path_buf(),
-                source: bincode::ErrorKind::Custom(
-                    "紧凑词典内部数据段偏移量未按 4 字节对齐".to_string(),
-                )
-                .into(),
-            });
+            return Err(AlgoError::deserialize_failed(
+                path,
+                "紧凑词典内部数据段偏移量未按 4 字节对齐",
+            ));
         }
 
         Ok(Self {
