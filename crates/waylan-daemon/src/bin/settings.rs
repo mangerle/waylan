@@ -1,9 +1,5 @@
-#[path = "../config.rs"]
-mod config;
-#[path = "../logger.rs"]
-mod logger;
-#[path = "../settings_gui/mod.rs"]
-mod settings_gui;
+use waylan_daemon::logger;
+use waylan_daemon::settings_gui;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
