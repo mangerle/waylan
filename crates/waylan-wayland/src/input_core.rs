@@ -511,10 +511,10 @@ pub fn update_modifier_masks(
 /// - **实现初衷**：确保输入法对同一个物理按键的 Press 与 Release 事件做出严格对称的拦截或透传决策。
 ///   防止：1) Shift 按下透传给客户端但松开触发中英切换被吞掉，导致客户端 Shift 卡死；
 ///   2) 空格/数字/回车按下完成选词清空预编辑后，松开事件因 `raw_input` 已空而泄漏给客户端触发误操作。
-/// - **核心优势**：采用 `[u64; 4]` 栈上位图覆盖 0..256 全部标准键盘扫描码，查询与更新均为 $O(1)$ 位运算且无堆分配。
+/// - **核心优势**：采用 `[u64; 12]` 栈上位图全量覆盖 Linux `KEY_MAX` (0x2ff/767) 全部键盘扫描码，查询与更新均为 $O(1)$ 位运算且无堆分配。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ConsumedKeyTracker {
-    bits: [u64; 4],
+    bits: [u64; 12],
 }
 
 impl ConsumedKeyTracker {
@@ -554,7 +554,7 @@ impl ConsumedKeyTracker {
     /// 清空所有按键消费记录（用于会话激活、失焦或重置）
     #[inline]
     pub fn clear(&mut self) {
-        self.bits = [0; 4];
+        self.bits = [0; 12];
     }
 }
 
