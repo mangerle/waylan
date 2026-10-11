@@ -310,7 +310,12 @@ impl CompactMmapLexicon {
     }
 }
 
-/// 将 16 位紧凑存储词频还原为 32 位静态分（兼容旧版 65535 截断与新版分段对数压缩）
+/// 将 16 位紧凑存储分转换为 32 位静态打分
+///
+/// # 设计说明
+/// - `builder_compact::encode_compact_score` 将原始词频单调量化至 `u16` 区间（低频线性保持、超高频对数压缩），
+///   确保紧凑词库候选在 `u16` 空间内严格单调保序；
+/// - 此处将 `u16` 量化分作为静态打分基数参与流水线后续的 rank_bonus、长度加权与 Bigram 上下文重打分。
 #[inline]
 fn decode_compact_score(score_u16: u16) -> u32 {
     score_u16 as u32
