@@ -335,11 +335,13 @@ impl AlgoEngine {
 
         for (idx, ch) in raw.char_indices() {
             if let Some(target) = target_opt {
-                if ch == target {
+                if ch.eq_ignore_ascii_case(&target) {
                     last_end = idx.saturating_add(ch.len_utf8());
                     target_opt = pinyin_iter.next();
                 } else if ch == '\'' {
                     last_end = idx.saturating_add(ch.len_utf8());
+                } else {
+                    break;
                 }
             } else {
                 if ch == '\'' {
@@ -348,6 +350,11 @@ impl AlgoEngine {
                 break;
             }
         }
-        last_end
+
+        if target_opt.is_none() {
+            last_end
+        } else {
+            0
+        }
     }
 }

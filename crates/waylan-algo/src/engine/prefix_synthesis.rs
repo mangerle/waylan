@@ -39,17 +39,25 @@ impl AlgoEngine {
             }
         }
 
-        // 2. 收集扩展项（动态日期时间、用户自定义短语、英文单词联想、符号表情）
+        // 2. 前缀高频短词混排注入（支持长句分段确认 Partial Commit，先于扩展项编排避免偏移错乱）
+        if let Some(best_path) = paths.first() {
+            self.inject_prefix_segment_candidates(best_path, candidates);
+        }
+
+        // 3. 收集扩展项（用户自定义短语、动态日期时间、英文单词联想、符号表情）
         let mut extensions: Vec<AlgoCandidate> = Vec::new();
 
-        // 2.1 用户自定义短语（最高优先级，标记为 ProtectedEntity 置顶）
+        // 3.1 用户自定义短语（最高优先级，标记为 ProtectedEntity 置顶）
         let phrase_cands = self.custom_phrases.lookup(raw_input);
         for mut phrase in phrase_cands {
+            if self.config.traditional_chinese {
+                phrase.text = self.opencc_dict.convert_text(&phrase.text);
+            }
             phrase.tier = CandidateTier::ProtectedEntity;
             extensions.push(phrase);
         }
 
-        // 2.2 动态扩展功能（日期、时间、干支等强相关功能卡片）
+        // 3.2 动态扩展功能（日期、时间、干支等强相关功能卡片）
         if let Some(mut dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
             if self.config.traditional_chinese {
                 dynamic_cand.text = self.opencc_dict.convert_text(&dynamic_cand.text);
@@ -60,7 +68,7 @@ impl AlgoEngine {
             extensions.push(dynamic_cand);
         }
 
-        // 2.3 英文单词联想（次要辅助建议，至多取 1 项避免污染候选列表）
+        // 3.3 英文单词联想（次要辅助建议，至多取 1 项避免污染候选列表）
         let eng_cands = self.english_suggester.lookup(raw_input);
         for eng in eng_cands.into_iter().take(1) {
             if !candidates
@@ -71,7 +79,7 @@ impl AlgoEngine {
             }
         }
 
-        // 2.4 符号与表情联想（次要辅助建议，至多取 1 项）
+        // 3.4 符号与表情联想（次要辅助建议，至多取 1 项）
         let sym_cands = self.symbol_suggester.lookup(raw_input);
         for sym in sym_cands.into_iter().take(1) {
             if !candidates.iter().any(|c| c.text == sym.text) {
@@ -79,7 +87,7 @@ impl AlgoEngine {
             }
         }
 
-        // 3. 按照确定的语义层级编排扩展候选，杜绝多个扩展项连续 insert(1) 暴力覆盖挤出中文最优词
+        // 4. 按照确定的语义层级编排扩展候选，杜绝多个扩展项连续 insert(1) 暴力覆盖挤出中文最优词
         for ext in extensions {
             if ext.tier == CandidateTier::ProtectedEntity {
                 // 自定义短语置顶
@@ -101,11 +109,6 @@ impl AlgoEngine {
                 };
                 candidates.insert(insert_pos, ext);
             }
-        }
-
-        // 4. 前缀高频短词混排注入（支持长句分段确认 Partial Commit）
-        if let Some(best_path) = paths.first() {
-            self.inject_prefix_segment_candidates(best_path, candidates);
         }
     }
 

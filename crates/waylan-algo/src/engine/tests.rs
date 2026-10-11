@@ -186,3 +186,111 @@ fn test_cjk_extension_ideographs_recorded_to_user_dict() {
     let mixed_cand = AlgoCandidate::new("Hello世界", "hello", 500);
     assert!(!engine.should_record_to_user_dict(&mixed_cand));
 }
+
+#[test]
+fn test_engine_reset_clears_all_candidates_cache() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    for ch in "nihao".chars() {
+        engine.push_char(ch);
+    }
+    assert!(!engine.all_candidates_cache.is_empty());
+    assert!(!engine.candidates().is_empty());
+
+    engine.reset();
+    assert!(engine.all_candidates_cache.is_empty());
+    assert!(engine.candidates().is_empty());
+    assert_eq!(engine.raw_input(), "");
+}
+
+#[test]
+fn test_cursor_move_resets_pagination_and_expansion() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig {
+        page_size: 2,
+        ..Default::default()
+    });
+    for ch in "xian".chars() {
+        engine.push_char(ch);
+    }
+    assert!(engine.all_candidates().len() >= 3);
+    engine.next_page();
+    engine.is_expanded = true;
+    assert_eq!(engine.page_index, 1);
+    assert!(engine.is_expanded);
+
+    engine.move_cursor_left();
+    assert_eq!(engine.page_index, 0);
+    assert_eq!(engine.selected_index, 0);
+    assert!(!engine.is_expanded);
+
+    engine.next_page();
+    engine.is_expanded = true;
+    engine.move_cursor_right();
+    assert_eq!(engine.page_index, 0);
+    assert_eq!(engine.selected_index, 0);
+    assert!(!engine.is_expanded);
+}
+
+#[test]
+fn test_formatted_cursor_byte_offset_case_and_apostrophe() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    for ch in "beijing".chars() {
+        engine.push_char(ch);
+    }
+    assert_eq!(engine.formatted_preedit(), "bei'jing");
+    assert_eq!(engine.formatted_cursor_byte_offset(), "bei'jing".len());
+
+    // 光标左移 4 次，raw_cursor 处于 3 ("bei")，应在隔音符单引号前 (3)
+    for _ in 0..4 {
+        engine.move_cursor_left();
+    }
+    assert_eq!(engine.cursor(), 3);
+    assert_eq!(engine.formatted_cursor_byte_offset(), 3);
+
+    // 大写输入与隔音符测试
+    engine.reset();
+    for ch in "BeiJing".chars() {
+        engine.push_char(ch);
+    }
+    for _ in 0..4 {
+        engine.move_cursor_left();
+    }
+    assert_eq!(engine.cursor(), 3);
+    assert_eq!(engine.formatted_cursor_byte_offset(), 3);
+}
+
+#[test]
+fn test_compute_consumed_len_mismatch_break() {
+    // 字符失配时应立即中断，不得跨越错误字符匹配导致过度消费按键
+    assert_eq!(AlgoEngine::compute_consumed_len("baxei", "bei"), 0);
+    // 正常前缀且带隔音符
+    assert_eq!(AlgoEngine::compute_consumed_len("bei'jing", "bei"), 4);
+    // 大小写不区分匹配
+    assert_eq!(AlgoEngine::compute_consumed_len("BeiJing", "bei"), 3);
+    // 完全匹配
+    assert_eq!(AlgoEngine::compute_consumed_len("beijing", "beijing"), 7);
+    // 输入长度不足以完整匹配候选词拼音
+    assert_eq!(AlgoEngine::compute_consumed_len("b", "bei"), 0);
+}
+
+#[test]
+fn test_custom_phrase_traditional_conversion() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig {
+        traditional_chinese: true,
+        ..Default::default()
+    });
+    engine
+        .custom_phrases
+        .add_entry("csdy".to_string(), "测试短语".to_string());
+
+    for ch in "csdy".chars() {
+        engine.push_char(ch);
+    }
+
+    let cands = engine.candidates();
+    assert!(!cands.is_empty());
+    assert_eq!(
+        cands[0].text, "測試短語",
+        "开启繁体模式后自定义短语应被正确转换为繁体"
+    );
+    assert_eq!(cands[0].tier, crate::types::CandidateTier::ProtectedEntity);
+}

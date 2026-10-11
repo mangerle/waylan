@@ -205,6 +205,9 @@ impl AlgoEngine {
     /// 光标左移
     pub fn move_cursor_left(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_cursor_left() {
+            self.page_index = 0;
+            self.selected_index = 0;
+            self.is_expanded = false;
             self.recompute_candidates();
         }
         &self.current_candidates
@@ -213,6 +216,9 @@ impl AlgoEngine {
     /// 光标右移
     pub fn move_cursor_right(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_cursor_right() {
+            self.page_index = 0;
+            self.selected_index = 0;
+            self.is_expanded = false;
             self.recompute_candidates();
         }
         &self.current_candidates
@@ -341,10 +347,10 @@ impl AlgoEngine {
 
         for (idx, ch) in formatted.char_indices() {
             if let Some(target) = target_opt {
-                if ch == target {
+                if ch.eq_ignore_ascii_case(&target) {
                     offset = idx + ch.len_utf8();
                     target_opt = raw_iter.next();
-                } else if ch == '\'' {
+                } else if ch == '\'' && target != '\'' {
                     continue;
                 } else {
                     break;
@@ -407,6 +413,7 @@ impl AlgoEngine {
         self.is_expanded = false;
         self.expanded_selected_index = 0;
         self.current_candidates.clear();
+        self.all_candidates_cache.clear();
         self.last_commit_context = None;
         self.partial_commit_segments.clear();
         self.cached_preedit.clear();
