@@ -25,23 +25,48 @@ impl BigramLanguageModel {
         curr_unigram: i64,
         table: &LexiconTable,
     ) -> i64 {
+        let prev_id = if !prev_word.is_empty() && table.compact_bigram.is_some() {
+            table.get_word_id(prev_word)
+        } else {
+            None
+        };
+        let curr_id = if !prev_word.is_empty() && table.compact_bigram.is_some() {
+            table.get_word_id(curr_word)
+        } else {
+            None
+        };
         let char_len = curr_word.chars().count() as i64;
-        let length_bonus = (char_len - 1) * 7_000;
+        Self::transition_score_cached(
+            (prev_word, prev_id),
+            (curr_word, curr_id, char_len),
+            curr_unigram,
+            table,
+        )
+    }
 
-        // 若为句首（无前驱词），直接采用单词自身似然
+    /// 使用预解析的词表 ID 与字符长度计算状态转移得分，消除内层循环重复查表与字符遍历
+    #[inline]
+    pub fn transition_score_cached(
+        prev: (&str, Option<u32>),
+        curr: (&str, Option<u32>, i64),
+        curr_unigram: i64,
+        table: &LexiconTable,
+    ) -> i64 {
+        let (prev_word, prev_id) = prev;
+        let (curr_word, curr_id, curr_char_len) = curr;
+        let length_bonus = (curr_char_len - 1) * 7_000;
+
         if prev_word.is_empty() {
             return curr_unigram + length_bonus - Self::BASE_WORD_PENALTY;
         }
 
-        // 1. 评估二元词对接续亲和度 (Bigram Transition Bonus)
-        // 优先尝试从紧凑内存映射矩阵中检索真实语料统计得分
-        let bigram_bonus = if let Some(affinity) = table.get_bigram_affinity(prev_word, curr_word) {
-            affinity
-        } else {
-            Self::estimate_bigram_affinity(prev_word, curr_word)
+        let bigram_bonus = match (&table.compact_bigram, prev_id, curr_id) {
+            (Some(bg), Some(pid), Some(cid)) => bg
+                .get_affinity_by_id(pid, cid)
+                .unwrap_or_else(|| Self::estimate_bigram_affinity(prev_word, curr_word)),
+            _ => Self::estimate_bigram_affinity(prev_word, curr_word),
         };
 
-        // 2. 联合似然加和
         curr_unigram + length_bonus + bigram_bonus - Self::BASE_WORD_PENALTY
     }
 
@@ -75,11 +100,13 @@ impl BigramLanguageModel {
     }
 }
 
-/// 束搜索动态规划格点状态（引入反向指针拓扑，彻底消除中间路径字符串集合深拷贝）
+/// 束搜索动态规划格点状态（引入反向指针拓扑与词 ID 缓存，彻底消除中间路径字符串克隆与重复查表）
 #[derive(Debug, Clone)]
 struct ViterbiBeamNode {
     /// 当前步转移的构词文本
     word: String,
+    /// 当前词在 Bigram 词表中的整数 ID 缓存
+    last_word_id: Option<u32>,
     /// 前驱步在 dp 中的索引（0 表示虚拟根节点）
     prev_step: usize,
     /// 前驱节点在 dp[prev_step] 束集合中的下标
@@ -142,12 +169,21 @@ impl ViterbiDecoder {
             return None;
         }
 
+        let has_bigram = table.compact_bigram.is_some();
+        let ctx_str = prev_context.unwrap_or("");
+        let ctx_word_id = if has_bigram && !ctx_str.is_empty() {
+            table.get_word_id(ctx_str)
+        } else {
+            None
+        };
+
         // dp[i] 保存消耗了前 i 个完整音节时的最优束状态集合
         let mut dp: Vec<Vec<ViterbiBeamNode>> = vec![Vec::new(); n + 1];
 
         // 虚拟起始根节点
         dp[0].push(ViterbiBeamNode {
             word: String::new(),
+            last_word_id: ctx_word_id,
             prev_step: 0,
             prev_beam_idx: 0,
             total_score: 0,
@@ -158,20 +194,6 @@ impl ViterbiDecoder {
             if dp[start_idx].is_empty() {
                 continue;
             }
-
-            // 提取前驱状态的最小元组 (prev_beam_idx, prev_word, total_score)，避免持有借用冲突
-            let prev_states: Vec<(usize, String, i64)> = dp[start_idx]
-                .iter()
-                .enumerate()
-                .map(|(idx, node)| {
-                    let prev_word = if start_idx == 0 {
-                        prev_context.unwrap_or("").to_string()
-                    } else {
-                        node.word.clone()
-                    };
-                    (idx, prev_word, node.total_score)
-                })
-                .collect();
 
             let max_span = (n - start_idx).min(5);
 
@@ -195,36 +217,65 @@ impl ViterbiDecoder {
                     }
                 };
 
+                let (left_dp, right_dp) = dp.split_at_mut(end_idx);
+                let prev_beam = &left_dp[start_idx];
+                let target_beam = &mut right_dp[0];
+
                 for (text, raw_score) in raw_entries.iter().take(4) {
                     let freq_score = Self::unigram_log_score(*raw_score);
-                    for &(prev_beam_idx, ref prev_word, prev_score) in &prev_states {
-                        let trans_score = BigramLanguageModel::transition_score(
-                            prev_word, text, freq_score, table,
-                        );
-                        let candidate_total = prev_score.saturating_add(trans_score);
+                    let curr_word_id = if has_bigram {
+                        table.get_word_id(text)
+                    } else {
+                        None
+                    };
+                    let curr_char_len = text.chars().count() as i64;
 
+                    let mut best_prev_idx = 0usize;
+                    let mut best_total = i64::MIN;
+
+                    for (prev_beam_idx, prev_node) in prev_beam.iter().enumerate() {
+                        let prev_word = if start_idx == 0 {
+                            ctx_str
+                        } else {
+                            prev_node.word.as_str()
+                        };
+                        let trans_score = BigramLanguageModel::transition_score_cached(
+                            (prev_word, prev_node.last_word_id),
+                            (text, curr_word_id, curr_char_len),
+                            freq_score,
+                            table,
+                        );
+                        let candidate_total = prev_node.total_score.saturating_add(trans_score);
+                        if candidate_total > best_total {
+                            best_total = candidate_total;
+                            best_prev_idx = prev_beam_idx;
+                        }
+                    }
+
+                    if best_total > i64::MIN {
                         if let Some(existing) =
-                            dp[end_idx].iter_mut().find(|node| node.word == *text)
+                            target_beam.iter_mut().find(|node| node.word == *text)
                         {
-                            if candidate_total > existing.total_score {
+                            if best_total > existing.total_score {
                                 existing.prev_step = start_idx;
-                                existing.prev_beam_idx = prev_beam_idx;
-                                existing.total_score = candidate_total;
+                                existing.prev_beam_idx = best_prev_idx;
+                                existing.total_score = best_total;
                             }
                         } else {
-                            dp[end_idx].push(ViterbiBeamNode {
+                            target_beam.push(ViterbiBeamNode {
                                 word: text.clone(),
+                                last_word_id: curr_word_id,
                                 prev_step: start_idx,
-                                prev_beam_idx,
-                                total_score: candidate_total,
+                                prev_beam_idx: best_prev_idx,
+                                total_score: best_total,
                             });
                         }
                     }
                 }
 
                 // 束搜索剪枝：保留得分最高的 Top-K 个不同末端词状态
-                dp[end_idx].sort_by_key(|state| std::cmp::Reverse(state.total_score));
-                dp[end_idx].truncate(Self::BEAM_WIDTH);
+                target_beam.sort_by_key(|state| std::cmp::Reverse(state.total_score));
+                target_beam.truncate(Self::BEAM_WIDTH);
             }
         }
 
