@@ -330,13 +330,12 @@ mod tests {
         assert_eq!(deserialized.page_keys, PageKeys::MinusEqual);
         assert!(!deserialized.auto_pangu_spacing);
 
-        // 测试临时文件保存
-        let temp_dir = std::env::temp_dir().join("waylan_test_cfg");
-        let temp_file = temp_dir.join("test_config.toml");
+        // 测试临时文件保存（使用 tempfile::tempdir() 确保多线程并发测试隔离与 RAII 自动清理）
+        let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
+        let temp_file = temp_dir.path().join("test_config.toml");
         default_cfg
             .save_to_file(&temp_file)
             .expect("应能保存至文件");
         assert!(temp_file.exists());
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
