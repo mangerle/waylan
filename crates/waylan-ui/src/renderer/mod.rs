@@ -131,24 +131,24 @@ impl CandidateBoxRenderer {
         let size_key = (size * 100.0).round() as u32;
         let font = self.font.as_ref()?;
 
-        if let Ok(cache) = self.glyph_cache.lock() {
+        if let Ok(mut cache) = self.glyph_cache.lock() {
             if let Some(cached) = cache.get(&(ch, size_key)) {
                 return Some(cached.clone());
             }
-        }
 
-        let (metrics, bitmap) = font.rasterize(ch, size);
-        let cached = CachedGlyph {
-            metrics,
-            bitmap: Arc::from(bitmap),
-        };
-        if let Ok(mut cache) = self.glyph_cache.lock() {
+            let (metrics, bitmap) = font.rasterize(ch, size);
+            let cached = CachedGlyph {
+                metrics,
+                bitmap: Arc::from(bitmap),
+            };
             if cache.len() >= MAX_GLYPH_CACHE_SIZE {
                 cache.clear();
             }
             cache.insert((ch, size_key), cached.clone());
+            Some(cached)
+        } else {
+            None
         }
-        Some(cached)
     }
 
     /// 加载默认系统字体
