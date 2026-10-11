@@ -14,6 +14,7 @@ impl AlgoEngine {
 
         let raw_input = self.composition.as_str();
         if raw_input.is_empty() {
+            self.all_candidates_cache.clear();
             self.current_candidates.clear();
             self.cached_preedit.clear();
             return;
@@ -22,12 +23,12 @@ impl AlgoEngine {
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
         if let Some(dispatched) = ModeDispatcher::try_dispatch(raw_input, &self.config) {
             self.cached_preedit = raw_input.to_string();
-            self.current_candidates = CandidatePipeline::process_with_opencc(
+            self.all_candidates_cache = CandidatePipeline::process_all_with_opencc(
                 dispatched,
                 &self.config,
-                self.page_index,
                 Some(&self.opencc_dict),
             );
+            self.update_page_candidates();
             return;
         }
 
@@ -241,21 +242,16 @@ impl AlgoEngine {
             }
         }
 
-        // 4. 送入后处理流水线（去重、简繁、字符集、注释、分页）
-        let mut candidates = CandidatePipeline::process_with_opencc(
+        // 4. 送入后处理流水线（去重、简繁、字符集、注释），保留全量已排序去重候选
+        let mut candidates = CandidatePipeline::process_all_with_opencc(
             raw_candidates,
             &self.config,
-            self.page_index,
             Some(&self.opencc_dict),
         );
 
-        if self.page_index == 0 {
-            self.inject_page_zero_extensions(raw_input, &paths, &mut candidates);
-        }
+        self.inject_page_zero_extensions(raw_input, &paths, &mut candidates);
 
-        // 统一强制截断至单页容量上限，防止扩展项注入导致单页候选溢出
-        candidates.truncate(self.config.page_size.max(1));
-
-        self.current_candidates = candidates;
+        self.all_candidates_cache = candidates;
+        self.update_page_candidates();
     }
 }

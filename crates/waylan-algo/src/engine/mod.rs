@@ -59,6 +59,8 @@ pub struct AlgoEngine {
     pub selected_index: usize,
     /// 当前呈现的清洗后候选词缓存
     pub(crate) current_candidates: Vec<AlgoCandidate>,
+    /// 全量候选词清洗与排序缓存池（翻页时直接切片，杜绝重复触发 Viterbi 与 DAG 重建）
+    pub(crate) all_candidates_cache: Vec<AlgoCandidate>,
     /// 上一次选词上屏的历史上下文词条（用于跨句 Bigram 语言模型联想预测）
     pub last_commit_context: Option<String>,
     /// 二级扩展卡片是否展开
@@ -91,6 +93,7 @@ impl AlgoEngine {
             page_index: 0,
             selected_index: 0,
             current_candidates: Vec::new(),
+            all_candidates_cache: Vec::new(),
             last_commit_context: None,
             is_expanded: false,
             expanded_selected_index: 0,
@@ -217,20 +220,40 @@ impl AlgoEngine {
 
     /// 候选翻下一页（若已处于末页则保持当前页不产生空白页）
     pub fn next_page(&mut self) -> &[AlgoCandidate] {
-        self.page_index = self.page_index.saturating_add(1);
-        self.recompute_candidates();
-        if self.current_candidates.is_empty() && self.page_index > 0 {
-            self.page_index -= 1;
-            self.recompute_candidates();
+        let page_size = self.config.page_size.max(1);
+        let max_page = self.all_candidates_cache.len().saturating_sub(1) / page_size;
+        if self.page_index < max_page {
+            self.page_index += 1;
+            self.selected_index = 0;
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
+            self.update_page_candidates();
         }
         &self.current_candidates
     }
 
     /// 候选翻上一页
     pub fn prev_page(&mut self) -> &[AlgoCandidate] {
-        self.page_index = self.page_index.saturating_sub(1);
-        self.recompute_candidates();
+        if self.page_index > 0 {
+            self.page_index -= 1;
+            self.selected_index = 0;
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
+            self.update_page_candidates();
+        }
         &self.current_candidates
+    }
+
+    /// 根据当前页码与页面大小从全量候选缓存池中截取当前展示页切片
+    pub(crate) fn update_page_candidates(&mut self) {
+        let page_size = self.config.page_size.max(1);
+        let start = self.page_index.saturating_mul(page_size);
+        if start < self.all_candidates_cache.len() {
+            let end = (start + page_size).min(self.all_candidates_cache.len());
+            self.current_candidates = self.all_candidates_cache[start..end].to_vec();
+        } else {
+            self.current_candidates.clear();
+        }
     }
 
     /// 在当前页候选词中向后（向下/向右）循环移动高亮选中项

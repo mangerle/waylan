@@ -22,11 +22,10 @@ impl CandidatePipeline {
         Self::process_with_opencc(raw_candidates, config, page_index, None)
     }
 
-    /// 执行完整候选词清洗与排序流水线（支持注入自定义简繁转换词典实例）
-    pub fn process_with_opencc(
+    /// 执行完整候选词清洗与排序流水线，返回全量排序列（不执行分页截断）
+    pub fn process_all_with_opencc(
         raw_candidates: Vec<AlgoCandidate>,
         config: &AlgoConfig,
-        page_index: usize,
         opencc: Option<&OpenCcDict>,
     ) -> Vec<AlgoCandidate> {
         let mut candidates = raw_candidates;
@@ -57,6 +56,18 @@ impl CandidatePipeline {
         if config.show_pinyin_comment {
             Self::decorate_comments(&mut candidates);
         }
+
+        candidates
+    }
+
+    /// 执行完整候选词清洗与排序流水线（支持注入自定义简繁转换词典实例并进行单页截取）
+    pub fn process_with_opencc(
+        raw_candidates: Vec<AlgoCandidate>,
+        config: &AlgoConfig,
+        page_index: usize,
+        opencc: Option<&OpenCcDict>,
+    ) -> Vec<AlgoCandidate> {
+        let candidates = Self::process_all_with_opencc(raw_candidates, config, opencc);
 
         // 6. 分页截取
         Self::paginate(candidates, config.page_size, page_index)
