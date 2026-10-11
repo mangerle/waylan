@@ -1,5 +1,5 @@
 use crate::surface::CursorRect;
-use log::info;
+use log::{debug, info, trace};
 use std::os::fd::AsFd;
 use wayland_client::protocol::wl_keyboard::KeyState;
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
@@ -39,7 +39,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 cursor,
                 anchor,
             } => {
-                info!(
+                trace!(
                     "[Wayland v2] 收到挂起上下文环境文本: 长度={}, 光标={}, 锚点={}",
                     text.len(),
                     cursor,
@@ -95,9 +95,12 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
             height,
         } = event
         {
-            info!(
+            trace!(
                 "[Wayland v2 光标矩形] 捕获焦点光标变化: x={}, y={}, w={}, h={}",
-                x, y, width, height
+                x,
+                y,
+                width,
+                height
             );
             state.current_cursor = CursorRect::new(x, y, width, height);
             state
@@ -169,7 +172,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
                     }
                 }
-                info!(
+                debug!(
                     "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}, latched={}, locked={}, group={}",
                     mods_depressed, mods_latched, mods_locked, group
                 );

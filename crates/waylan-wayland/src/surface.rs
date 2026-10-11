@@ -1,4 +1,4 @@
-use log::info;
+use log::debug;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
@@ -189,7 +189,7 @@ impl CandidateSurfaceManager {
     pub fn on_input_active(&mut self, width: u32, height: u32) {
         self.is_visible = true;
         self.current_size = (width, height);
-        info!(
+        debug!(
             "[悬浮窗口] 显示候选框图层，尺寸: {}x{}，吸附光标: ({}, {})",
             width, height, self.cursor_rect.x, self.cursor_rect.y
         );
@@ -199,7 +199,7 @@ impl CandidateSurfaceManager {
     pub fn on_input_inactive(&mut self) {
         if self.is_visible {
             self.is_visible = false;
-            info!("[悬浮窗口] 隐藏候选框悬浮图层。");
+            debug!("[悬浮窗口] 隐藏候选框悬浮图层。");
         }
     }
 
