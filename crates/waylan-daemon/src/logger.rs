@@ -1,6 +1,6 @@
+use crate::config::{env_var_non_empty, AppConfig};
 use chrono::Local;
 use log::LevelFilter;
-use std::env;
 use std::error::Error;
 use std::fs;
 use std::io::stdout;
@@ -20,9 +20,19 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
     // 确定日志文件路径
     let log_path = log_file_path();
 
-    // 确保日志文件所在的目录存在
+    // 确保日志文件所在的目录存在并设置 0o700 安全权限
     if let Some(parent) = log_path.parent() {
-        let _ = fs::create_dir_all(parent);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            let _ = builder.create(parent);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = fs::create_dir_all(parent);
+        }
     }
 
     // 若现有日志文件超过最大体积限制，自动多槽位滚动（.log.2 -> 删除, .log.1 -> .log.2, .log -> .log.1）防止磁盘耗尽
@@ -37,7 +47,7 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
     }
 
     // 根据环境变量 RUST_LOG 决定日志级别，默认为 Info
-    let env_level = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let env_level = env_var_non_empty("RUST_LOG").unwrap_or_else(|| "info".to_string());
     let level_filter = match env_level.to_lowercase().as_str() {
         "trace" => LevelFilter::Trace,
         "debug" => LevelFilter::Debug,
@@ -84,15 +94,15 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
 
 /// 解析符合 Linux XDG 状态目录规范的日志存储路径
 pub fn log_file_path() -> PathBuf {
-    if let Ok(custom_path) = env::var("WAYLAN_LOG_PATH") {
+    if let Some(custom_path) = env_var_non_empty("WAYLAN_LOG_PATH") {
         return PathBuf::from(custom_path);
     }
 
-    if let Ok(state_home) = env::var("XDG_STATE_HOME") {
+    if let Some(state_home) = env_var_non_empty("XDG_STATE_HOME") {
         return PathBuf::from(state_home).join("waylan").join("waylan.log");
     }
 
-    if let Ok(home) = env::var("HOME") {
+    if let Some(home) = env_var_non_empty("HOME") {
         return PathBuf::from(home)
             .join(".local")
             .join("state")
@@ -100,6 +110,6 @@ pub fn log_file_path() -> PathBuf {
             .join("waylan.log");
     }
 
-    // 回退到当前目录
-    PathBuf::from("waylan.log")
+    // 无 HOME 环境下统一回退至受控安全的运行时目录
+    AppConfig::fallback_runtime_dir().join("waylan.log")
 }

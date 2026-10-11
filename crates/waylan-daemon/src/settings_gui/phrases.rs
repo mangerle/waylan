@@ -103,10 +103,14 @@ pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui:
                     .find(|p| std::path::Path::new(p).exists())
                     .copied()
                     .unwrap_or("xdg-open");
-                if let Ok(mut child) = std::process::Command::new(xdg_bin)
-                    .arg(&phrase_path)
-                    .spawn()
+                let mut cmd = std::process::Command::new(xdg_bin);
+                cmd.arg(&phrase_path);
+                #[cfg(unix)]
                 {
+                    use std::os::unix::process::CommandExt;
+                    cmd.process_group(0);
+                }
+                if let Ok(mut child) = cmd.spawn() {
                     std::thread::spawn(move || {
                         let _ = child.wait();
                     });

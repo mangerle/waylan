@@ -240,6 +240,19 @@ impl DBusMenu {
                 #[cfg(unix)]
                 cmd2.process_group(0);
 
+                for var in [
+                    "WAYLAND_DISPLAY",
+                    "DISPLAY",
+                    "XDG_RUNTIME_DIR",
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "XDG_CURRENT_DESKTOP",
+                ] {
+                    if let Ok(val) = std::env::var(var) {
+                        cmd1.env(var, &val);
+                        cmd2.env(var, &val);
+                    }
+                }
+
                 let spawned = cmd1.spawn().or_else(|_| cmd2.spawn());
 
                 match spawned {
@@ -492,10 +505,8 @@ impl TrayService {
 impl Drop for TrayService {
     fn drop(&mut self) {
         self.exit_requested.store(true, Ordering::Release);
-        if self.icon_update_tx.try_send(()).is_err() {
-            // 通道已满时使用带超时的重发或同步发送，确保后台等待线程被唤醒
-            let _ = self.icon_update_tx.send(());
-        }
+        // 使用非阻塞 try_send 避免通道已满时阻塞死锁；通道已满说明已有待唤醒信号
+        let _ = self.icon_update_tx.try_send(());
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
         }
