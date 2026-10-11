@@ -53,24 +53,26 @@ fn test_shm_slot_reuse_and_ping_pong() {
     let fd1 = file1.as_raw_fd();
     assert_eq!(manager.current_slot, 1);
 
-    // 第二次渲染：应轮换初始化 slot 0
+    // 第二次渲染：应初始化 slot 2
     let (w2, h2, file2) = manager.render_state(&state).expect("第二次渲染失败");
     assert!(w2 > 0 && h2 > 0);
     let fd2 = file2.as_raw_fd();
-    assert_eq!(manager.current_slot, 0);
-    assert_ne!(fd1, fd2, "双缓冲两个槽位应对应独立的内核文件描述符");
+    assert_eq!(manager.current_slot, 2);
+    assert_ne!(fd1, fd2, "不同槽位应对应独立的内核文件描述符");
 
-    // 第三次渲染：应轮换复用 slot 1 的 fd，不再重复调用 tempfile()
-    let (_, _, file3) = manager.render_state(&state).expect("第三次渲染失败");
-    let fd3 = file3.as_raw_fd();
+    // 第三次渲染：应初始化 slot 3
+    let (_, _, _) = manager.render_state(&state).expect("第三次渲染失败");
+    assert_eq!(manager.current_slot, 3);
+
+    // 第四次渲染：应初始化 slot 0
+    let (_, _, _) = manager.render_state(&state).expect("第四次渲染失败");
+    assert_eq!(manager.current_slot, 0);
+
+    // 第五次渲染：完成一轮闭环，轮换复用 slot 1 的 fd，不再重复调用 tempfile()
+    let (_, _, file5) = manager.render_state(&state).expect("第五次渲染失败");
+    let fd5 = file5.as_raw_fd();
     assert_eq!(manager.current_slot, 1);
-    assert_eq!(fd1, fd3, "第三次渲染应复用 slot 1 的文件描述符");
-
-    // 第四次渲染：应轮换复用 slot 0 的 fd
-    let (_, _, file4) = manager.render_state(&state).expect("第四次渲染失败");
-    let fd4 = file4.as_raw_fd();
-    assert_eq!(manager.current_slot, 0);
-    assert_eq!(fd2, fd4, "第四次渲染应复用 slot 0 的文件描述符");
+    assert_eq!(fd1, fd5, "第五次渲染应复用 slot 1 的文件描述符");
 }
 
 #[test]
@@ -95,7 +97,7 @@ fn test_surface_manager_scale() {
 }
 
 #[test]
-fn test_shm_slot_all_busy_drops_frame() {
+fn test_shm_slot_all_busy_recycles_oldest_slot() {
     let mut manager = CandidateSurfaceManager::new();
     let state = CandidateBoxState {
         visible: true,
@@ -104,16 +106,20 @@ fn test_shm_slot_all_busy_drops_frame() {
         ..CandidateBoxState::default()
     };
 
-    // 渲染两次填满两个槽位
-    let _ = manager.render_state(&state);
-    let _ = manager.render_state(&state);
+    // 渲染四次填满所有四个槽位
+    for _ in 0..4 {
+        let _ = manager.render_state(&state);
+    }
 
-    // 人工模拟合成器尚未释放两个槽位（两槽皆 busy）
+    // 人工模拟合成器尚未释放全部槽位（全槽皆 busy）
     for slot in manager.shm_slots.iter_mut().flatten() {
         slot.is_busy = true;
     }
 
-    // 此时再次尝试渲染，应安全返回 None 丢帧，杜绝并发写入 busy 槽位引发花屏
-    let third_res = manager.render_state(&state);
-    assert!(third_res.is_none(), "两槽皆 busy 时应放弃提交");
+    // 此时再次尝试渲染，应自愈降级轮转复用最旧槽位，杜绝丢帧导致候选框画面卡死
+    let res = manager.render_state(&state);
+    assert!(
+        res.is_some(),
+        "全槽皆 busy 时应自愈轮转复用最旧槽位完成渲染"
+    );
 }

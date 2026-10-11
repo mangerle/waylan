@@ -116,10 +116,10 @@ pub struct CandidateSurfaceManager {
     pub scale: i32,
     /// 候选框矢量渲染器实例
     pub renderer: CandidateBoxRenderer,
-    /// 共享内存双缓冲槽位（交替使用以避免单缓冲画面撕裂与频繁创建文件）
-    pub shm_slots: [Option<ShmSlot>; 2],
+    /// 共享内存环形多缓冲槽位（交替使用以避免单缓冲画面撕裂与频繁创建文件）
+    pub shm_slots: [Option<ShmSlot>; 4],
     /// 各槽位绑定的 Wayland 活跃缓冲区对象（等待 release 回调）
-    pub slot_buffers: [Option<WlBuffer>; 2],
+    pub slot_buffers: [Option<WlBuffer>; 4],
     /// 当前活跃槽位索引
     pub current_slot: usize,
     /// 复用的像素格式转换内存缓冲区（避免每次按键触发堆内存重新分配）
@@ -144,8 +144,8 @@ impl CandidateSurfaceManager {
             current_size: (0, 0),
             scale: 1,
             renderer: CandidateBoxRenderer::new(UiTheme::light()),
-            shm_slots: [None, None],
-            slot_buffers: [None, None],
+            shm_slots: [None, None, None, None],
+            slot_buffers: [None, None, None, None],
             current_slot: 0,
             pixel_buffer: Vec::with_capacity(64 * 1024),
             screen_size: (1920, 1080),
@@ -352,8 +352,8 @@ impl CandidateSurfaceManager {
         let next_slot = match available_slot {
             Some(slot) => slot,
             None => {
-                log::warn!("[悬浮窗口] 双缓冲所有槽位当前均被合成器锁定为忙碌状态，跳过本次帧提交以防画面撕裂。");
-                return None;
+                log::debug!("[悬浮窗口] 合成器未及时下发 release 事件，轮转复用最旧槽位保证候选框画面实时刷新。");
+                (self.current_slot + 1) % self.shm_slots.len()
             }
         };
 

@@ -2,6 +2,7 @@ pub mod capsule;
 pub mod draw;
 pub mod expanded;
 pub mod font;
+pub mod grid;
 pub mod layout;
 
 use crate::theme::{Color, UiTheme};
@@ -10,7 +11,7 @@ use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 pub use font::CachedGlyph;
 use font::FontManager;
 use fontdue::{Font, FontSettings};
-use layout::{measure_candidates_bar, LayoutParams};
+use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, LayoutParams};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -31,8 +32,81 @@ pub struct CandidateBoxRenderer {
     pub font_size: f32,
     /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
     pub scale: f32,
-    /// 字形位图与度量信息缓存（避免高频字符每次击键重复矢量光栅化）
-    glyph_cache: Mutex<HashMap<(char, u32), CachedGlyph>>,
+    /// 字形位图与度量信息缓存（LRU 策略，避免高频字符每次击键重复矢量光栅化）
+    glyph_cache: Mutex<GlyphCacheState>,
+    /// 最近一次渲染生成的鼠标可点击命中测试区域列表
+    hit_regions: Mutex<Vec<HitRegion>>,
+}
+
+/// 字形缓存条目（附带最后访问时钟用于 LRU 淘汰）
+struct GlyphCacheEntry {
+    glyph: CachedGlyph,
+    last_accessed: u64,
+}
+
+/// 字形缓存状态机（维护条目哈希表与逻辑访问时钟）
+struct GlyphCacheState {
+    entries: HashMap<(char, u32), GlyphCacheEntry>,
+    clock: u64,
+}
+
+impl GlyphCacheState {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(capacity),
+            clock: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.clock = 0;
+    }
+
+    fn get(&mut self, key: &(char, u32)) -> Option<&CachedGlyph> {
+        self.clock = self.clock.wrapping_add(1);
+        let clock = self.clock;
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.last_accessed = clock;
+            Some(&entry.glyph)
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, key: (char, u32), glyph: CachedGlyph) {
+        self.clock = self.clock.wrapping_add(1);
+        let clock = self.clock;
+        self.evict_if_needed();
+        self.entries.insert(
+            key,
+            GlyphCacheEntry {
+                glyph,
+                last_accessed: clock,
+            },
+        );
+    }
+
+    /// 当字形缓存达到上限时，按访问时间戳升序排序，精确淘汰最久未使用的约 25% 条目 (LRU)
+    fn evict_if_needed(&mut self) {
+        if self.entries.len() >= MAX_GLYPH_CACHE_SIZE {
+            let evict_count = MAX_GLYPH_CACHE_SIZE / 4;
+            let mut entries: Vec<((char, u32), u64)> = self
+                .entries
+                .iter()
+                .map(|(k, v)| (*k, v.last_accessed))
+                .collect();
+            // 按最后访问时间升序排序，最久未使用的排在最前
+            entries.sort_unstable_by_key(|(_, last_accessed)| *last_accessed);
+            for (key, _) in entries.into_iter().take(evict_count) {
+                self.entries.remove(&key);
+            }
+        }
+    }
 }
 
 impl CandidateBoxRenderer {
@@ -43,10 +117,22 @@ impl CandidateBoxRenderer {
             fallback_fonts: Vec::new(),
             font_size: 15.0,
             scale: 1.0,
-            glyph_cache: Mutex::new(HashMap::with_capacity(256)),
+            glyph_cache: Mutex::new(GlyphCacheState::with_capacity(256)),
+            hit_regions: Mutex::new(Vec::with_capacity(36)),
         };
         renderer.load_default_fonts();
         renderer
+    }
+
+    /// 根据相对候选框表面左上角的物理像素坐标 (x, y) 执行命中测试，返回命中的操作目标
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<CandidateHitTarget> {
+        let lock = self.hit_regions.lock().ok()?;
+        for region in lock.iter() {
+            if region.contains(x, y) {
+                return Some(region.target);
+            }
+        }
+        None
     }
 
     /// 设置 HiDPI 屏幕缩放因子
@@ -122,18 +208,6 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 当字形缓存达到上限时，淘汰约 25% 的旧条目避免全量清空带来的重光栅化抖动
-    fn evict_cache_if_needed(cache: &mut HashMap<(char, u32), CachedGlyph>) {
-        if cache.len() >= MAX_GLYPH_CACHE_SIZE {
-            let evict_count = MAX_GLYPH_CACHE_SIZE / 4;
-            let keys_to_remove: Vec<(char, u32)> =
-                cache.keys().take(evict_count).cloned().collect();
-            for key in keys_to_remove {
-                cache.remove(&key);
-            }
-        }
-    }
-
     /// 测量一段文字的排版宽度（单次加锁并顺带预热字形缓存，使后续绘制 100% 命中缓存）
     pub fn measure_text(&self, text: &str, size: f32) -> f32 {
         if !self.has_font() {
@@ -150,7 +224,6 @@ impl CandidateBoxRenderer {
                 } else if let Some(font) = self.get_font_for_char(ch) {
                     let (metrics, bitmap) = font.rasterize(ch, size);
                     width += metrics.advance_width;
-                    Self::evict_cache_if_needed(&mut cache);
                     cache.insert(
                         (ch, size_key),
                         CachedGlyph {
@@ -188,7 +261,6 @@ impl CandidateBoxRenderer {
                 metrics,
                 bitmap: Arc::from(bitmap),
             };
-            Self::evict_cache_if_needed(&mut cache);
             cache.insert((ch, size_key), cached.clone());
             Some(cached)
         } else {
@@ -251,6 +323,16 @@ impl CandidateBoxRenderer {
     pub fn render(&self, state: &CandidateBoxState) -> Option<Pixmap> {
         if state.candidates.is_empty() {
             return None;
+        }
+
+        // 若处于 5 行网格大面板展开状态，优先渲染网格面板
+        if state.is_grid_expanded {
+            let mut regions = Vec::with_capacity(36);
+            let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
+            if let Ok(mut lock) = self.hit_regions.lock() {
+                *lock = regions;
+            }
+            return pix;
         }
 
         let s = self.scale.max(0.5);
@@ -341,7 +423,7 @@ impl CandidateBoxRenderer {
 
         let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
 
-        capsule::render_capsule_bar(
+        let regions = capsule::render_capsule_bar(
             self,
             &mut pixmap,
             state,
@@ -355,6 +437,9 @@ impl CandidateBoxRenderer {
                 scale: s,
             },
         );
+        if let Ok(mut lock) = self.hit_regions.lock() {
+            *lock = regions;
+        }
 
         if has_active_sub {
             render_expanded_popup_card(

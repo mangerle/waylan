@@ -100,6 +100,16 @@ pub struct WaylanV2Session {
     pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 动态键盘布局映射表（支持根据 XKB Keymap 动态更新）
     pub keymap_layout: KeymapLayout,
+    /// 5 行网格大候选词面板是否展开
+    pub is_grid_expanded: bool,
+    /// 5 行网格大候选词面板当前选中的全局候选词索引
+    pub grid_selected_index: usize,
+    /// 鼠标指针对象（用于接收候选框上的鼠标点击与移动）
+    pub pointer: Option<wayland_client::protocol::wl_pointer::WlPointer>,
+    /// 鼠标指针在候选表面内的当前局部物理坐标 (x, y)
+    pub pointer_pos: (f64, f64),
+    /// 鼠标指针当前是否位于候选表面内部
+    pub pointer_in_surface: bool,
 }
 
 impl WaylanV2Session {
@@ -144,6 +154,11 @@ impl WaylanV2Session {
             is_unavailable: false,
             exit_requested: None,
             keymap_layout: KeymapLayout::default(),
+            is_grid_expanded: false,
+            grid_selected_index: 0,
+            pointer: None,
+            pointer_pos: (0.0, 0.0),
+            pointer_in_surface: false,
         }
     }
 
@@ -334,6 +349,23 @@ impl WaylanV2Session {
             })
             .collect();
 
+        let grid_candidates: Vec<waylan_core::Candidate> = if self.is_grid_expanded {
+            self.engine
+                .all_candidates()
+                .iter()
+                .take(30)
+                .map(|c| waylan_core::Candidate {
+                    text: c.text.clone(),
+                    pinyin: c.pinyin.clone(),
+                    score: c.score,
+                    is_expandable: c.is_expandable,
+                    sub_candidates: c.sub_candidates.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let expanded_card = if self.engine.is_expanded {
             waylan_core::ExpandedCardState::Expanded {
                 selected_index: self.engine.expanded_selected_index,
@@ -342,17 +374,34 @@ impl WaylanV2Session {
             waylan_core::ExpandedCardState::Collapsed
         };
 
+        // 在拥有内联预编辑（Inline Preedit）时，常规拼音无需在候选框左侧重复显示拼音和模式徽标；
+        // 但当输入以 'v' 引导触发 V模式 时，显式展示 [V模式] 徽标与当前输入表达式
+        let is_dynamic_v_mode = self.engine.raw_input().starts_with('v');
+        let (preedit, mode_badge) = if is_dynamic_v_mode {
+            (self.engine.raw_input().to_string(), "V模式".to_string())
+        } else {
+            match self.mode {
+                InputMode::Chinese => (String::new(), String::new()),
+                InputMode::English => (String::new(), "英".to_string()),
+                InputMode::VMode => (self.engine.formatted_preedit(), "V".to_string()),
+            }
+        };
+
+        let selected_index = if self.is_grid_expanded {
+            self.grid_selected_index
+        } else {
+            self.engine.selected_index
+        };
+
         CandidateBoxState {
             visible: self.is_active && !self.engine.raw_input().is_empty(),
-            preedit: self.engine.formatted_preedit(),
+            preedit,
             candidates: core_candidates,
-            selected_index: self.engine.selected_index,
+            selected_index,
             expanded_card,
-            mode_badge: match self.mode {
-                InputMode::Chinese => "中".to_string(),
-                InputMode::English => "英".to_string(),
-                InputMode::VMode => "V".to_string(),
-            },
+            mode_badge,
+            is_grid_expanded: self.is_grid_expanded,
+            grid_candidates,
         }
     }
 
@@ -376,6 +425,8 @@ impl WaylanV2Session {
 
     /// 提交指定文本上屏，并重置预编辑状态
     pub fn commit_text(&mut self, text: &str) {
+        self.is_grid_expanded = false;
+        self.grid_selected_index = 0;
         if let Some(im) = &self.input_method {
             im.commit_string(text.to_string());
             im.set_preedit_string(String::new(), 0, 0);
@@ -415,6 +466,8 @@ impl WaylanV2Session {
 
     /// 取消当前输入，重置引擎与预编辑区
     pub fn cancel_input(&mut self) {
+        self.is_grid_expanded = false;
+        self.grid_selected_index = 0;
         self.engine.reset();
         self.update_preedit("");
     }

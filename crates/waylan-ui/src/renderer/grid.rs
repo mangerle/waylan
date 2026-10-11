@@ -1,0 +1,257 @@
+//! 5 行网格大候选词面板渲染与布局模块
+//!
+//! 负责大面板展开状态下的 5 行 × 6 列网格候选词、右侧垂直滚动条、
+//! 向上折叠箭头按钮的矢量绘制以及鼠标可点击区域计算。
+
+use super::draw::{
+    draw_card_background_at, draw_collapse_arrow, draw_rounded_rect, draw_scrollbar,
+    CardBackgroundParams, RoundedRectParams,
+};
+use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
+use super::CandidateBoxRenderer;
+use tiny_skia::Pixmap;
+use waylan_core::CandidateBoxState;
+
+/// 网格大面板布局常量
+const GRID_ROWS: usize = 5;
+const GRID_COLS: usize = 6;
+const MAX_GRID_CAPACITY: usize = GRID_ROWS * GRID_COLS;
+
+/// 5 行网格尺寸与度量结果
+struct GridDimensions {
+    col_widths: [f32; GRID_COLS],
+    row_height: f32,
+    total_width: f32,
+    total_height: f32,
+    padding_h: f32,
+    padding_v: f32,
+}
+
+/// 计算网格各列宽度与总宽高
+fn compute_grid_dimensions(
+    renderer: &CandidateBoxRenderer,
+    candidates: &[waylan_core::Candidate],
+    s: f32,
+) -> GridDimensions {
+    let font_size = renderer.font_size * s;
+    let index_font_size = font_size * 0.85;
+    let mut col_widths = [40.0 * s; GRID_COLS];
+
+    for (idx, cand) in candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
+        let col = idx % GRID_COLS;
+        let text_w = renderer.measure_text(&cand.text, font_size);
+        let num_str = if col < PRECACHED_INDEX_STRINGS.len() {
+            PRECACHED_INDEX_STRINGS[col]
+        } else {
+            "•"
+        };
+        let num_w = renderer.measure_text(num_str, index_font_size);
+        let item_w = num_w + 6.0 * s + text_w + 14.0 * s;
+        if item_w > col_widths[col] {
+            col_widths[col] = item_w;
+        }
+    }
+
+    let padding_h = 12.0 * s;
+    let padding_v = 10.0 * s;
+    let row_height = 28.0 * s;
+    let col_gap = 8.0 * s;
+    let right_action_w = 26.0 * s;
+
+    let cols_total: f32 =
+        col_widths.iter().sum::<f32>() + (GRID_COLS.saturating_sub(1) as f32 * col_gap);
+    let total_width = padding_h * 2.0 + cols_total + right_action_w;
+
+    let count = candidates.len().min(MAX_GRID_CAPACITY);
+    let actual_rows = count.div_ceil(GRID_COLS).clamp(1, GRID_ROWS);
+    let total_height = padding_v * 2.0 + actual_rows as f32 * row_height;
+
+    GridDimensions {
+        col_widths,
+        row_height,
+        total_width,
+        total_height,
+        padding_h,
+        padding_v,
+    }
+}
+
+/// 渲染 5 行展开大候选词网格面板
+pub fn render_grid_expanded_panel(
+    renderer: &CandidateBoxRenderer,
+    state: &CandidateBoxState,
+    regions: &mut Vec<HitRegion>,
+) -> Option<Pixmap> {
+    let s = renderer.scale.max(0.5);
+    let candidates_source = if !state.grid_candidates.is_empty() {
+        &state.grid_candidates
+    } else {
+        &state.candidates
+    };
+    if candidates_source.is_empty() {
+        return None;
+    }
+
+    let dims = compute_grid_dimensions(renderer, candidates_source, s);
+    let mut pixmap = Pixmap::new(
+        dims.total_width.ceil() as u32,
+        dims.total_height.ceil() as u32,
+    )?;
+
+    // 绘制大面板圆角卡片背景
+    draw_card_background_at(
+        &mut pixmap,
+        &renderer.theme,
+        CardBackgroundParams {
+            x: 0.0,
+            y: 0.0,
+            width: dims.total_width,
+            height: dims.total_height,
+            radius: renderer.theme.corner_radius.max(6.0) * s,
+            stroke_width: 1.0 * s,
+        },
+    );
+
+    render_grid_items(
+        renderer,
+        &mut pixmap,
+        state,
+        candidates_source,
+        &dims,
+        regions,
+        s,
+    );
+    render_grid_controls(renderer, &mut pixmap, &dims, regions, s);
+
+    Some(pixmap)
+}
+
+/// 渲染网格内所有候选词项
+fn render_grid_items(
+    renderer: &CandidateBoxRenderer,
+    pixmap: &mut Pixmap,
+    state: &CandidateBoxState,
+    candidates: &[waylan_core::Candidate],
+    dims: &GridDimensions,
+    regions: &mut Vec<HitRegion>,
+    s: f32,
+) {
+    let font_size = renderer.font_size * s;
+    let col_gap = 8.0 * s;
+
+    let mut col_starts = [0.0; GRID_COLS];
+    let mut acc_x = dims.padding_h;
+    for (c, start) in col_starts.iter_mut().enumerate() {
+        *start = acc_x;
+        acc_x += dims.col_widths[c] + col_gap;
+    }
+
+    for (idx, cand) in candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
+        let row = idx / GRID_COLS;
+        let col = idx % GRID_COLS;
+        let item_x = col_starts[col];
+        let item_y = dims.padding_v + row as f32 * dims.row_height;
+        let item_w = dims.col_widths[col];
+        let item_h = dims.row_height;
+
+        let is_selected = idx == state.selected_index;
+        if is_selected {
+            draw_rounded_rect(
+                pixmap,
+                RoundedRectParams {
+                    x: item_x,
+                    y: item_y + 2.0 * s,
+                    w: item_w,
+                    h: item_h - 4.0 * s,
+                    r: 4.0 * s,
+                },
+                renderer.theme.highlight_badge,
+            );
+        }
+
+        let baseline_y = item_y + (item_h + font_size * 0.72) / 2.0;
+        let mut cur_x = item_x + 4.0 * s;
+
+        let selected_row = state.selected_index / GRID_COLS;
+        if row == selected_row {
+            let num_str = if col < PRECACHED_INDEX_STRINGS.len() {
+                PRECACHED_INDEX_STRINGS[col]
+            } else {
+                "•"
+            };
+            let num_color = if is_selected {
+                renderer.theme.highlight_text
+            } else {
+                renderer.theme.index_text
+            };
+            let num_w = renderer.measure_text(num_str, font_size * 0.85);
+            renderer.draw_text(
+                pixmap,
+                num_str,
+                cur_x,
+                baseline_y,
+                font_size * 0.85,
+                num_color,
+            );
+            cur_x += num_w + 4.0 * s;
+        }
+
+        let text_color = if is_selected {
+            renderer.theme.highlight_text
+        } else {
+            renderer.theme.candidate_text
+        };
+        renderer.draw_text(pixmap, &cand.text, cur_x, baseline_y, font_size, text_color);
+
+        regions.push(HitRegion::new(
+            item_x,
+            item_y,
+            item_w,
+            item_h,
+            CandidateHitTarget::Select(idx),
+        ));
+    }
+}
+
+/// 渲染右侧折叠箭头与指示滚动条
+fn render_grid_controls(
+    renderer: &CandidateBoxRenderer,
+    pixmap: &mut Pixmap,
+    dims: &GridDimensions,
+    regions: &mut Vec<HitRegion>,
+    s: f32,
+) {
+    let ctrl_center_x = dims.total_width - 14.0 * s;
+    let ctrl_top_y = dims.padding_v + 12.0 * s;
+
+    // 绘制向上折叠箭头
+    draw_collapse_arrow(
+        pixmap,
+        ctrl_center_x,
+        ctrl_top_y,
+        10.0 * s,
+        renderer.theme.index_text,
+    );
+    // 记录折叠按钮点击区域
+    regions.push(HitRegion::new(
+        ctrl_center_x - 10.0 * s,
+        ctrl_top_y - 10.0 * s,
+        20.0 * s,
+        20.0 * s,
+        CandidateHitTarget::ToggleExpand,
+    ));
+
+    // 绘制右侧细长滚动条滑块
+    let scroll_x = dims.total_width - 9.0 * s;
+    let scroll_y = ctrl_top_y + 16.0 * s;
+    let scroll_h = (dims.total_height - scroll_y - dims.padding_v).max(18.0 * s);
+    draw_scrollbar(
+        pixmap,
+        scroll_x,
+        scroll_y,
+        3.0 * s,
+        scroll_h * 0.45,
+        1.5 * s,
+        renderer.theme.border,
+    );
+}

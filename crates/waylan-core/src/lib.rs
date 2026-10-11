@@ -106,6 +106,10 @@ pub struct CandidateBoxState {
     pub expanded_card: ExpandedCardState,
     /// 当前工作模式提示文字（如：“中”、“英”、“V”）
     pub mode_badge: String,
+    /// 是否处于 5 行大候选网格面板展开状态
+    pub is_grid_expanded: bool,
+    /// 展开状态下的多行网格候选词列表（通常预加载前 30 个候选词）
+    pub grid_candidates: Vec<Candidate>,
 }
 
 impl CandidateBoxState {

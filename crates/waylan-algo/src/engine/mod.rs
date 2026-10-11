@@ -389,6 +389,11 @@ impl AlgoEngine {
         &self.current_candidates
     }
 
+    /// 获取当前输入下的全量候选词切片（用于展开大面板展示）
+    pub fn all_candidates(&self) -> &[AlgoCandidate] {
+        &self.all_candidates_cache
+    }
+
     /// 清空上屏历史上下文缓存
     pub fn clear_commit_context(&mut self) {
         self.last_commit_context = None;

@@ -260,3 +260,57 @@ pub fn blend_glyph(pixmap: &mut Pixmap, glyph: &CachedGlyph, pos: (i32, i32), co
         }
     }
 }
+
+/// 绘制向上折叠箭头（点击收回单行模式）
+pub fn draw_collapse_arrow(
+    pixmap: &mut Pixmap,
+    center_x: f32,
+    center_y: f32,
+    size: f32,
+    color: Color,
+) {
+    let half_w = size * 0.5;
+    let half_h = size * 0.35;
+    let mut pb = PathBuilder::new();
+    // 向上三角形
+    pb.move_to(center_x, center_y - half_h);
+    pb.line_to(center_x + half_w, center_y + half_h);
+    pb.line_to(center_x - half_w, center_y + half_h);
+    pb.close();
+
+    if let Some(path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color(color.to_tiny_skia());
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
+/// 绘制细长胶囊滚动条指示器
+pub fn draw_scrollbar(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    color: Color,
+) {
+    draw_rounded_rect(
+        pixmap,
+        RoundedRectParams {
+            x,
+            y,
+            w: width,
+            h: height,
+            r: radius,
+        },
+        color,
+    );
+}

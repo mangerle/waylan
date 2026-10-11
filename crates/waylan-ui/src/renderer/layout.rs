@@ -88,3 +88,43 @@ where
     let total_bar_width = current_pos_x - params.item_gap + action_area_width + params.padding_h;
     (measured, total_bar_width)
 }
+
+/// 鼠标在候选框上的命中交互目标
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateHitTarget {
+    /// 选中指定候选词（包含单行展示页索引或多行网格全局索引）
+    Select(usize),
+    /// 展开或折叠 5 行大网格候选面板
+    ToggleExpand,
+    /// 翻上一页
+    PrevPage,
+    /// 翻下一页
+    NextPage,
+}
+
+/// 鼠标点击检测矩形区域
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HitRegion {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub target: CandidateHitTarget,
+}
+
+impl HitRegion {
+    pub fn new(x: f32, y: f32, width: f32, height: f32, target: CandidateHitTarget) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+            target,
+        }
+    }
+
+    #[inline]
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height
+    }
+}

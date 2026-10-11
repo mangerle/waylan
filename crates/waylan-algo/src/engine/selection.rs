@@ -40,9 +40,30 @@ impl AlgoEngine {
         if index >= self.current_candidates.len() {
             return None;
         }
-
-        self.last_timestamp = self.last_timestamp.max(current_timestamp);
         let selected = self.current_candidates[index].clone();
+        Some(self.commit_candidate_internal(selected, current_timestamp))
+    }
+
+    /// 从当前输入的全量候选词缓存中直接选取指定全局索引的词条上屏
+    pub fn select_candidate_from_all(
+        &mut self,
+        global_index: usize,
+        current_timestamp: u64,
+    ) -> Option<(String, usize)> {
+        if global_index >= self.all_candidates_cache.len() {
+            return None;
+        }
+        let selected = self.all_candidates_cache[global_index].clone();
+        Some(self.commit_candidate_internal(selected, current_timestamp))
+    }
+
+    /// 核心提交逻辑内部实现：自造词、调频、盘古之白与消费前缀
+    fn commit_candidate_internal(
+        &mut self,
+        selected: AlgoCandidate,
+        current_timestamp: u64,
+    ) -> (String, usize) {
+        self.last_timestamp = self.last_timestamp.max(current_timestamp);
         let should_record = self.should_record_to_user_dict(&selected);
 
         // 若选中的是可展开项，且直接按数字键确认（未展开时）：
@@ -89,13 +110,16 @@ impl AlgoEngine {
             self.last_commit_context = Some(trimmed_commit.to_string());
         }
 
-        // 计算消费的拼音字母长度并执行分段确认（动态功能项与容错纠错项消费全部输入）
-        let consumed_len =
-            if selected.is_expandable || selected.tier == CandidateTier::TypoCorrection {
-                self.composition.len()
-            } else {
-                self.compute_consumed_len_for_candidate(&selected)
-            };
+        // 计算消费的拼音字母长度并执行分段确认（动态功能项、容错纠错项与特殊模式分发项全量消费输入）
+        let consumed_len = if selected.is_expandable
+            || selected.tier == CandidateTier::TypoCorrection
+            || self.composition.as_str().starts_with('v')
+            || ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config).is_some()
+        {
+            self.composition.len()
+        } else {
+            self.compute_consumed_len_for_candidate(&selected)
+        };
 
         if should_record {
             self.partial_commit_segments
@@ -141,7 +165,7 @@ impl AlgoEngine {
         self.page_index = 0;
         self.recompute_candidates();
 
-        Some((commit_text, self.composition.len()))
+        (commit_text, self.composition.len())
     }
 
     /// 切换二级扩展卡片的展开状态（仅当当前选中的项支持二级展开时有效）

@@ -256,6 +256,8 @@ impl WaylanV1Session {
                 InputMode::English => "英".to_string(),
                 InputMode::VMode => "V".to_string(),
             },
+            is_grid_expanded: false,
+            grid_candidates: Vec::new(),
         }
     }
 

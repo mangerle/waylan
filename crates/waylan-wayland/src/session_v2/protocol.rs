@@ -1,7 +1,11 @@
 use crate::surface::CursorRect;
 use log::{debug, info, trace};
 use std::os::fd::AsFd;
+use waylan_ui::CandidateHitTarget;
 use wayland_client::protocol::wl_keyboard::KeyState;
+use wayland_client::protocol::wl_pointer::{
+    ButtonState as WlButtonState, Event as PointerEvent, WlPointer,
+};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::{
     Event as GrabEvent, ZwpInputMethodKeyboardGrabV2,
@@ -183,6 +187,109 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     "[Wayland v2 键盘抓取] 收到按键连击设置: rate={}, delay={}",
                     rate, delay
                 );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 处理鼠标点击候选框事件（包含展开/折叠、选词上屏与翻页）
+fn handle_pointer_click(state: &mut WaylanV2Session) {
+    let (px, py) = state.pointer_pos;
+    let hit = state
+        .surface_manager
+        .renderer
+        .hit_test(px as f32, py as f32);
+    let Some(target) = hit else {
+        return;
+    };
+
+    match target {
+        CandidateHitTarget::ToggleExpand => {
+            state.is_grid_expanded = !state.is_grid_expanded;
+            if state.is_grid_expanded {
+                state.grid_selected_index = state.engine.selected_index;
+            } else {
+                state.grid_selected_index = 0;
+            }
+            state.refresh_candidate_surface();
+        }
+        CandidateHitTarget::Select(idx) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let select_res = if state.is_grid_expanded {
+                state.engine.select_candidate_from_all(idx, now)
+            } else {
+                state.engine.select_candidate(idx, now)
+            };
+            if let Some((commit_text, remaining_len)) = select_res {
+                state.is_grid_expanded = false;
+                state.grid_selected_index = 0;
+                if remaining_len == 0 {
+                    state.commit_text(&commit_text);
+                } else {
+                    let formatted = state.engine.formatted_preedit();
+                    state.commit_partial(&commit_text, &formatted);
+                }
+            }
+        }
+        CandidateHitTarget::NextPage => {
+            state.engine.next_page();
+            state.refresh_candidate_surface();
+        }
+        CandidateHitTarget::PrevPage => {
+            state.engine.prev_page();
+            state.refresh_candidate_surface();
+        }
+    }
+}
+
+// 为 wl_pointer 实现事件分发
+impl Dispatch<WlPointer, ()> for WaylanV2Session {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlPointer,
+        event: PointerEvent,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            PointerEvent::Enter {
+                surface,
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                if let Some(ref popup_surface) = state.popup_wl_surface {
+                    if &surface == popup_surface {
+                        state.pointer_in_surface = true;
+                        state.pointer_pos = (surface_x, surface_y);
+                    }
+                }
+            }
+            PointerEvent::Leave { surface, .. } => {
+                if let Some(ref popup_surface) = state.popup_wl_surface {
+                    if &surface == popup_surface {
+                        state.pointer_in_surface = false;
+                    }
+                }
+            }
+            PointerEvent::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } if state.pointer_in_surface => {
+                state.pointer_pos = (surface_x, surface_y);
+            }
+            PointerEvent::Button {
+                button: 0x110,
+                state: WEnum::Value(WlButtonState::Pressed),
+                ..
+            } if state.pointer_in_surface => {
+                handle_pointer_click(state);
             }
             _ => {}
         }

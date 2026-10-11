@@ -174,46 +174,39 @@ impl AlgoEngine {
         }
         raw_candidates.append(&mut acronym_matches);
 
-        // 2.3 若多音节切分未能命中整词，将首段已完成音节或首声母单字作为保真降级备选（如 "ni" -> "你", "r" -> "人"）
-        let clean_raw_len = raw_input.chars().filter(|c| *c != '\'').count();
-        let has_full_exact_match = raw_candidates.iter().any(|c| {
-            c.tier == CandidateTier::ExactWord
-                && c.pinyin.chars().filter(|ch| *ch != '\'').count() == clean_raw_len
-        });
-        if !has_full_exact_match {
-            if let Some(first_path) = paths.first() {
-                if !first_path.syllables.is_empty() {
-                    let first_syl = &first_path.syllables[0];
-                    let mut first_matches = self.table.lookup(first_syl);
-                    if self.config.fuzzy.has_active_rules() {
-                        for alt_syl in
-                            PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy)
-                        {
-                            let mut alt_matches = self.table.lookup(&alt_syl);
-                            for am in &mut alt_matches {
-                                am.pinyin = first_syl.clone();
-                                am.score = am.score.saturating_sub(50);
-                            }
-                            first_matches.append(&mut alt_matches);
+        // 2.3 将首音节已完成音节或首声母单字作为降级备选（如 "wo" -> "我", "握", "卧"...）
+        // 赋予 PrefixPartial 优先级，确保整词始终排在最前，同时单字可排在后续行供网格面板展开与翻页
+        if let Some(first_path) = paths.first() {
+            if !first_path.syllables.is_empty() {
+                let first_syl = &first_path.syllables[0];
+                let mut first_matches = self.table.lookup(first_syl);
+                if self.config.fuzzy.has_active_rules() {
+                    for alt_syl in
+                        PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy)
+                    {
+                        let mut alt_matches = self.table.lookup(&alt_syl);
+                        for am in &mut alt_matches {
+                            am.pinyin = first_syl.clone();
+                            am.score = am.score.saturating_sub(50);
                         }
+                        first_matches.append(&mut alt_matches);
                     }
-                    if first_matches.is_empty() {
-                        if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl)
-                        {
-                            for (text, score) in initial_entries {
-                                first_matches.push(
-                                    AlgoCandidate::new(text, first_syl.clone(), score)
-                                        .with_tier(CandidateTier::PrefixPartial),
-                                );
-                            }
-                        }
-                    } else {
-                        for fm in &mut first_matches {
-                            fm.tier = CandidateTier::PrefixPartial;
-                        }
-                    }
-                    raw_candidates.append(&mut first_matches);
                 }
+                if first_matches.is_empty() {
+                    if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl) {
+                        for (text, score) in initial_entries {
+                            first_matches.push(
+                                AlgoCandidate::new(text, first_syl.clone(), score)
+                                    .with_tier(CandidateTier::PrefixPartial),
+                            );
+                        }
+                    }
+                } else {
+                    for fm in &mut first_matches {
+                        fm.tier = CandidateTier::PrefixPartial;
+                    }
+                }
+                raw_candidates.append(&mut first_matches);
             }
         }
 

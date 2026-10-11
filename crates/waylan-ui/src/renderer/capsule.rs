@@ -6,7 +6,7 @@ use super::draw::{
     draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow, draw_rounded_rect,
     CardBackgroundParams, RoundedRectParams,
 };
-use super::layout::ItemMeasure;
+use super::layout::{CandidateHitTarget, HitRegion, ItemMeasure};
 use super::CandidateBoxRenderer;
 use tiny_skia::Pixmap;
 use waylan_core::{Candidate, CandidateBoxState};

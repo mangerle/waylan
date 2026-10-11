@@ -16,6 +16,8 @@ fn test_renderer_basic() {
         selected_index: 0,
         expanded_card: waylan_core::ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
+        is_grid_expanded: false,
+        grid_candidates: Vec::new(),
     };
 
     let pixmap = renderer.render(&state);
@@ -39,6 +41,8 @@ fn test_render_expanded_popup_card() {
         selected_index: 1,
         expanded_card: waylan_core::ExpandedCardState::Expanded { selected_index: 0 },
         mode_badge: "中".to_string(),
+        is_grid_expanded: false,
+        grid_candidates: Vec::new(),
     };
 
     let pixmap = renderer.render(&state).expect("应成功渲染展开的二级卡片");
@@ -65,6 +69,8 @@ fn test_glyph_cache_hit_and_reuse() {
         selected_index: 0,
         expanded_card: waylan_core::ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
+        is_grid_expanded: false,
+        grid_candidates: Vec::new(),
     };
 
     let _ = renderer.render(&state);
@@ -86,6 +92,8 @@ fn test_hidpi_scale_rendering() {
         selected_index: 0,
         expanded_card: waylan_core::ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
+        is_grid_expanded: false,
+        grid_candidates: Vec::new(),
     };
 
     let pixmap_1x = renderer.render(&state).expect("1x 渲染失败");
@@ -114,4 +122,74 @@ fn test_fallback_font_chain() {
         renderer.add_fallback_font(fb);
     }
     assert!(renderer.has_font());
+}
+
+#[test]
+fn test_glyph_cache_lru_eviction() {
+    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    if !renderer.has_font() {
+        return;
+    }
+    renderer.clear_glyph_cache();
+
+    // 预热一个高频热点字符 '中'
+    renderer.measure_text("中", 15.0);
+    assert_eq!(renderer.glyph_cache_len(), 1);
+
+    // 持续测量大量不同字符（触发缓存超过 2048 上限与 LRU 淘汰）
+    for i in 0..2100 {
+        if let Some(ch) = char::from_u32(0x4E00 + i) {
+            renderer.measure_text(&ch.to_string(), 15.0);
+            // 周期性重新访问高频热点字符 '中'，刷新其 LRU 时钟
+            if i % 50 == 0 {
+                renderer.measure_text("中", 15.0);
+            }
+        }
+    }
+
+    // 验证总容量被严格限制在 MAX_GLYPH_CACHE_SIZE 内
+    let len = renderer.glyph_cache_len();
+    assert!(len <= 2048, "字形缓存容量应被严格限制在上限内");
+    assert!(len > 1500, "淘汰后应保留大部分活跃字形");
+
+    // 验证频繁访问的热点字形在淘汰后依然被保留在缓存中（命中缓存，len 不变）
+    let before_len = renderer.glyph_cache_len();
+    renderer.measure_text("中", 15.0);
+    assert_eq!(
+        renderer.glyph_cache_len(),
+        before_len,
+        "高频字符应因 LRU 保护常驻缓存"
+    );
+}
+
+#[test]
+fn test_render_grid_expanded_and_hit_test() {
+    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut grid_cands = Vec::with_capacity(30);
+    for i in 0..30 {
+        grid_cands.push(Candidate::new(format!("候选{}", i + 1), "hou'xuan", 100));
+    }
+
+    let state = CandidateBoxState {
+        visible: true,
+        preedit: "hou'xuan".to_string(),
+        candidates: grid_cands.iter().take(6).cloned().collect(),
+        selected_index: 0,
+        expanded_card: waylan_core::ExpandedCardState::Collapsed,
+        mode_badge: String::new(),
+        is_grid_expanded: true,
+        grid_candidates: grid_cands,
+    };
+
+    let pixmap = renderer.render(&state).expect("5行网格面板应渲染成功");
+    assert!(pixmap.height() >= 140, "5行网格面板高度应至少140像素");
+    assert!(pixmap.width() >= 300, "5行网格面板宽度应充足以容纳6列");
+
+    // 测试右上角折叠按钮命中测试
+    let collapse_target = renderer.hit_test(pixmap.width() as f32 - 14.0, 20.0);
+    assert_eq!(collapse_target, Some(CandidateHitTarget::ToggleExpand));
+
+    // 测试首个候选词命中测试
+    let first_cand_target = renderer.hit_test(20.0, 20.0);
+    assert_eq!(first_cand_target, Some(CandidateHitTarget::Select(0)));
 }

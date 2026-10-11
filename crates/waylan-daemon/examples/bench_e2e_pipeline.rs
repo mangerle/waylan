@@ -80,6 +80,8 @@ fn main() {
         selected_index: 0,
         expanded_card: waylan_core::ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
+        is_grid_expanded: false,
+        grid_candidates: Vec::new(),
     };
 
     let start_render = Instant::now();
