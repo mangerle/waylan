@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, warn};
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
@@ -419,16 +419,15 @@ impl CandidateSurfaceManager {
         let next_slot = match available_slot {
             Some(slot) => slot,
             None => {
-                log::debug!("[悬浮窗口] 合成器未及时下发 release 事件，轮转复用最旧槽位保证候选框画面实时刷新。");
+                debug!("[悬浮窗口] 合成器未及时下发 release 事件，轮转复用最旧槽位保证候选框画面实时刷新。");
                 (self.current_slot + 1) % self.shm_slots.len()
             }
         };
 
         if let Err(e) = self.ensure_slot(next_slot, required_bytes) {
-            log::warn!(
+            warn!(
                 "[悬浮窗口] 扩容共享内存槽位失败，槽位: {}，原因: {}",
-                next_slot,
-                e
+                next_slot, e
             );
             return None;
         }
@@ -441,10 +440,9 @@ impl CandidateSurfaceManager {
             .seek(SeekFrom::Start(0))
             .and_then(|_| slot.file.write_all(&self.pixel_buffer))
         {
-            log::warn!(
+            warn!(
                 "[悬浮窗口] 写入候选框共享内存失败，槽位: {}，原因: {}",
-                self.current_slot,
-                e
+                self.current_slot, e
             );
             return None;
         }
@@ -454,7 +452,7 @@ impl CandidateSurfaceManager {
 
     /// 将 RGBA/BGRA 像素位图写入匿名内存映射文件（用于跨进程传递给 Wayland 合成器）
     /// 在 Linux 环境优先使用纯内存文件描述符 (memfd_create)，失败时平滑降级至 tempfile
-    pub fn create_shm_fd(size: usize) -> std::io::Result<std::fs::File> {
+    pub fn create_shm_fd(size: usize) -> std::io::Result<File> {
         #[cfg(target_os = "linux")]
         {
             use rustix::fs::{memfd_create, MemfdFlags};
@@ -462,7 +460,7 @@ impl CandidateSurfaceManager {
                 "waylan-candidate-shm",
                 MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
             ) {
-                let file = std::fs::File::from(fd);
+                let file = File::from(fd);
                 file.set_len(size as u64)?;
                 return Ok(file);
             }

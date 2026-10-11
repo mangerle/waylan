@@ -1,14 +1,19 @@
-use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
-use crate::session_v1::{
-    handle_composition_key, keycode_to_ascii_digit_char, keycode_to_punctuation_with_shift,
-    KeyProcessAction, WaylanV1Session, KEY_BACKSPACE, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
-};
-use log::{debug, info};
 use std::fs::File;
 use std::io::Read;
-use waylan_core::InputMode;
-use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, WlKeyboard};
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use log::{debug, info};
+use waylan_core::{InputMode, TextAction};
+use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, WlKeyboard};
+use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+
+use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
+use crate::session_v1::{
+    handle_composition_key_with_params, keycode_to_ascii_digit_char,
+    keycode_to_punctuation_with_shift, CompositionKeyParams, KeyProcessAction, WaylanV1Session,
+    KEY_BACKSPACE, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
+};
 
 impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
     fn event(
@@ -52,12 +57,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                 state: key_state,
             } => {
                 state.current_serial = serial;
-                let is_press = matches!(
-                    key_state,
-                    wayland_client::WEnum::Value(
-                        wayland_client::protocol::wl_keyboard::KeyState::Pressed
-                    )
-                );
+                let is_press = matches!(key_state, WEnum::Value(KeyState::Pressed));
 
                 state.update_modifier_by_key(key, is_press);
 
@@ -72,7 +72,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                         if let Some(ref zh_flag) = state.shared_is_chinese {
                             zh_flag.store(
                                 matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                                std::sync::atomic::Ordering::Release,
+                                Ordering::Release,
                             );
                         }
                         if let Some(ref notify_tx) = state.mode_notify_tx {
@@ -104,7 +104,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     return;
                 }
 
-                let consumed = handle_v1_key_press(state, &context, serial, time, key);
+                let consumed = handle_v1_key_press(state, &context, time, key);
                 state.consumed_keys.record_press(key, consumed);
                 if !consumed {
                     context.key(serial, time, key, 1);
@@ -130,10 +130,10 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
 fn handle_v1_key_press(
     state: &mut WaylanV1Session,
     context: &ZwpInputMethodContextV1,
-    serial: u32,
     time: u32,
     key: u32,
 ) -> bool {
+    let serial = state.current_serial;
     // 2. 如果当前处于英文模式，或按下了 Ctrl/Alt/Super 快捷键（如 Ctrl+C/V），直接转发原始按键给应用
     if state.mode == InputMode::English || state.has_ctrl_or_alt() {
         return false;
@@ -141,20 +141,21 @@ fn handle_v1_key_press(
 
     // 3. 正在组合拼音状态下的专门按键拦截
     if !state.engine.raw_input().is_empty() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let shift_active = state.is_shift_active();
-        let page_keys = state.page_keys;
-        if let Some(action) = handle_composition_key(
+        let params = CompositionKeyParams {
+            key,
+            shift_active: state.is_shift_active(),
+            page_keys: state.page_keys,
+            now,
+        };
+        if let Some(action) = handle_composition_key_with_params(
             &mut state.engine,
             &mut state.punctuation_processor,
-            key,
-            shift_active,
-            page_keys,
-            now,
+            params,
         ) {
             match action {
                 KeyProcessAction::PassThrough => {}
@@ -204,10 +205,10 @@ fn handle_v1_key_press(
             if let Some(actions) = state.punctuation_processor.process_punctuation(punct_char) {
                 for action in actions {
                     match action {
-                        waylan_core::TextAction::Commit(text) => {
+                        TextAction::Commit(text) => {
                             context.commit_string(state.commit_serial, text);
                         }
-                        waylan_core::TextAction::MoveCursor(offset) => {
+                        TextAction::MoveCursor(offset) => {
                             for _ in 0..offset.unsigned_abs() {
                                 let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
                                 context.key(serial, time, dir_key, 1);

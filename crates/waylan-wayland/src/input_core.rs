@@ -1,4 +1,6 @@
 pub use crate::input_constants::*;
+use waylan_algo::preprocessor::PunctuationProcessor;
+use waylan_algo::AlgoEngine;
 
 /// 候选词翻页快捷键配置模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -191,27 +193,27 @@ pub enum KeyProcessAction {
     Reset,
 }
 
-/// 处理处于拼音组词状态（raw_input 非空）下的核心按键拦截决策
-///
-/// # 设计原理
-/// - **实现初衷**：统一 V1 与 V2 协议在输入拼音时的按键分发逻辑（二级展开、候选词高亮移动、数字/空格选词、回车字母上屏、退格删除、翻页、光标移动与取消）。
-/// - **核心优势**：直接操作 AlgoEngine，返回纯粹的 `KeyProcessAction` 决策枚举，调用方只需负责与自身协议的 IPC 消息映射。
-pub fn handle_composition_key(
-    engine: &mut waylan_algo::AlgoEngine,
-    punct_processor: &mut waylan_algo::preprocessor::PunctuationProcessor,
+/// 拼音组词状态按键决策输入参数
+#[derive(Debug, Clone, Copy)]
+pub struct CompositionKeyParams {
+    pub key: u32,
+    pub shift_active: bool,
+    pub page_keys: PageKeyConfig,
+    pub now: u64,
+}
+
+/// 处理二级展开卡片导航或常规上下候选词高亮切换
+fn handle_expanded_or_arrow_key(
+    engine: &mut AlgoEngine,
+    punct_processor: &mut PunctuationProcessor,
     key: u32,
-    shift_active: bool,
-    page_keys: PageKeyConfig,
-    now: u64,
 ) -> Option<KeyProcessAction> {
-    // 1. Tab 键：切换/展开当前高亮候选词的二级动态格式卡片
     if key == KEY_TAB {
         let sel = engine.selected_index;
         engine.toggle_expand(sel);
         return Some(KeyProcessAction::Handled);
     }
 
-    // 2. 处于展开二级状态下的导航与选择
     if engine.is_expanded {
         let sel = engine.selected_index;
         if key == KEY_DOWN {
@@ -231,7 +233,6 @@ pub fn handle_composition_key(
             }
         }
     } else {
-        // 非展开态下，上下方向键在当前页候选词间移动高亮
         if key == KEY_DOWN {
             engine.next_candidate();
             return Some(KeyProcessAction::Handled);
@@ -241,114 +242,131 @@ pub fn handle_composition_key(
             return Some(KeyProcessAction::Handled);
         }
     }
+    None
+}
 
-    // 2.1 V模式专属字符输入：连续追加数字（0-9）与算术符号（+-*/%()）至表达式缓冲区
+/// 选取指定索引候选词并转换为协议决策枚举
+fn select_candidate_action(
+    engine: &mut AlgoEngine,
+    punct_processor: &mut PunctuationProcessor,
+    cand_idx: usize,
+    now: u64,
+) -> KeyProcessAction {
+    if let Some((committed_text, remaining_len)) = engine.select_candidate(cand_idx, now) {
+        punct_processor.record_commit(&committed_text);
+        if remaining_len > 0 {
+            KeyProcessAction::CommitPartial {
+                committed: committed_text,
+                remaining_preedit: engine.formatted_preedit(),
+            }
+        } else {
+            KeyProcessAction::Commit(committed_text)
+        }
+    } else {
+        KeyProcessAction::Handled
+    }
+}
+
+/// 使用收敛的参数结构体处理处于拼音组词状态（raw_input 非空）下的核心按键拦截决策
+pub fn handle_composition_key_with_params(
+    engine: &mut AlgoEngine,
+    punct_processor: &mut PunctuationProcessor,
+    params: CompositionKeyParams,
+) -> Option<KeyProcessAction> {
+    let CompositionKeyParams {
+        key,
+        shift_active,
+        page_keys,
+        now,
+    } = params;
+
+    if let Some(act) = handle_expanded_or_arrow_key(engine, punct_processor, key) {
+        return Some(act);
+    }
+
     if engine.raw_input().starts_with('v') {
         if let Some(ch) = keycode_to_v_mode_char(key, shift_active) {
             engine.push_char(ch);
             return Some(KeyProcessAction::Handled);
         }
-    }
-
-    // 3. 数字键（1-9）：选取对应编号候选词（非 V 模式）
-    if !shift_active && !engine.raw_input().starts_with('v') {
+    } else if !shift_active {
         if let Some(digit) = keycode_to_digit(key) {
-            let cand_idx = digit.saturating_sub(1);
-            if let Some((committed_text, remaining_len)) = engine.select_candidate(cand_idx, now) {
-                punct_processor.record_commit(&committed_text);
-                if remaining_len > 0 {
-                    return Some(KeyProcessAction::CommitPartial {
-                        committed: committed_text,
-                        remaining_preedit: engine.formatted_preedit(),
-                    });
-                } else {
-                    return Some(KeyProcessAction::Commit(committed_text));
-                }
-            } else {
-                // 组合态下超出范围的数字键吞掉，避免穿透给客户端引发字符污染
-                return Some(KeyProcessAction::Handled);
-            }
+            return Some(select_candidate_action(
+                engine,
+                punct_processor,
+                digit.saturating_sub(1),
+                now,
+            ));
         }
     }
 
-    // 4. 空格键：当前高亮候选词上屏（若无候选词则吞掉按键，避免空格泄露至宿主应用）
     if key == KEY_SPACE {
         let sel = engine.selected_index;
-        if let Some((committed_text, remaining_len)) = engine.select_candidate(sel, now) {
-            punct_processor.record_commit(&committed_text);
-            if remaining_len > 0 {
-                return Some(KeyProcessAction::CommitPartial {
-                    committed: committed_text,
-                    remaining_preedit: engine.formatted_preedit(),
-                });
-            } else {
-                return Some(KeyProcessAction::Commit(committed_text));
-            }
-        } else {
-            return Some(KeyProcessAction::Handled);
-        }
+        return Some(select_candidate_action(engine, punct_processor, sel, now));
     }
-
-    // 5. 回车键（Enter / 小键盘 Enter）：直接上屏原始未转换的拼音英文字母
     if key == KEY_ENTER || key == KEY_KPENTER {
         let raw = engine.raw_input().to_string();
         engine.reset();
         return Some(KeyProcessAction::Commit(raw));
     }
-
-    // 6. 退格键（Backspace）：删除一个拼文字母
-    if key == KEY_BACKSPACE {
-        engine.pop_char();
-        if engine.raw_input().is_empty() {
-            return Some(KeyProcessAction::Reset);
+    if key == KEY_BACKSPACE || key == KEY_DELETE {
+        if key == KEY_BACKSPACE {
+            engine.pop_char();
         } else {
-            return Some(KeyProcessAction::Handled);
+            engine.delete_char_at_cursor();
         }
+        return Some(if engine.raw_input().is_empty() {
+            KeyProcessAction::Reset
+        } else {
+            KeyProcessAction::Handled
+        });
     }
-
-    // 6.1 单引号键（'）：在拼音输入态推入音节隔音符（需未按住 Shift，避免将双引号误判为隔音符）
     if !shift_active && key == KEY_APOSTROPHE {
         engine.push_char('\'');
         return Some(KeyProcessAction::Handled);
     }
-
-    // 7. 候选词翻页（根据配置的翻页快捷键模式判定）
-    if !shift_active && page_keys.is_prev_page(key) {
-        engine.prev_page();
-        return Some(KeyProcessAction::Handled);
-    }
-    if !shift_active && page_keys.is_next_page(key) {
-        engine.next_page();
-        return Some(KeyProcessAction::Handled);
-    }
-
-    // 8. 预编辑区内光标左移/右移
-    if key == KEY_LEFT {
-        engine.move_cursor_left();
-        return Some(KeyProcessAction::Handled);
-    }
-    if key == KEY_RIGHT {
-        engine.move_cursor_right();
-        return Some(KeyProcessAction::Handled);
-    }
-
-    // 9. Delete 键：删除光标处的字符
-    if key == KEY_DELETE {
-        engine.delete_char_at_cursor();
-        if engine.raw_input().is_empty() {
-            return Some(KeyProcessAction::Reset);
+    if !shift_active && (page_keys.is_prev_page(key) || page_keys.is_next_page(key)) {
+        if page_keys.is_prev_page(key) {
+            engine.prev_page();
         } else {
-            return Some(KeyProcessAction::Handled);
+            engine.next_page();
         }
+        return Some(KeyProcessAction::Handled);
     }
-
-    // 10. ESC 键：取消当前输入并清空
+    if key == KEY_LEFT || key == KEY_RIGHT {
+        if key == KEY_LEFT {
+            engine.move_cursor_left();
+        } else {
+            engine.move_cursor_right();
+        }
+        return Some(KeyProcessAction::Handled);
+    }
     if key == KEY_ESC {
         engine.reset();
         return Some(KeyProcessAction::Reset);
     }
-
     None
+}
+
+/// 处理处于拼音组词状态（raw_input 非空）下的核心按键拦截决策
+pub fn handle_composition_key(
+    engine: &mut AlgoEngine,
+    punct_processor: &mut PunctuationProcessor,
+    key: u32,
+    shift_active: bool,
+    page_keys: PageKeyConfig,
+    now: u64,
+) -> Option<KeyProcessAction> {
+    handle_composition_key_with_params(
+        engine,
+        punct_processor,
+        CompositionKeyParams {
+            key,
+            shift_active,
+            page_keys,
+            now,
+        },
+    )
 }
 
 /// 根据物理按键按下/释放事件独立维护左右修饰键状态并同步更新 XKB 位掩码

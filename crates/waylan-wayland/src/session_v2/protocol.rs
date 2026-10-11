@@ -3,6 +3,7 @@ use log::{debug, info, trace};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsFd;
+use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_ui::CandidateHitTarget;
 use wayland_client::protocol::wl_keyboard::KeyState;
 use wayland_client::protocol::wl_pointer::{
@@ -34,11 +35,11 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
     ) {
         match event {
             V2Event::Activate => {
-                info!("[Wayland v2] 收到会话激活挂起事件（等待 Done 原子生效）。");
+                debug!("[Wayland v2] 收到会话激活挂起事件（等待 Done 原子生效）。");
                 state.stage_activate();
             }
             V2Event::Deactivate => {
-                info!("[Wayland v2] 收到会话失焦挂起事件（等待 Done 原子生效）。");
+                debug!("[Wayland v2] 收到会话失焦挂起事件（等待 Done 原子生效）。");
                 state.stage_deactivate();
             }
             V2Event::SurroundingText {
@@ -132,7 +133,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
         state.sync_atomic_state();
         match event {
             GrabEvent::Keymap { format, fd, size } => {
-                info!(
+                debug!(
                     "[Wayland v2 键盘抓取] 收到键盘映射配置: format={:?}, 大小={} 字节",
                     format, size
                 );
@@ -147,7 +148,9 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                         state
                             .keymap_layout
                             .update_from_xkb_text(text.trim_end_matches('\0'));
-                        info!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
+                        debug!(
+                            "[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。"
+                        );
                     }
                 }
                 if let Some(ref vk) = state.virtual_keyboard {
@@ -190,7 +193,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
             }
             GrabEvent::RepeatInfo { rate, delay } => {
                 state.repeat_info = (rate, delay);
-                info!(
+                debug!(
                     "[Wayland v2 键盘抓取] 收到按键连击设置: rate={}, delay={}",
                     rate, delay
                 );
@@ -222,8 +225,8 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
             state.refresh_candidate_surface();
         }
         CandidateHitTarget::Select(idx) => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let select_res = if state.is_grid_expanded {

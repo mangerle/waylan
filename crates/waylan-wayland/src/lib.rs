@@ -16,16 +16,34 @@ pub use input_core::{
     KEY_SPACE, KEY_TAB, KEY_UP, MOD_ALT, MOD_CTRL, MOD_SHIFT, MOD_SUPER,
 };
 
-use protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
-use wayland_client::protocol::{wl_compositor::WlCompositor, wl_seat::WlSeat};
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use std::error::Error;
+use std::fmt;
+use std::io::{self, ErrorKind};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use log::{info, warn};
+use rustix::event::{poll, PollFd, PollFlags};
+use rustix::io::Errno;
+use wayland_client::backend::WaylandError;
+use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::protocol::{
+    wl_compositor::WlCompositor, wl_registry::WlRegistry, wl_seat::WlSeat, wl_shm::WlShm,
+};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
     Layer, ZwlrLayerShellV1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     Anchor, KeyboardInteractivity,
 };
+
+use protocol_v1::input_method_v1::zwp_input_method_v1::ZwpInputMethodV1;
+use protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
+use session_v1::WaylanV1Session;
+use session_v2::WaylanV2Session;
 
 /// 合成器全局接口信息
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,8 +54,8 @@ pub struct WaylandGlobal {
     pub version: u32,
 }
 
-impl std::fmt::Display for WaylandGlobal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for WaylandGlobal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} (版本 {})", self.interface, self.version)
     }
 }
@@ -70,7 +88,7 @@ impl Dispatch<WlCompositor, ()> for WaylandProbeState {
     fn event(
         _state: &mut Self,
         _proxy: &WlCompositor,
-        _event: <WlCompositor as wayland_client::Proxy>::Event,
+        _event: <WlCompositor as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
@@ -83,7 +101,7 @@ impl Dispatch<WlSeat, ()> for WaylandProbeState {
     fn event(
         _state: &mut Self,
         _proxy: &WlSeat,
-        _event: <WlSeat as wayland_client::Proxy>::Event,
+        _event: <WlSeat as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
@@ -96,7 +114,7 @@ impl Dispatch<ZwpInputMethodManagerV2, ()> for WaylandProbeState {
     fn event(
         _state: &mut Self,
         _proxy: &ZwpInputMethodManagerV2,
-        _event: <ZwpInputMethodManagerV2 as wayland_client::Proxy>::Event,
+        _event: <ZwpInputMethodManagerV2 as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
@@ -109,7 +127,7 @@ impl Dispatch<ZwlrLayerShellV1, ()> for WaylandProbeState {
     fn event(
         _state: &mut Self,
         _proxy: &ZwlrLayerShellV1,
-        _event: <ZwlrLayerShellV1 as wayland_client::Proxy>::Event,
+        _event: <ZwlrLayerShellV1 as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
@@ -118,17 +136,12 @@ impl Dispatch<ZwlrLayerShellV1, ()> for WaylandProbeState {
 }
 
 // 为 wl_registry 实现 Dispatch
-impl
-    Dispatch<
-        wayland_client::protocol::wl_registry::WlRegistry,
-        wayland_client::globals::GlobalListContents,
-    > for WaylandProbeState
-{
+impl Dispatch<WlRegistry, GlobalListContents> for WaylandProbeState {
     fn event(
         _state: &mut Self,
-        _proxy: &wayland_client::protocol::wl_registry::WlRegistry,
-        _event: <wayland_client::protocol::wl_registry::WlRegistry as wayland_client::Proxy>::Event,
-        _data: &wayland_client::globals::GlobalListContents,
+        _proxy: &WlRegistry,
+        _event: <WlRegistry as Proxy>::Event,
+        _data: &GlobalListContents,
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
@@ -136,9 +149,9 @@ impl
 }
 
 /// 探测当前运行环境中的 Wayland 合成器协议能力
-pub fn probe_wayland_environment() -> Result<WaylandCapabilities, Box<dyn std::error::Error>> {
+pub fn probe_wayland_environment() -> Result<WaylandCapabilities, Box<dyn Error>> {
     let conn = Connection::connect_to_env()?;
-    let (globals, mut event_queue) = wayland_client::globals::registry_queue_init(&conn)?;
+    let (globals, mut event_queue) = registry_queue_init(&conn)?;
     let _qh = event_queue.handle();
 
     let mut state = WaylandProbeState::default();
@@ -174,11 +187,9 @@ pub fn probe_wayland_environment() -> Result<WaylandCapabilities, Box<dyn std::e
 }
 
 /// 启动并运行 Wayland V1 输入法事件循环（使用已初始化的会话实例）
-pub fn run_session_v1_loop(
-    mut session: session_v1::WaylanV1Session,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn Error>> {
     let conn = Connection::connect_to_env()?;
-    let (globals, mut event_queue) = wayland_client::globals::registry_queue_init(&conn)?;
+    let (globals, mut event_queue) = registry_queue_init(&conn)?;
     let qh = event_queue.handle();
 
     let mut im_global = None;
@@ -193,8 +204,7 @@ pub fn run_session_v1_loop(
         return Err("当前 Wayland 合成器未暴露 zwp_input_method_v1 接口".into());
     };
 
-    let _input_method: protocol_v1::input_method_v1::zwp_input_method_v1::ZwpInputMethodV1 =
-        globals.bind(&qh, 1..=1, ())?;
+    let _input_method: ZwpInputMethodV1 = globals.bind(&qh, 1..=1, ())?;
 
     if let Ok(compositor) = globals.bind::<WlCompositor, _, _>(&qh, 1..=6, ()) {
         let wl_surface = compositor.create_surface(&qh, ());
@@ -204,7 +214,7 @@ pub fn run_session_v1_loop(
             let panel_surface = input_panel.get_input_panel_surface(&wl_surface, &qh, ());
             panel_surface.set_overlay_panel();
             session.panel_surface = Some(panel_surface);
-            log::info!("[微澜 Wayland] 成功绑定 zwp_input_panel_v1 并将候选框配置为光标悬浮面板(overlay_panel)。");
+            info!("[微澜 Wayland] 成功绑定 zwp_input_panel_v1 并将候选框配置为光标悬浮面板(overlay_panel)。");
         } else if let Ok(layer_shell) = globals.bind::<ZwlrLayerShellV1, _, _>(&qh, 1..=4, ()) {
             let layer_surface = layer_shell.get_layer_surface(
                 &wl_surface,
@@ -219,31 +229,31 @@ pub fn run_session_v1_loop(
             layer_surface.set_size(1, 1);
             wl_surface.commit();
             session.layer_surface = Some(layer_surface);
-            log::info!(
+            info!(
                 "[微澜 Wayland] 成功绑定 zwlr_layer_shell_v1 并将候选框配置为 Overlay 图层表面。"
             );
         } else {
-            log::warn!("[微澜 Wayland] 合成器未提供 zwp_input_panel_v1 或 zwlr_layer_shell_v1，裸 wl_surface 可能无法正常显示。");
+            warn!("[微澜 Wayland] 合成器未提供 zwp_input_panel_v1 或 zwlr_layer_shell_v1，裸 wl_surface 可能无法正常显示。");
         }
 
         session.popup_wl_surface = Some(wl_surface);
     }
-    if let Ok(shm) = globals.bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&qh, 1..=1, ()) {
+    if let Ok(shm) = globals.bind::<WlShm, _, _>(&qh, 1..=1, ()) {
         session.shm = Some(shm);
     }
     session.qhandle = Some(qh.clone());
 
-    log::info!("[微澜 Wayland] 成功绑定 zwp_input_method_v1 接口，进入输入法事件分发循环。");
+    info!("[微澜 Wayland] 成功绑定 zwp_input_method_v1 接口，进入输入法事件分发循环。");
 
-    let mut last_ext_sync = std::time::Instant::now();
+    let mut last_ext_sync = Instant::now();
     loop {
         if session
             .exit_requested
             .as_ref()
-            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .map(|f| f.load(Ordering::Relaxed))
             .unwrap_or(false)
         {
-            log::info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V1 事件循环。");
+            info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V1 事件循环。");
             return Ok(());
         }
 
@@ -252,28 +262,25 @@ pub fn run_session_v1_loop(
 
         if let Some(guard) = event_queue.prepare_read() {
             let fd = guard.connection_fd();
-            let mut fds = [rustix::event::PollFd::new(
-                &fd,
-                rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
-            )];
-            match rustix::event::poll(&mut fds, 200) {
+            let mut fds = [PollFd::new(&fd, PollFlags::IN | PollFlags::ERR)];
+            match poll(&mut fds, 200) {
                 Ok(0) => {
                     drop(guard);
                     session.sync_external_state();
-                    last_ext_sync = std::time::Instant::now();
+                    last_ext_sync = Instant::now();
                 }
                 Ok(_) => {
-                    if let Err(wayland_client::backend::WaylandError::Io(io_err)) = guard.read() {
-                        if io_err.kind() != std::io::ErrorKind::WouldBlock {
+                    if let Err(WaylandError::Io(io_err)) = guard.read() {
+                        if io_err.kind() != ErrorKind::WouldBlock {
                             return Err(io_err.into());
                         }
                     }
-                    if last_ext_sync.elapsed() >= std::time::Duration::from_secs(1) {
+                    if last_ext_sync.elapsed() >= Duration::from_secs(1) {
                         session.sync_external_state();
-                        last_ext_sync = std::time::Instant::now();
+                        last_ext_sync = Instant::now();
                     }
                 }
-                Err(rustix::io::Errno::INTR) => {}
+                Err(Errno::INTR) => {}
                 Err(e) => return Err(e.into()),
             }
         }
@@ -282,13 +289,13 @@ pub fn run_session_v1_loop(
 
 /// 启动并运行现代 Wayland V2 输入法事件循环（若协议不可用或发生错误，返回错误同时移交 session 实例以便降级）
 pub fn run_session_v2_loop_fallible(
-    mut session: session_v2::WaylanV2Session,
-) -> Result<(), (Box<dyn std::error::Error>, Box<session_v2::WaylanV2Session>)> {
+    mut session: WaylanV2Session,
+) -> Result<(), (Box<dyn Error>, Box<WaylanV2Session>)> {
     let conn = match Connection::connect_to_env() {
         Ok(c) => c,
         Err(e) => return Err((e.into(), Box::new(session))),
     };
-    let (globals, mut event_queue) = match wayland_client::globals::registry_queue_init(&conn) {
+    let (globals, mut event_queue) = match registry_queue_init(&conn) {
         Ok(res) => res,
         Err(e) => return Err((e.into(), Box::new(session))),
     };
@@ -305,9 +312,7 @@ pub fn run_session_v2_loop_fallible(
     let input_method = im_manager.get_input_method(&seat, &qh, ());
     let pointer = seat.get_pointer(&qh, ());
     session.pointer = Some(pointer);
-    log::info!(
-        "[微澜 Wayland] 成功向 wl_seat 注册鼠标指针(wl_pointer)，支持候选框点击与网格展开交互。"
-    );
+    info!("[微澜 Wayland] 成功向 wl_seat 注册鼠标指针(wl_pointer)，支持候选框点击与网格展开交互。");
 
     let compositor: WlCompositor = match globals.bind(&qh, 1..=6, ()) {
         Ok(c) => c,
@@ -323,7 +328,7 @@ pub fn run_session_v2_loop_fallible(
     session.popup_wl_surface = Some(wl_surface);
     session.popup_surface = Some(popup_surface);
 
-    let shm: wayland_client::protocol::wl_shm::WlShm = match globals.bind(&qh, 1..=1, ()) {
+    let shm: WlShm = match globals.bind(&qh, 1..=1, ()) {
         Ok(s) => s,
         Err(e) => {
             return Err((
@@ -336,16 +341,16 @@ pub fn run_session_v2_loop_fallible(
     session.qhandle = Some(qh.clone());
     session.set_input_method(input_method);
 
-    match globals.bind::<wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
+    match globals.bind::<ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
         Ok(vk_mgr) => {
             let vk = vk_mgr.create_virtual_keyboard(&seat, &qh, ());
             session.virtual_keyboard = Some(vk);
-            log::info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
+            info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
         }
         Err(e) => {
             return Err((
-                std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
+                io::Error::new(
+                    ErrorKind::Unsupported,
                     format!(
                         "合成器缺少 zwp_virtual_keyboard_v1 扩展协议 ({})，为避免按键黑洞主动放弃 V2 会话",
                         e
@@ -357,19 +362,19 @@ pub fn run_session_v2_loop_fallible(
         }
     }
 
-    log::info!(
+    info!(
         "[微澜 Wayland] 成功绑定 zwp_input_method_manager_v2、wl_compositor 与 wl_shm，进入 V2 输入法事件分发循环。"
     );
 
-    let mut last_ext_sync = std::time::Instant::now();
+    let mut last_ext_sync = Instant::now();
     loop {
         if session
             .exit_requested
             .as_ref()
-            .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .map(|f| f.load(Ordering::Relaxed))
             .unwrap_or(false)
         {
-            log::info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V2 事件循环。");
+            info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V2 事件循环。");
             return Ok(());
         }
 
@@ -392,29 +397,26 @@ pub fn run_session_v2_loop_fallible(
         let timeout_ms = session.next_poll_timeout_ms(200);
         if let Some(guard) = event_queue.prepare_read() {
             let fd = guard.connection_fd();
-            let mut fds = [rustix::event::PollFd::new(
-                &fd,
-                rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
-            )];
-            match rustix::event::poll(&mut fds, timeout_ms) {
+            let mut fds = [PollFd::new(&fd, PollFlags::IN | PollFlags::ERR)];
+            match poll(&mut fds, timeout_ms) {
                 Ok(0) => {
                     drop(guard);
                     session.drive_key_repeat();
                     session.sync_external_state();
-                    last_ext_sync = std::time::Instant::now();
+                    last_ext_sync = Instant::now();
                 }
                 Ok(_) => {
-                    if let Err(wayland_client::backend::WaylandError::Io(io_err)) = guard.read() {
-                        if io_err.kind() != std::io::ErrorKind::WouldBlock {
+                    if let Err(WaylandError::Io(io_err)) = guard.read() {
+                        if io_err.kind() != ErrorKind::WouldBlock {
                             return Err((io_err.into(), Box::new(session)));
                         }
                     }
-                    if last_ext_sync.elapsed() >= std::time::Duration::from_secs(1) {
+                    if last_ext_sync.elapsed() >= Duration::from_secs(1) {
                         session.sync_external_state();
-                        last_ext_sync = std::time::Instant::now();
+                        last_ext_sync = Instant::now();
                     }
                 }
-                Err(rustix::io::Errno::INTR) => {}
+                Err(Errno::INTR) => {}
                 Err(e) => {
                     return Err((e.into(), Box::new(session)));
                 }
@@ -424,9 +426,7 @@ pub fn run_session_v2_loop_fallible(
 }
 
 /// 启动并运行现代 Wayland V2 输入法事件循环（适用于 KDE Plasma 6 / GNOME / Hyprland / Sway）
-pub fn run_session_v2_loop(
-    session: session_v2::WaylanV2Session,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_session_v2_loop(session: WaylanV2Session) -> Result<(), Box<dyn Error>> {
     run_session_v2_loop_fallible(session).map_err(|(e, _)| e)
 }
 

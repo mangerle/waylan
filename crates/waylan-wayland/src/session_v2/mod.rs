@@ -1,9 +1,22 @@
 mod keys;
+mod surrounding;
 
-use crate::surface::{CandidateSurfaceManager, CursorRect};
-use log::info;
+use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::SyncSender,
+    Arc,
+};
+use std::time::{Instant, SystemTime};
+
+use log::{debug, info, warn};
+use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
+use waylan_core::{CandidateBoxState, InputMode};
+use wayland_client::protocol::{
+    wl_buffer::WlBuffer, wl_pointer::WlPointer, wl_shm::WlShm, wl_surface::WlSurface,
+};
 use wayland_client::QueueHandle;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::ZwpInputMethodKeyboardGrabV2;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
@@ -11,14 +24,12 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
 use crate::input_core::*;
-use waylan_core::{CandidateBoxState, InputMode};
+use crate::surface::{CandidateSurfaceManager, CursorRect};
+
+pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
 
 /// 配置与词库热重载回调函数类型
 pub type ReloadCallback = Box<dyn FnMut(&mut WaylanV2Session) + Send>;
-
-mod surrounding;
-
-pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
 
 /// 微澜面向现代 Wayland 合成器 (KDE Plasma 6 / GNOME 46+ / Hyprland) 的 V2 会话状态
 pub struct WaylanV2Session {
@@ -43,11 +54,11 @@ pub struct WaylanV2Session {
     /// 虚拟键盘输入协议句柄（用于模拟光标位移与未拦截按键透传）
     pub virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
     /// 关联的共享内存管理器句柄
-    pub shm: Option<wayland_client::protocol::wl_shm::WlShm>,
+    pub shm: Option<WlShm>,
     /// 候选框渲染目标 Wayland 表面
-    pub popup_wl_surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    pub popup_wl_surface: Option<WlSurface>,
     /// 当前挂载在表面上的活跃像素缓冲区
-    pub active_buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
+    pub active_buffer: Option<WlBuffer>,
     /// Wayland 事件队列句柄
     pub qhandle: Option<QueueHandle<Self>>,
     /// 当前跟踪的光标坐标
@@ -55,17 +66,17 @@ pub struct WaylanV2Session {
     /// 当前输入语言模式
     pub mode: InputMode,
     /// 与外部系统托盘共享的中英文状态标志
-    pub shared_is_chinese: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub shared_is_chinese: Option<Arc<AtomicBool>>,
     /// 键盘切换中英文时唤醒系统托盘刷新图标的通知发送端
-    pub mode_notify_tx: Option<std::sync::mpsc::SyncSender<()>>,
+    pub mode_notify_tx: Option<SyncSender<()>>,
     /// 与外部系统托盘共享的配置与词库重载请求标志
-    pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub reload_requested: Option<Arc<AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
     pub reload_callback: Option<ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
-    pub watched_paths: Vec<std::path::PathBuf>,
+    pub watched_paths: Vec<PathBuf>,
     /// 上次记录的被监控文件最新修改时间戳
-    pub last_watched_mtime: Option<std::time::SystemTime>,
+    pub last_watched_mtime: Option<SystemTime>,
     /// 客户端同步的上下文环境文本及光标位置 (text, cursor_byte_idx, anchor_byte_idx)
     pub surrounding_text: Option<(String, u32, u32)>,
     /// 双缓冲挂起的会话激活状态（在收到 Done 事件时原子生效）
@@ -97,11 +108,11 @@ pub struct WaylanV2Session {
     /// 合成器下发的键盘长按连击参数 (rate_keys_per_sec, delay_ms)
     pub repeat_info: (i32, i32),
     /// 当前正处于长按连击计时中的消费按键状态 (keycode, next_fire_instant)
-    pub repeat_state: Option<(u32, std::time::Instant)>,
+    pub repeat_state: Option<(u32, Instant)>,
     /// 标记 V2 会话是否已被合成器宣告不可用（触发自动降级）
     pub is_unavailable: bool,
     /// 与外部系统托盘共享的优雅退出请求标志
-    pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub exit_requested: Option<Arc<AtomicBool>>,
     /// 动态键盘布局映射表（支持根据 XKB Keymap 动态更新）
     pub keymap_layout: KeymapLayout,
     /// 5 行网格大候选词面板是否展开
@@ -109,7 +120,7 @@ pub struct WaylanV2Session {
     /// 5 行网格大候选词面板当前选中的全局候选词索引
     pub grid_selected_index: usize,
     /// 鼠标指针对象（用于接收候选框上的鼠标点击与移动）
-    pub pointer: Option<wayland_client::protocol::wl_pointer::WlPointer>,
+    pub pointer: Option<WlPointer>,
     /// 鼠标指针在候选表面内的当前局部物理坐标 (x, y)
     pub pointer_pos: (f64, f64),
     /// 鼠标指针当前是否位于候选表面内部
@@ -255,7 +266,7 @@ impl WaylanV2Session {
     /// 判断当前是否处于 Shift 按下状态
     #[inline]
     pub fn is_shift_active(&self) -> bool {
-        crate::input_core::ModifierState {
+        ModifierState {
             depressed: self.mods_depressed,
             phys_mods: self.phys_mods,
         }
@@ -265,7 +276,7 @@ impl WaylanV2Session {
     /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
     #[inline]
     pub fn has_ctrl_or_alt(&self) -> bool {
-        crate::input_core::ModifierState {
+        ModifierState {
             depressed: self.mods_depressed,
             phys_mods: self.phys_mods,
         }
@@ -274,18 +285,14 @@ impl WaylanV2Session {
 
     /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
     pub fn sync_external_state(&mut self) {
-        use std::sync::atomic::Ordering;
-
         let mut should_reload = self
             .reload_requested
             .as_ref()
             .map(|flag| flag.swap(false, Ordering::Relaxed))
             .unwrap_or(false);
 
-        let changed = crate::input_core::check_watched_paths_changed(
-            &self.watched_paths,
-            &mut self.last_watched_mtime,
-        );
+        let changed =
+            check_watched_paths_changed(&self.watched_paths, &mut self.last_watched_mtime);
         if changed {
             should_reload = true;
         }
@@ -295,9 +302,8 @@ impl WaylanV2Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-                self.engine.custom_phrases =
-                    waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+                let phrase_path = CustomPhraseManager::default_path();
+                self.engine.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
                 let wal_opt = self.engine.user_dict_path.clone();
                 if let Some(ref wal_path) = wal_opt {
                     self.engine.set_user_dict_path(wal_path);
@@ -311,8 +317,6 @@ impl WaylanV2Session {
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
     pub fn sync_atomic_state(&mut self) {
-        use std::sync::atomic::Ordering;
-
         let requested = self
             .reload_requested
             .as_ref()
@@ -329,7 +333,7 @@ impl WaylanV2Session {
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即取消输入并隐藏候选框
     fn sync_mode_from_shared_flag(&mut self) {
         if let Some(ref zh_flag) = self.shared_is_chinese {
-            let external_zh = zh_flag.load(std::sync::atomic::Ordering::Acquire);
+            let external_zh = zh_flag.load(Ordering::Acquire);
             let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
             if external_zh != current_zh {
                 self.mode = if external_zh {
@@ -351,72 +355,7 @@ impl WaylanV2Session {
 
     /// 根据当前算法引擎与输入模式构建候选框渲染状态
     pub fn build_candidate_box_state(&self) -> CandidateBoxState {
-        let candidates = self.engine.candidates();
-        let core_candidates: Vec<waylan_core::Candidate> = candidates
-            .iter()
-            .map(|c| waylan_core::Candidate {
-                text: c.text.clone(),
-                pinyin: c.pinyin.clone(),
-                score: c.score,
-                is_expandable: c.is_expandable,
-                sub_candidates: c.sub_candidates.clone(),
-            })
-            .collect();
-
-        let grid_candidates: Vec<waylan_core::Candidate> = if self.is_grid_expanded {
-            self.engine
-                .all_candidates()
-                .iter()
-                .take(30)
-                .map(|c| waylan_core::Candidate {
-                    text: c.text.clone(),
-                    pinyin: c.pinyin.clone(),
-                    score: c.score,
-                    is_expandable: c.is_expandable,
-                    sub_candidates: c.sub_candidates.clone(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        let expanded_card = if self.engine.is_expanded {
-            waylan_core::ExpandedCardState::Expanded {
-                selected_index: self.engine.expanded_selected_index,
-            }
-        } else {
-            waylan_core::ExpandedCardState::Collapsed
-        };
-
-        // 在拥有内联预编辑（Inline Preedit）时，常规拼音无需在候选框左侧重复显示拼音和模式徽标；
-        // 但当输入以 'v' 引导触发 V模式 时，显式展示 [V模式] 徽标与当前输入表达式
-        let is_dynamic_v_mode = self.engine.raw_input().starts_with('v');
-        let (preedit, mode_badge) = if is_dynamic_v_mode {
-            (self.engine.raw_input().to_string(), "V模式".to_string())
-        } else {
-            match self.mode {
-                InputMode::Chinese => (String::new(), String::new()),
-                InputMode::English => (String::new(), "英".to_string()),
-                InputMode::VMode => (self.engine.formatted_preedit(), "V".to_string()),
-            }
-        };
-
-        let selected_index = if self.is_grid_expanded {
-            self.grid_selected_index
-        } else {
-            self.engine.selected_index
-        };
-
-        CandidateBoxState {
-            visible: self.is_active && !self.engine.raw_input().is_empty(),
-            preedit,
-            candidates: core_candidates,
-            selected_index,
-            expanded_card,
-            mode_badge,
-            is_grid_expanded: self.is_grid_expanded,
-            grid_candidates,
-        }
+        keys::build_candidate_box_state(self)
     }
 
     /// 触发候选框悬浮表面重绘并提交至 Wayland 表面
@@ -511,10 +450,9 @@ impl WaylanV2Session {
     /// 将未被输入法消费的原始物理按键通过虚拟键盘协议回投到席位，确保快捷键与控制键正常透传
     pub fn forward_key_to_seat(&mut self, time: u32, key: u32, is_press: bool) {
         if !self.has_virtual_keymap {
-            log::warn!(
-                "[Wayland v2 键盘回投 警告] 虚拟键盘 keymap 尚未就绪，无法转发键码 {} (press={})",
-                key,
-                is_press
+            debug!(
+                "[Wayland v2 键盘回投] 虚拟键盘 keymap 尚未就绪，跳过转发键码 {} (press={})",
+                key, is_press
             );
             return;
         }
@@ -522,7 +460,7 @@ impl WaylanV2Session {
             let state_val = if is_press { 1 } else { 0 };
             vk.key(time, key, state_val);
         } else {
-            log::warn!(
+            warn!(
                 "[Wayland v2 键盘回投 警告] 当前会话未绑定 zwp_virtual_keyboard_v1 实例，键码 {} 被丢弃",
                 key
             );

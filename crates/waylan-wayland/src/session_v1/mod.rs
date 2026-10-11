@@ -1,3 +1,23 @@
+use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::SyncSender,
+    Arc,
+};
+use std::time::SystemTime;
+
+use log::{debug, info};
+use waylan_algo::custom_phrase::CustomPhraseManager;
+use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
+use waylan_algo::types::AlgoConfig;
+use waylan_algo::AlgoEngine;
+use waylan_core::{Candidate, CandidateBoxState, ExpandedCardState, InputMode};
+use wayland_client::protocol::{
+    wl_buffer::WlBuffer, wl_keyboard::WlKeyboard, wl_shm::WlShm, wl_surface::WlSurface,
+};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
+
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::{
     Event as ContextEvent, ZwpInputMethodContextV1,
 };
@@ -5,14 +25,7 @@ use crate::protocol_v1::input_method_v1::zwp_input_method_v1::{
     Event as MethodEvent, ZwpInputMethodV1,
 };
 use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1;
-use log::info;
-use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
-use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
-use waylan_core::InputMode;
-use wayland_client::protocol::wl_keyboard::WlKeyboard;
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
-use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
+use crate::surface::CandidateSurfaceManager;
 
 pub use crate::input_core::*;
 
@@ -30,35 +43,35 @@ pub struct WaylanV1Session {
     /// 候选词翻页快捷键模式
     pub page_keys: PageKeyConfig,
     /// 候选框悬浮图层管理器
-    pub surface_manager: crate::surface::CandidateSurfaceManager,
+    pub surface_manager: CandidateSurfaceManager,
     /// 当前输入语言模式
     pub mode: InputMode,
     /// 与外部系统托盘共享的中英文状态标志
-    pub shared_is_chinese: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub shared_is_chinese: Option<Arc<AtomicBool>>,
     /// 键盘切换中英文时唤醒系统托盘刷新图标的通知发送端
-    pub mode_notify_tx: Option<std::sync::mpsc::SyncSender<()>>,
+    pub mode_notify_tx: Option<SyncSender<()>>,
     /// 与外部系统托盘共享的配置与词库重载请求标志
-    pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub reload_requested: Option<Arc<AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
     pub reload_callback: Option<V1ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
-    pub watched_paths: Vec<std::path::PathBuf>,
+    pub watched_paths: Vec<PathBuf>,
     /// 上次记录的被监控文件最新修改时间戳
-    pub last_watched_mtime: Option<std::time::SystemTime>,
+    pub last_watched_mtime: Option<SystemTime>,
     /// 当前激活的应用上下文引用
     pub active_context: Option<ZwpInputMethodContextV1>,
     /// 捕获的键盘对象
     pub grabbed_keyboard: Option<WlKeyboard>,
     /// 关联的共享内存管理器句柄
-    pub shm: Option<wayland_client::protocol::wl_shm::WlShm>,
+    pub shm: Option<WlShm>,
     /// 候选框渲染目标 Wayland 表面
-    pub popup_wl_surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    pub popup_wl_surface: Option<WlSurface>,
     /// V1 输入面板表面角色对象 (zwp_input_panel_surface_v1)
     pub panel_surface: Option<ZwpInputPanelSurfaceV1>,
     /// WLR Layer Shell 表面角色对象（用于 Sway / wlroots 等环境）
     pub layer_surface: Option<ZwlrLayerSurfaceV1>,
     /// 当前挂载在表面上的活跃像素缓冲区
-    pub active_buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
+    pub active_buffer: Option<WlBuffer>,
     /// Wayland 事件队列句柄
     pub qhandle: Option<QueueHandle<Self>>,
     /// 当前硬件按键事件序号
@@ -74,7 +87,7 @@ pub struct WaylanV1Session {
     /// 物理按键与动态键位布局映射表（支持 Dvorak / Colemak 等动态布局）
     pub keymap_layout: KeymapLayout,
     /// 与外部系统托盘共享的优雅退出请求标志
-    pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub exit_requested: Option<Arc<AtomicBool>>,
 }
 
 impl Default for WaylanV1Session {
@@ -84,7 +97,7 @@ impl Default for WaylanV1Session {
             punctuation_processor: PunctuationProcessor::new(),
             shift_sm: ShiftToggleStateMachine::new(),
             page_keys: PageKeyConfig::default(),
-            surface_manager: crate::surface::CandidateSurfaceManager::new(),
+            surface_manager: CandidateSurfaceManager::new(),
             mode: InputMode::Chinese,
             shared_is_chinese: None,
             mode_notify_tx: None,
@@ -156,8 +169,6 @@ impl WaylanV1Session {
 
     /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
     pub fn sync_external_state(&mut self) {
-        use std::sync::atomic::Ordering;
-
         let mut should_reload = self
             .reload_requested
             .as_ref()
@@ -175,9 +186,8 @@ impl WaylanV1Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-                self.engine.custom_phrases =
-                    waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+                let phrase_path = CustomPhraseManager::default_path();
+                self.engine.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
                 let wal_opt = self.engine.user_dict_path.clone();
                 if let Some(ref wal_path) = wal_opt {
                     self.engine.set_user_dict_path(wal_path);
@@ -191,8 +201,6 @@ impl WaylanV1Session {
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
     pub fn sync_atomic_state(&mut self) {
-        use std::sync::atomic::Ordering;
-
         let requested = self
             .reload_requested
             .as_ref()
@@ -209,7 +217,7 @@ impl WaylanV1Session {
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即清理残留预编辑与候选框
     fn sync_mode_from_shared_flag(&mut self) {
         if let Some(ref zh_flag) = self.shared_is_chinese {
-            let external_zh = zh_flag.load(std::sync::atomic::Ordering::Acquire);
+            let external_zh = zh_flag.load(Ordering::Acquire);
             let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
             if external_zh != current_zh {
                 self.mode = if external_zh {
@@ -230,11 +238,11 @@ impl WaylanV1Session {
     }
 
     /// 构造当前候选框的渲染状态
-    pub fn build_candidate_box_state(&self) -> waylan_core::CandidateBoxState {
+    pub fn build_candidate_box_state(&self) -> CandidateBoxState {
         let candidates = self.engine.candidates();
-        let core_candidates: Vec<waylan_core::Candidate> = candidates
+        let core_candidates: Vec<Candidate> = candidates
             .iter()
-            .map(|c| waylan_core::Candidate {
+            .map(|c| Candidate {
                 text: c.text.clone(),
                 pinyin: c.pinyin.clone(),
                 score: c.score,
@@ -244,14 +252,14 @@ impl WaylanV1Session {
             .collect();
 
         let expanded_card = if self.engine.is_expanded {
-            waylan_core::ExpandedCardState::Expanded {
+            ExpandedCardState::Expanded {
                 selected_index: self.engine.expanded_selected_index,
             }
         } else {
-            waylan_core::ExpandedCardState::Collapsed
+            ExpandedCardState::Collapsed
         };
 
-        waylan_core::CandidateBoxState {
+        CandidateBoxState {
             visible: !self.engine.raw_input().is_empty(),
             preedit: self.engine.formatted_preedit(),
             candidates: core_candidates,
@@ -315,7 +323,7 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
     ) {
         match event {
             MethodEvent::Activate { id } => {
-                info!("[微澜] 收到焦点激活事件：用户已进入文本输入框。");
+                debug!("[微澜] 收到焦点激活事件：用户已进入文本输入框。");
                 state.sync_external_state();
                 if let Some(old_kb) = state.grabbed_keyboard.take() {
                     if old_kb.version() >= 3 {
@@ -337,7 +345,7 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
                 state.engine.reset();
             }
             MethodEvent::Deactivate { context } => {
-                info!("[微澜] 收到失焦事件：用户已离开文本输入框。");
+                debug!("[微澜] 收到失焦事件：用户已离开文本输入框。");
                 let is_current = state.active_context.as_ref() == Some(&context);
                 if is_current {
                     if let Some(active_ctx) = state.active_context.take() {

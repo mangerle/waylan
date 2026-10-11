@@ -1,6 +1,83 @@
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use log::info;
+use waylan_core::{Candidate, CandidateBoxState, ExpandedCardState, InputMode, TextAction};
+
+use super::surrounding::{clamp_char_boundary_ceil, clamp_char_boundary_floor};
 use super::WaylanV2Session;
 use crate::input_core::*;
-use waylan_core::{InputMode, TextAction};
+
+/// 根据当前 V2 会话算法引擎与输入模式构建候选框渲染状态
+pub fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateBoxState {
+    let core_candidates: Vec<Candidate> = session
+        .engine
+        .candidates()
+        .iter()
+        .map(|c| Candidate {
+            text: c.text.clone(),
+            pinyin: c.pinyin.clone(),
+            score: c.score,
+            is_expandable: c.is_expandable,
+            sub_candidates: c.sub_candidates.clone(),
+        })
+        .collect();
+    let grid_candidates: Vec<Candidate> = if session.is_grid_expanded {
+        session
+            .engine
+            .all_candidates()
+            .iter()
+            .take(30)
+            .map(|c| Candidate {
+                text: c.text.clone(),
+                pinyin: c.pinyin.clone(),
+                score: c.score,
+                is_expandable: c.is_expandable,
+                sub_candidates: c.sub_candidates.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let expanded_card = if session.engine.is_expanded {
+        ExpandedCardState::Expanded {
+            selected_index: session.engine.expanded_selected_index,
+        }
+    } else {
+        ExpandedCardState::Collapsed
+    };
+
+    // 在拥有内联预编辑（Inline Preedit）时，常规拼音无需在候选框左侧重复显示拼音和模式徽标；
+    // 但当输入以 'v' 引导触发 V模式 时，显式展示 [V模式] 徽标与当前输入表达式
+    let is_dynamic_v_mode = session.engine.raw_input().starts_with('v');
+    let (preedit, mode_badge) = if is_dynamic_v_mode {
+        (session.engine.raw_input().to_string(), "V模式".to_string())
+    } else {
+        match session.mode {
+            InputMode::Chinese => (String::new(), String::new()),
+            InputMode::English => (String::new(), "英".to_string()),
+            InputMode::VMode => (session.engine.formatted_preedit(), "V".to_string()),
+        }
+    };
+
+    let selected_index = if session.is_grid_expanded {
+        session.grid_selected_index
+    } else {
+        session.engine.selected_index
+    };
+
+    CandidateBoxState {
+        visible: session.is_active && !session.engine.raw_input().is_empty(),
+        preedit,
+        candidates: core_candidates,
+        selected_index,
+        expanded_card,
+        mode_badge,
+        is_grid_expanded: session.is_grid_expanded,
+        grid_candidates,
+    }
+}
 
 /// 处理英文模式下的按键输入（所有常规按键不拦截，由席位原生透传以支持 Key Repeat 与系统布局）
 pub fn process_english_mode_key(
@@ -130,15 +207,16 @@ pub fn process_composition_key(
         }
     }
 
-    let shift_active = session.is_shift_active();
-    let page_keys = session.page_keys;
-    let action = handle_composition_key(
+    let params = CompositionKeyParams {
+        key,
+        shift_active: session.is_shift_active(),
+        page_keys: session.page_keys,
+        now,
+    };
+    let action = handle_composition_key_with_params(
         &mut session.engine,
         &mut session.punctuation_processor,
-        key,
-        shift_active,
-        page_keys,
-        now,
+        params,
     )?;
 
     match action {
@@ -174,10 +252,9 @@ pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool
         // 优先从 surrounding_text 提取光标前文本作为上下文（至多截取 64 字节并安全对齐 UTF-8 字符边界）
         let context_buf = session.surrounding_text.as_ref().map(|(text, cursor, _)| {
             let cursor_idx = (*cursor as usize).min(text.len());
-            let safe_cursor =
-                crate::session_v2::surrounding::clamp_char_boundary_floor(text, cursor_idx);
+            let safe_cursor = clamp_char_boundary_floor(text, cursor_idx);
             let start = safe_cursor.saturating_sub(64);
-            let safe_start = crate::session_v2::surrounding::clamp_char_boundary_ceil(text, start);
+            let safe_start = clamp_char_boundary_ceil(text, start);
             text[safe_start..safe_cursor].to_string()
         });
 
@@ -264,7 +341,7 @@ pub fn process_key_event(
             if let Some(ref zh_flag) = session.shared_is_chinese {
                 zh_flag.store(
                     matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                    std::sync::atomic::Ordering::Release,
+                    Ordering::Release,
                 );
             }
             if let Some(ref notify_tx) = session.mode_notify_tx {
@@ -275,7 +352,7 @@ pub fn process_key_event(
                 InputMode::English => "英文",
                 InputMode::VMode => "V模式",
             };
-            log::info!("[Wayland v2] 切换输入模式为：{}", mode_str);
+            info!("[Wayland v2] 切换输入模式为：{}", mode_str);
 
             if new_mode == InputMode::English && !session.engine.raw_input().is_empty() {
                 let raw = session.engine.raw_input().to_string();
@@ -293,8 +370,7 @@ pub fn process_key_event(
     // 若按键被输入法内部消费（如退格、方向键、拼音字母）且合成器开启了长按连击（rate > 0），启动连击计时
     let (rate, delay) = session.repeat_info;
     if result.0 && rate > 0 && delay > 0 && !session.engine.raw_input().is_empty() {
-        let next_fire =
-            std::time::Instant::now() + std::time::Duration::from_millis(delay.max(50) as u64);
+        let next_fire = Instant::now() + Duration::from_millis(delay.max(50) as u64);
         session.repeat_state = Some((key, next_fire));
     } else {
         session.repeat_state = None;
@@ -315,8 +391,8 @@ pub fn process_key_press_inner(session: &mut WaylanV2Session, key: u32) -> (bool
         return process_english_mode_key(session, key);
     }
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
@@ -351,7 +427,7 @@ pub fn next_poll_timeout_ms(session: &WaylanV2Session, default_ms: i32) -> i32 {
     let Some((_, next_fire)) = session.repeat_state else {
         return default_ms;
     };
-    let now = std::time::Instant::now();
+    let now = Instant::now();
     if next_fire <= now {
         return 0;
     }
@@ -368,14 +444,14 @@ pub fn drive_key_repeat(session: &mut WaylanV2Session) {
     if rate <= 0 || !session.is_active || session.engine.raw_input().is_empty() {
         session.repeat_state = None;
         return;
-    }
+    };
 
-    let now = std::time::Instant::now();
+    let now = Instant::now();
     if now >= next_fire {
         let (consumed, _) = process_key_press_inner(session, key);
         if consumed && !session.engine.raw_input().is_empty() {
             let interval_ms = (1000 / rate.max(1)).max(10) as u64;
-            session.repeat_state = Some((key, now + std::time::Duration::from_millis(interval_ms)));
+            session.repeat_state = Some((key, now + Duration::from_millis(interval_ms)));
         } else {
             session.repeat_state = None;
         }
