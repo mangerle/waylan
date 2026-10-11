@@ -1,6 +1,7 @@
 use crate::error::AlgoError;
 use crate::user_adaptive::UserAdaptiveModel;
 use log::warn;
+use rustix::fs::{flock, FlockOperation};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -70,13 +71,21 @@ impl UserAdaptiveModel {
                     source: e,
                 })?;
 
+            // 跨进程锁保护：尝试获取排他锁以防与其他进程初始化交错
+            let _ = flock(&file, FlockOperation::LockExclusive);
+
             // 文件大小为 0 时写入魔数头
             if file.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
-                file.write_all(WAL_MAGIC)
+                let res = file
+                    .write_all(WAL_MAGIC)
                     .map_err(|e| AlgoError::UserDictPersistFailed {
                         path: PathBuf::from(path_ref),
                         source: e,
-                    })?;
+                    });
+                let _ = flock(&file, FlockOperation::Unlock);
+                res?;
+            } else {
+                let _ = flock(&file, FlockOperation::Unlock);
             }
 
             *guard = Some((PathBuf::from(path_ref), file));
@@ -109,11 +118,16 @@ impl UserAdaptiveModel {
         buf.extend_from_slice(&checksum.to_le_bytes());
 
         if let Some((_, ref mut file)) = *guard {
-            file.write_all(&buf)
+            // 跨进程锁保护：追加写入期间持有排他锁，防止被并发截断或并发交错写入
+            let _ = flock(&*file, FlockOperation::LockExclusive);
+            let write_res = file
+                .write_all(&buf)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: PathBuf::from(path_ref),
                     source: e,
-                })?;
+                });
+            let _ = flock(&*file, FlockOperation::Unlock);
+            write_res?;
         }
 
         drop(guard);
@@ -304,6 +318,18 @@ impl UserAdaptiveModel {
             *guard = None;
         }
 
+        // 若目标原文件存在，先获取跨进程排他锁以防与其他正在追加的进程发生冲突
+        let orig_lock_file = if path_ref.exists() {
+            if let Ok(f) = OpenOptions::new().read(true).write(true).open(path_ref) {
+                let _ = flock(&f, FlockOperation::LockExclusive);
+                Some(f)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if let Some(parent) = path_ref.parent() {
             if !parent.as_os_str().is_empty() {
                 let _ = std::fs::create_dir_all(parent);
@@ -377,6 +403,10 @@ impl UserAdaptiveModel {
 
         // 成功完成原子重命名后解除守卫删除
         guard.1 = true;
+
+        if let Some(f) = orig_lock_file {
+            let _ = flock(&f, FlockOperation::Unlock);
+        }
 
         Ok(())
     }

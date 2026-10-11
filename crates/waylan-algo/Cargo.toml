@@ -18,3 +18,4 @@ jieba-rs.workspace = true
 rayon.workspace = true
 serde_json.workspace = true
 regex.workspace = true
+rustix.workspace = true

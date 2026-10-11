@@ -3361,6 +3361,7 @@ dependencies = [
  "memmap2",
  "rayon",
  "regex",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
