@@ -230,14 +230,17 @@ impl CandidateSurfaceManager {
             surf.attach(None, 0, 0);
             surf.commit();
         }
-        // active_buffer 与 slot_buffers 引用同一底层 WlBuffer，统一由 slot_buffers 执行单次 destroy 防止重复销毁
+        // active_buffer 与 slot_buffers 引用同一底层 WlBuffer，统一由 slot_buffers 执行销毁防止重复销毁
         *active_buffer = None;
         for (idx, slot_buf) in self.slot_buffers.iter_mut().enumerate() {
-            if let Some(buf) = slot_buf.take() {
-                buf.destroy();
-            }
-            if let Some(ref mut slot) = self.shm_slots[idx] {
-                slot.is_busy = false;
+            let is_busy = self.shm_slots[idx]
+                .as_ref()
+                .map(|s| s.is_busy)
+                .unwrap_or(false);
+            if !is_busy {
+                if let Some(buf) = slot_buf.take() {
+                    buf.destroy();
+                }
             }
         }
     }
@@ -273,9 +276,15 @@ impl CandidateSurfaceManager {
             );
             pool.destroy();
 
+            let is_slot_busy = self.shm_slots[self.current_slot]
+                .as_ref()
+                .map(|s| s.is_busy)
+                .unwrap_or(false);
             let old_slot_buf = self.slot_buffers[self.current_slot].take();
             if let Some(old) = old_slot_buf {
-                old.destroy();
+                if !is_slot_busy {
+                    old.destroy();
+                }
             }
             self.slot_buffers[self.current_slot] = Some(buffer.clone());
             if let Some(ref mut slot) = self.shm_slots[self.current_slot] {
@@ -308,20 +317,28 @@ impl CandidateSurfaceManager {
         self.convert_rgba_to_pixel_buffer(pixmap.data());
         let required_bytes = self.pixel_buffer.len();
 
-        // 2. 轮换至下一个空闲持久化槽位（双缓冲交替，优先选择合成器已 release 的空闲槽位）
-        let mut next_slot = (self.current_slot + 1) % self.shm_slots.len();
+        // 2. 轮换至下一个空闲持久化槽位（双缓冲交替，严格检查合成器已 release 的空闲槽位）
+        let mut available_slot = None;
         for offset in 1..=self.shm_slots.len() {
             let candidate = (self.current_slot + offset) % self.shm_slots.len();
             if let Some(ref slot) = self.shm_slots[candidate] {
                 if !slot.is_busy {
-                    next_slot = candidate;
+                    available_slot = Some(candidate);
                     break;
                 }
             } else {
-                next_slot = candidate;
+                available_slot = Some(candidate);
                 break;
             }
         }
+
+        let next_slot = match available_slot {
+            Some(slot) => slot,
+            None => {
+                log::warn!("[悬浮窗口] 双缓冲所有槽位当前均被合成器锁定为忙碌状态，跳过本次帧提交以防画面撕裂。");
+                return None;
+            }
+        };
 
         if let Err(e) = self.ensure_slot(next_slot, required_bytes) {
             log::warn!(
@@ -463,5 +480,29 @@ mod tests {
         let (w, h, _) = manager.render_state(&state).expect("2x 渲染位图失败");
         assert_eq!(h, 76);
         assert!(w > 100);
+    }
+
+    #[test]
+    fn test_shm_slot_all_busy_drops_frame() {
+        let mut manager = CandidateSurfaceManager::new();
+        let state = CandidateBoxState {
+            visible: true,
+            preedit: "ce".to_string(),
+            candidates: vec![waylan_core::Candidate::new("测试", "ce'shi", 100)],
+            ..CandidateBoxState::default()
+        };
+
+        // 渲染两次填满两个槽位
+        let _ = manager.render_state(&state);
+        let _ = manager.render_state(&state);
+
+        // 人工模拟合成器尚未释放两个槽位（两槽皆 busy）
+        for slot in manager.shm_slots.iter_mut().flatten() {
+            slot.is_busy = true;
+        }
+
+        // 此时再次尝试渲染，应安全返回 None 丢帧，杜绝并发写入 busy 槽位引发花屏
+        let third_res = manager.render_state(&state);
+        assert!(third_res.is_none(), "两槽皆 busy 时应放弃提交");
     }
 }
