@@ -36,7 +36,9 @@ impl ShmSlot {
     /// 确保文件容量至少达到目标字节数（容量不足时按 2 倍扩容）
     pub fn ensure_capacity(&mut self, required_bytes: usize) -> std::io::Result<()> {
         if self.capacity < required_bytes {
-            let new_cap = required_bytes.max(self.capacity * 2).max(64 * 1024);
+            let new_cap = required_bytes
+                .max(self.capacity.saturating_mul(2))
+                .max(64 * 1024);
             self.file.set_len(new_cap as u64)?;
             self.capacity = new_cap;
         }
@@ -126,8 +128,8 @@ pub struct CandidateSurfaceManager {
     pub pixel_buffer: Vec<u8>,
     /// 目标显示器逻辑分辨率 (宽, 高)，用于贴边防溢出平移与向上翻转
     pub screen_size: (i32, i32),
-    /// 待合成器 release 的退役缓冲区列表（防止因重入替换丢失引用引发代理泄漏）
-    pub pending_release_buffers: Vec<WlBuffer>,
+    /// 待合成器 release 的退役缓冲区列表（附带所属槽位索引，防止隐藏表面后 is_busy 永久锁死）
+    pub pending_release_buffers: Vec<(usize, WlBuffer)>,
 }
 
 impl Default for CandidateSurfaceManager {
@@ -149,7 +151,7 @@ impl CandidateSurfaceManager {
             current_slot: 0,
             pixel_buffer: Vec::with_capacity(64 * 1024),
             screen_size: (1920, 1080),
-            pending_release_buffers: Vec::new(),
+            pending_release_buffers: Vec::with_capacity(4),
         }
     }
 
@@ -223,13 +225,18 @@ impl CandidateSurfaceManager {
             }
         }
 
-        // 检查退役缓冲区队列中等待 release 的旧缓冲
+        // 检查退役缓冲区队列中等待 release 的旧缓冲，若该槽位当前无新活跃缓冲则复位 is_busy
         if let Some(pos) = self
             .pending_release_buffers
             .iter()
-            .position(|b| b == released_buffer)
+            .position(|(_, b)| b == released_buffer)
         {
-            let buf = self.pending_release_buffers.remove(pos);
+            let (slot_idx, buf) = self.pending_release_buffers.remove(pos);
+            if self.slot_buffers[slot_idx].is_none() {
+                if let Some(ref mut slot) = self.shm_slots[slot_idx] {
+                    slot.is_busy = false;
+                }
+            }
             buf.destroy();
         }
     }
@@ -257,7 +264,7 @@ impl CandidateSurfaceManager {
                     buf.destroy();
                 }
             } else if let Some(buf) = slot_buf.take() {
-                self.pending_release_buffers.push(buf);
+                self.pending_release_buffers.push((idx, buf));
             }
         }
     }
@@ -279,8 +286,8 @@ impl CandidateSurfaceManager {
         };
 
         if let (Some(shm), Some(surf), Some(qh)) = (shm, surface, qhandle) {
-            let stride = (width * 4) as i32;
-            let pool_size = stride * (height as i32);
+            let stride = (width as i32).saturating_mul(4);
+            let pool_size = stride.saturating_mul(height as i32);
             let pool = shm.create_pool(file.as_fd(), pool_size, qh, ());
             let buffer = pool.create_buffer(
                 0,
@@ -302,7 +309,7 @@ impl CandidateSurfaceManager {
                 if !is_slot_busy {
                     old.destroy();
                 } else {
-                    self.pending_release_buffers.push(old);
+                    self.pending_release_buffers.push((self.current_slot, old));
                 }
             }
             self.slot_buffers[self.current_slot] = Some(buffer.clone());

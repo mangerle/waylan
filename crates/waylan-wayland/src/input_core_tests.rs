@@ -99,6 +99,43 @@ fn test_keymap_layout_dynamic_update() {
     assert_eq!(layout.get_char(31), Some('a'));
     // 未在文本中重定义的按键保持 QWERTY 兜底
     assert_eq!(layout.get_char(48), Some('b'));
+
+    // 模拟真实合成器下发的完整 xkb_keymap（包含前置 xkb_keycodes 段与后置 xkb_symbols 段）
+    let mut full_layout = KeymapLayout::qwerty();
+    let real_xkb = r#"
+        xkb_keymap {
+            xkb_keycodes "evdev+aliases(qwerty)" {
+                minimum = 8;
+                maximum = 255;
+                <AC01> = 38;
+                <AC02> = 39;
+                <AC03> = 40;
+                <AC04> = 41;
+                <AC05> = 42;
+                <AC06> = 43;
+                <AC07> = 44;
+                <AC08> = 45;
+                <AC09> = 46;
+                <AC10> = 47;
+            };
+            xkb_symbols "pc+us(dvorak)" {
+                key <AC01> { [ a, A ] };
+                key <AC02> { [ o, O ] };
+                key <AC03> { [ e, E ] };
+                key <AC04> { [ u, U ] };
+                key <AC05> { [ i, I ] };
+                key <AC06> { [ d, D ] };
+                key <AC07> { [ h, H ] };
+                key <AC08> { [ t, T ] };
+                key <AC09> { [ n, N ] };
+                key <AC10> { [ s, S ] };
+            };
+        };
+    "#;
+    full_layout.update_from_xkb_text(real_xkb);
+    assert_eq!(full_layout.get_char(31), Some('o'));
+    assert_eq!(full_layout.get_char(32), Some('e'));
+    assert_eq!(full_layout.get_char(33), Some('u'));
 }
 
 #[test]

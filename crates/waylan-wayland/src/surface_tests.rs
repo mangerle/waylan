@@ -140,4 +140,10 @@ fn test_shm_slot_all_busy_recycles_oldest_slot() {
         res.is_some(),
         "全槽皆 busy 时应自愈轮转复用最旧槽位完成渲染"
     );
+
+    // 验证隐藏表面并清空无活跃缓冲后，pending_release_buffers 为空且状态一致
+    let mut active_buf = None;
+    manager.hide_wayland_surface(None, &mut active_buf);
+    assert!(!manager.is_visible);
+    assert!(manager.pending_release_buffers.is_empty());
 }

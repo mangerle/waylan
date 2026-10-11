@@ -3,7 +3,9 @@ use crate::session_v1::{
     handle_composition_key, keycode_to_ascii_digit_char, keycode_to_punctuation_with_shift,
     KeyProcessAction, WaylanV1Session, KEY_BACKSPACE, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
 };
-use log::info;
+use log::{debug, info};
+use std::fs::File;
+use std::io::Read;
 use waylan_core::InputMode;
 use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, WlKeyboard};
 use wayland_client::{Connection, Dispatch, QueueHandle};
@@ -17,6 +19,25 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        if let KeyboardEvent::Keymap {
+            format: _,
+            fd,
+            size,
+        } = event
+        {
+            let mut file = File::from(fd);
+            let read_len = (size as usize).min(1024 * 1024);
+            let mut buf = vec![0u8; read_len];
+            if file.read_exact(&mut buf).is_ok() {
+                let text = String::from_utf8_lossy(&buf);
+                state
+                    .keymap_layout
+                    .update_from_xkb_text(text.trim_end_matches('\0'));
+                debug!("[Wayland v1 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
+            }
+            return;
+        }
+
         let Some(context) = state.active_context.clone() else {
             return;
         };
