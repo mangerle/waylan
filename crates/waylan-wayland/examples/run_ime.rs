@@ -34,7 +34,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("[微澜] 快捷键说明：单按 Shift 切换中英文，中文模式下敲击字母输入拼音，按空格选词上屏，按 / 自动输入顿号。");
 
-    loop {
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let r = running.clone();
+    let _ = signal_hook::flag::register(signal_hook::consts::SIGINT, r);
+
+    while running.load(std::sync::atomic::Ordering::Relaxed) {
         event_queue.blocking_dispatch(&mut session)?;
     }
+
+    println!("\n[微澜] 收到退出信号，正在平滑停止输入法测试服务...");
+    Ok(())
 }
