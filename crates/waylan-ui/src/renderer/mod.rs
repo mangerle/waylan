@@ -209,6 +209,8 @@ impl CandidateBoxRenderer {
             LayoutParams {
                 candidates: &state.candidates,
                 selected_index: state.selected_index,
+                preedit: &state.preedit,
+                mode_badge: &state.mode_badge,
                 s,
                 padding_h,
                 item_gap,
@@ -288,8 +290,50 @@ impl CandidateBoxRenderer {
             },
         );
 
-        // 绘制条目
+        // 绘制前置模式标识徽标（如“中”、“英”、“V”）与预编辑拼音文本
         let baseline_y = (bar_height + font_size * 0.72) / 2.0;
+        let mut prefix_draw_x = padding_h + 2.0 * s;
+
+        if !state.mode_badge.is_empty() {
+            let badge_font_size = font_size * 0.8;
+            let text_w = self.measure_text(&state.mode_badge, badge_font_size);
+            let badge_w = text_w + 10.0 * s;
+            let badge_h = 22.0 * s;
+            let badge_y = (bar_height - badge_h) / 2.0;
+
+            draw_rounded_rect(
+                &mut pixmap,
+                RoundedRectParams {
+                    x: prefix_draw_x,
+                    y: badge_y,
+                    w: badge_w,
+                    h: badge_h,
+                    r: 4.0 * s,
+                },
+                self.theme.highlight_badge,
+            );
+            self.draw_text(
+                &mut pixmap,
+                &state.mode_badge,
+                prefix_draw_x + 5.0 * s,
+                (bar_height + badge_font_size * 0.72) / 2.0,
+                badge_font_size,
+                self.theme.highlight_text,
+            );
+            prefix_draw_x += badge_w + 6.0 * s;
+        }
+
+        if !state.preedit.is_empty() {
+            let preedit_font_size = font_size * 0.9;
+            self.draw_text(
+                &mut pixmap,
+                &state.preedit,
+                prefix_draw_x,
+                baseline_y,
+                preedit_font_size,
+                self.theme.preedit_text,
+            );
+        }
         for (idx, item) in measured_items.iter().enumerate() {
             let cand = &state.candidates[idx];
             let is_selected = idx == state.selected_index;

@@ -18,6 +18,8 @@ pub struct ItemMeasure<'a> {
 pub struct LayoutParams<'a> {
     pub candidates: &'a [Candidate],
     pub selected_index: usize,
+    pub preedit: &'a str,
+    pub mode_badge: &'a str,
     pub s: f32,
     pub padding_h: f32,
     pub item_gap: f32,
@@ -34,6 +36,18 @@ where
 {
     let mut measured = Vec::with_capacity(params.candidates.len());
     let mut current_pos_x = params.padding_h + 2.0 * params.s;
+
+    // 若配置了模式标识（如“中”、“英”、“V”），前置预留徽标宽度
+    if !params.mode_badge.is_empty() {
+        let badge_w = measure_fn(params.mode_badge, params.font_size * 0.8) + 10.0 * params.s;
+        current_pos_x += badge_w + 6.0 * params.s;
+    }
+
+    // 若存在预编辑拼音，前置预留预编辑文本区域
+    if !params.preedit.is_empty() {
+        let preedit_w = measure_fn(params.preedit, params.font_size * 0.9) + 8.0 * params.s;
+        current_pos_x += preedit_w + 8.0 * params.s;
+    }
 
     for (idx, cand) in params.candidates.iter().enumerate() {
         let index_str = if idx < PRECACHED_INDEX_STRINGS.len() {
