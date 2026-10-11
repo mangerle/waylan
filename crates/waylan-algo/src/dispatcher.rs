@@ -35,8 +35,22 @@ impl ModeDispatcher {
                     Some(res)
                 }
             }
-            'u' if config.enable_u_mode && !body.is_empty() => Some(Self::eval_u_mode(body)),
-            'i' if config.enable_i_mode && !body.is_empty() => Some(Self::eval_i_mode(body)),
+            'u' if config.enable_u_mode && !body.is_empty() => {
+                let res = Self::eval_u_mode(body);
+                if res.is_empty() {
+                    None
+                } else {
+                    Some(res)
+                }
+            }
+            'i' if config.enable_i_mode && !body.is_empty() => {
+                let res = Self::eval_i_mode(body);
+                if res.is_empty() {
+                    None
+                } else {
+                    Some(res)
+                }
+            }
             _ => None,
         }
     }
@@ -295,6 +309,10 @@ mod tests {
         let config = AlgoConfig::default();
         let result = ModeDispatcher::try_dispatch("uhehe", &config).expect("应触发U模式");
         assert_eq!(result[0].text, "囍");
+
+        // 未命中任何拆字规则时应返回 None，不能返回 Some(vec![]) 拦截拼音
+        assert!(ModeDispatcher::try_dispatch("ui", &config).is_none());
+        assert!(ModeDispatcher::try_dispatch("uzz", &config).is_none());
     }
 
     #[test]
