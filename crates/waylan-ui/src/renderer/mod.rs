@@ -201,7 +201,8 @@ impl CandidateBoxRenderer {
 
         let s = self.scale.max(0.5);
         let bar_height: f32 = 38.0 * s;
-        let padding_h: f32 = 8.0 * s;
+        let padding_h: f32 = self.theme.padding.max(4.0) * s;
+        let corner_radius: f32 = self.theme.corner_radius.max(2.0) * s;
         let item_gap: f32 = 14.0 * s;
         let font_size = self.font_size * s;
 
@@ -285,7 +286,7 @@ impl CandidateBoxRenderer {
                 y: 0.0,
                 width: total_bar_width,
                 height: bar_height,
-                radius: 10.0 * s,
+                radius: corner_radius,
                 stroke_width: 1.0 * s,
             },
         );
@@ -432,7 +433,7 @@ impl CandidateBoxRenderer {
                     y: popup_top_y,
                     width: popup_w,
                     height: popup_h,
-                    radius: 10.0 * s,
+                    radius: corner_radius,
                     stroke_width: 1.0 * s,
                 },
             );
