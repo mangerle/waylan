@@ -16,130 +16,40 @@ pub fn process_composition_key(
     key: u32,
     now: u64,
 ) -> Option<(bool, Option<String>)> {
-    if key == KEY_TAB {
-        let sel = session.engine.selected_index;
-        session.engine.toggle_expand(sel);
-        session.refresh_candidate_surface();
-        return Some((true, None));
-    }
+    let shift_active = session.is_shift_active();
+    let page_keys = session.page_keys;
+    let action = handle_composition_key(
+        &mut session.engine,
+        &mut session.punctuation_processor,
+        key,
+        shift_active,
+        page_keys,
+        now,
+    )?;
 
-    if session.engine.is_expanded {
-        let sel = session.engine.selected_index;
-        if key == KEY_DOWN {
-            session.engine.next_expanded_item(sel);
-            session.refresh_candidate_surface();
-            return Some((true, None));
+    match action {
+        KeyProcessAction::PassThrough => None,
+        KeyProcessAction::Handled => {
+            let preedit = session.engine.formatted_preedit();
+            session.update_preedit(&preedit);
+            Some((true, None))
         }
-        if key == KEY_UP {
-            session.engine.prev_expanded_item(sel);
-            session.refresh_candidate_surface();
-            return Some((true, None));
+        KeyProcessAction::Commit(committed) => {
+            session.commit_text(&committed);
+            Some((true, Some(committed)))
         }
-        if key == KEY_ENTER || key == KEY_SPACE {
-            if let Some((committed, _)) = session
-                .engine
-                .select_expanded_item(sel, session.engine.expanded_selected_index)
-            {
-                session.punctuation_processor.record_commit(&committed);
-                session.commit_text(&committed);
-                return Some((true, Some(committed)));
-            }
+        KeyProcessAction::CommitPartial {
+            committed,
+            remaining_preedit,
+        } => {
+            session.commit_partial(&committed, &remaining_preedit);
+            Some((true, Some(committed)))
         }
-    } else {
-        if key == KEY_DOWN {
-            session.engine.next_candidate();
-            session.refresh_candidate_surface();
-            return Some((true, None));
-        }
-        if key == KEY_UP {
-            session.engine.prev_candidate();
-            session.refresh_candidate_surface();
-            return Some((true, None));
+        KeyProcessAction::Reset => {
+            session.cancel_input();
+            Some((true, None))
         }
     }
-
-    if !session.is_shift_active() {
-        if let Some(digit) = keycode_to_digit(key) {
-            let cand_idx = digit.saturating_sub(1);
-            if let Some((committed_text, remaining_len)) =
-                session.engine.select_candidate(cand_idx, now)
-            {
-                session.punctuation_processor.record_commit(&committed_text);
-                if remaining_len > 0 {
-                    let preedit = session.engine.formatted_preedit();
-                    session.commit_partial(&committed_text, &preedit);
-                } else {
-                    session.commit_text(&committed_text);
-                }
-                return Some((true, Some(committed_text)));
-            }
-        }
-    }
-
-    if key == KEY_SPACE {
-        let sel = session.engine.selected_index;
-        if let Some((committed_text, remaining_len)) = session.engine.select_candidate(sel, now) {
-            session.punctuation_processor.record_commit(&committed_text);
-            if remaining_len > 0 {
-                let preedit = session.engine.formatted_preedit();
-                session.commit_partial(&committed_text, &preedit);
-            } else {
-                session.commit_text(&committed_text);
-            }
-            return Some((true, Some(committed_text)));
-        }
-    }
-
-    if key == KEY_ENTER {
-        let raw = session.engine.raw_input().to_string();
-        session.engine.reset();
-        session.commit_text(&raw);
-        return Some((true, Some(raw)));
-    }
-
-    if key == KEY_BACKSPACE {
-        session.engine.pop_char();
-        let preedit = session.engine.formatted_preedit();
-        session.update_preedit(&preedit);
-        return Some((true, None));
-    }
-
-    if !session.is_shift_active() && is_prev_page_key(key, session.page_keys) {
-        session.engine.prev_page();
-        session.refresh_candidate_surface();
-        return Some((true, None));
-    }
-    if !session.is_shift_active() && is_next_page_key(key, session.page_keys) {
-        session.engine.next_page();
-        session.refresh_candidate_surface();
-        return Some((true, None));
-    }
-
-    if key == KEY_LEFT {
-        session.engine.move_cursor_left();
-        let preedit = session.engine.formatted_preedit();
-        session.update_preedit(&preedit);
-        return Some((true, None));
-    }
-    if key == KEY_RIGHT {
-        session.engine.move_cursor_right();
-        let preedit = session.engine.formatted_preedit();
-        session.update_preedit(&preedit);
-        return Some((true, None));
-    }
-    if key == KEY_DELETE {
-        session.engine.delete_char_at_cursor();
-        let preedit = session.engine.formatted_preedit();
-        session.update_preedit(&preedit);
-        return Some((true, None));
-    }
-
-    if key == KEY_ESC {
-        session.cancel_input();
-        return Some((true, None));
-    }
-
-    None
 }
 
 /// 处理输入缓冲区为空时的空闲按键输入（仅拦截中文标点，其余编辑键与数字键保持原生透传）

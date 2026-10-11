@@ -1,8 +1,8 @@
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
 use crate::session_v1::{
-    is_next_page_key, is_prev_page_key, keycode_to_ascii_digit_char, keycode_to_char,
-    keycode_to_digit, keycode_to_punctuation_with_shift, WaylanV1Session, KEY_BACKSPACE,
-    KEY_DELETE, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_LEFT, KEY_RIGHT, KEY_SPACE, KEY_TAB, KEY_UP,
+    handle_composition_key, keycode_to_ascii_digit_char, keycode_to_char,
+    keycode_to_punctuation_with_shift, KeyProcessAction, WaylanV1Session, KEY_BACKSPACE, KEY_LEFT,
+    KEY_RIGHT, KEY_SPACE,
 };
 use log::info;
 use waylan_core::InputMode;
@@ -126,175 +126,49 @@ fn handle_v1_key_press(
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        // 3.1 Tab 键：切换/展开当前高亮候选词的二级动态格式卡片
-        if key == KEY_TAB {
-            let sel = state.engine.selected_index;
-            state.engine.toggle_expand(sel);
-            state.refresh_candidate_surface();
-            return true;
-        }
-
-        // 3.2 处于展开二级状态下的导航与选择
-        if state.engine.is_expanded {
-            let sel = state.engine.selected_index;
-            if key == KEY_DOWN {
-                state.engine.next_expanded_item(sel);
-                state.refresh_candidate_surface();
-                return true;
-            }
-            if key == KEY_UP {
-                state.engine.prev_expanded_item(sel);
-                state.refresh_candidate_surface();
-                return true;
-            }
-            if key == KEY_ENTER || key == KEY_SPACE {
-                if let Some((committed, _)) = state
-                    .engine
-                    .select_expanded_item(sel, state.engine.expanded_selected_index)
-                {
-                    state.punctuation_processor.record_commit(&committed);
-                    state.hide_candidate_surface();
-                    context.commit_string(state.commit_serial, committed);
-                    context.preedit_string(state.commit_serial, String::new(), String::new());
-                    return true;
-                }
-            }
-        } else {
-            // 非展开态下，上下方向键在当前页候选词间循环移动高亮胶囊
-            if key == KEY_DOWN {
-                state.engine.next_candidate();
-                state.refresh_candidate_surface();
-                return true;
-            }
-            if key == KEY_UP {
-                state.engine.prev_candidate();
-                state.refresh_candidate_surface();
-                return true;
-            }
-        }
-
-        // 3.3 数字键 1-9（未按 Shift 时）：选择对应位候选词
-        if !state.is_shift_active() {
-            if let Some(digit) = keycode_to_digit(key) {
-                let cand_idx = digit.saturating_sub(1);
-                if let Some((committed_text, remaining_len)) =
-                    state.engine.select_candidate(cand_idx, now)
-                {
-                    state.punctuation_processor.record_commit(&committed_text);
-                    context.commit_string(state.commit_serial, committed_text);
-                    if remaining_len > 0 {
-                        state.refresh_candidate_surface();
-                        context.preedit_string(
-                            state.commit_serial,
-                            state.engine.formatted_preedit(),
-                            String::new(),
-                        );
-                    } else {
-                        state.hide_candidate_surface();
-                        context.preedit_string(state.commit_serial, String::new(), String::new());
-                    }
-                    return true;
-                }
-            }
-        }
-
-        // 3.4 空格键：当前高亮候选词上屏
-        if key == KEY_SPACE {
-            let sel = state.engine.selected_index;
-            if let Some((committed_text, remaining_len)) = state.engine.select_candidate(sel, now) {
-                state.punctuation_processor.record_commit(&committed_text);
-                context.commit_string(state.commit_serial, committed_text);
-                if remaining_len > 0 {
+        let shift_active = state.is_shift_active();
+        let page_keys = state.page_keys;
+        if let Some(action) = handle_composition_key(
+            &mut state.engine,
+            &mut state.punctuation_processor,
+            key,
+            shift_active,
+            page_keys,
+            now,
+        ) {
+            match action {
+                KeyProcessAction::PassThrough => {}
+                KeyProcessAction::Handled => {
+                    let preedit = state.engine.formatted_preedit();
                     state.refresh_candidate_surface();
-                    context.preedit_string(
-                        state.commit_serial,
-                        state.engine.formatted_preedit(),
-                        String::new(),
-                    );
-                } else {
-                    state.hide_candidate_surface();
-                    context.preedit_string(state.commit_serial, String::new(), String::new());
+                    context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
+                    context.preedit_string(state.commit_serial, preedit, String::new());
+                    return true;
                 }
-                return true;
+                KeyProcessAction::Commit(text) => {
+                    state.hide_candidate_surface();
+                    context.commit_string(state.commit_serial, text);
+                    context.preedit_cursor(0);
+                    context.preedit_string(state.commit_serial, String::new(), String::new());
+                    return true;
+                }
+                KeyProcessAction::CommitPartial {
+                    committed,
+                    remaining_preedit,
+                } => {
+                    context.commit_string(state.commit_serial, committed);
+                    state.refresh_candidate_surface();
+                    context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
+                    context.preedit_string(state.commit_serial, remaining_preedit, String::new());
+                    return true;
+                }
+                KeyProcessAction::Reset => {
+                    state.hide_candidate_surface();
+                    context.preedit_cursor(0);
+                    context.preedit_string(state.commit_serial, String::new(), String::new());
+                    return true;
+                }
             }
-        }
-
-        // 3.5 回车键（Enter）：直接上屏原始未转换的英文字母
-        if key == KEY_ENTER {
-            let raw = state.engine.raw_input().to_string();
-            state.engine.reset();
-            state.hide_candidate_surface();
-            context.commit_string(state.commit_serial, raw);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-            return true;
-        }
-
-        // 3.6 退格键（Backspace）：删除一个拼文字母
-        if key == KEY_BACKSPACE {
-            state.engine.pop_char();
-            let preedit = state.engine.formatted_preedit();
-            if preedit.is_empty() {
-                state.hide_candidate_surface();
-            } else {
-                state.refresh_candidate_surface();
-            }
-            context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
-            context.preedit_string(state.commit_serial, preedit, String::new());
-            return true;
-        }
-
-        // 3.7 候选词翻页（根据配置的翻页快捷键模式判定）
-        if !state.is_shift_active() && is_prev_page_key(key, state.page_keys) {
-            state.engine.prev_page();
-            state.refresh_candidate_surface();
-            return true;
-        }
-        if !state.is_shift_active() && is_next_page_key(key, state.page_keys) {
-            state.engine.next_page();
-            state.refresh_candidate_surface();
-            return true;
-        }
-
-        // 3.8 预编辑区内光标左移/右移
-        if key == KEY_LEFT {
-            state.engine.move_cursor_left();
-            let preedit = state.engine.formatted_preedit();
-            state.refresh_candidate_surface();
-            context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
-            context.preedit_string(state.commit_serial, preedit, String::new());
-            return true;
-        }
-        if key == KEY_RIGHT {
-            state.engine.move_cursor_right();
-            let preedit = state.engine.formatted_preedit();
-            state.refresh_candidate_surface();
-            context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
-            context.preedit_string(state.commit_serial, preedit, String::new());
-            return true;
-        }
-
-        if key == KEY_DELETE {
-            state.engine.delete_char_at_cursor();
-            if state.engine.raw_input().is_empty() {
-                state.hide_candidate_surface();
-                context.preedit_cursor(0);
-                context.preedit_string(state.commit_serial, String::new(), String::new());
-            } else {
-                let preedit = state.engine.formatted_preedit();
-                state.refresh_candidate_surface();
-                context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
-                context.preedit_string(state.commit_serial, preedit, String::new());
-            }
-            return true;
-        }
-
-        // 3.9 ESC 键：取消当前输入并清空
-        if key == KEY_ESC {
-            state.engine.reset();
-            state.hide_candidate_surface();
-            context.preedit_cursor(0);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-            return true;
         }
     }
 

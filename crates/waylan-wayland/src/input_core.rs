@@ -303,21 +303,167 @@ pub fn keycode_to_punctuation_with_shift(keycode: u32, shift_pressed: bool) -> O
 }
 
 /// 核心按键决策结果
+///
+/// # 设计原理
+/// - **实现初衷**：解耦按键消费决策与具体的 Wayland 协议版本（V1 zwp_input_method_v1 与 V2 zwp_input_method_v2），
+///   将拼音预编辑与候选词选择的通用状态机决策收敛至协议无关的核心层。
+/// - **核心优势**：消除 V1 和 V2 之间数百行高度重合的按键分支代码，防止逻辑分叉。
 #[derive(Debug, PartialEq, Eq)]
 pub enum KeyProcessAction {
     /// 原样透传给客户端应用
     PassThrough,
     /// 内部消费，刷新候选表面（无需提交）
     Handled,
-    /// 提交整段文字上屏，并隐藏候选表面
+    /// 提交整段文字上屏，并隐藏候选表面与清空预编辑
     Commit(String),
     /// 提交部分文字，并保留/刷新剩余拼音预编辑
     CommitPartial {
         committed: String,
         remaining_preedit: String,
     },
-    /// 清空预编辑并重置状态
+    /// 清空预编辑并重置状态（如 ESC）
     Reset,
+}
+
+/// 处理处于拼音组词状态（raw_input 非空）下的核心按键拦截决策
+///
+/// # 设计原理
+/// - **实现初衷**：统一 V1 与 V2 协议在输入拼音时的按键分发逻辑（二级展开、候选词高亮移动、数字/空格选词、回车字母上屏、退格删除、翻页、光标移动与取消）。
+/// - **核心优势**：直接操作 AlgoEngine，返回纯粹的 `KeyProcessAction` 决策枚举，调用方只需负责与自身协议的 IPC 消息映射。
+pub fn handle_composition_key(
+    engine: &mut waylan_algo::AlgoEngine,
+    punct_processor: &mut waylan_algo::preprocessor::PunctuationProcessor,
+    key: u32,
+    shift_active: bool,
+    page_keys: PageKeyConfig,
+    now: u64,
+) -> Option<KeyProcessAction> {
+    // 1. Tab 键：切换/展开当前高亮候选词的二级动态格式卡片
+    if key == KEY_TAB {
+        let sel = engine.selected_index;
+        engine.toggle_expand(sel);
+        return Some(KeyProcessAction::Handled);
+    }
+
+    // 2. 处于展开二级状态下的导航与选择
+    if engine.is_expanded {
+        let sel = engine.selected_index;
+        if key == KEY_DOWN {
+            engine.next_expanded_item(sel);
+            return Some(KeyProcessAction::Handled);
+        }
+        if key == KEY_UP {
+            engine.prev_expanded_item(sel);
+            return Some(KeyProcessAction::Handled);
+        }
+        if key == KEY_ENTER || key == KEY_SPACE {
+            if let Some((committed, _)) =
+                engine.select_expanded_item(sel, engine.expanded_selected_index)
+            {
+                punct_processor.record_commit(&committed);
+                return Some(KeyProcessAction::Commit(committed));
+            }
+        }
+    } else {
+        // 非展开态下，上下方向键在当前页候选词间移动高亮
+        if key == KEY_DOWN {
+            engine.next_candidate();
+            return Some(KeyProcessAction::Handled);
+        }
+        if key == KEY_UP {
+            engine.prev_candidate();
+            return Some(KeyProcessAction::Handled);
+        }
+    }
+
+    // 3. 数字键 1-9（未按 Shift 时）：选择对应位候选词
+    if !shift_active {
+        if let Some(digit) = keycode_to_digit(key) {
+            let cand_idx = digit.saturating_sub(1);
+            if let Some((committed_text, remaining_len)) = engine.select_candidate(cand_idx, now) {
+                punct_processor.record_commit(&committed_text);
+                if remaining_len > 0 {
+                    return Some(KeyProcessAction::CommitPartial {
+                        committed: committed_text,
+                        remaining_preedit: engine.formatted_preedit(),
+                    });
+                } else {
+                    return Some(KeyProcessAction::Commit(committed_text));
+                }
+            }
+        }
+    }
+
+    // 4. 空格键：当前高亮候选词上屏
+    if key == KEY_SPACE {
+        let sel = engine.selected_index;
+        if let Some((committed_text, remaining_len)) = engine.select_candidate(sel, now) {
+            punct_processor.record_commit(&committed_text);
+            if remaining_len > 0 {
+                return Some(KeyProcessAction::CommitPartial {
+                    committed: committed_text,
+                    remaining_preedit: engine.formatted_preedit(),
+                });
+            } else {
+                return Some(KeyProcessAction::Commit(committed_text));
+            }
+        }
+    }
+
+    // 5. 回车键（Enter）：直接上屏原始未转换的拼音英文字母
+    if key == KEY_ENTER {
+        let raw = engine.raw_input().to_string();
+        engine.reset();
+        return Some(KeyProcessAction::Commit(raw));
+    }
+
+    // 6. 退格键（Backspace）：删除一个拼文字母
+    if key == KEY_BACKSPACE {
+        engine.pop_char();
+        if engine.raw_input().is_empty() {
+            return Some(KeyProcessAction::Reset);
+        } else {
+            return Some(KeyProcessAction::Handled);
+        }
+    }
+
+    // 7. 候选词翻页（根据配置的翻页快捷键模式判定）
+    if !shift_active && page_keys.is_prev_page(key) {
+        engine.prev_page();
+        return Some(KeyProcessAction::Handled);
+    }
+    if !shift_active && page_keys.is_next_page(key) {
+        engine.next_page();
+        return Some(KeyProcessAction::Handled);
+    }
+
+    // 8. 预编辑区内光标左移/右移
+    if key == KEY_LEFT {
+        engine.move_cursor_left();
+        return Some(KeyProcessAction::Handled);
+    }
+    if key == KEY_RIGHT {
+        engine.move_cursor_right();
+        return Some(KeyProcessAction::Handled);
+    }
+
+    // 9. Delete 键：删除光标处的字符
+    if key == KEY_DELETE {
+        engine.delete_char_at_cursor();
+        if engine.raw_input().is_empty() {
+            return Some(KeyProcessAction::Reset);
+        } else {
+            return Some(KeyProcessAction::Handled);
+        }
+    }
+
+    // 10. ESC 键：取消当前输入并清空
+    if key == KEY_ESC {
+        engine.reset();
+        return Some(KeyProcessAction::Reset);
+    }
+
+    None
 }
 
 /// 根据物理按键按下/释放事件独立维护左右修饰键状态并同步更新 XKB 位掩码
@@ -529,5 +675,36 @@ mod tests {
         assert_eq!(layout.get_char(31), Some('a'));
         // 未在文本中重定义的按键保持 QWERTY 兜底
         assert_eq!(layout.get_char(48), Some('b'));
+    }
+
+    #[test]
+    fn test_handle_composition_key() {
+        let mut engine =
+            waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
+        let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
+        let page_keys = PageKeyConfig::MinusEqual;
+
+        // 模拟输入 "ni"
+        engine.push_char('n');
+        engine.push_char('i');
+        assert_eq!(engine.raw_input(), "ni");
+
+        // 测试光标移动
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+
+        // 测试回车字母上屏
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_ENTER, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Commit("ni".to_string())));
+        assert!(engine.raw_input().is_empty());
+
+        // 测试 ESC 清空
+        engine.push_char('a');
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_ESC, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Reset));
+        assert!(engine.raw_input().is_empty());
     }
 }
