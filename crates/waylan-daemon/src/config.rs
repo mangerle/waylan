@@ -240,10 +240,17 @@ impl AppConfig {
                             return cfg;
                         }
                         Err(e) => {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            let broken_path = path.with_extension(format!("toml.broken.{}", ts));
+                            let _ = fs::rename(&path, &broken_path);
                             log::warn!(
-                                "[配置系统] 解析配置文件 {:?} 失败 ({})，将回退使用默认配置。",
+                                "[配置系统] 解析配置文件 {:?} 失败 ({})，已备份损坏配置至 {:?}，将回退使用默认配置。",
                                 path,
-                                e
+                                e,
+                                broken_path
                             );
                         }
                     },

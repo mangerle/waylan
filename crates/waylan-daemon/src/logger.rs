@@ -25,11 +25,14 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         let _ = fs::create_dir_all(parent);
     }
 
-    // 若现有日志文件超过最大体积限制，自动轮转为 .old 防止磁盘耗尽
+    // 若现有日志文件超过最大体积限制，自动多槽位滚动（.log.2 -> 删除, .log.1 -> .log.2, .log -> .log.1）防止磁盘耗尽
     if let Ok(meta) = fs::metadata(&log_path) {
         if meta.len() > MAX_LOG_FILE_BYTES {
-            let backup_path = log_path.with_extension("log.old");
-            let _ = fs::rename(&log_path, backup_path);
+            let backup_2 = log_path.with_extension("log.2");
+            let backup_1 = log_path.with_extension("log.1");
+            let _ = fs::remove_file(&backup_2);
+            let _ = fs::rename(&backup_1, &backup_2);
+            let _ = fs::rename(&log_path, &backup_1);
         }
     }
 
@@ -43,10 +46,14 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         _ => LevelFilter::Info,
     };
 
-    let log_file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
+    let mut open_opts = fs::OpenOptions::new();
+    open_opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_opts.mode(0o600);
+    }
+    let log_file = open_opts.open(&log_path)?;
 
     // 使用 fern 构建多目标日志格式化器，并对嘈杂的第三方底层库限制在 Warn 级别
     fern::Dispatch::new()
