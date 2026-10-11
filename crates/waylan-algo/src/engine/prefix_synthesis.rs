@@ -262,8 +262,11 @@ impl AlgoEngine {
                 let phrase_text = format!("{}{}", head_text, tail.text);
                 let phrase_pinyin = format!("{}'{}", head_pinyin, tail.pinyin);
 
-                let char_len = phrase_text.chars().count() as u32;
-                let length_boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                let char_len = (phrase_text.chars().count() as u32).min(64);
+                let length_boost = char_len
+                    .saturating_sub(1)
+                    .saturating_mul(600_000)
+                    .min(30_000_000);
 
                 let bigram_bonus = self
                     .table

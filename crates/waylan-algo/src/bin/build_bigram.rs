@@ -215,8 +215,18 @@ fn export_csr_model(
     row_offsets[vocab_size] = current_offset;
 
     // 3. 构建列数据数组 Cols: [u32; num_pairs] (低24位next_id, 高8位q_score)
+    assert!(
+        vocab_size <= 0x00FF_FFFF,
+        "词表规模 ({} 条) 超过 CSR 二进制格式低 24 位上限 (16,777,215)，无法安全压缩编码！",
+        vocab_size
+    );
     let mut cols_data = Vec::with_capacity(num_pairs);
     for &(_, w2, aff, _) in selected {
+        assert!(
+            w2 <= 0x00FF_FFFF,
+            "后继词 ID ({}) 超过 24 位列索引上限 (16,777,215)，存在静默截断碰撞风险！",
+            w2
+        );
         let clamped_aff = aff.clamp(min_score, max_score);
         let q_score = (((clamped_aff - min_score) as f64 / (max_score - min_score) as f64) * 255.0)
             .round() as u8;
