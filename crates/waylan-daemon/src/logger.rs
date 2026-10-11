@@ -71,6 +71,8 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         .level_for("eframe", LevelFilter::Warn)
         .level_for("egui", LevelFilter::Warn)
         .level_for("winit", LevelFilter::Warn)
+        .level_for("wayland_client", LevelFilter::Warn)
+        .level_for("rustix", LevelFilter::Warn)
         // 终端标准输出通道
         .chain(stdout())
         // 日志文件持久化通道

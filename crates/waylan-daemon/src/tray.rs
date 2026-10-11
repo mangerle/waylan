@@ -492,7 +492,10 @@ impl TrayService {
 impl Drop for TrayService {
     fn drop(&mut self) {
         self.exit_requested.store(true, Ordering::Release);
-        let _ = self.icon_update_tx.try_send(());
+        if self.icon_update_tx.try_send(()).is_err() {
+            // 通道已满时使用带超时的重发或同步发送，确保后台等待线程被唤醒
+            let _ = self.icon_update_tx.send(());
+        }
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
         }
