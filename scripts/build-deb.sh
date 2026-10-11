@@ -44,6 +44,10 @@ if [ -f "${PROJECT_ROOT}/data/aux.dict.bin" ]; then
     cp "${PROJECT_ROOT}/data/aux.dict.bin" "${BUILD_ROOT}/usr/share/waylan/data/aux.dict.bin"
     chmod 644 "${BUILD_ROOT}/usr/share/waylan/data/aux.dict.bin"
 fi
+if [ -f "${PROJECT_ROOT}/data/bigram.table.bin" ]; then
+    cp "${PROJECT_ROOT}/data/bigram.table.bin" "${BUILD_ROOT}/usr/share/waylan/data/bigram.table.bin"
+    chmod 644 "${BUILD_ROOT}/usr/share/waylan/data/bigram.table.bin"
+fi
 if [ -f "${PROJECT_ROOT}/data/opencc.dict.bin" ]; then
     cp "${PROJECT_ROOT}/data/opencc.dict.bin" "${BUILD_ROOT}/usr/share/waylan/data/opencc.dict.bin"
     chmod 644 "${BUILD_ROOT}/usr/share/waylan/data/opencc.dict.bin"
@@ -117,11 +121,40 @@ cat << 'EOF' > "${BUILD_ROOT}/DEBIAN/prerm"
 #!/bin/sh
 set -e
 
-if [ "$1" = "remove" ]; then
-    # 尝试通知当前图形会话停止服务并向运行中的守护进程发送优雅停机信号
-    systemctl --user stop waylan.service >/dev/null 2>&1 || true
-    pkill -TERM -x waylan >/dev/null 2>&1 || true
-fi
+case "$1" in
+    remove|deconfigure|upgrade)
+        # 1. 遍历当前所有活跃登录用户的 runtime 会话，停止并禁用 waylan.service
+        for user_dir in /run/user/*; do
+            if [ -d "$user_dir" ]; then
+                uid="$(basename "$user_dir")"
+                case "$uid" in
+                    ''|*[!0-9]*) continue ;;
+                esac
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --user -M "${uid}@" stop waylan.service >/dev/null 2>&1 || true
+                    systemctl --user -M "${uid}@" disable waylan.service >/dev/null 2>&1 || true
+                fi
+            fi
+        done
+
+        # 2. 兼容当前已在用户上下文中的调用场景
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --user stop waylan.service >/dev/null 2>&1 || true
+            systemctl --user disable waylan.service >/dev/null 2>&1 || true
+        fi
+
+        # 3. 兜底向运行中的微澜守护进程与设置窗口发送终止信号
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -TERM -x waylan >/dev/null 2>&1 || true
+            pkill -TERM -x waylan-settings >/dev/null 2>&1 || true
+        fi
+        ;;
+    failed-upgrade)
+        ;;
+    *)
+        ;;
+esac
+
 exit 0
 EOF
 chmod 755 "${BUILD_ROOT}/DEBIAN/prerm"
