@@ -6,17 +6,30 @@ use waylan_ui::{CandidateBoxRenderer, UiTheme};
 fn main() {
     println!("=== 微澜全链路核心管线真实实机性能基准测试 ===");
 
-    // 1. 初始化算法引擎 (真实载入已安装到系统的 45.7 万词主词库)
-    let dict_path = "/usr/share/waylan/data/base.dict.bin";
-    println!("[准备] 正在载入系统全量词库: {}", dict_path);
-    let load_start = Instant::now();
-    let table = LexiconTable::load_binary(dict_path).expect("加载全量字词库失败");
-    println!(
-        "  -> 词库载入完成，耗时: {:.2} ms",
-        load_start.elapsed().as_secs_f64() * 1000.0
-    );
+    // 1. 初始化算法引擎 (通过多级查找动态寻找主词库，支持环境变量与本地仓库目录)
+    let search_paths = waylan_daemon::config::AppConfig::base_dict_search_paths();
+    let mut resolved_table = None;
+    for p in &search_paths {
+        if p.exists() {
+            println!("[准备] 正在载入系统全量词库: {:?}", p);
+            let load_start = Instant::now();
+            if let Ok(t) = LexiconTable::load_binary(p) {
+                println!(
+                    "  -> 词库载入完成，耗时: {:.2} ms",
+                    load_start.elapsed().as_secs_f64() * 1000.0
+                );
+                resolved_table = Some(t);
+                break;
+            }
+        }
+    }
 
-    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+    let mut engine = if let Some(table) = resolved_table {
+        AlgoEngine::new(table, AlgoConfig::default())
+    } else {
+        println!("[提示] 未在系统中找到 base.dict.bin，使用示例内置词库进行端到端性能压测。");
+        AlgoEngine::with_sample_data(AlgoConfig::default())
+    };
     let renderer = CandidateBoxRenderer::new(UiTheme::light());
 
     // 预热 (Warm-up 500 次)
