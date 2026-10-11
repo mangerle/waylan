@@ -154,7 +154,7 @@ impl Dispatch<ZwlrLayerShellV1, ()> for WaylanV1Session {
 // 为 zwlr_layer_surface_v1 实现 Dispatch
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylanV1Session {
     fn event(
-        _state: &mut Self,
+        state: &mut Self,
         proxy: &ZwlrLayerSurfaceV1,
         event: <ZwlrLayerSurfaceV1 as wayland_client::Proxy>::Event,
         _data: &(),
@@ -165,7 +165,10 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylanV1Session {
             LayerSurfaceEvent::Configure { serial, .. } => {
                 proxy.ack_configure(serial);
             }
-            LayerSurfaceEvent::Closed => {}
+            LayerSurfaceEvent::Closed => {
+                log::info!("[V1会话] 图层表面 (LayerSurface) 已被合成器关闭，重置表面句柄。");
+                state.layer_surface = None;
+            }
             _ => {}
         }
     }
