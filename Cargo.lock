@@ -3387,6 +3387,7 @@ dependencies = [
  "log",
  "serde",
  "signal-hook",
+ "tempfile",
  "toml",
  "waylan-algo",
  "waylan-core",
@@ -3411,6 +3412,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "rustix 0.38.44",
+ "signal-hook",
  "tempfile",
  "waylan-algo",
  "waylan-core",
