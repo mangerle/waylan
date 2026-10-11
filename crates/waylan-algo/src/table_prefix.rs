@@ -18,7 +18,7 @@ impl LexiconTable {
 
         if prefix_syllables.is_empty() {
             for &syl in matched_syllables {
-                if let Some(matches) = self.get_raw_entries(syl) {
+                if let Some(matches) = self.get_top_raw_entries(syl, 8) {
                     for (text, score) in matches {
                         if text.chars().count() == 1 {
                             candidates.push(
@@ -37,7 +37,7 @@ impl LexiconTable {
                 full_key.push_str(&prefix_key);
                 full_key.push('\'');
                 full_key.push_str(syl);
-                if let Some(matches) = self.get_raw_entries(&full_key) {
+                if let Some(matches) = self.get_top_raw_entries(&full_key, 8) {
                     for (text, score) in matches {
                         let char_len = text.chars().count() as u32;
                         let boost = char_len.saturating_sub(1).saturating_mul(600_000);

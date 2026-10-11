@@ -11,7 +11,8 @@ impl PrismFuzzy {
         }
 
         // 1. 收集声母等价变体（含原切片自身）
-        let mut init_variants = vec![slice.to_string()];
+        let mut init_variants = Vec::with_capacity(4);
+        init_variants.push(slice.to_string());
 
         if fuzzy.z_zh {
             if let Some(rest) = slice.strip_prefix("zh") {
@@ -56,10 +57,11 @@ impl PrismFuzzy {
             }
         }
 
-        // 2. 在声母变体基础上叠加韵母等价变体
-        let mut all_variants = Vec::new();
+        // 2. 在声母变体基础上叠加韵母等价变体（仅按需分配变体字符串，避免无谓克隆）
+        let mut all_variants = Vec::with_capacity(4);
+        let mut final_cands = Vec::with_capacity(3);
         for v in init_variants {
-            let mut final_cands = vec![v.clone()];
+            final_cands.clear();
             if fuzzy.an_ang {
                 if let Some(stem) = v.strip_suffix("ang") {
                     final_cands.push(format!("{}an", stem));
@@ -82,7 +84,10 @@ impl PrismFuzzy {
                 }
             }
 
-            for cand in final_cands {
+            if v != slice && is_valid_syllable(&v) && !all_variants.contains(&v) {
+                all_variants.push(v);
+            }
+            for cand in final_cands.drain(..) {
                 if cand != slice && is_valid_syllable(&cand) && !all_variants.contains(&cand) {
                     all_variants.push(cand);
                 }
@@ -101,9 +106,10 @@ impl PrismFuzzy {
             return Vec::new();
         }
 
-        let mut combos: Vec<Vec<String>> = vec![Vec::new()];
+        let mut combos: Vec<Vec<String>> = Vec::with_capacity(16);
+        combos.push(Vec::with_capacity(syllables.len()));
         for syl in syllables {
-            let mut syl_options = Vec::new();
+            let mut syl_options = Vec::with_capacity(4);
             if is_valid_syllable(syl) {
                 syl_options.push(syl.clone());
             }
@@ -116,13 +122,22 @@ impl PrismFuzzy {
                 syl_options.push(syl.clone());
             }
 
-            let mut next_combos = Vec::new();
+            if syl_options.len() == 1 {
+                let single_opt = &syl_options[0];
+                for prefix in &mut combos {
+                    prefix.push(single_opt.clone());
+                }
+                continue;
+            }
+
+            let mut next_combos = Vec::with_capacity(16);
             for prefix in &combos {
                 for opt in &syl_options {
                     if next_combos.len() >= 16 {
                         break;
                     }
-                    let mut next = prefix.clone();
+                    let mut next = Vec::with_capacity(syllables.len());
+                    next.extend_from_slice(prefix);
                     next.push(opt.clone());
                     next_combos.push(next);
                 }

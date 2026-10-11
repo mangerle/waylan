@@ -1,7 +1,7 @@
 use crate::custom_phrase::AuxiliaryDict;
 use crate::error::AlgoError;
 use crate::user_adaptive::UserAdaptiveModel;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -131,13 +131,18 @@ impl DictBuilder {
         })
     }
 
-    /// 从多个文本词库源编译生成全新的 DAT 一体化零拷贝紧凑二进制词库文件 (WAYLAN_COMPACT02)
+    /// 构建包含英文补全与表情符号的辅助词典二进制文件
     pub fn build_auxiliary_dict<P: AsRef<Path>, Q: AsRef<Path>, R: AsRef<Path>>(
         en_paths: &[P],
         sym_paths: &[Q],
         output_path: R,
     ) -> Result<AuxiliaryDict, AlgoError> {
         let mut dict = AuxiliaryDict::with_default_data();
+        let mut seen_en: HashSet<String> = dict
+            .english_words
+            .iter()
+            .map(|(w, _)| w.to_lowercase())
+            .collect();
 
         // 若提供了外部英文词库，增量解析合并
         for path in en_paths {
@@ -170,12 +175,7 @@ impl DictBuilder {
                             } else {
                                 50_000
                             };
-                            let word_lower = word.to_lowercase();
-                            if !dict
-                                .english_words
-                                .iter()
-                                .any(|(w, _)| w.to_lowercase() == word_lower)
-                            {
+                            if seen_en.insert(word.to_lowercase()) {
                                 dict.english_words.push((word.to_string(), score));
                             }
                         }
