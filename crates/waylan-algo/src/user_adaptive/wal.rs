@@ -85,6 +85,11 @@ impl UserAdaptiveModel {
         let py_bytes = pinyin.as_bytes();
         let text_bytes = text.as_bytes();
         if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
+            warn!(
+                "待写入的用户词条长度超过 65535 字节上限，跳过写入: py_len={}, text_len={}",
+                py_bytes.len(),
+                text_bytes.len()
+            );
             return Ok(());
         }
         let py_len = py_bytes.len() as u16;
@@ -306,6 +311,17 @@ impl UserAdaptiveModel {
         }
         let temp_path = path_ref.with_extension("wal.tmp");
 
+        struct TempFileGuard<'a>(&'a Path, bool);
+        impl<'a> Drop for TempFileGuard<'a> {
+            fn drop(&mut self) {
+                if !self.1 {
+                    let _ = std::fs::remove_file(self.0);
+                }
+            }
+        }
+
+        let mut guard = TempFileGuard(&temp_path, false);
+
         {
             let mut file =
                 File::create(&temp_path).map_err(|e| AlgoError::UserDictPersistFailed {
@@ -358,6 +374,9 @@ impl UserAdaptiveModel {
             path: PathBuf::from(path_ref),
             source: e,
         })?;
+
+        // 成功完成原子重命名后解除守卫删除
+        guard.1 = true;
 
         Ok(())
     }
