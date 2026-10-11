@@ -91,6 +91,16 @@ impl AppConfig {
         }
     }
 
+    /// 获取无 HOME 环境下的受控运行时回退目录（优先 XDG_RUNTIME_DIR/waylan，其次系统临时目录 /tmp/waylan）
+    fn fallback_runtime_dir() -> PathBuf {
+        if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR") {
+            if !runtime_dir.trim().is_empty() {
+                return PathBuf::from(runtime_dir).join("waylan");
+            }
+        }
+        env::temp_dir().join("waylan")
+    }
+
     /// 获取用户默认配置路径 (~/.config/waylan/config.toml)
     pub fn config_path() -> Option<PathBuf> {
         if let Ok(custom_path) = env::var("WAYLAN_CONFIG_PATH") {
@@ -103,13 +113,15 @@ impl AppConfig {
                     .join("config.toml"),
             );
         }
-        let home = env::var("HOME").ok()?;
-        Some(
-            PathBuf::from(home)
-                .join(".config")
-                .join("waylan")
-                .join("config.toml"),
-        )
+        if let Ok(home) = env::var("HOME") {
+            return Some(
+                PathBuf::from(home)
+                    .join(".config")
+                    .join("waylan")
+                    .join("config.toml"),
+            );
+        }
+        Some(Self::fallback_runtime_dir().join("config.toml"))
     }
 
     /// 获取符合 XDG 规范的用户词库文件存储路径 (~/.local/share/waylan/user_dict.bin)
@@ -130,7 +142,7 @@ impl AppConfig {
                 .join("waylan")
                 .join("user_dict.bin");
         }
-        PathBuf::from("data/user_dict.bin")
+        Self::fallback_runtime_dir().join("user_dict.bin")
     }
 
     /// 获取默认系统基础词库的多级查找路径（环境变量 -> 用户数据目录 -> 系统公共目录 -> 相对路径）
@@ -180,7 +192,7 @@ impl AppConfig {
                 .join("waylan")
                 .join("aux.dict.bin");
         }
-        PathBuf::from("data/aux.dict.bin")
+        Self::fallback_runtime_dir().join("aux.dict.bin")
     }
 
     /// 获取辅助与混输词库（英文与符号表情）的多级查找路径
@@ -337,5 +349,15 @@ mod tests {
             .save_to_file(&temp_file)
             .expect("应能保存至文件");
         assert!(temp_file.exists());
+    }
+
+    #[test]
+    fn test_fallback_runtime_dir_is_absolute() {
+        let fallback = AppConfig::fallback_runtime_dir();
+        assert!(
+            fallback.is_absolute(),
+            "无 HOME 回退目录必须为绝对路径，避免工作目录只读导致落盘失败"
+        );
+        assert!(fallback.ends_with("waylan"));
     }
 }
