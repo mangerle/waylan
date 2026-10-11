@@ -1,6 +1,6 @@
 /// 将字节偏移安全对齐到不大于 `idx` 的合法 UTF-8 字符边界
 #[inline]
-fn clamp_char_boundary_floor(text: &str, idx: usize) -> usize {
+pub(crate) fn clamp_char_boundary_floor(text: &str, idx: usize) -> usize {
     let mut pos = idx.min(text.len());
     while pos > 0 && !text.is_char_boundary(pos) {
         pos -= 1;
@@ -10,7 +10,7 @@ fn clamp_char_boundary_floor(text: &str, idx: usize) -> usize {
 
 /// 将字节偏移安全对齐到不小于 `idx` 的合法 UTF-8 字符边界
 #[inline]
-fn clamp_char_boundary_ceil(text: &str, idx: usize) -> usize {
+pub(crate) fn clamp_char_boundary_ceil(text: &str, idx: usize) -> usize {
     let len = text.len();
     let mut pos = idx.min(len);
     while pos < len && !text.is_char_boundary(pos) {

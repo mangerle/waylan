@@ -111,6 +111,8 @@ pub struct PunctuationProcessor {
     pub protect_digits_punctuation: bool,
     /// 是否开启成对括号与引号自动补全并回退光标
     pub auto_complete_pairs: bool,
+    /// 最近提交或输入的上下文文本缓存（用于无外部应用上下文时感知网址与邮箱模式）
+    pub recent_context: String,
 }
 
 impl Default for PunctuationProcessor {
@@ -122,6 +124,7 @@ impl Default for PunctuationProcessor {
             slash_to_dunhao: true,
             protect_digits_punctuation: true,
             auto_complete_pairs: true,
+            recent_context: String::with_capacity(128),
         }
     }
 }
@@ -144,6 +147,7 @@ impl PunctuationProcessor {
             slash_to_dunhao,
             protect_digits_punctuation,
             auto_complete_pairs,
+            recent_context: String::with_capacity(128),
         }
     }
 
@@ -158,12 +162,24 @@ impl PunctuationProcessor {
         self.last_char_was_digit = false;
         self.double_quote_open = false;
         self.single_quote_open = false;
+        self.recent_context.clear();
     }
 
-    /// 记录外部提交动作以更新上下文状态（维护数字状态与成对引号开闭状态）
+    /// 记录外部提交动作以更新上下文状态（维护数字状态、最近输入上下文与成对引号开闭状态）
     pub fn record_commit(&mut self, text: &str) {
         if let Some(last_ch) = text.chars().last() {
             self.last_char_was_digit = last_ch.is_ascii_digit();
+        }
+        self.recent_context.push_str(text);
+        if self.recent_context.len() > 128 {
+            let keep_start = self.recent_context.len().saturating_sub(64);
+            let safe_start = self
+                .recent_context
+                .char_indices()
+                .map(|(i, _)| i)
+                .find(|&i| i >= keep_start)
+                .unwrap_or(0);
+            self.recent_context = self.recent_context[safe_start..].to_string();
         }
         for ch in text.chars() {
             match ch {
@@ -176,23 +192,48 @@ impl PunctuationProcessor {
         }
     }
 
-    /// 检查输入缓冲区是否属于网址模式或邮箱模式
+    /// 检查输入缓冲区或上下文前缀是否属于网址模式或邮箱模式
     pub fn is_url_or_email_mode(buffer: &str) -> bool {
-        let lower = buffer.to_lowercase();
-        lower.starts_with("http://")
+        let trimmed = buffer.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        let lower = trimmed.to_lowercase();
+        lower.contains("://")
+            || lower.starts_with("http://")
             || lower.starts_with("https://")
             || lower.starts_with("ftp://")
+            || lower.starts_with("file://")
             || lower.starts_with("www.")
+            || lower.contains("www.")
             || lower.starts_with("git@")
             || lower.contains('@')
+            || lower.ends_with("http")
+            || lower.ends_with("https")
+            || lower.ends_with("ftp")
+            || lower.ends_with("http:")
+            || lower.ends_with("https:")
+            || lower.ends_with("ftp:")
+            || lower.ends_with("http:/")
+            || lower.ends_with("https:/")
+            || lower.ends_with("ftp:/")
+            || lower.ends_with("www")
+            || lower.ends_with(".com")
+            || lower.ends_with(".cn")
+            || lower.ends_with(".org")
+            || lower.ends_with(".net")
+            || lower.ends_with(".io")
+            || lower.ends_with(".edu")
+            || lower.ends_with(".gov")
     }
 
-    /// 尝试处理标点符号输入（兼容无缓冲区上下文接口）
+    /// 尝试处理标点符号输入（自动从内置 recent_context 获取上下文）
     pub fn process_punctuation(&mut self, ch: char) -> Option<Vec<TextAction>> {
-        self.process_punctuation_with_context(ch, "")
+        let ctx = self.recent_context.clone();
+        self.process_punctuation_with_context(ch, &ctx)
     }
 
-    /// 结合当前输入缓冲区上下文处理标点符号输入
+    /// 结合当前输入缓冲区或应用上下文处理标点符号输入
     pub fn process_punctuation_with_context(
         &mut self,
         ch: char,

@@ -39,7 +39,17 @@ impl AlgoEngine {
             }
         }
 
-        // 2. 动态扩展功能（日期、时间、干支等）注入：插入到第 2 位（仅次于首选常规成词）
+        // 2. 收集扩展项（动态日期时间、用户自定义短语、英文单词联想、符号表情）
+        let mut extensions: Vec<AlgoCandidate> = Vec::new();
+
+        // 2.1 用户自定义短语（最高优先级，标记为 ProtectedEntity 置顶）
+        let phrase_cands = self.custom_phrases.lookup(raw_input);
+        for mut phrase in phrase_cands {
+            phrase.tier = CandidateTier::ProtectedEntity;
+            extensions.push(phrase);
+        }
+
+        // 2.2 动态扩展功能（日期、时间、干支等强相关功能卡片）
         if let Some(mut dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
             if self.config.traditional_chinese {
                 dynamic_cand.text = self.opencc_dict.convert_text(&dynamic_cand.text);
@@ -47,36 +57,53 @@ impl AlgoEngine {
                     *sub = self.opencc_dict.convert_text(sub);
                 }
             }
-            let insert_pos = if candidates.is_empty() { 0 } else { 1 };
-            candidates.insert(insert_pos, dynamic_cand);
+            extensions.push(dynamic_cand);
         }
 
-        // 3. 英文单词联想注入（如输入 rust、github、apple 等在次位提供英文候选）
+        // 2.3 英文单词联想（次要辅助建议，至多取 1 项避免污染候选列表）
         let eng_cands = self.english_suggester.lookup(raw_input);
-        for eng in eng_cands.into_iter().rev() {
+        for eng in eng_cands.into_iter().take(1) {
             if !candidates
                 .iter()
                 .any(|c| c.text.eq_ignore_ascii_case(&eng.text))
             {
-                let pos = if candidates.is_empty() { 0 } else { 1 };
-                candidates.insert(pos, eng);
+                extensions.push(eng);
             }
         }
 
-        // 4. 符号与表情联想注入（如输入 dianzan、daxiao 等在次位提供符号候选）
+        // 2.4 符号与表情联想（次要辅助建议，至多取 1 项）
         let sym_cands = self.symbol_suggester.lookup(raw_input);
-        for sym in sym_cands.into_iter().rev() {
-            let pos = if candidates.is_empty() { 0 } else { 1 };
-            candidates.insert(pos, sym);
+        for sym in sym_cands.into_iter().take(1) {
+            if !candidates.iter().any(|c| c.text == sym.text) {
+                extensions.push(sym);
+            }
         }
 
-        // 5. 用户自定义短语注入（如输入 mymail、addr 等置顶首位）
-        let phrase_cands = self.custom_phrases.lookup(raw_input);
-        for phrase in phrase_cands.into_iter().rev() {
-            candidates.insert(0, phrase);
+        // 3. 按照确定的语义层级编排扩展候选，杜绝多个扩展项连续 insert(1) 暴力覆盖挤出中文最优词
+        for ext in extensions {
+            if ext.tier == CandidateTier::ProtectedEntity {
+                // 自定义短语置顶
+                candidates.retain(|c| c.text != ext.text);
+                candidates.insert(0, ext);
+            } else if ext.is_expandable {
+                // 动态日期/时间功能项：若已有候选项，插入到 index 1（紧随首选常规成词），否则置顶
+                candidates.retain(|c| !(c.text == ext.text && c.is_expandable));
+                let insert_pos = if candidates.is_empty() { 0 } else { 1 };
+                candidates.insert(insert_pos, ext);
+            } else {
+                // 英文联想与符号表情等辅助备选项：
+                // 排在核心成词与动态功能之后（至少在 index 2 或末尾），确保首选与次选中文成词不受挤压
+                candidates.retain(|c| c.text != ext.text);
+                let insert_pos = if candidates.len() <= 1 {
+                    candidates.len()
+                } else {
+                    2.min(candidates.len())
+                };
+                candidates.insert(insert_pos, ext);
+            }
         }
 
-        // 6. 前缀高频短词混排注入（支持长句分段确认 Partial Commit）
+        // 4. 前缀高频短词混排注入（支持长句分段确认 Partial Commit）
         if let Some(best_path) = paths.first() {
             self.inject_prefix_segment_candidates(best_path, candidates);
         }

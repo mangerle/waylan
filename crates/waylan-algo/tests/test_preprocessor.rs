@@ -198,3 +198,41 @@ fn test_ctrl_toggle_and_punctuation_options() {
         Some(vec![TextAction::Commit("’".to_string())])
     );
 }
+
+#[test]
+fn test_url_and_email_context_punctuation() {
+    let mut pp = PunctuationProcessor::new();
+
+    // 当用户输入 https 并提交后，后续冒号与斜杠应保持半角直通
+    pp.record_commit("https");
+    assert_eq!(
+        pp.process_punctuation(':'),
+        Some(vec![TextAction::Commit(":".to_string())])
+    );
+    pp.record_commit(":");
+    assert_eq!(
+        pp.process_punctuation('/'),
+        Some(vec![TextAction::Commit("/".to_string())])
+    );
+    pp.record_commit("/");
+    assert_eq!(
+        pp.process_punctuation('/'),
+        Some(vec![TextAction::Commit("/".to_string())])
+    );
+
+    // 当用户输入 www 后，后续句点应保持半角直通
+    pp.reset();
+    pp.record_commit("www");
+    assert_eq!(
+        pp.process_punctuation('.'),
+        Some(vec![TextAction::Commit(".".to_string())])
+    );
+
+    // 当用户输入邮箱前缀后，后续句点应保持半角直通
+    pp.reset();
+    pp.record_commit("developer@gmail");
+    assert_eq!(
+        pp.process_punctuation('.'),
+        Some(vec![TextAction::Commit(".".to_string())])
+    );
+}

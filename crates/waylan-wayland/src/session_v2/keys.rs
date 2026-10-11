@@ -56,15 +56,33 @@ pub fn process_composition_key(
 pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool, Option<String>)> {
     // 中文模式下的智能标点符号拦截（含 Shift 组合标点，如 !?$^_()""<>{}:~）
     if let Some(punct_char) = keycode_to_punctuation_with_shift(key, session.is_shift_active()) {
-        if let Some(actions) = session
-            .punctuation_processor
-            .process_punctuation(punct_char)
-        {
+        // 优先从 surrounding_text 提取光标前文本作为上下文（至多截取 64 字节并安全对齐 UTF-8 字符边界）
+        let context_buf = session.surrounding_text.as_ref().map(|(text, cursor, _)| {
+            let cursor_idx = (*cursor as usize).min(text.len());
+            let safe_cursor =
+                crate::session_v2::surrounding::clamp_char_boundary_floor(text, cursor_idx);
+            let start = safe_cursor.saturating_sub(64);
+            let safe_start = crate::session_v2::surrounding::clamp_char_boundary_ceil(text, start);
+            text[safe_start..safe_cursor].to_string()
+        });
+
+        let actions_opt = if let Some(ref ctx) = context_buf {
+            session
+                .punctuation_processor
+                .process_punctuation_with_context(punct_char, ctx)
+        } else {
+            session
+                .punctuation_processor
+                .process_punctuation(punct_char)
+        };
+
+        if let Some(actions) = actions_opt {
             let mut committed_out = None;
             for action in actions {
                 match action {
                     TextAction::Commit(text) => {
                         session.commit_text(&text);
+                        session.punctuation_processor.record_commit(&text);
                         committed_out = Some(text);
                     }
                     TextAction::MoveCursor(offset) => {
