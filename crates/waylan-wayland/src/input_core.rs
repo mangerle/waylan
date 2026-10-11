@@ -56,36 +56,36 @@ pub fn keycode_to_char_with_layout(keycode: u32, layout: &KeymapLayout) -> Optio
     layout.get_char(keycode)
 }
 
-/// 将扫描码转换为 1-indexed 选词序号（1..=9 对应 1..=9 号候选，0 对应第 10 号候选）
+/// 将扫描码转换为 1-indexed 选词序号（1..=9 对应 1..=9 号候选，0 对应第 10 号候选，支持主键盘与小键盘）
 pub fn keycode_to_digit(keycode: u32) -> Option<usize> {
     match keycode {
-        KEY_1 => Some(1),
-        KEY_2 => Some(2),
-        KEY_3 => Some(3),
-        KEY_4 => Some(4),
-        KEY_5 => Some(5),
-        KEY_6 => Some(6),
-        KEY_7 => Some(7),
-        KEY_8 => Some(8),
-        KEY_9 => Some(9),
-        KEY_0 => Some(10),
+        KEY_1 | KEY_KP1 => Some(1),
+        KEY_2 | KEY_KP2 => Some(2),
+        KEY_3 | KEY_KP3 => Some(3),
+        KEY_4 | KEY_KP4 => Some(4),
+        KEY_5 | KEY_KP5 => Some(5),
+        KEY_6 | KEY_KP6 => Some(6),
+        KEY_7 | KEY_KP7 => Some(7),
+        KEY_8 | KEY_KP8 => Some(8),
+        KEY_9 | KEY_KP9 => Some(9),
+        KEY_0 | KEY_KP0 => Some(10),
         _ => None,
     }
 }
 
-/// 将主键盘数字键扫描码转换为对应的 ASCII 数字字符 ('0'..='9')
+/// 将数字键扫描码转换为对应的 ASCII 数字字符 ('0'..='9')，支持主键盘与小键盘
 pub fn keycode_to_ascii_digit_char(keycode: u32) -> Option<char> {
     match keycode {
-        KEY_1 => Some('1'),
-        KEY_2 => Some('2'),
-        KEY_3 => Some('3'),
-        KEY_4 => Some('4'),
-        KEY_5 => Some('5'),
-        KEY_6 => Some('6'),
-        KEY_7 => Some('7'),
-        KEY_8 => Some('8'),
-        KEY_9 => Some('9'),
-        KEY_0 => Some('0'),
+        KEY_1 | KEY_KP1 => Some('1'),
+        KEY_2 | KEY_KP2 => Some('2'),
+        KEY_3 | KEY_KP3 => Some('3'),
+        KEY_4 | KEY_KP4 => Some('4'),
+        KEY_5 | KEY_KP5 => Some('5'),
+        KEY_6 | KEY_KP6 => Some('6'),
+        KEY_7 | KEY_KP7 => Some('7'),
+        KEY_8 | KEY_KP8 => Some('8'),
+        KEY_9 | KEY_KP9 => Some('9'),
+        KEY_0 | KEY_KP0 => Some('0'),
         _ => None,
     }
 }
@@ -183,7 +183,7 @@ pub fn handle_composition_key(
             engine.prev_expanded_item(sel);
             return Some(KeyProcessAction::Handled);
         }
-        if key == KEY_ENTER || key == KEY_SPACE {
+        if key == KEY_ENTER || key == KEY_KPENTER || key == KEY_SPACE {
             if let Some((committed, _)) =
                 engine.select_expanded_item(sel, engine.expanded_selected_index)
             {
@@ -242,8 +242,8 @@ pub fn handle_composition_key(
         }
     }
 
-    // 5. 回车键（Enter）：直接上屏原始未转换的拼音英文字母
-    if key == KEY_ENTER {
+    // 5. 回车键（Enter / 小键盘 Enter）：直接上屏原始未转换的拼音英文字母
+    if key == KEY_ENTER || key == KEY_KPENTER {
         let raw = engine.raw_input().to_string();
         engine.reset();
         return Some(KeyProcessAction::Commit(raw));

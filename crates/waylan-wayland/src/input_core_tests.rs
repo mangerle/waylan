@@ -12,7 +12,15 @@ fn test_keycode_conversions() {
     assert_eq!(keycode_to_digit(KEY_0), Some(10));
     assert_eq!(keycode_to_digit(KEY_ESC), None);
 
+    // 小键盘数字键码映射
+    assert_eq!(keycode_to_digit(KEY_KP1), Some(1));
+    assert_eq!(keycode_to_digit(KEY_KP5), Some(5));
+    assert_eq!(keycode_to_digit(KEY_KP9), Some(9));
+    assert_eq!(keycode_to_digit(KEY_KP0), Some(10));
+
     assert_eq!(keycode_to_ascii_digit_char(KEY_0), Some('0'));
+    assert_eq!(keycode_to_ascii_digit_char(KEY_KP0), Some('0'));
+    assert_eq!(keycode_to_ascii_digit_char(KEY_KP7), Some('7'));
     assert_eq!(keycode_to_punctuation(KEY_COMMA), Some(','));
     assert_eq!(keycode_to_punctuation_with_shift(KEY_1, true), Some('!'));
 }
@@ -130,5 +138,19 @@ fn test_handle_composition_key() {
     // 测试 ESC 清空
     let act = handle_composition_key(&mut engine, &mut punct, KEY_ESC, false, page_keys, 0);
     assert_eq!(act, Some(KeyProcessAction::Reset));
+    assert!(engine.raw_input().is_empty());
+
+    // 测试小键盘回车字母上屏
+    engine.push_char('h');
+    engine.push_char('a');
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_KPENTER, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Commit("ha".to_string())));
+    assert!(engine.raw_input().is_empty());
+
+    // 测试小键盘数字 1 选词上屏
+    engine.push_char('n');
+    engine.push_char('i');
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_KP1, false, page_keys, 0);
+    assert!(matches!(act, Some(KeyProcessAction::Commit(_))));
     assert!(engine.raw_input().is_empty());
 }

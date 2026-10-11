@@ -45,6 +45,25 @@ pub const KEY_RIGHTALT: u32 = 100;
 pub const KEY_LEFTMETA: u32 = 125;
 pub const KEY_RIGHTMETA: u32 = 126;
 
+/// 小键盘（Numpad）扫描码常量（对标 linux/input-event-codes.h）
+pub const KEY_KP7: u32 = 71;
+pub const KEY_KP8: u32 = 72;
+pub const KEY_KP9: u32 = 73;
+pub const KEY_KPMINUS: u32 = 74;
+pub const KEY_KP4: u32 = 75;
+pub const KEY_KP5: u32 = 76;
+pub const KEY_KP6: u32 = 77;
+pub const KEY_KPPLUS: u32 = 78;
+pub const KEY_KP1: u32 = 79;
+pub const KEY_KP2: u32 = 80;
+pub const KEY_KP3: u32 = 81;
+pub const KEY_KP0: u32 = 82;
+pub const KEY_KPDOT: u32 = 83;
+pub const KEY_KPENTER: u32 = 96;
+pub const KEY_KPSLASH: u32 = 98;
+pub const KEY_KPASTERISK: u32 = 55;
+pub const KEY_KPEQUAL: u32 = 117;
+
 /// 标准 XKB 修饰键位掩码常量
 pub const MOD_SHIFT: u32 = 1;
 pub const MOD_CTRL: u32 = 4;
