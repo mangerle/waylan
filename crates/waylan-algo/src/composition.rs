@@ -107,10 +107,23 @@ impl Composition {
         if consumed_chars_len >= self.raw_buffer.len() {
             self.clear();
         } else {
-            // 切除已上屏的前缀部分
-            let remaining = self.raw_buffer[consumed_chars_len..].to_string();
-            self.raw_buffer = remaining;
-            self.cursor_position = self.raw_buffer.len();
+            // 切除已上屏的前缀部分，防止非字符边界导致 panic
+            let safe_cut_len = if self.raw_buffer.is_char_boundary(consumed_chars_len) {
+                consumed_chars_len
+            } else {
+                // 若给定的字节偏移不是合法的 UTF-8 字符边界，寻找向后最近的字符边界；若无则清空
+                (consumed_chars_len..=self.raw_buffer.len())
+                    .find(|&idx| self.raw_buffer.is_char_boundary(idx))
+                    .unwrap_or(self.raw_buffer.len())
+            };
+
+            if safe_cut_len >= self.raw_buffer.len() {
+                self.clear();
+            } else {
+                let remaining = self.raw_buffer[safe_cut_len..].to_string();
+                self.raw_buffer = remaining;
+                self.cursor_position = self.raw_buffer.len();
+            }
         }
     }
 
@@ -181,5 +194,17 @@ mod tests {
         comp.consume_prefix(2);
         assert_eq!(comp.as_str(), "hao");
         assert_eq!(comp.cursor(), 3);
+    }
+
+    #[test]
+    fn test_consume_prefix_non_char_boundary_no_panic() {
+        let mut comp = Composition::new();
+        for ch in "测nihao".chars() {
+            comp.push_char(ch);
+        }
+        // "测" 是 3 字节 UTF-8，传入偏移 1 或 2 是非字符边界，断言不会 panic 且安全对齐
+        comp.consume_prefix(1);
+        assert_eq!(comp.as_str(), "nihao");
+        assert_eq!(comp.cursor(), 5);
     }
 }

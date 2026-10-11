@@ -284,7 +284,7 @@ impl AlgoEngine {
     fn compute_consumed_len(raw: &str, pinyin: &str) -> usize {
         if raw.starts_with(pinyin) {
             let mut len = pinyin.len();
-            if raw[len..].starts_with('\'') {
+            if raw.is_char_boundary(len) && raw[len..].starts_with('\'') {
                 len = len.saturating_add(1);
             }
             return len;
