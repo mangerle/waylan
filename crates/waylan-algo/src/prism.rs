@@ -105,9 +105,16 @@ impl PrismEngine {
         }
 
         // 判定是否属于正常击键流程：
-        // 1. 前驱音节全部属于完整标准音节或合法模糊音音节（无单字母辅音声母降级）；
+        // 1. 前驱音节全部属于完整标准音节或合法模糊音音节（无单字母辅音声母降级，且无夹在中间的孤立单字母元音碎切如 shi'o'hu）；
         // 2. 末尾闭合（remaining 为空）或处于合法音节前缀键入中（如 "bei" + "j"）
         let is_normal_typing = paths.iter().any(|p| {
+            let has_mid_single_vowel = p.syllables.len() >= 3
+                && p.syllables[1..]
+                    .iter()
+                    .any(|s| matches!(s.as_str(), "a" | "o" | "e"));
+            if has_mid_single_vowel {
+                return false;
+            }
             let all_prev_valid = p.syllables.iter().all(|s| {
                 (is_valid_syllable(s) || PrismFuzzy::is_fuzzy_valid(s, fuzzy))
                     && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e"))
@@ -247,41 +254,13 @@ impl PrismEngine {
             }
         }
 
-        // 1.3 容错虚边：相邻按键倒置（Adjacent Transpose，如 cehng -> cheng, shiohu -> shihou）
-        // 防候选词爆炸：仅在第二阶段（enable_typo=true）且单路径未曾容错时探索
+        // 1.3 容错虚边：相邻按键倒置（支持音节内 (0,1)..=(4,5) 交换与跨音节边界交换）
         if ctx.enable_typo
             && typo_count == 0
             && start + 1 < ctx.input.len()
             && ctx.results.len() < 48
         {
-            let bytes = ctx.input.as_bytes();
-            let rem_bytes = &bytes[start..];
-
-            // 尝试互换相邻索引 (0, 1) 或 (1, 2)
-            let swap_pairs = if rem_bytes.len() >= 3 {
-                vec![(0, 1), (1, 2)]
-            } else {
-                vec![(0, 1)]
-            };
-
-            for (idx1, idx2) in swap_pairs {
-                if !rem_bytes[idx1].is_ascii_alphabetic() || !rem_bytes[idx2].is_ascii_alphabetic()
-                {
-                    continue;
-                }
-                let mut swapped = Vec::from(rem_bytes);
-                swapped.swap(idx1, idx2);
-                if let Ok(swapped_str) = str::from_utf8(&swapped) {
-                    let swapped_matches = fsa.match_syllables(swapped_str, 0);
-                    for &(std_syl, len) in swapped_matches.iter().rev() {
-                        if len > idx2 && ctx.input.is_char_boundary(start + len) {
-                            ctx.current.push(std_syl.to_string());
-                            Self::dfs_dag(ctx, start + len, current_cost + 10 + 16, 1);
-                            ctx.current.pop();
-                        }
-                    }
-                }
-            }
+            Self::explore_transpose_typo(ctx, start, current_cost, fsa);
         }
 
         // 1.4 容错虚边：物理键盘紧邻按键高斯误触与常见韵母规则纠错（如 nihso -> nihao, zhegn -> zheng）
@@ -344,6 +323,53 @@ impl PrismEngine {
                     cost: current_cost + 50,
                     is_typo: typo_count > 0,
                 });
+            }
+        }
+    }
+
+    /// 探索相邻字母交换容错路径（覆盖单音节内 (0,1)..=(4,5) 交换及跨音节边界首尾字母倒置）
+    fn explore_transpose_typo(
+        ctx: &mut DfsContext<'_>,
+        start: usize,
+        current_cost: u32,
+        fsa: &PrismFsa,
+    ) {
+        const SWAP_PAIRS: [(usize, usize); 5] = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)];
+        let rem_bytes = &ctx.input.as_bytes()[start..];
+
+        for &(idx1, idx2) in &SWAP_PAIRS {
+            if idx2 >= rem_bytes.len() {
+                break;
+            }
+            if !rem_bytes[idx1].is_ascii_alphabetic() || !rem_bytes[idx2].is_ascii_alphabetic() {
+                continue;
+            }
+            let mut swapped = Vec::from(rem_bytes);
+            swapped.swap(idx1, idx2);
+            let Ok(swapped_str) = str::from_utf8(&swapped) else {
+                continue;
+            };
+            let swapped_matches = fsa.match_syllables(swapped_str, 0);
+            for &(std_syl, len) in swapped_matches.iter().rev() {
+                if len > idx2 && ctx.input.is_char_boundary(start + len) {
+                    // 音节内部相邻字母倒置（如 cehng -> cheng, zhuagn -> zhuang）
+                    ctx.current.push(std_syl.to_string());
+                    Self::dfs_dag(ctx, start + len, current_cost + 10 + 16, 1);
+                    ctx.current.pop();
+                } else if len == idx2 {
+                    // 跨音节边界相邻字母倒置（前音节末尾 idx1 与后音节开头 idx2 互换，如 nhiao -> ni'hao, shhiou -> shi'hou）
+                    let next_matches = fsa.match_syllables(swapped_str, len);
+                    for &(next_syl, next_len) in next_matches.iter().rev() {
+                        let total_len = len + next_len;
+                        if ctx.input.is_char_boundary(start + total_len) {
+                            ctx.current.push(std_syl.to_string());
+                            ctx.current.push(next_syl.to_string());
+                            Self::dfs_dag(ctx, start + total_len, current_cost + 20 + 16, 1);
+                            ctx.current.pop();
+                            ctx.current.pop();
+                        }
+                    }
+                }
             }
         }
     }
@@ -449,5 +475,45 @@ mod tests {
         // 混合拼音与中文的多字节输入应安全退化，不触发 Panic
         let mixed_paths = PrismEngine::build_paths("pin音测试", &fuzzy);
         assert!(!mixed_paths.is_empty());
+    }
+
+    #[test]
+    fn test_extended_transpose_and_cross_boundary_typo() {
+        let fuzzy = FuzzyConfig::default();
+
+        // 1. 长音节尾部倒置 (idx 4, 5): zhuagn -> zhuang
+        let zhuang_paths = PrismEngine::build_paths("zhuagn", &fuzzy);
+        assert!(
+            zhuang_paths
+                .iter()
+                .any(|p| p.to_key_string() == "zhuang" && p.is_typo),
+            "应支持长音节尾部 (4,5) 倒置纠错 zhuagn -> zhuang"
+        );
+
+        // 2. 跨音节边界首尾倒置: nhiao -> ni'hao, shhiou -> shi'hou
+        let nhiao_paths = PrismEngine::build_paths("nhiao", &fuzzy);
+        assert!(
+            nhiao_paths
+                .iter()
+                .any(|p| p.to_key_string() == "ni'hao" && p.is_typo),
+            "应支持跨音节边界倒置 nhiao -> ni'hao"
+        );
+
+        let shhiou_paths = PrismEngine::build_paths("shhiou", &fuzzy);
+        assert!(
+            shhiou_paths
+                .iter()
+                .any(|p| p.to_key_string() == "shi'hou" && p.is_typo),
+            "应支持跨音节边界倒置 shhiou -> shi'hou"
+        );
+
+        // 3. 第二音节开头倒置且被单字母元音伪装: shiohu -> shi'hou
+        let shiohu_paths = PrismEngine::build_paths("shiohu", &fuzzy);
+        assert!(
+            shiohu_paths
+                .iter()
+                .any(|p| p.to_key_string() == "shi'hou" && p.is_typo),
+            "应支持 shiohu -> shi'hou 倒置纠错"
+        );
     }
 }
