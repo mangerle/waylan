@@ -33,7 +33,12 @@ pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui:
                 if code.is_empty() || text.is_empty() {
                     app.phrase_status_message = Some("简写代码和展开内容均不能为空。".to_string());
                 } else {
-                    app.custom_phrases.push((code, text));
+                    if let Some(existing) = app.custom_phrases.iter_mut().find(|(c, _)| c == &code)
+                    {
+                        existing.1 = text;
+                    } else {
+                        app.custom_phrases.push((code, text));
+                    }
                     if let Err(e) = app.sync_custom_phrases() {
                         app.phrase_status_message = Some(e);
                     } else {
@@ -67,7 +72,7 @@ pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui:
                                     .strong()
                                     .color(Color32::from_rgb(5, 150, 105)),
                             );
-                            ui.label("➔");
+                            ui.label("->");
                             ui.label(text);
                             if ui.small_button("删除").clicked() {
                                 to_remove_idx = Some(idx);

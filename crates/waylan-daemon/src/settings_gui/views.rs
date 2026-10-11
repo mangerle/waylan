@@ -1,7 +1,12 @@
 use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 use eframe::egui::{self, Color32, RichText};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 外部导入文本词库最大允许字节数（64 MB），防止误导入超大文件触发 OOM
+const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 渲染常规设置标签页（包含候选外观、按键切换习惯与标点/算法特性）
 pub fn render_general_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut egui::Ui) {
@@ -124,10 +129,17 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
 
         ui.horizontal(|ui| {
             if ui.button("开始导入并增量合入").clicked() {
-                let path = Path::new(&app.import_file_path);
-                if !path.exists() {
+                let path = Path::new(app.import_file_path.trim());
+                if !path.is_file() {
                     app.import_status_message =
-                        Some("指定的词库文件不存在，请检查路径。".to_string());
+                        Some("指定的词库文件不存在或不是有效文件，请检查路径。".to_string());
+                } else if path
+                    .metadata()
+                    .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
+                    .unwrap_or(true)
+                {
+                    app.import_status_message =
+                        Some("词库文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
                 } else {
                     match waylan_algo::dict_importer::DictImporter::import_file(path) {
                         Ok(entries) => {
@@ -138,16 +150,26 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
                                     &user_dict_path,
                                 )
                                 .unwrap_or_default();
-                            let now = 1_700_000_000;
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(1_700_000_000);
                             for entry in &entries {
                                 user_model.record_commit(&entry.text, &entry.pinyin, now);
                             }
-                            let _ = user_model.compact_wal(&user_dict_path);
-                            app.user_dict_count = user_model.total_entries();
-                            app.import_status_message = Some(format!(
-                                "成功导入 {} 条词目，并已即时合入专属用户词库！",
-                                count
-                            ));
+                            match user_model.compact_wal(&user_dict_path) {
+                                Ok(()) => {
+                                    app.user_dict_count = user_model.total_entries();
+                                    app.import_status_message = Some(format!(
+                                        "成功导入 {} 条词目，并已即时合入专属用户词库！",
+                                        count
+                                    ));
+                                }
+                                Err(e) => {
+                                    app.import_status_message =
+                                        Some(format!("保存用户词库失败: {}", e));
+                                }
+                            }
                         }
                         Err(e) => {
                             app.import_status_message = Some(format!("导入词库失败: {}", e));
@@ -188,25 +210,58 @@ pub fn render_english_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
 
         ui.horizontal(|ui| {
             if ui.button("导入英文单词表").clicked() {
-                let path = Path::new(&app.english_import_path);
-                if !path.exists() {
+                let path = Path::new(app.english_import_path.trim());
+                if !path.is_file() {
                     app.english_status_message =
-                        Some("指定的英文词典文件不存在，请检查路径。".to_string());
+                        Some("指定的英文词典文件不存在或不是有效文件，请检查路径。".to_string());
+                } else if path
+                    .metadata()
+                    .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
+                    .unwrap_or(true)
+                {
+                    app.english_status_message =
+                        Some("英文词库文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
                 } else if let Ok(content) = fs::read_to_string(path) {
+                    let mut existing: HashSet<String> = app
+                        .aux_dict
+                        .english_words
+                        .iter()
+                        .map(|(w, _)| w.to_lowercase())
+                        .collect();
                     let mut added = 0;
+                    let mut in_yaml_header = false;
                     for line in content.lines() {
-                        let word = line.split('\t').next().unwrap_or("").trim().to_lowercase();
+                        let trimmed = line.trim();
+                        if trimmed == "---" {
+                            in_yaml_header = true;
+                            continue;
+                        }
+                        if trimmed == "..." {
+                            in_yaml_header = false;
+                            continue;
+                        }
+                        if in_yaml_header || trimmed.is_empty() || trimmed.starts_with('#') {
+                            continue;
+                        }
+                        let word = trimmed.split('\t').next().unwrap_or("").trim();
                         if !word.is_empty()
-                            && !app.aux_dict.english_words.iter().any(|(w, _)| w == &word)
+                            && word.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
+                            && existing.insert(word.to_lowercase())
                         {
-                            app.aux_dict.english_words.push((word, 50_000));
+                            app.aux_dict.english_words.push((word.to_string(), 50_000));
                             added += 1;
                         }
                     }
                     let aux_path = AppConfig::user_aux_dict_path();
-                    let _ = app.aux_dict.save_to_file(&aux_path);
-                    app.english_status_message =
-                        Some(format!("成功导入 {} 个新英文词汇并已更新！", added));
+                    match app.aux_dict.save_to_file(&aux_path) {
+                        Ok(()) => {
+                            app.english_status_message =
+                                Some(format!("成功导入 {} 个新英文词汇并已更新！", added));
+                        }
+                        Err(e) => {
+                            app.english_status_message = Some(format!("保存英文词库失败: {}", e));
+                        }
+                    }
                 } else {
                     app.english_status_message = Some("读取英文词库文件失败。".to_string());
                 }
@@ -246,10 +301,10 @@ pub fn render_symbols_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
             .max_height(140.0)
             .id_salt("symbols_preview_list")
             .show(ui, |ui| {
-                for (code, sym, desc) in &app.aux_dict.symbols {
+                for (code, sym, desc) in app.aux_dict.symbols.iter().take(200) {
                     ui.horizontal(|ui| {
                         ui.monospace(RichText::new(code).color(Color32::from_rgb(5, 150, 105)));
-                        ui.label("➔");
+                        ui.label("->");
                         ui.monospace(sym);
                         ui.label(format!("({})", desc));
                     });
@@ -270,11 +325,24 @@ pub fn render_symbols_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
 
         ui.horizontal(|ui| {
             if ui.button("导入符号映射表").clicked() {
-                let path = Path::new(&app.symbols_import_path);
-                if !path.exists() {
+                let path = Path::new(app.symbols_import_path.trim());
+                if !path.is_file() {
                     app.symbols_status_message =
-                        Some("指定的符号文件不存在，请检查路径。".to_string());
+                        Some("指定的符号文件不存在或不是有效文件，请检查路径。".to_string());
+                } else if path
+                    .metadata()
+                    .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
+                    .unwrap_or(true)
+                {
+                    app.symbols_status_message =
+                        Some("符号文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
                 } else if let Ok(content) = fs::read_to_string(path) {
+                    let mut existing: HashSet<(String, String)> = app
+                        .aux_dict
+                        .symbols
+                        .iter()
+                        .map(|(k, s, _)| (k.clone(), s.clone()))
+                        .collect();
                     let mut added = 0;
                     for line in content.lines() {
                         let trimmed = line.trim();
@@ -290,14 +358,22 @@ pub fn render_symbols_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
                             } else {
                                 "外部符号".to_string()
                             };
-                            app.aux_dict.symbols.push((key, sym, desc));
-                            added += 1;
+                            if existing.insert((key.clone(), sym.clone())) {
+                                app.aux_dict.symbols.push((key, sym, desc));
+                                added += 1;
+                            }
                         }
                     }
                     let aux_path = AppConfig::user_aux_dict_path();
-                    let _ = app.aux_dict.save_to_file(&aux_path);
-                    app.symbols_status_message =
-                        Some(format!("成功导入 {} 条符号映射并已更新！", added));
+                    match app.aux_dict.save_to_file(&aux_path) {
+                        Ok(()) => {
+                            app.symbols_status_message =
+                                Some(format!("成功导入 {} 条符号映射并已更新！", added));
+                        }
+                        Err(e) => {
+                            app.symbols_status_message = Some(format!("保存符号词库失败: {}", e));
+                        }
+                    }
                 } else {
                     app.symbols_status_message = Some("读取符号文件失败。".to_string());
                 }

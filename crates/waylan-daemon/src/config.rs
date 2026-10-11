@@ -33,6 +33,7 @@ pub enum PageKeys {
 
 /// 微澜输入法全局配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     /// 中英文切换按键
     pub switch_key: SwitchKey,
@@ -57,7 +58,6 @@ pub struct AppConfig {
     /// 是否默认输出繁体字
     pub traditional_chinese: bool,
     /// 是否开启中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）
-    #[serde(default)]
     pub auto_pangu_spacing: bool,
 }
 
@@ -81,6 +81,16 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// 校验并钳制配置参数边界，防止手工修改出非法数值引发除零或渲染异常
+    pub fn sanitize(&mut self) {
+        self.page_size = self.page_size.clamp(5, 9);
+        if !self.font_size.is_finite() {
+            self.font_size = 15.0;
+        } else {
+            self.font_size = self.font_size.clamp(12.0, 24.0);
+        }
+    }
+
     /// 获取用户默认配置路径 (~/.config/waylan/config.toml)
     pub fn config_path() -> Option<PathBuf> {
         if let Ok(custom_path) = env::var("WAYLAN_CONFIG_PATH") {
@@ -126,7 +136,7 @@ impl AppConfig {
     /// 获取默认系统基础词库的多级查找路径（环境变量 -> 用户数据目录 -> 系统公共目录 -> 相对路径）
     #[allow(dead_code)]
     pub fn base_dict_search_paths() -> Vec<PathBuf> {
-        let mut paths = Vec::new();
+        let mut paths = Vec::with_capacity(8);
         if let Ok(custom) = env::var("WAYLAN_DICT_PATH") {
             paths.push(PathBuf::from(custom));
         }
@@ -176,19 +186,20 @@ impl AppConfig {
     /// 获取辅助与混输词库（英文与符号表情）的多级查找路径
     #[allow(dead_code)]
     pub fn aux_dict_search_paths() -> Vec<PathBuf> {
-        let mut paths = vec![Self::user_aux_dict_path()];
-        paths.push(PathBuf::from("/usr/share/waylan/data/aux.dict.bin"));
-        paths.push(PathBuf::from("/usr/share/waylan/aux.dict.bin"));
-        paths.push(PathBuf::from("/usr/local/share/waylan/data/aux.dict.bin"));
-        paths.push(PathBuf::from("/usr/local/share/waylan/aux.dict.bin"));
-        paths.push(PathBuf::from("data/aux.dict.bin"));
-        paths
+        vec![
+            Self::user_aux_dict_path(),
+            PathBuf::from("/usr/share/waylan/data/aux.dict.bin"),
+            PathBuf::from("/usr/share/waylan/aux.dict.bin"),
+            PathBuf::from("/usr/local/share/waylan/data/aux.dict.bin"),
+            PathBuf::from("/usr/local/share/waylan/aux.dict.bin"),
+            PathBuf::from("data/aux.dict.bin"),
+        ]
     }
 
     /// 获取简繁转换词库（STPhrases + STCharacters）的多级查找路径
     #[allow(dead_code)]
     pub fn opencc_dict_search_paths() -> Vec<PathBuf> {
-        let mut paths = Vec::new();
+        let mut paths = Vec::with_capacity(8);
         if let Ok(custom) = env::var("WAYLAN_OPENCC_DICT_PATH") {
             paths.push(PathBuf::from(custom));
         }
@@ -222,14 +233,33 @@ impl AppConfig {
     pub fn load_or_create() -> Self {
         if let Some(path) = Self::config_path() {
             if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(cfg) = toml::from_str::<Self>(&content) {
-                        return cfg;
+                match fs::read_to_string(&path) {
+                    Ok(content) => match toml::from_str::<Self>(&content) {
+                        Ok(mut cfg) => {
+                            cfg.sanitize();
+                            return cfg;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[配置系统] 解析配置文件 {:?} 失败 ({})，将回退使用默认配置。",
+                                path,
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            "[配置系统] 读取配置文件 {:?} 失败 ({})，将回退使用默认配置。",
+                            path,
+                            e
+                        );
                     }
                 }
             } else {
                 let default_cfg = Self::default();
-                let _ = default_cfg.save_to_file(&path);
+                if let Err(e) = default_cfg.save_to_file(&path) {
+                    log::warn!("[配置系统] 初始化写入默认配置文件 {:?} 失败: {}", path, e);
+                }
                 return default_cfg;
             }
         }
@@ -237,6 +267,9 @@ impl AppConfig {
     }
 
     /// 保存配置到默认用户路径
+    ///
+    /// # Errors
+    /// 当无法确定用户配置目录或磁盘写入失败时返回错误。
     pub fn save_default(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(path) = Self::config_path() {
             self.save_to_file(&path)?;
@@ -247,6 +280,9 @@ impl AppConfig {
     }
 
     /// 保存配置到指定路径
+    ///
+    /// # Errors
+    /// 当目录创建失败、TOML 序列化失败或原子重命名失败时返回错误。
     pub fn save_to_file(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -254,21 +290,17 @@ impl AppConfig {
         let serialized = toml::to_string_pretty(self)?;
         // 使用原子写入：写入同目录临时文件，刷盘后原子 rename 覆盖目标文件
         let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
-        {
+        let write_res: std::io::Result<()> = (|| {
             use std::io::Write;
             let mut file = fs::File::create(&tmp_path)?;
             file.write_all(serialized.as_bytes())?;
             file.sync_all()?;
-        }
-        fs::rename(&tmp_path, path)?;
-        Ok(())
-    }
-
-    /// 保存配置到用户默认路径
-    #[allow(dead_code)]
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(path) = Self::config_path() {
-            self.save_to_file(&path)?;
+            fs::rename(&tmp_path, path)?;
+            Ok(())
+        })();
+        if let Err(e) = write_res {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e.into());
         }
         Ok(())
     }
