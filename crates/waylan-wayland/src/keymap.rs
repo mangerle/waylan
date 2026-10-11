@@ -17,6 +17,11 @@ impl Default for KeymapLayout {
 }
 
 impl KeymapLayout {
+    /// 使用显式字符映射表构造布局实例
+    pub fn new(char_map: HashMap<u32, char>) -> Self {
+        Self { char_map }
+    }
+
     /// 标准 QWERTY 布局默认映射
     pub fn qwerty() -> Self {
         let mut map = HashMap::with_capacity(32);

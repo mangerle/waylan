@@ -1,8 +1,7 @@
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
 use crate::session_v1::{
-    handle_composition_key, keycode_to_ascii_digit_char, keycode_to_char,
-    keycode_to_punctuation_with_shift, KeyProcessAction, WaylanV1Session, KEY_BACKSPACE, KEY_LEFT,
-    KEY_RIGHT, KEY_SPACE,
+    handle_composition_key, keycode_to_ascii_digit_char, keycode_to_punctuation_with_shift,
+    KeyProcessAction, WaylanV1Session, KEY_BACKSPACE, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
 };
 use log::info;
 use waylan_core::InputMode;
@@ -212,8 +211,8 @@ fn handle_v1_key_press(
         }
     }
 
-    // 5. 字母键输入（A-Z）：进入拼音算法管线
-    if let Some(ch) = keycode_to_char(key) {
+    // 5. 字母键输入（A-Z）：进入拼音算法管线（支持动态键盘布局）
+    if let Some(ch) = state.keymap_layout.get_char(key) {
         state.engine.push_char(ch);
         let preedit = state.engine.formatted_preedit();
         state.refresh_candidate_surface();

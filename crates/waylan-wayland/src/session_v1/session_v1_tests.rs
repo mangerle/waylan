@@ -58,3 +58,20 @@ fn test_v1_sync_atomic_state_and_mode_toggle() {
     session.sync_atomic_state();
     assert_eq!(session.mode, InputMode::Chinese);
 }
+
+#[test]
+fn test_v1_keymap_layout_dynamic_mapping() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let mut session = WaylanV1Session::with_engine(engine);
+
+    // 默认 QWERTY 布局下扫描码 16 (Q) 应映射为 'q'
+    assert_eq!(session.keymap_layout.get_char(16), Some('q'));
+    assert_eq!(session.keymap_layout.get_char(KEY_APOSTROPHE), Some('\''));
+
+    // 自定义动态布局：将扫描码 16 映射为 'x' (如自定义或 Dvorak 布局)
+    let mut custom_map = std::collections::HashMap::new();
+    custom_map.insert(16, 'x');
+    session.keymap_layout = KeymapLayout::new(custom_map);
+
+    assert_eq!(session.keymap_layout.get_char(16), Some('x'));
+}

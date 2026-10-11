@@ -247,6 +247,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let watched_paths = returned_session.watched_paths;
                 let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
                 session.surface_manager.renderer = renderer;
+                session.keymap_layout = returned_session.keymap_layout;
                 session.watched_paths = watched_paths;
                 session.last_watched_mtime = returned_session.last_watched_mtime;
                 session.shift_sm = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {

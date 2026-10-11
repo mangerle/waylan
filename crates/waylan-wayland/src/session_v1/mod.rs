@@ -71,6 +71,8 @@ pub struct WaylanV1Session {
     pub phys_mods: u8,
     /// 按键按下与释放对称消费跟踪器
     pub consumed_keys: ConsumedKeyTracker,
+    /// 物理按键与动态键位布局映射表（支持 Dvorak / Colemak 等动态布局）
+    pub keymap_layout: KeymapLayout,
     /// 与外部系统托盘共享的优雅退出请求标志
     pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -103,6 +105,7 @@ impl Default for WaylanV1Session {
             mods_depressed: 0,
             phys_mods: 0,
             consumed_keys: ConsumedKeyTracker::new(),
+            keymap_layout: KeymapLayout::default(),
             exit_requested: None,
         }
     }
