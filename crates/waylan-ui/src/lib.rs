@@ -27,7 +27,7 @@ mod tests {
 
         let pixmap = renderer.render(&state);
         assert!(pixmap.is_some(), "应该成功渲染出像素位图");
-        let pixmap = pixmap.unwrap();
+        let pixmap = pixmap.expect("候选框有效状态下应成功生成渲染位图");
         assert!(pixmap.width() > 0);
         assert!(pixmap.height() > 0);
     }

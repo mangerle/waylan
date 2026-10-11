@@ -269,6 +269,10 @@ impl CandidateBoxRenderer {
         .ceil()
         .clamp(1.0, 2048.0) as u32;
 
+        if canvas_w == 0 || canvas_h == 0 {
+            return None;
+        }
+
         let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
 
         draw_card_background_at(
