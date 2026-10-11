@@ -114,24 +114,38 @@ impl LexiconTable {
         })
     }
 
-    /// 查询二元词对统计转移亲和度加权得分
+    /// 反查词条的唯一整数 ID（纳秒级二分反查或哈希表索引）
     #[inline]
-    pub fn get_bigram_affinity(&self, prev: &str, curr: &str) -> Option<i64> {
-        if let Some(bg) = &self.compact_bigram {
-            // 优先从一体化底库快速反查 Word ID (纳秒级二分，零堆开销)
-            if let Some(compact) = &self.compact_mmap {
-                if let (Some(id1), Some(id2)) = (compact.get_id(prev), compact.get_id(curr)) {
-                    return bg.get_affinity_by_id(id1, id2);
-                }
+    pub fn get_word_id(&self, word: &str) -> Option<u32> {
+        if let Some(compact) = &self.compact_mmap {
+            if let Some(id) = compact.get_id(word) {
+                return Some(id);
             }
-            // 回退到动态内存词表
-            if let Some(vocab) = &self.vocab {
-                if let (Some(id1), Some(id2)) = (vocab.get_id(prev), vocab.get_id(curr)) {
-                    return bg.get_affinity_by_id(id1, id2);
-                }
+        }
+        if let Some(vocab) = &self.vocab {
+            if let Some(id) = vocab.get_id(word) {
+                return Some(id);
             }
         }
         None
+    }
+
+    /// 已知前驱词 ID 时直接查询二元词对亲和度得分（避免在候选循环内重复解析前驱词 ID）
+    #[inline]
+    pub fn get_bigram_affinity_by_first_id(&self, prev_id: u32, curr: &str) -> Option<i64> {
+        if let Some(bg) = &self.compact_bigram {
+            if let Some(curr_id) = self.get_word_id(curr) {
+                return bg.get_affinity_by_id(prev_id, curr_id);
+            }
+        }
+        None
+    }
+
+    /// 查询二元词对统计转移亲和度加权得分
+    #[inline]
+    pub fn get_bigram_affinity(&self, prev: &str, curr: &str) -> Option<i64> {
+        let prev_id = self.get_word_id(prev)?;
+        self.get_bigram_affinity_by_first_id(prev_id, curr)
     }
 
     /// 根据归一化拼音键检索候选词

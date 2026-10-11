@@ -217,15 +217,24 @@ impl AlgoEngine {
         }
 
         // 3. 动态应用用户习惯提权与上屏历史上下文亲和度加权
+        let prev_context_info = self
+            .last_commit_context
+            .as_deref()
+            .map(|prev| (prev, self.table.get_word_id(prev)));
+
         for c in &mut raw_candidates {
             self.user_model.apply_boost(c, eval_ts);
-            if let Some(ref prev) = self.last_commit_context {
-                let affinity = self
-                    .table
-                    .get_bigram_affinity(prev, &c.text)
-                    .unwrap_or_else(|| {
-                        BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
-                    });
+            if let Some((prev, prev_id_opt)) = prev_context_info {
+                let affinity = if let Some(prev_id) = prev_id_opt {
+                    self.table
+                        .get_bigram_affinity_by_first_id(prev_id, &c.text)
+                        .unwrap_or_else(|| {
+                            BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
+                        })
+                } else {
+                    BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
+                };
+
                 if affinity > 0 {
                     c.score = c.score.saturating_add((affinity as u32).min(50_000));
                 }
