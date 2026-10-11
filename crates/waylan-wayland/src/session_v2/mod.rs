@@ -98,6 +98,8 @@ pub struct WaylanV2Session {
     pub is_unavailable: bool,
     /// 与外部系统托盘共享的优雅退出请求标志
     pub exit_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// 动态键盘布局映射表（支持根据 XKB Keymap 动态更新）
+    pub keymap_layout: KeymapLayout,
 }
 
 impl WaylanV2Session {
@@ -141,6 +143,7 @@ impl WaylanV2Session {
             repeat_state: None,
             is_unavailable: false,
             exit_requested: None,
+            keymap_layout: KeymapLayout::default(),
         }
     }
 

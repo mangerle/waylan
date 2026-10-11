@@ -124,6 +124,18 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     "[Wayland v2 键盘抓取] 收到键盘映射配置: format={:?}, 大小={} 字节",
                     format, size
                 );
+                // 尝试从 fd 读取 XKB keymap 文本并动态更新键盘字符映射以适配非 QWERTY 布局
+                if let Ok(mut file) = fd.try_clone().map(std::fs::File::from) {
+                    use std::io::Read;
+                    let read_len = (size as usize).min(1024 * 1024);
+                    let mut buf = vec![0u8; read_len];
+                    if file.read_exact(&mut buf).is_ok() {
+                        if let Ok(text) = std::str::from_utf8(&buf) {
+                            state.keymap_layout.update_from_xkb_text(text);
+                            info!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
+                        }
+                    }
+                }
                 if let Some(ref vk) = state.virtual_keyboard {
                     vk.keymap(u32::from(format), fd.as_fd(), size);
                     state.has_virtual_keymap = true;

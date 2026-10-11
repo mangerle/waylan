@@ -280,8 +280,8 @@ pub fn process_key_press_inner(session: &mut WaylanV2Session, key: u32) -> (bool
         }
     }
 
-    // 5. 字母键输入（A-Z）：进入拼音算法管线
-    if let Some(ch) = keycode_to_char(key) {
+    // 5. 字母键输入（A-Z）：进入拼音算法管线（支持动态键盘布局）
+    if let Some(ch) = session.keymap_layout.get_char(key) {
         session.engine.push_char(ch);
         let preedit = session.engine.formatted_preedit();
         session.update_preedit(&preedit);
