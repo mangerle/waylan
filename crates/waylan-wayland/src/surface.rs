@@ -369,7 +369,20 @@ impl CandidateSurfaceManager {
     }
 
     /// 将 RGBA/BGRA 像素位图写入匿名内存映射文件（用于跨进程传递给 Wayland 合成器）
+    /// 在 Linux 环境优先使用纯内存文件描述符 (memfd_create)，失败时平滑降级至 tempfile
     pub fn create_shm_fd(size: usize) -> std::io::Result<std::fs::File> {
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::fs::{memfd_create, MemfdFlags};
+            if let Ok(fd) = memfd_create(
+                "waylan-candidate-shm",
+                MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+            ) {
+                let file = std::fs::File::from(fd);
+                file.set_len(size as u64)?;
+                return Ok(file);
+            }
+        }
         let file = tempfile::tempfile()?;
         file.set_len(size as u64)?;
         Ok(file)
