@@ -291,10 +291,26 @@ pub fn run_session_v2_loop_fallible(
     session.qhandle = Some(qh.clone());
     session.set_input_method(input_method);
 
-    if let Ok(vk_mgr) = globals.bind::<wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
-        let vk = vk_mgr.create_virtual_keyboard(&seat, &qh, ());
-        session.virtual_keyboard = Some(vk);
-        log::info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
+    match globals.bind::<wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, _, _>(&qh, 1..=1, ()) {
+        Ok(vk_mgr) => {
+            let vk = vk_mgr.create_virtual_keyboard(&seat, &qh, ());
+            session.virtual_keyboard = Some(vk);
+            log::info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
+        }
+        Err(e) => {
+            log::warn!(
+                "[微澜 Wayland] 当前合成器不支持 zwp_virtual_keyboard_v1 ({})，无法安全透传未消费按键，将主动退出 V2 会话以触发降级。",
+                e
+            );
+            return Err((
+                std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "合成器缺少 zwp_virtual_keyboard_v1 扩展协议，为避免按键黑洞主动放弃 V2 会话",
+                )
+                .into(),
+                Box::new(session),
+            ));
+        }
     }
 
     log::info!(
