@@ -45,7 +45,7 @@ pub fn calculate_delete_backward_range(surrounding: Option<&(String, u32, u32)>)
         }
     }
 
-    // 2. 无选区：光标前向删除 1 个 UTF-8 字符
+    // 2. 无选区：光标前向删除 1 个 UTF-8 字符（自动向左对齐字符边界）
     let safe_cursor = clamp_char_boundary_floor(text, cursor_idx);
     if safe_cursor == 0 {
         return (0, 0);
