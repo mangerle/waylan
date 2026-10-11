@@ -368,43 +368,82 @@ fn load_opencc_dict() -> waylan_algo::OpenCcDict {
     waylan_algo::OpenCcDict::load_default()
 }
 
+/// 统一会话配置包（收敛 V1 与 V2 热重载与初始化的重复配置逻辑）
+struct SessionConfigBundle {
+    algo_config: AlgoConfig,
+    theme: UiTheme,
+    font_size: f32,
+    shift_mode: ToggleKeyMode,
+    punct_processor: PunctuationProcessor,
+    page_keys: PageKeyConfig,
+    custom_phrases: waylan_algo::custom_phrase::CustomPhraseManager,
+    user_dict_path: std::path::PathBuf,
+    aux_dict: waylan_algo::AuxiliaryDict,
+}
+
+impl SessionConfigBundle {
+    fn load_current() -> Self {
+        let new_cfg = AppConfig::load_or_create();
+        let algo_config = AlgoConfig {
+            page_size: new_cfg.page_size,
+            enable_v_mode: new_cfg.v_mode,
+            traditional_chinese: new_cfg.traditional_chinese,
+            fuzzy: if new_cfg.fuzzy_pinyin {
+                FuzzyConfig::all_enabled()
+            } else {
+                FuzzyConfig::default()
+            },
+            auto_pangu_spacing: new_cfg.auto_pangu_spacing,
+            ..Default::default()
+        };
+        let theme = match new_cfg.theme {
+            ThemeMode::Light => UiTheme::light(),
+            ThemeMode::Dark => UiTheme::dark(),
+        };
+        let shift_mode = match new_cfg.switch_key {
+            SwitchKey::Shift => ToggleKeyMode::Shift,
+            SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+        };
+        let punct_processor = PunctuationProcessor::with_options(
+            new_cfg.slash_to_dunhao,
+            new_cfg.protect_digits_punctuation,
+            new_cfg.auto_complete_pairs,
+        );
+        let page_keys = match new_cfg.page_keys {
+            PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
+            PageKeys::Bracket => PageKeyConfig::Bracket,
+            PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
+        };
+        let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+        let custom_phrases = waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
+        let user_dict_path = AppConfig::user_dict_path();
+        let aux_dict = load_auxiliary_dict();
+        Self {
+            algo_config,
+            theme,
+            font_size: new_cfg.font_size,
+            shift_mode,
+            punct_processor,
+            page_keys,
+            custom_phrases,
+            user_dict_path,
+            aux_dict,
+        }
+    }
+}
+
 /// 执行 V2 会话的配置与词库热重载
 fn apply_reload_v2(s: &mut waylan_wayland::session_v2::WaylanV2Session) {
-    let new_cfg = AppConfig::load_or_create();
-    s.engine.config.page_size = new_cfg.page_size;
-    s.engine.config.enable_v_mode = new_cfg.v_mode;
-    s.engine.config.traditional_chinese = new_cfg.traditional_chinese;
-    s.engine.config.fuzzy = if new_cfg.fuzzy_pinyin {
-        FuzzyConfig::all_enabled()
-    } else {
-        FuzzyConfig::default()
-    };
-    s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
-    s.surface_manager.renderer.theme = match new_cfg.theme {
-        ThemeMode::Light => UiTheme::light(),
-        ThemeMode::Dark => UiTheme::dark(),
-    };
-    s.surface_manager.renderer.font_size = new_cfg.font_size;
-    s.shift_state = ShiftToggleStateMachine::with_toggle_key(match new_cfg.switch_key {
-        SwitchKey::Shift => ToggleKeyMode::Shift,
-        SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
-    });
-    s.punctuation_processor = PunctuationProcessor::with_options(
-        new_cfg.slash_to_dunhao,
-        new_cfg.protect_digits_punctuation,
-        new_cfg.auto_complete_pairs,
-    );
-    s.page_keys = match new_cfg.page_keys {
-        PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
-        PageKeys::Bracket => PageKeyConfig::Bracket,
-        PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
-    };
-    let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-    s.engine.custom_phrases =
-        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
-    let u_dict = AppConfig::user_dict_path();
-    s.engine.set_user_dict_path(&u_dict);
-    s.engine.load_auxiliary_dict(load_auxiliary_dict());
+    let b = SessionConfigBundle::load_current();
+    s.engine.config = b.algo_config;
+    s.surface_manager.renderer.theme = b.theme;
+    s.surface_manager.renderer.font_size = b.font_size;
+    s.shift_state = ShiftToggleStateMachine::with_toggle_key(b.shift_mode);
+    s.punctuation_processor = b.punct_processor;
+    s.page_keys = b.page_keys;
+    s.engine.custom_phrases = b.custom_phrases;
+    s.engine.set_user_dict_path(&b.user_dict_path);
+    s.engine.load_auxiliary_dict(b.aux_dict);
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }
@@ -412,41 +451,16 @@ fn apply_reload_v2(s: &mut waylan_wayland::session_v2::WaylanV2Session) {
 
 /// 执行 V1 会话的配置与词库热重载
 fn apply_reload_v1(s: &mut waylan_wayland::session_v1::WaylanV1Session) {
-    let new_cfg = AppConfig::load_or_create();
-    s.engine.config.page_size = new_cfg.page_size;
-    s.engine.config.enable_v_mode = new_cfg.v_mode;
-    s.engine.config.traditional_chinese = new_cfg.traditional_chinese;
-    s.engine.config.fuzzy = if new_cfg.fuzzy_pinyin {
-        FuzzyConfig::all_enabled()
-    } else {
-        FuzzyConfig::default()
-    };
-    s.engine.config.auto_pangu_spacing = new_cfg.auto_pangu_spacing;
-    s.surface_manager.renderer.theme = match new_cfg.theme {
-        ThemeMode::Light => UiTheme::light(),
-        ThemeMode::Dark => UiTheme::dark(),
-    };
-    s.surface_manager.renderer.font_size = new_cfg.font_size;
-    s.shift_sm = ShiftToggleStateMachine::with_toggle_key(match new_cfg.switch_key {
-        SwitchKey::Shift => ToggleKeyMode::Shift,
-        SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
-    });
-    s.punctuation_processor = PunctuationProcessor::with_options(
-        new_cfg.slash_to_dunhao,
-        new_cfg.protect_digits_punctuation,
-        new_cfg.auto_complete_pairs,
-    );
-    s.page_keys = match new_cfg.page_keys {
-        PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
-        PageKeys::Bracket => PageKeyConfig::Bracket,
-        PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
-    };
-    let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-    s.engine.custom_phrases =
-        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
-    let u_dict = AppConfig::user_dict_path();
-    s.engine.set_user_dict_path(&u_dict);
-    s.engine.load_auxiliary_dict(load_auxiliary_dict());
+    let b = SessionConfigBundle::load_current();
+    s.engine.config = b.algo_config;
+    s.surface_manager.renderer.theme = b.theme;
+    s.surface_manager.renderer.font_size = b.font_size;
+    s.shift_sm = ShiftToggleStateMachine::with_toggle_key(b.shift_mode);
+    s.punctuation_processor = b.punct_processor;
+    s.page_keys = b.page_keys;
+    s.engine.custom_phrases = b.custom_phrases;
+    s.engine.set_user_dict_path(&b.user_dict_path);
+    s.engine.load_auxiliary_dict(b.aux_dict);
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }
