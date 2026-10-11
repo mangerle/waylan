@@ -3,12 +3,13 @@ use log::{info, warn};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 缓存的单字形光栅化位图与度量信息
 #[derive(Debug, Clone)]
 pub struct CachedGlyph {
     pub metrics: fontdue::Metrics,
-    pub bitmap: Vec<u8>,
+    pub bitmap: Arc<[u8]>,
 }
 
 /// 系统字体加载与探测模块
@@ -29,7 +30,7 @@ impl FontManager {
         ];
 
         if let Ok(home) = std::env::var("HOME") {
-            let user_font = std::path::PathBuf::from(home).join(".local/share/fonts");
+            let user_font = PathBuf::from(home).join(".local/share/fonts");
             candidates.push(
                 user_font
                     .join("NotoSansCJK-Regular.ttc")
@@ -47,8 +48,10 @@ impl FontManager {
         for path in &candidates {
             if let Ok(data) = fs::read(path) {
                 if let Ok(font) = Font::from_bytes(&data[..], FontSettings::default()) {
-                    info!("[矢量渲染] 成功加载默认中文字体: {}", path);
-                    return Some(font);
+                    if font.lookup_glyph_index('中') != 0 {
+                        info!("[矢量渲染] 成功加载默认中文字体: {}", path);
+                        return Some(font);
+                    }
                 }
             }
         }
@@ -61,7 +64,7 @@ impl FontManager {
         None
     }
 
-    /// 回退字体深度安全探测（基于显式栈迭代遍历子目录，防爆栈）
+    /// 回退字体深度安全探测（基于显式栈迭代遍历子目录，防爆栈，且强制校验包含中文汉字字形）
     fn scan_fallback_fonts() -> Option<Font> {
         let mut search_dirs = vec![
             PathBuf::from("/usr/share/fonts"),
@@ -99,8 +102,10 @@ impl FontManager {
                     if matches!(ext, "ttf" | "ttc" | "otf") {
                         if let Ok(data) = fs::read(&p) {
                             if let Ok(font) = Font::from_bytes(&data[..], FontSettings::default()) {
-                                info!("[矢量渲染] 成功从回退目录加载字体: {:?}", p);
-                                return Some(font);
+                                if font.lookup_glyph_index('中') != 0 {
+                                    info!("[矢量渲染] 成功从回退目录加载中文字体: {:?}", p);
+                                    return Some(font);
+                                }
                             }
                         }
                     }

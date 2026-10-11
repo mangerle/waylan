@@ -13,8 +13,8 @@ use fontdue::{Font, FontSettings};
 use layout::{measure_candidates_bar, LayoutParams, PRECACHED_INDEX_STRINGS};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
-use tiny_skia::Pixmap;
+use std::sync::{Arc, Mutex};
+use tiny_skia::{Pixmap, PremultipliedColorU8};
 use waylan_core::CandidateBoxState;
 
 /// 最大字形位图缓存条目数（覆盖绝大多数常用汉字与符号，占用内存不足 1MB）
@@ -90,7 +90,7 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 测量一段文字的排版宽度
+    /// 测量一段文字的排版宽度（单次加锁并顺带预热字形缓存，使后续绘制 100% 命中缓存）
     pub fn measure_text(&self, text: &str, size: f32) -> f32 {
         let Some(font) = self.font.as_ref() else {
             return text.chars().count() as f32 * (size * 0.8 + 3.0);
@@ -98,15 +98,29 @@ impl CandidateBoxRenderer {
 
         let size_key = (size * 100.0).round() as u32;
         let mut width = 0.0;
-        for ch in text.chars() {
-            if let Ok(cache) = self.glyph_cache.lock() {
+        if let Ok(mut cache) = self.glyph_cache.lock() {
+            for ch in text.chars() {
                 if let Some(cached) = cache.get(&(ch, size_key)) {
                     width += cached.metrics.advance_width;
-                    continue;
+                } else {
+                    let (metrics, bitmap) = font.rasterize(ch, size);
+                    width += metrics.advance_width;
+                    if cache.len() >= MAX_GLYPH_CACHE_SIZE {
+                        cache.clear();
+                    }
+                    cache.insert(
+                        (ch, size_key),
+                        CachedGlyph {
+                            metrics,
+                            bitmap: Arc::from(bitmap),
+                        },
+                    );
                 }
             }
-            let metrics = font.metrics(ch, size);
-            width += metrics.advance_width;
+        } else {
+            for ch in text.chars() {
+                width += font.metrics(ch, size).advance_width;
+            }
         }
         width
     }
@@ -123,7 +137,10 @@ impl CandidateBoxRenderer {
         }
 
         let (metrics, bitmap) = font.rasterize(ch, size);
-        let cached = CachedGlyph { metrics, bitmap };
+        let cached = CachedGlyph {
+            metrics,
+            bitmap: Arc::from(bitmap),
+        };
         if let Ok(mut cache) = self.glyph_cache.lock() {
             if cache.len() >= MAX_GLYPH_CACHE_SIZE {
                 cache.clear();
@@ -226,7 +243,7 @@ impl CandidateBoxRenderer {
                     .round()
                     .clamp(0.0, 255.0) as u8;
 
-                if let Some(blended) = tiny_skia::PremultipliedColorU8::from_rgba(
+                if let Some(blended) = PremultipliedColorU8::from_rgba(
                     out_r.min(out_a),
                     out_g.min(out_a),
                     out_b.min(out_a),
@@ -303,15 +320,18 @@ impl CandidateBoxRenderer {
             total_bar_width.max(popup_x + popup_w + padding_h)
         } else {
             total_bar_width
-        };
+        }
+        .ceil()
+        .clamp(1.0, 4096.0) as u32;
         let canvas_h = if has_active_sub {
             bar_height + 6.0 * s + popup_h
         } else {
             bar_height
-        };
+        }
+        .ceil()
+        .clamp(1.0, 2048.0) as u32;
 
-        let mut pixmap = Pixmap::new(canvas_w.ceil() as u32, canvas_h.ceil() as u32)?;
-        pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
 
         draw_card_background_at(
             &mut pixmap,
