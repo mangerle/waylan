@@ -24,6 +24,21 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     Anchor, KeyboardInteractivity,
 };
 
+/// 合成器全局接口信息
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaylandGlobal {
+    /// 接口名称 (如 "wl_compositor")
+    pub interface: String,
+    /// 接口版本号
+    pub version: u32,
+}
+
+impl std::fmt::Display for WaylandGlobal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (版本 {})", self.interface, self.version)
+    }
+}
+
 /// Wayland 合成器支持的特权能力汇总
 #[derive(Debug, Default, Clone)]
 pub struct WaylandCapabilities {
@@ -37,8 +52,8 @@ pub struct WaylandCapabilities {
     pub has_compositor: bool,
     /// 是否具有席位输入接口 (wl_seat)
     pub has_seat: bool,
-    /// 合成器广播的全部全局接口名称列表
-    pub all_globals: Vec<String>,
+    /// 合成器广播的全部全局接口信息列表
+    pub all_globals: Vec<WaylandGlobal>,
 }
 
 /// Wayland 状态管理器
@@ -127,10 +142,10 @@ pub fn probe_wayland_environment() -> Result<WaylandCapabilities, Box<dyn std::e
 
     // 检查并记录所有广播的全局接口
     for global in globals.contents().clone_list() {
-        state
-            .capabilities
-            .all_globals
-            .push(format!("{} (版本 {})", global.interface, global.version));
+        state.capabilities.all_globals.push(WaylandGlobal {
+            interface: global.interface.clone(),
+            version: global.version,
+        });
 
         if global.interface == "zwp_input_method_v1" {
             state.capabilities.has_input_method_v1 = true;
