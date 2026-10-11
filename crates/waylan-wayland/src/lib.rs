@@ -279,15 +279,29 @@ pub fn run_session_v2_loop_fallible(
     };
     let input_method = im_manager.get_input_method(&seat, &qh, ());
 
-    if let Ok(compositor) = globals.bind::<WlCompositor, _, _>(&qh, 1..=6, ()) {
-        let wl_surface = compositor.create_surface(&qh, ());
-        let popup_surface = input_method.get_input_popup_surface(&wl_surface, &qh, ());
-        session.popup_wl_surface = Some(wl_surface);
-        session.popup_surface = Some(popup_surface);
-    }
-    if let Ok(shm) = globals.bind::<wayland_client::protocol::wl_shm::WlShm, _, _>(&qh, 1..=1, ()) {
-        session.shm = Some(shm);
-    }
+    let compositor: WlCompositor = match globals.bind(&qh, 1..=6, ()) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!(
+                "[微澜 Wayland] 无法绑定必需的基础全局协议 wl_compositor: {}",
+                e
+            );
+            return Err((e.into(), Box::new(session)));
+        }
+    };
+    let wl_surface = compositor.create_surface(&qh, ());
+    let popup_surface = input_method.get_input_popup_surface(&wl_surface, &qh, ());
+    session.popup_wl_surface = Some(wl_surface);
+    session.popup_surface = Some(popup_surface);
+
+    let shm: wayland_client::protocol::wl_shm::WlShm = match globals.bind(&qh, 1..=1, ()) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("[微澜 Wayland] 无法绑定必需的共享内存协议 wl_shm: {}", e);
+            return Err((e.into(), Box::new(session)));
+        }
+    };
+    session.shm = Some(shm);
     session.qhandle = Some(qh.clone());
     session.set_input_method(input_method);
 
