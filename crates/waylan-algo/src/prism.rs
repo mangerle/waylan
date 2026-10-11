@@ -190,8 +190,8 @@ impl PrismEngine {
             return;
         }
 
-        if ctx.results.len() >= 64 {
-            return; // 限制全局分支数量，保障微秒级求解
+        if ctx.results.len() >= 64 || ctx.current.len() >= 32 {
+            return; // 限制全局分支数量与最大递归深度（<=32 音节），保障微秒级求解并防爆栈
         }
 
         let max_len = (ctx.input.len() - start).min(6);
