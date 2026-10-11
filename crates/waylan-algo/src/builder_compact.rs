@@ -123,8 +123,10 @@ impl CompactDictBuilder {
             }
         }
 
-        // 按原始词频降序排序
+        // 按原始词频降序排序并对同音同词去重（保留最高分）
         for entries in dict_map.values_mut() {
+            entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+            entries.dedup_by(|a, b| a.0 == b.0);
             entries.sort_by_key(|b| std::cmp::Reverse(b.1));
         }
 
@@ -155,6 +157,8 @@ impl CompactDictBuilder {
             }
         }
         for list in acronym_map.values_mut() {
+            list.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+            list.dedup_by(|a, b| a.0 == b.0);
             list.sort_by_key(|b| std::cmp::Reverse(b.1));
             list.truncate(8);
         }
@@ -176,6 +180,8 @@ impl CompactDictBuilder {
                     }
                 }
             }
+            list.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+            list.dedup_by(|a, b| a.0 == b.0);
             list.sort_by_key(|r| std::cmp::Reverse(r.1));
             list.truncate(5);
             if !list.is_empty() {
@@ -221,9 +227,10 @@ impl CompactDictBuilder {
                 .get(k)
                 .expect("键来自于 combined_keys 自身集合，查询必定命中");
             let c_start = cand_counter;
-            let c_count = cands.len() as u16;
+            let capped_len = cands.len().min(u16::MAX as usize);
+            let c_count = capped_len as u16;
 
-            for &(wid, score) in cands {
+            for &(wid, score) in cands.iter().take(capped_len) {
                 candidates_data.extend_from_slice(&wid.to_le_bytes());
                 let score_u16 = encode_compact_score(score);
                 candidates_data.extend_from_slice(&score_u16.to_le_bytes());

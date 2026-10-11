@@ -1,6 +1,15 @@
+use crate::builder::normalize_pinyin_tones;
 use crate::error::AlgoError;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+/// 搜狗细胞词库最大允许文件体积上限 (100 MB)
+const MAX_SCEL_SIZE: usize = 100 * 1024 * 1024;
+/// 搜狗细胞词库标准文件头前 4 字节魔数
+const SCEL_HEADER_MAGIC: [u8; 4] = [0x40, 0x15, 0x00, 0x00];
+/// 搜狗细胞词库拼音表区 (0x1540) 4 字节魔数
+const SCEL_PY_MAGIC: [u8; 4] = [0x9D, 0x01, 0x00, 0x00];
 
 /// 词库条目结构 (文本, 拼音序列, 基础频次)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +33,15 @@ impl DictImporter {
 
         match extension.as_str() {
             "scel" => {
+                let meta = fs::metadata(path).map_err(|e| AlgoError::DictionaryIo {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
+                if meta.len() > MAX_SCEL_SIZE as u64 {
+                    return Err(AlgoError::DictParseFailed {
+                        reason: format!("搜狗细胞词库文件体积超出 100MB 安全上限: {}", meta.len()),
+                    });
+                }
                 let data = fs::read(path).map_err(|e| AlgoError::DictionaryIo {
                     path: path.to_path_buf(),
                     source: e,
@@ -51,14 +69,15 @@ impl DictImporter {
         }
     }
 
-    /// 解析 Rime 词典 YAML 格式
+    /// 解析 Rime 词典 YAML 格式（兼容标准 `...` 表头分隔与无 `...` 标记的纯 TSV 词表）
     pub fn parse_rime_yaml(content: &str) -> Result<Vec<ImportedDictEntry>, AlgoError> {
         let mut entries = Vec::new();
-        let mut past_header = false;
+        let has_header_sep = content.lines().any(|l| l.trim() == "...");
+        let mut past_header = !has_header_sep;
 
         for line in content.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+            if line.is_empty() || line.starts_with('#') || line == "---" {
                 continue;
             }
 
@@ -75,7 +94,7 @@ impl DictImporter {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 2 {
                 let text = parts[0].trim().to_string();
-                let pinyin = parts[1].trim().replace(' ', "'");
+                let pinyin = normalize_pinyin_tones(parts[1].trim());
                 let weight = if parts.len() >= 3 {
                     parts[2].trim().parse::<u32>().unwrap_or(100)
                 } else {
@@ -112,18 +131,20 @@ impl DictImporter {
 
             if parts.len() >= 2 {
                 let text = parts[0].trim().to_string();
-                let pinyin = parts[1].trim().replace(' ', "'");
+                let pinyin = normalize_pinyin_tones(parts[1].trim());
                 let weight = if parts.len() >= 3 {
                     parts[2].trim().parse::<u32>().unwrap_or(100)
                 } else {
                     100
                 };
 
-                entries.push(ImportedDictEntry {
-                    text,
-                    pinyin,
-                    weight,
-                });
+                if !text.is_empty() && !pinyin.is_empty() {
+                    entries.push(ImportedDictEntry {
+                        text,
+                        pinyin,
+                        weight,
+                    });
+                }
             }
         }
         Ok(entries)
@@ -134,10 +155,19 @@ impl DictImporter {
         let pinyin_table_offset = 0x1540;
         let words_offset = 0x2628;
 
-        // 校验基本文件长度
-        if data.len() < words_offset {
+        // 校验基本文件长度与最大体积上限
+        if data.len() < words_offset || data.len() > MAX_SCEL_SIZE {
             return Err(AlgoError::DictParseFailed {
-                reason: "无效或损坏的搜狗细胞词库文件 (体积过小)".to_string(),
+                reason: "无效或损坏的搜狗细胞词库文件 (体积不在合法范围内)".to_string(),
+            });
+        }
+
+        // 校验 SCEL 文件头魔数或拼音表区魔数标识
+        if data[0..4] != SCEL_HEADER_MAGIC
+            && data[pinyin_table_offset..pinyin_table_offset + 4] != SCEL_PY_MAGIC
+        {
+            return Err(AlgoError::DictParseFailed {
+                reason: "搜狗细胞词库魔数头校验失败".to_string(),
             });
         }
 
@@ -235,12 +265,10 @@ impl DictImporter {
     }
 
     /// 从数据切片中提取搜狗拼音索引表
-    fn read_scel_pinyin_table(
-        slice: &[u8],
-    ) -> Result<std::collections::HashMap<usize, String>, AlgoError> {
-        let mut map = std::collections::HashMap::new();
+    fn read_scel_pinyin_table(slice: &[u8]) -> Result<HashMap<usize, String>, AlgoError> {
+        let mut map = HashMap::new();
         // 若包含标准 4 字节头部魔数 [0x9D, 0x01, 0x00, 0x00]，跳过头部
-        let mut cursor: usize = if slice.len() >= 4 && slice[0..4] == [0x9D, 0x01, 0x00, 0x00] {
+        let mut cursor: usize = if slice.len() >= 4 && slice[0..4] == SCEL_PY_MAGIC {
             4
         } else {
             0
@@ -285,15 +313,23 @@ mod tests {
         assert_eq!(res[0].weight, 500);
         assert_eq!(res[1].text, "微澜");
         assert_eq!(res[1].pinyin, "wei'lan");
+
+        // 兼容无 ... 头部分隔符且带大小写声调的 Rime TSV 词表
+        let headerless = "长安\tCháng''ān\t800\n";
+        let res2 = DictImporter::parse_rime_yaml(headerless).unwrap();
+        assert_eq!(res2.len(), 1);
+        assert_eq!(res2[0].text, "长安");
+        assert_eq!(res2[0].pinyin, "chang'an");
     }
 
     #[test]
     fn test_parse_plain_text() {
-        let sample = "测试 ce'shi 100\n输入法 shu'ru'fa 200\n";
+        let sample = "测试 ce'shi 100\n输入法 shū''rù'fǎ 200\n";
         let res = DictImporter::parse_plain_text(sample).unwrap();
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].text, "测试");
         assert_eq!(res[1].text, "输入法");
+        assert_eq!(res[1].pinyin, "shu'ru'fa");
     }
 
     #[test]

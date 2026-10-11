@@ -49,20 +49,31 @@ impl LexiconTable {
         }
     }
 
+    /// 向候选词列表中插入或更新词条（相同词文本保留最高分，并保持按得分降序排列）
+    pub(crate) fn upsert_entry(list: &mut Vec<(String, u32)>, text: String, score: u32) {
+        if let Some(existing) = list.iter_mut().find(|(t, _)| *t == text) {
+            if score > existing.1 {
+                existing.1 = score;
+            }
+        } else {
+            list.push((text, score));
+        }
+        list.sort_by_key(|b| std::cmp::Reverse(b.1));
+    }
+
     /// 插入一条字词条目（内存动态词库）
     pub fn insert(&mut self, pinyin: impl Into<String>, text: impl Into<String>, score: u32) {
         let key = pinyin.into();
         let val_text = text.into();
-        let val = (val_text.clone(), score);
-        self.entries.entry(key.clone()).or_default().push(val);
+        let entry_list = self.entries.entry(key.clone()).or_default();
+        Self::upsert_entry(entry_list, val_text.clone(), score);
 
         // 维护声母高频单字索引
         if !key.contains('\'') && val_text.chars().count() == 1 {
             for &initial in STANDARD_INITIALS {
                 if key.starts_with(initial) {
                     let list = self.initial_entries.entry(initial.to_string()).or_default();
-                    list.push((val_text.clone(), score));
-                    list.sort_by_key(|b| std::cmp::Reverse(b.1));
+                    Self::upsert_entry(list, val_text.clone(), score);
                     list.truncate(5);
                     break;
                 }
@@ -80,10 +91,8 @@ impl LexiconTable {
                     }
                 }
                 if acronym.len() >= 2 {
-                    self.acronym_entries
-                        .entry(acronym)
-                        .or_default()
-                        .push((val_text, score));
+                    let list = self.acronym_entries.entry(acronym).or_default();
+                    Self::upsert_entry(list, val_text, score);
                 }
             }
         }
@@ -179,31 +188,50 @@ impl LexiconTable {
         candidates
     }
 
-    /// 获取指定拼音键的原始词库条目
+    /// 获取指定拼音键的原始词库条目（合并紧凑词库与内存增量词表）
     pub fn get_raw_entries(&self, key: &str) -> Option<Vec<(String, u32)>> {
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(entries) = compact.lookup(key) {
-                return Some(entries);
+        let compact_res = self.compact_mmap.as_ref().and_then(|c| c.lookup(key));
+        let mem_res = self.entries.get(key);
+
+        match (compact_res, mem_res) {
+            (Some(mut c_list), Some(m_list)) => {
+                for (text, score) in m_list {
+                    Self::upsert_entry(&mut c_list, text.clone(), *score);
+                }
+                Some(c_list)
             }
+            (Some(c_list), None) => Some(c_list),
+            (None, Some(m_list)) => Some(m_list.clone()),
+            (None, None) => None,
         }
-        self.entries.get(key).cloned()
     }
 
-    /// 按需获取指定拼音键的前 `k` 条高频原始词条（用于 Viterbi 束搜索热路径，消除同音长尾无用分配）
+    /// 按需获取指定拼音键的前 `k` 条高频原始词条（合并紧凑词库与内存增量词表并截取 Top-K）
     pub fn get_top_raw_entries(&self, key: &str, k: usize) -> Option<Vec<(String, u32)>> {
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(entries) = compact.lookup_top_k(key, k) {
-                return Some(entries);
+        let compact_res = self
+            .compact_mmap
+            .as_ref()
+            .and_then(|c| c.lookup_top_k(key, k));
+        let mem_res = self.entries.get(key);
+
+        match (compact_res, mem_res) {
+            (Some(mut c_list), Some(m_list)) => {
+                for (text, score) in m_list.iter().take(k) {
+                    Self::upsert_entry(&mut c_list, text.clone(), *score);
+                }
+                c_list.truncate(k);
+                Some(c_list)
             }
+            (Some(c_list), None) => Some(c_list),
+            (None, Some(m_list)) => {
+                let mut top: Vec<(String, u32)> = m_list.iter().take(k).cloned().collect();
+                if top.len() > 1 {
+                    top.sort_by_key(|b| std::cmp::Reverse(b.1));
+                }
+                Some(top)
+            }
+            (None, None) => None,
         }
-        self.entries.get(key).map(|list| {
-            let mut top = list.clone();
-            if top.len() > 1 {
-                top.sort_by_key(|b| std::cmp::Reverse(b.1));
-            }
-            top.truncate(k);
-            top
-        })
     }
 
     /// 获取索引中词条总数
@@ -215,5 +243,24 @@ impl LexiconTable {
     /// 词库是否为空
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insert_deduplication_and_descending_order() {
+        let mut table = LexiconTable::new();
+        table.insert("shi'jian", "时间", 10_000);
+        table.insert("shi'jian", "事件", 15_000);
+        table.insert("shi'jian", "时间", 20_000); // 同词更高分应更新并排在首位
+        table.insert("shi'jian", "事件", 5_000); // 同词更低分应忽略
+
+        let raw = table.get_raw_entries("shi'jian").expect("应存在词条");
+        assert_eq!(raw.len(), 2);
+        assert_eq!(raw[0], ("时间".to_string(), 20_000));
+        assert_eq!(raw[1], ("事件".to_string(), 15_000));
     }
 }

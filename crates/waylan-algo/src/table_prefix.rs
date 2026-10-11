@@ -52,18 +52,38 @@ impl LexiconTable {
         }
 
         candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
-        candidates.truncate(20);
-        candidates
-    }
-
-    /// 检索指定单字母声母对应的高频单字原始词库条目列表
-    pub fn get_initial_raw_entries(&self, initial: &str) -> Option<Vec<(String, u32)>> {
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(entries) = compact.lookup_initial(initial) {
-                return Some(entries);
+        let mut unique = Vec::with_capacity(candidates.len().min(20));
+        for cand in candidates {
+            if !unique.iter().any(|u: &AlgoCandidate| u.text == cand.text) {
+                unique.push(cand);
+                if unique.len() >= 20 {
+                    break;
+                }
             }
         }
-        self.initial_entries.get(initial).cloned()
+        unique
+    }
+
+    /// 检索指定单字母声母对应的高频单字原始词库条目列表（合并紧凑词库与内存动态索引）
+    pub fn get_initial_raw_entries(&self, initial: &str) -> Option<Vec<(String, u32)>> {
+        let compact_res = self
+            .compact_mmap
+            .as_ref()
+            .and_then(|c| c.lookup_initial(initial));
+        let mem_res = self.initial_entries.get(initial);
+
+        match (compact_res, mem_res) {
+            (Some(mut c_list), Some(m_list)) => {
+                for (text, score) in m_list {
+                    Self::upsert_entry(&mut c_list, text.clone(), *score);
+                }
+                c_list.truncate(5);
+                Some(c_list)
+            }
+            (Some(c_list), None) => Some(c_list),
+            (None, Some(m_list)) => Some(m_list.clone()),
+            (None, None) => None,
+        }
     }
 
     /// 检索首字母缩写简拼候选词（如 "bj" 匹配 "北京"）
