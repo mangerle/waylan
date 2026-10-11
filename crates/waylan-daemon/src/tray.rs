@@ -210,10 +210,26 @@ impl DBusMenu {
                     return;
                 }
                 info!("[系统托盘] 唤起微澜偏好设置界面...");
-                let mut cmd1 = Command::new("waylan-settings");
+                let current_exe = std::env::current_exe().ok();
+                let sibling_settings = current_exe
+                    .as_ref()
+                    .and_then(|p| p.parent())
+                    .map(|d| d.join("waylan-settings"))
+                    .filter(|p| p.is_file());
+
+                let mut cmd1 = if let Some(ref path) = sibling_settings {
+                    Command::new(path)
+                } else {
+                    Command::new("waylan-settings")
+                };
                 #[cfg(unix)]
                 cmd1.process_group(0);
-                let mut cmd2 = Command::new("waylan");
+
+                let mut cmd2 = if let Some(ref path) = current_exe {
+                    Command::new(path)
+                } else {
+                    Command::new("waylan")
+                };
                 cmd2.arg("settings");
                 #[cfg(unix)]
                 cmd2.process_group(0);
@@ -227,7 +243,12 @@ impl DBusMenu {
                     Err(_) => {
                         self.settings_running.store(false, Ordering::Release);
                         if let Some(path) = AppConfig::config_path() {
-                            let mut xdg_cmd = Command::new("xdg-open");
+                            let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+                                .iter()
+                                .find(|p| std::path::Path::new(p).exists())
+                                .copied()
+                                .unwrap_or("xdg-open");
+                            let mut xdg_cmd = Command::new(xdg_bin);
                             xdg_cmd.arg(path);
                             #[cfg(unix)]
                             xdg_cmd.process_group(0);
@@ -241,7 +262,12 @@ impl DBusMenu {
             4 => {
                 let log_path = log_file_path();
                 info!("[系统托盘] 查看运行日志: {:?}", log_path);
-                let mut log_cmd = Command::new("xdg-open");
+                let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+                    .iter()
+                    .find(|p| std::path::Path::new(p).exists())
+                    .copied()
+                    .unwrap_or("xdg-open");
+                let mut log_cmd = Command::new(xdg_bin);
                 log_cmd.arg(log_path);
                 #[cfg(unix)]
                 log_cmd.process_group(0);

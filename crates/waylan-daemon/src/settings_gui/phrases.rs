@@ -98,7 +98,12 @@ pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui:
                     let _ =
                         waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
                 }
-                if let Ok(mut child) = std::process::Command::new("xdg-open")
+                let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+                    .iter()
+                    .find(|p| std::path::Path::new(p).exists())
+                    .copied()
+                    .unwrap_or("xdg-open");
+                if let Ok(mut child) = std::process::Command::new(xdg_bin)
                     .arg(&phrase_path)
                     .spawn()
                 {
