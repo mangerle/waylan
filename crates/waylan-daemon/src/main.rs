@@ -179,13 +179,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
     info!("------------------------------------------------------------");
 
-    let mut watched_paths = Vec::with_capacity(4);
+    let mut watched_paths = Vec::with_capacity(3);
     if let Some(c_path) = AppConfig::config_path() {
         watched_paths.push(c_path);
     }
     watched_paths.push(waylan_algo::custom_phrase::CustomPhraseManager::default_path());
     watched_paths.push(AppConfig::user_aux_dict_path());
-    watched_paths.push(AppConfig::user_dict_path());
 
     let initial_mtime = watched_paths
         .iter()
