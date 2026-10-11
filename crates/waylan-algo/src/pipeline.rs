@@ -75,7 +75,7 @@ impl CandidatePipeline {
 
     /// 候选词去重：按候选文字去重，保留最高分者
     fn deduplicate(candidates: Vec<AlgoCandidate>) -> Vec<AlgoCandidate> {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::with_capacity(candidates.len());
         let mut deduped = Vec::with_capacity(candidates.len());
 
         for item in candidates {
@@ -86,10 +86,18 @@ impl CandidatePipeline {
         deduped
     }
 
-    /// 检查是否在标准通用汉字字符集内（过滤非常规未编码符号与控制符）
+    /// 检查是否在标准通用汉字字符集内（过滤控制符、替换字符及 Unicode 私用区 PUA 字符，保留 CJK 扩展区汉字）
     fn is_standard_chinese_charset(text: &str) -> bool {
         for ch in text.chars() {
-            if ch.is_control() {
+            if ch.is_control()
+                || ch == '\u{FFFD}'
+                || matches!(
+                    ch,
+                    '\u{E000}'..='\u{F8FF}'
+                        | '\u{F0000}'..='\u{FFFFD}'
+                        | '\u{100000}'..='\u{10FFFD}'
+                )
+            {
                 return false;
             }
         }
@@ -180,5 +188,25 @@ mod tests {
         let page1 = CandidatePipeline::process(raw, &config, 1);
         assert_eq!(page1.len(), 5);
         assert_eq!(page1[0].text, "词5");
+    }
+
+    #[test]
+    fn test_filter_pua_and_replacement_chars_retains_cjk_extensions() {
+        let raw = vec![
+            AlgoCandidate::new("常用字", "chang'yong'zi", 10_000),
+            AlgoCandidate::new("\u{20000}", "he", 9_000), // CJK 扩展 B 区生僻字，必须保留
+            AlgoCandidate::new("\u{E000}", "pua", 8_000), // BMP 私用区，应过滤
+            AlgoCandidate::new("\u{F0000}", "spua", 7_000), // 补充私用区 A，应过滤
+            AlgoCandidate::new("乱码\u{FFFD}", "luan'ma", 6_000), // 替换字符，应过滤
+        ];
+        let config = AlgoConfig {
+            filter_uncommon_charset: true,
+            ..Default::default()
+        };
+
+        let result = CandidatePipeline::process(raw, &config, 0);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].text, "常用字");
+        assert_eq!(result[1].text, "\u{20000}");
     }
 }

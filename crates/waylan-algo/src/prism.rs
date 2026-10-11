@@ -117,7 +117,7 @@ impl PrismEngine {
             }
             let all_prev_valid = p.syllables.iter().all(|s| {
                 (is_valid_syllable(s) || PrismFuzzy::is_fuzzy_valid(s, fuzzy))
-                    && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e"))
+                    && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e" | "n" | "ng" | "m"))
             });
             if !all_prev_valid {
                 return false;
@@ -177,10 +177,28 @@ impl PrismEngine {
             });
         }
 
-        // 路径排序：正向非容错路径严格优先于容错路径，同类按代价值排序
-        paths.sort_by(|a, b| a.is_typo.cmp(&b.is_typo).then_with(|| a.cost.cmp(&b.cost)));
-        paths.dedup();
+        Self::dedup_best_paths(&mut paths);
         paths
+    }
+
+    /// 路径排序与全局去重：正向非容错路径优先、代价值与音节数最小优先，相同 (syllables, remaining) 仅保留最优解
+    fn dedup_best_paths(paths: &mut Vec<SegmentPath>) {
+        paths.sort_by(|a, b| {
+            a.is_typo
+                .cmp(&b.is_typo)
+                .then_with(|| a.cost.cmp(&b.cost))
+                .then_with(|| a.syllables.len().cmp(&b.syllables.len()))
+        });
+        let mut unique: Vec<SegmentPath> = Vec::with_capacity(paths.len());
+        for path in paths.drain(..) {
+            if !unique
+                .iter()
+                .any(|u| u.syllables == path.syllables && u.remaining == path.remaining)
+            {
+                unique.push(path);
+            }
+        }
+        *paths = unique;
     }
 
     /// 深度优先搜索构建音节与声母混合 DAG 路径（保证 100% 原始击键字母保真）
@@ -374,7 +392,7 @@ impl PrismEngine {
         }
     }
 
-    /// 显式单引号强制切分处理（支持末尾未闭合单字前缀继续展开联想）
+    /// 显式单引号强制切分处理（支持多音节子片段自动拆解及末尾未闭合单字前缀展开联想）
     fn build_explicit_split_paths(input: &str, fuzzy: &FuzzyConfig) -> Vec<SegmentPath> {
         let parts: Vec<&str> = input.split('\'').filter(|s| !s.is_empty()).collect();
         if parts.is_empty() {
@@ -385,15 +403,32 @@ impl PrismEngine {
         let last_idx = parts.len() - 1;
         let last_part = parts[last_idx];
 
-        let mut base_syllables = Vec::with_capacity(parts.len());
+        let mut base_syllables = Vec::with_capacity(parts.len() + 2);
         for &part in &parts[..last_idx] {
-            base_syllables.push(part.to_string());
+            if is_valid_syllable(part)
+                || PrismFuzzy::is_fuzzy_valid(part, fuzzy)
+                || STANDARD_INITIALS.contains(&part)
+            {
+                base_syllables.push(part.to_string());
+            } else if let Some(first_sub) = Self::build_paths(part, fuzzy)
+                .into_iter()
+                .find(|p| !p.syllables.is_empty())
+            {
+                base_syllables.extend(first_sub.syllables);
+                if !first_sub.remaining.is_empty() {
+                    base_syllables.push(first_sub.remaining);
+                }
+            } else {
+                base_syllables.push(part.to_string());
+            }
         }
 
         let mut paths = Vec::new();
+        let last_is_single_valid =
+            is_valid_syllable(last_part) || PrismFuzzy::is_fuzzy_valid(last_part, fuzzy);
 
-        // 1. 若末尾片段本身是合法音节（或末尾输入了单引号强制确认），生成闭合音节路径
-        if is_valid_syllable(last_part) || PrismFuzzy::is_fuzzy_valid(last_part, fuzzy) {
+        // 1. 若末尾片段本身是单个合法音节，生成闭合音节路径
+        if last_is_single_valid {
             let mut syls = base_syllables.clone();
             syls.push(last_part.to_string());
             let cost = syls.len() as u32;
@@ -403,12 +438,34 @@ impl PrismEngine {
                 cost,
                 is_typo: false,
             });
+        } else {
+            // 1.1 若末尾片段包含多个连续音节（如 "xi'anhui" 中的 "anhui"），调用内部切分逻辑拆解拼接
+            for sub in Self::build_paths(last_part, fuzzy) {
+                if !sub.syllables.is_empty() {
+                    let mut syls = base_syllables.clone();
+                    syls.extend(sub.syllables);
+                    let remaining = if is_trailing_quote && !sub.remaining.is_empty() {
+                        syls.push(sub.remaining);
+                        String::new()
+                    } else {
+                        sub.remaining
+                    };
+                    let cost = (syls.len() as u32).saturating_add(sub.cost / 10);
+                    paths.push(SegmentPath {
+                        syllables: syls,
+                        remaining,
+                        cost,
+                        is_typo: sub.is_typo,
+                    });
+                }
+            }
         }
 
-        // 2. 若末尾未以单引号显式封口，且末尾片段不是合法音节或存在更长的合法音节前缀，
-        // 则同时生成将末尾片段作为未完成前缀 (remaining) 的扩展路径（支持如 xi'a 联想 喜爱 xi'ai / 西安 xi'an）
+        // 2. 若末尾未以单引号显式封口，且末尾片段是合法音节前缀（非完整音节或存在更长合法音节），
+        // 则生成将末尾片段作为未完成前缀 (remaining) 的扩展路径（支持如 xi'a 联想 喜爱 xi'ai / 西安 xi'an）
         if !is_trailing_quote
-            && (!is_valid_syllable(last_part) || has_strictly_longer_syllable(last_part))
+            && has_syllable_prefix(last_part)
+            && (!last_is_single_valid || has_strictly_longer_syllable(last_part))
         {
             let cost = (base_syllables.len() + 1) as u32;
             paths.push(SegmentPath {
@@ -515,5 +572,47 @@ mod tests {
                 .any(|p| p.to_key_string() == "shi'hou" && p.is_typo),
             "应支持 shiohu -> shi'hou 倒置纠错"
         );
+    }
+
+    #[test]
+    fn test_explicit_quote_multisyllable_part_split() {
+        let fuzzy = FuzzyConfig::default();
+        let paths = PrismEngine::build_paths("xi'anhui", &fuzzy);
+        assert!(!paths.is_empty());
+        assert_eq!(
+            paths[0].syllables,
+            vec!["xi".to_string(), "an".to_string(), "hui".to_string()]
+        );
+        assert!(paths[0].remaining.is_empty());
+    }
+
+    #[test]
+    fn test_dedup_best_paths_retains_optimal() {
+        let mut paths = vec![
+            SegmentPath {
+                syllables: vec!["ni".to_string(), "hao".to_string()],
+                remaining: String::new(),
+                cost: 36,
+                is_typo: true,
+            },
+            SegmentPath {
+                syllables: vec!["ni".to_string(), "hao".to_string()],
+                remaining: "a".to_string(),
+                cost: 25,
+                is_typo: false,
+            },
+            SegmentPath {
+                syllables: vec!["ni".to_string(), "hao".to_string()],
+                remaining: String::new(),
+                cost: 20,
+                is_typo: false,
+            },
+        ];
+        PrismEngine::dedup_best_paths(&mut paths);
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0].remaining, "");
+        assert_eq!(paths[0].cost, 20);
+        assert!(!paths[0].is_typo);
+        assert_eq!(paths[1].remaining, "a");
     }
 }
