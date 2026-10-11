@@ -8,16 +8,16 @@ use waylan_algo::AlgoEngine;
 
 /// 打印主程序 CLI 使用帮助
 pub fn print_main_usage() {
-    info!("微澜输入法 (WayLan) - 专为 Wayland 打造的现代轻量纯 Rust 中文输入法");
-    info!("用法: waylan [选项 | 子命令]");
-    info!("选项:");
-    info!("  -h, --help       显示本帮助信息");
-    info!("  -V, --version    显示版本信息");
-    info!("  --check          执行算法引擎与词库环境自检");
-    info!("  --settings       启动图形化偏好设置界面");
-    info!("子命令:");
-    info!("  settings         启动图形化偏好设置界面");
-    info!("  dict <子命令>    词库编译与用户词库导入管理工具");
+    println!("微澜输入法 (WayLan) - 专为 Wayland 打造的现代轻量纯 Rust 中文输入法");
+    println!("用法: waylan [选项 | 子命令]");
+    println!("选项:");
+    println!("  -h, --help       显示本帮助信息");
+    println!("  -V, --version    显示版本信息");
+    println!("  --check          执行算法引擎与词库环境自检");
+    println!("  --settings       启动图形化偏好设置界面");
+    println!("子命令:");
+    println!("  settings         启动图形化偏好设置界面");
+    println!("  dict <子命令>    词库编译与用户词库导入管理工具");
 }
 
 /// 处理 `dict` 命令行子命令
@@ -124,12 +124,12 @@ pub fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn Error>>
 
 /// 打印词库管理 CLI 使用帮助
 pub fn print_dict_usage() {
-    info!("微澜输入法 (WayLan) 词库构建管理工具");
-    info!("用法: waylan dict <子命令> [参数...]");
-    info!("  build <输入文本词库1> [输入2...] <输出二进制文件>");
-    info!("  build-opencc [STCharacters.txt] [STPhrases.txt] [输出文件]");
-    info!("  build-aux <英文词表> <符号表> <输出文件>");
-    info!("  import-user <用户文本词库> <用户二进制WAL路径>");
+    println!("微澜输入法 (WayLan) 词库构建管理工具");
+    println!("用法: waylan dict <子命令> [参数...]");
+    println!("  build <输入文本词库1> [输入2...] <输出二进制文件>");
+    println!("  build-opencc [STCharacters.txt] [STPhrases.txt] [输出文件]");
+    println!("  build-aux <英文词表> <符号表> <输出文件>");
+    println!("  import-user <用户文本词库> <用户二进制WAL路径>");
 }
 
 /// 执行算法与词典自检测试
