@@ -1,5 +1,7 @@
 use crate::surface::CursorRect;
 use log::{debug, info, trace};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsFd;
 use waylan_ui::CandidateHitTarget;
 use wayland_client::protocol::wl_keyboard::KeyState;
@@ -7,6 +9,7 @@ use wayland_client::protocol::wl_pointer::{
     ButtonState as WlButtonState, Event as PointerEvent, WlPointer,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ContentPurpose;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_keyboard_grab_v2::{
     Event as GrabEvent, ZwpInputMethodKeyboardGrabV2,
 };
@@ -52,10 +55,12 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                 state.stage_surrounding_text(text, cursor, anchor);
             }
             V2Event::TextChangeCause { cause: _ } => {}
-            V2Event::ContentType {
-                hint: _,
-                purpose: _,
-            } => {}
+            V2Event::ContentType { hint: _, purpose } => {
+                state.pending_is_password = matches!(
+                    purpose,
+                    WEnum::Value(ContentPurpose::Password | ContentPurpose::Pin)
+                );
+            }
             V2Event::Done => {
                 let now_active = state.apply_done_state();
                 if now_active {
@@ -132,15 +137,17 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     format, size
                 );
                 // 尝试从 fd 读取 XKB keymap 文本并动态更新键盘字符映射以适配非 QWERTY 布局
-                if let Ok(mut file) = fd.try_clone().map(std::fs::File::from) {
-                    use std::io::Read;
+                if let Ok(mut file) = fd.try_clone().map(File::from) {
                     let read_len = (size as usize).min(1024 * 1024);
                     let mut buf = vec![0u8; read_len];
-                    if file.read_exact(&mut buf).is_ok() {
-                        if let Ok(text) = std::str::from_utf8(&buf) {
-                            state.keymap_layout.update_from_xkb_text(text);
-                            info!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
-                        }
+                    let read_ok = file.read_exact(&mut buf).is_ok();
+                    let _ = file.seek(SeekFrom::Start(0));
+                    if read_ok {
+                        let text = String::from_utf8_lossy(&buf);
+                        state
+                            .keymap_layout
+                            .update_from_xkb_text(text.trim_end_matches('\0'));
+                        info!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
                     }
                 }
                 if let Some(ref vk) = state.virtual_keyboard {

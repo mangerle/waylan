@@ -234,6 +234,17 @@ pub fn process_key_event(
 ) -> (bool, Option<String>) {
     session.update_modifier_by_key(key, is_press);
 
+    // 密码或 PIN 码输入框自动规避拼音拦截，全量直通按键
+    if session.is_password_context {
+        session.repeat_state = None;
+        session.shift_state.reset();
+        if !is_press {
+            return (session.consumed_keys.take_release(key), None);
+        }
+        session.consumed_keys.record_press(key, false);
+        return (false, None);
+    }
+
     // 1. 优先经由 Shift/Ctrl 防误触状态机判定
     let toggled_mode = session
         .shift_state

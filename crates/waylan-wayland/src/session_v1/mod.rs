@@ -186,17 +186,7 @@ impl WaylanV1Session {
             info!("[微澜] 已完成用户词库与运行配置热重载。");
         }
 
-        if let Some(ref zh_flag) = self.shared_is_chinese {
-            let external_zh = zh_flag.load(Ordering::Relaxed);
-            let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
-            if external_zh != current_zh {
-                self.mode = if external_zh {
-                    InputMode::Chinese
-                } else {
-                    InputMode::English
-                };
-            }
-        }
+        self.sync_mode_from_shared_flag();
     }
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
@@ -213,8 +203,13 @@ impl WaylanV1Session {
             return;
         }
 
+        self.sync_mode_from_shared_flag();
+    }
+
+    /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即清理残留预编辑与候选框
+    fn sync_mode_from_shared_flag(&mut self) {
         if let Some(ref zh_flag) = self.shared_is_chinese {
-            let external_zh = zh_flag.load(Ordering::Acquire);
+            let external_zh = zh_flag.load(std::sync::atomic::Ordering::Acquire);
             let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
             if external_zh != current_zh {
                 self.mode = if external_zh {
@@ -222,6 +217,14 @@ impl WaylanV1Session {
                 } else {
                     InputMode::English
                 };
+                if self.mode == InputMode::English && !self.engine.raw_input().is_empty() {
+                    self.engine.reset();
+                    self.hide_candidate_surface();
+                    if let Some(ref ctx) = self.active_context {
+                        ctx.preedit_cursor(0);
+                        ctx.preedit_string(self.commit_serial, String::new(), String::new());
+                    }
+                }
             }
         }
     }
@@ -370,7 +373,6 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
                 state.commit_serial = serial;
             }
             ContextEvent::Reset => {
-                state.consumed_keys.clear();
                 state.shift_sm.reset();
                 state.punctuation_processor.reset();
                 state.engine.reset();

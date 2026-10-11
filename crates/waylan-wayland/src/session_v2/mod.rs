@@ -72,6 +72,10 @@ pub struct WaylanV2Session {
     pub pending_active: bool,
     /// 双缓冲挂起的上下文环境文本（在收到 Done 事件时原子生效）
     pub pending_surrounding_text: Option<(String, u32, u32)>,
+    /// 双缓冲挂起的密码/PIN码输入框标识（在收到 Done 事件时原子生效）
+    pub pending_is_password: bool,
+    /// 当前激活上下文是否为密码或 PIN 输入框（若为 true 则自动直通按键规避拼音拦截）
+    pub is_password_context: bool,
     /// 标记当前批次是否发生了焦点激活/失焦切换（用于在 Done 事件中重置状态机）
     pub pending_focus_reset: bool,
     /// Done 事件累计序列号（用于 commit 请求原子同步）
@@ -140,6 +144,8 @@ impl WaylanV2Session {
             surrounding_text: None,
             pending_active: false,
             pending_surrounding_text: None,
+            pending_is_password: false,
+            is_password_context: false,
             pending_focus_reset: false,
             done_serial: 0,
             mods_depressed: 0,
@@ -167,6 +173,7 @@ impl WaylanV2Session {
         self.pending_active = true;
         self.pending_focus_reset = true;
         self.pending_surrounding_text = None;
+        self.pending_is_password = false;
     }
 
     /// 挂起 Deactivate 事件（等待 Done 事件原子提交）
@@ -174,6 +181,7 @@ impl WaylanV2Session {
         self.pending_active = false;
         self.pending_focus_reset = true;
         self.pending_surrounding_text = None;
+        self.pending_is_password = false;
     }
 
     /// 挂起 SurroundingText 事件（等待 Done 事件原子提交）
@@ -192,38 +200,43 @@ impl WaylanV2Session {
 
         if now_active {
             self.surrounding_text = self.pending_surrounding_text.clone();
+            self.is_password_context = self.pending_is_password;
             self.sync_external_state();
             if !was_active || focus_reset {
-                self.mods_depressed = 0;
-                self.phys_mods = 0;
-                self.consumed_keys.clear();
-                self.repeat_state = None;
-                self.mods_latched = 0;
-                self.mods_locked = 0;
-                self.mods_group = 0;
-                self.shift_state.reset();
-                self.punctuation_processor.reset();
-                self.engine.reset();
-                self.hide_candidate_surface();
+                self.reset_focus_state();
+            } else if self.is_password_context && !self.engine.raw_input().is_empty() {
+                self.cancel_input();
             }
         } else {
             self.pending_surrounding_text = None;
             self.surrounding_text = None;
+            self.pending_is_password = false;
+            self.is_password_context = false;
             if was_active || focus_reset {
-                self.mods_depressed = 0;
-                self.phys_mods = 0;
-                self.consumed_keys.clear();
-                self.repeat_state = None;
-                self.mods_latched = 0;
-                self.mods_locked = 0;
-                self.mods_group = 0;
-                self.shift_state.reset();
-                self.punctuation_processor.reset();
-                self.engine.reset();
-                self.hide_candidate_surface();
+                if self.mods_depressed != 0 && self.has_virtual_keymap {
+                    if let Some(ref vk) = self.virtual_keyboard {
+                        vk.modifiers(0, 0, self.mods_locked, self.mods_group);
+                    }
+                }
+                self.reset_focus_state();
             }
         }
         now_active
+    }
+
+    /// 重置焦点关联的键盘修饰键、防误触状态机与输入引擎状态
+    fn reset_focus_state(&mut self) {
+        self.mods_depressed = 0;
+        self.phys_mods = 0;
+        self.consumed_keys.clear();
+        self.repeat_state = None;
+        self.mods_latched = 0;
+        self.mods_locked = 0;
+        self.mods_group = 0;
+        self.shift_state.reset();
+        self.punctuation_processor.reset();
+        self.engine.reset();
+        self.hide_candidate_surface();
     }
 
     /// 根据按键按下/释放事件更新修饰键位掩码
@@ -290,17 +303,7 @@ impl WaylanV2Session {
             info!("[Wayland v2] 已完成用户词库与运行配置热重载。");
         }
 
-        if let Some(ref zh_flag) = self.shared_is_chinese {
-            let external_zh = zh_flag.load(Ordering::Relaxed);
-            let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
-            if external_zh != current_zh {
-                self.mode = if external_zh {
-                    InputMode::Chinese
-                } else {
-                    InputMode::English
-                };
-            }
-        }
+        self.sync_mode_from_shared_flag();
     }
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
@@ -317,8 +320,13 @@ impl WaylanV2Session {
             return;
         }
 
+        self.sync_mode_from_shared_flag();
+    }
+
+    /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即取消输入并隐藏候选框
+    fn sync_mode_from_shared_flag(&mut self) {
         if let Some(ref zh_flag) = self.shared_is_chinese {
-            let external_zh = zh_flag.load(Ordering::Acquire);
+            let external_zh = zh_flag.load(std::sync::atomic::Ordering::Acquire);
             let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
             if external_zh != current_zh {
                 self.mode = if external_zh {
@@ -326,6 +334,9 @@ impl WaylanV2Session {
                 } else {
                     InputMode::English
                 };
+                if self.mode == InputMode::English && !self.engine.raw_input().is_empty() {
+                    self.cancel_input();
+                }
             }
         }
     }
@@ -505,12 +516,6 @@ impl WaylanV2Session {
             return;
         }
         if let Some(ref vk) = self.virtual_keyboard {
-            vk.modifiers(
-                self.mods_depressed,
-                self.mods_latched,
-                self.mods_locked,
-                self.mods_group,
-            );
             let state_val = if is_press { 1 } else { 0 };
             vk.key(time, key, state_val);
         } else {
