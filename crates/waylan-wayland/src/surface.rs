@@ -12,7 +12,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Dispatch, QueueHandle};
 
-/// 候选框共享内存持久槽位（复用匿名文件描述符与预分配内存空间）
+/// 候选框共享内存持久槽位（复用匿名文件描述符、预分配内存空间与 Wayland 共享内存池）
 pub struct ShmSlot {
     /// 匿名共享内存文件
     pub file: File,
@@ -20,6 +20,8 @@ pub struct ShmSlot {
     pub capacity: usize,
     /// 标记当前槽位的缓冲区是否正被合成器读取占用
     pub is_busy: bool,
+    /// 持久复用的 Wayland 共享内存池及其当前在合成器侧映射的字节大小（消除每次按键重复 mmap/munmap）
+    pub pool: Option<(WlShmPool, usize)>,
 }
 
 impl ShmSlot {
@@ -30,6 +32,7 @@ impl ShmSlot {
             file,
             capacity,
             is_busy: false,
+            pool: None,
         })
     }
 
@@ -162,6 +165,24 @@ impl CandidateSurfaceManager {
         self.renderer.set_scale(scale as f32);
     }
 
+    /// 清理绑定到旧 Wayland 连接的池与缓冲区代理资源（保留底层 memfd 文件与渲染器缓存，供会话重连或降级复用）
+    pub fn clear_wayland_resources(&mut self) {
+        for slot in self.shm_slots.iter_mut().flatten() {
+            slot.is_busy = false;
+            if let Some((pool, _)) = slot.pool.take() {
+                pool.destroy();
+            }
+        }
+        for buf in self.slot_buffers.iter_mut() {
+            if let Some(b) = buf.take() {
+                b.destroy();
+            }
+        }
+        for (_, b) in self.pending_release_buffers.drain(..) {
+            b.destroy();
+        }
+    }
+
     /// 确保指定槽位已经初始化并具备足够的容量
     fn ensure_slot(&mut self, slot_idx: usize, required_bytes: usize) -> std::io::Result<()> {
         if self.shm_slots[slot_idx].is_none() {
@@ -269,6 +290,52 @@ impl CandidateSurfaceManager {
         }
     }
 
+    /// 从指定 SHM 槽位持久复用的 WlShmPool 中分配或扩容创建 WlBuffer
+    fn acquire_slot_buffer<S>(
+        slot: &mut ShmSlot,
+        shm: &WlShm,
+        qh: &QueueHandle<S>,
+        dims: (u32, u32, i32),
+    ) -> WlBuffer
+    where
+        S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
+    {
+        let (aligned_w, aligned_h, stride) = dims;
+        let min_pool_bytes = (stride.saturating_mul(aligned_h as i32)).max(1) as usize;
+        let target_pool_size = slot.capacity.max(min_pool_bytes);
+        match slot.pool {
+            Some((ref pool, ref mut mapped_size)) => {
+                if *mapped_size < target_pool_size {
+                    pool.resize(target_pool_size as i32);
+                    *mapped_size = target_pool_size;
+                }
+                pool.create_buffer(
+                    0,
+                    aligned_w as i32,
+                    aligned_h as i32,
+                    stride,
+                    wl_shm::Format::Argb8888,
+                    qh,
+                    (),
+                )
+            }
+            None => {
+                let pool = shm.create_pool(slot.file.as_fd(), target_pool_size as i32, qh, ());
+                let buf = pool.create_buffer(
+                    0,
+                    aligned_w as i32,
+                    aligned_h as i32,
+                    stride,
+                    wl_shm::Format::Argb8888,
+                    qh,
+                    (),
+                );
+                slot.pool = Some((pool, target_pool_size));
+                buf
+            }
+        }
+    }
+
     /// 渲染候选框状态并将其通过 wl_shm 共享内存池挂载提交至 Wayland wl_surface
     pub fn commit_to_wayland<S>(
         &mut self,
@@ -282,7 +349,7 @@ impl CandidateSurfaceManager {
     {
         let scale = self.scale.max(1);
         let scale_u = scale as u32;
-        let Some((width, height, file)) = self.render_state(state) else {
+        let Some((width, height, _)) = self.render_state(state) else {
             self.hide_wayland_surface(surface, active_buffer);
             return;
         };
@@ -291,25 +358,15 @@ impl CandidateSurfaceManager {
             let aligned_w = (width / scale_u).max(1).saturating_mul(scale_u);
             let aligned_h = (height / scale_u).max(1).saturating_mul(scale_u);
             let stride = (width as i32).saturating_mul(4);
-            let pool_size = stride.saturating_mul(height as i32);
-            let pool = shm.create_pool(file.as_fd(), pool_size, qh, ());
-            let buffer = pool.create_buffer(
-                0,
-                aligned_w as i32,
-                aligned_h as i32,
-                stride,
-                wl_shm::Format::Argb8888,
-                qh,
-                (),
-            );
-            pool.destroy();
 
-            let is_slot_busy = self.shm_slots[self.current_slot]
-                .as_ref()
-                .map(|s| s.is_busy)
-                .unwrap_or(false);
-            let old_slot_buf = self.slot_buffers[self.current_slot].take();
-            if let Some(old) = old_slot_buf {
+            let Some(ref mut slot) = self.shm_slots[self.current_slot] else {
+                return;
+            };
+            let is_slot_busy = slot.is_busy;
+            let buffer = Self::acquire_slot_buffer(slot, shm, qh, (aligned_w, aligned_h, stride));
+            slot.is_busy = true;
+
+            if let Some(old) = self.slot_buffers[self.current_slot].take() {
                 if !is_slot_busy {
                     old.destroy();
                 } else {
@@ -317,9 +374,6 @@ impl CandidateSurfaceManager {
                 }
             }
             self.slot_buffers[self.current_slot] = Some(buffer.clone());
-            if let Some(ref mut slot) = self.shm_slots[self.current_slot] {
-                slot.is_busy = true;
-            }
 
             surf.set_buffer_scale(scale);
             surf.attach(Some(&buffer), 0, 0);
