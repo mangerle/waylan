@@ -148,7 +148,8 @@ fn test_watched_paths_mtime_triggers_reload() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
 
-    let temp_file = std::env::temp_dir().join("waylan_test_mtime_watch.toml");
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let temp_file = dir.path().join("waylan_test_mtime_watch.toml");
     let _ = std::fs::write(&temp_file, "page_size = 7\n");
 
     session.watched_paths = vec![temp_file.clone()];
@@ -168,8 +169,6 @@ fn test_watched_paths_mtime_triggers_reload() {
         session.engine.config.page_size, 9,
         "检测到被监控文件修改时间更新后应自动触发 reload_callback"
     );
-
-    let _ = std::fs::remove_file(&temp_file);
 }
 
 #[test]
