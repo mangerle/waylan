@@ -143,11 +143,12 @@ mod tests {
         assert!(mgr.match_exact("viterbi").is_some());
         assert!(mgr.match_exact("xyz123").is_none());
 
-        let prefix_res = mgr.match_prefix("rustaceans");
-        assert!(prefix_res.is_some());
-        let (entity, len) = prefix_res.unwrap();
-        assert_eq!(entity, "rust");
-        assert_eq!(len, 4);
+        if let Some((entity, len)) = mgr.match_prefix("rustaceans") {
+            assert_eq!(entity, "rust");
+            assert_eq!(len, 4);
+        } else {
+            panic!("预期命中前缀保护实体 rustaceans -> rust");
+        }
     }
 
     #[test]
