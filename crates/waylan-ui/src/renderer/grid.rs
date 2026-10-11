@@ -100,8 +100,11 @@ pub fn render_grid_expanded_panel(
     }
 
     let dims = compute_grid_dimensions(renderer, candidates_source, state.selected_index, s);
-    let canvas_w = dims.total_width.ceil().clamp(1.0, 4096.0) as u32;
-    let canvas_h = dims.total_height.ceil().clamp(1.0, 2048.0) as u32;
+    let align = (s.round() as u32).max(1);
+    let clamped_w = dims.total_width.ceil().clamp(1.0, 4096.0) as u32;
+    let clamped_h = dims.total_height.ceil().clamp(1.0, 2048.0) as u32;
+    let canvas_w = clamped_w.div_ceil(align).saturating_mul(align);
+    let canvas_h = clamped_h.div_ceil(align).saturating_mul(align);
     let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
 
     // 绘制大面板圆角卡片背景

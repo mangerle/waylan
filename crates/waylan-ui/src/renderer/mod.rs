@@ -424,8 +424,11 @@ impl CandidateBoxRenderer {
             );
         }
 
-        let canvas_w = raw_w.clamp(1.0, 4096.0) as u32;
-        let canvas_h = raw_h.clamp(1.0, 2048.0) as u32;
+        let align = (s.round() as u32).max(1);
+        let clamped_w = raw_w.clamp(1.0, 4096.0) as u32;
+        let clamped_h = raw_h.clamp(1.0, 2048.0) as u32;
+        let canvas_w = clamped_w.div_ceil(align).saturating_mul(align);
+        let canvas_h = clamped_h.div_ceil(align).saturating_mul(align);
 
         if canvas_w == 0 || canvas_h == 0 {
             return None;

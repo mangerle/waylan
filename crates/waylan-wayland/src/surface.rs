@@ -280,19 +280,23 @@ impl CandidateSurfaceManager {
     ) where
         S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
     {
+        let scale = self.scale.max(1);
+        let scale_u = scale as u32;
         let Some((width, height, file)) = self.render_state(state) else {
             self.hide_wayland_surface(surface, active_buffer);
             return;
         };
 
         if let (Some(shm), Some(surf), Some(qh)) = (shm, surface, qhandle) {
+            let aligned_w = (width / scale_u).max(1).saturating_mul(scale_u);
+            let aligned_h = (height / scale_u).max(1).saturating_mul(scale_u);
             let stride = (width as i32).saturating_mul(4);
             let pool_size = stride.saturating_mul(height as i32);
             let pool = shm.create_pool(file.as_fd(), pool_size, qh, ());
             let buffer = pool.create_buffer(
                 0,
-                width as i32,
-                height as i32,
+                aligned_w as i32,
+                aligned_h as i32,
                 stride,
                 wl_shm::Format::Argb8888,
                 qh,
@@ -317,10 +321,10 @@ impl CandidateSurfaceManager {
                 slot.is_busy = true;
             }
 
-            surf.set_buffer_scale(self.scale);
+            surf.set_buffer_scale(scale);
             surf.attach(Some(&buffer), 0, 0);
-            let logical_w = ((width as f32) / (self.scale as f32)).ceil() as i32;
-            let logical_h = ((height as f32) / (self.scale as f32)).ceil() as i32;
+            let logical_w = (aligned_w / scale_u) as i32;
+            let logical_h = (aligned_h / scale_u) as i32;
             surf.damage(0, 0, logical_w, logical_h);
             surf.commit();
             *active_buffer = Some(buffer);
