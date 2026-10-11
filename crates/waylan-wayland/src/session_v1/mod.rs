@@ -306,11 +306,19 @@ impl WaylanV1Session {
     /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
+        self.surface_manager.commit_to_wayland(
+            &box_state,
+            self.shm.as_ref(),
+            self.popup_wl_surface.as_ref(),
+            self.qhandle.as_ref(),
+            &mut self.active_buffer,
+        );
+
         if let Some(ref layer_surf) = self.layer_surface {
             let scale = self.surface_manager.scale.max(1) as u32;
             let (phys_w, phys_h) = self.surface_manager.current_size;
-            let logical_w = (phys_w / scale).max(200);
-            let logical_h = (phys_h / scale).max(48);
+            let logical_w = (phys_w / scale).max(1);
+            let logical_h = (phys_h / scale).max(1);
             let (screen_w, screen_h) = self.surface_manager.screen_size;
             let (pos_x, pos_y) = self
                 .surface_manager
@@ -319,13 +327,6 @@ impl WaylanV1Session {
             layer_surf.set_size(logical_w, logical_h);
             layer_surf.set_margin(pos_y.max(0), 0, 0, pos_x.max(0));
         }
-        self.surface_manager.commit_to_wayland(
-            &box_state,
-            self.shm.as_ref(),
-            self.popup_wl_surface.as_ref(),
-            self.qhandle.as_ref(),
-            &mut self.active_buffer,
-        );
     }
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲
@@ -361,7 +362,6 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
                 let keyboard = id.grab_keyboard(qhandle, ());
                 state.grabbed_keyboard = Some(keyboard);
                 state.active_context = Some(id);
-                state.commit_serial = 0;
                 state.mods_depressed = 0;
                 state.phys_mods = 0;
                 state.consumed_keys.clear();
@@ -372,15 +372,15 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
             MethodEvent::Deactivate { context } => {
                 info!("[微澜] 收到失焦事件：用户已离开文本输入框。");
                 let is_current = state.active_context.as_ref() == Some(&context);
-                context.destroy();
                 if is_current {
-                    state.active_context = None;
+                    if let Some(active_ctx) = state.active_context.take() {
+                        active_ctx.destroy();
+                    }
                     if let Some(old_kb) = state.grabbed_keyboard.take() {
                         if old_kb.version() >= 3 {
                             old_kb.release();
                         }
                     }
-                    state.commit_serial = 0;
                     state.mods_depressed = 0;
                     state.phys_mods = 0;
                     state.consumed_keys.clear();

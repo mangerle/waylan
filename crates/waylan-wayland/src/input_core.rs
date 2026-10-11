@@ -376,7 +376,7 @@ pub fn handle_composition_key(
         }
     }
 
-    // 3. 数字键 1-9（未按 Shift 时）：选择对应位候选词
+    // 3. 数字键（1-9）：选取对应编号候选词
     if !shift_active {
         if let Some(digit) = keycode_to_digit(key) {
             let cand_idx = digit.saturating_sub(1);
@@ -390,11 +390,14 @@ pub fn handle_composition_key(
                 } else {
                     return Some(KeyProcessAction::Commit(committed_text));
                 }
+            } else {
+                // 组合态下超出范围的数字键吞掉，避免穿透给客户端引发字符污染
+                return Some(KeyProcessAction::Handled);
             }
         }
     }
 
-    // 4. 空格键：当前高亮候选词上屏
+    // 4. 空格键：当前高亮候选词上屏（若无候选词则吞掉按键，避免空格泄露至宿主应用）
     if key == KEY_SPACE {
         let sel = engine.selected_index;
         if let Some((committed_text, remaining_len)) = engine.select_candidate(sel, now) {
@@ -407,6 +410,8 @@ pub fn handle_composition_key(
             } else {
                 return Some(KeyProcessAction::Commit(committed_text));
             }
+        } else {
+            return Some(KeyProcessAction::Handled);
         }
     }
 
