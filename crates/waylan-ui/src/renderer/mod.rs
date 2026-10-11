@@ -98,6 +98,18 @@ impl CandidateBoxRenderer {
         }
     }
 
+    /// 当字形缓存达到上限时，淘汰约 25% 的旧条目避免全量清空带来的重光栅化抖动
+    fn evict_cache_if_needed(cache: &mut HashMap<(char, u32), CachedGlyph>) {
+        if cache.len() >= MAX_GLYPH_CACHE_SIZE {
+            let evict_count = MAX_GLYPH_CACHE_SIZE / 4;
+            let keys_to_remove: Vec<(char, u32)> =
+                cache.keys().take(evict_count).cloned().collect();
+            for key in keys_to_remove {
+                cache.remove(&key);
+            }
+        }
+    }
+
     /// 测量一段文字的排版宽度（单次加锁并顺带预热字形缓存，使后续绘制 100% 命中缓存）
     pub fn measure_text(&self, text: &str, size: f32) -> f32 {
         let Some(font) = self.font.as_ref() else {
@@ -114,9 +126,7 @@ impl CandidateBoxRenderer {
                 } else {
                     let (metrics, bitmap) = font.rasterize(ch, size);
                     width += metrics.advance_width;
-                    if cache.len() >= MAX_GLYPH_CACHE_SIZE {
-                        cache.clear();
-                    }
+                    Self::evict_cache_if_needed(&mut cache);
                     cache.insert(
                         (ch, size_key),
                         CachedGlyph {
@@ -149,9 +159,7 @@ impl CandidateBoxRenderer {
                 metrics,
                 bitmap: Arc::from(bitmap),
             };
-            if cache.len() >= MAX_GLYPH_CACHE_SIZE {
-                cache.clear();
-            }
+            Self::evict_cache_if_needed(&mut cache);
             cache.insert((ch, size_key), cached.clone());
             Some(cached)
         } else {
