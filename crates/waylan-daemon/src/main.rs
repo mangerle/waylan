@@ -153,22 +153,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opencc_dict = load_opencc_dict();
     engine.load_opencc_dict(opencc_dict);
 
+    // 6. 执行环境自检（--check 参数，在词库加载完成后立即自检，支持无 Wayland GUI 环境下的 CI 测试）
+    if args.len() > 1 && args[1] == "--check" {
+        cli::run_self_check(&mut engine)?;
+        return Ok(());
+    }
+
     if term_now.load(std::sync::atomic::Ordering::Relaxed) {
         info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
         return Ok(());
     }
 
-    // 6. 探测 Wayland 环境与合成器协议能力
+    // 7. 探测 Wayland 环境与合成器协议能力
     let caps = check_wayland_capabilities();
 
     if term_now.load(std::sync::atomic::Ordering::Relaxed) {
         info!("[微澜守护进程] 探测环境期间收到终止信号，立即安全退场。");
-        return Ok(());
-    }
-
-    // 7. 执行环境自检（--check 参数）
-    if args.len() > 1 && args[1] == "--check" {
-        cli::run_self_check(&mut engine)?;
         return Ok(());
     }
 

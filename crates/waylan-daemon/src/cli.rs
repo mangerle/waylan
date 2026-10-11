@@ -152,7 +152,11 @@ pub fn run_self_check(engine: &mut AlgoEngine) -> Result<(), Box<dyn Error>> {
             c.score
         );
     }
+    let is_empty = cands.is_empty();
     engine.reset();
+    if is_empty {
+        return Err("自检测试失败：键入 'xian' 未能召回任何候选词，请检查词库完整性！".into());
+    }
     info!("自检测试通过！");
     Ok(())
 }
