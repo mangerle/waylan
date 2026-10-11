@@ -3,7 +3,7 @@ use log::{info, warn};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// 缓存的单字形光栅化位图与度量信息
 #[derive(Debug, Clone)]
@@ -12,12 +12,21 @@ pub struct CachedGlyph {
     pub bitmap: Arc<[u8]>,
 }
 
+/// 全局字体加载结果缓存，避免 V2 降级 V1 或重建渲染器时重复扫描磁盘
+static GLOBAL_FONT_CACHE: OnceLock<Option<Arc<Font>>> = OnceLock::new();
+
 /// 系统字体加载与探测模块
 pub struct FontManager;
 
 impl FontManager {
-    /// 加载默认系统字体
+    /// 加载默认系统字体（通过全局 OnceLock 避免重复扫描与多次反序列化）
     pub fn load_default_fonts() -> Option<Font> {
+        let cached =
+            GLOBAL_FONT_CACHE.get_or_init(|| Self::load_default_fonts_impl().map(Arc::new));
+        cached.as_ref().map(|arc| (**arc).clone())
+    }
+
+    fn load_default_fonts_impl() -> Option<Font> {
         let mut candidates = vec![
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".to_string(),
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc".to_string(),
@@ -64,7 +73,7 @@ impl FontManager {
         None
     }
 
-    /// 回退字体深度安全探测（基于显式栈迭代遍历子目录，防爆栈，且强制校验包含中文汉字字形）
+    /// 回退字体深度安全探测（带文件数量与单文件体积预算上限，避免无限制读盘引发数秒级启动延迟）
     fn scan_fallback_fonts() -> Option<Font> {
         let mut search_dirs = vec![
             PathBuf::from("/usr/share/fonts"),
@@ -85,8 +94,13 @@ impl FontManager {
             }
         }
 
+        // 设置安全预算：最多检测 60 个字体文件，单个文件超过 35MB 过滤跳过
+        const MAX_FILES_BUDGET: usize = 60;
+        const MAX_FILE_SIZE: u64 = 35 * 1024 * 1024;
+        let mut inspected_files = 0;
+
         while let Some((dir, depth)) = queue.pop_front() {
-            if depth > 4 {
+            if depth > 4 || inspected_files >= MAX_FILES_BUDGET {
                 continue;
             }
             let Ok(entries) = fs::read_dir(&dir) else {
@@ -94,12 +108,21 @@ impl FontManager {
             };
 
             for entry in entries.flatten() {
+                if inspected_files >= MAX_FILES_BUDGET {
+                    break;
+                }
                 let p = entry.path();
                 if p.is_dir() {
                     queue.push_back((p, depth + 1));
                 } else if p.is_file() {
                     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
                     if matches!(ext, "ttf" | "ttc" | "otf") {
+                        if let Ok(meta) = entry.metadata() {
+                            if meta.len() > MAX_FILE_SIZE {
+                                continue;
+                            }
+                        }
+                        inspected_files += 1;
                         if let Ok(data) = fs::read(&p) {
                             if let Ok(font) = Font::from_bytes(&data[..], FontSettings::default()) {
                                 if font.lookup_glyph_index('中') != 0 {
