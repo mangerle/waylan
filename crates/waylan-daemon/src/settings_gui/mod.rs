@@ -4,7 +4,6 @@ mod views;
 use crate::config::AppConfig;
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichText};
 use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
 /// 偏好设置中心导航 Tab 标签页枚举
@@ -143,47 +142,76 @@ impl SettingsApp {
             .map_err(|e| format!("写入短语配置失败: {}", e))
     }
 
-    /// 配置系统与备选中文字体
-    pub fn configure_chinese_fonts(ctx: &egui::Context) {
-        let font_candidates = [
+    /// 探测并加载系统或用户环境中的 CJK 中文字体二进制数据
+    fn find_cjk_font_data() -> Option<Vec<u8>> {
+        if let Some(custom) = crate::config::env_var_non_empty("WAYLAN_FONT_PATH") {
+            if let Ok(data) = fs::read(custom) {
+                return Some(data);
+            }
+        }
+
+        let system_paths = [
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-cjk-fonts/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+            "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+            "/usr/share/fonts/noto/NotoSansSC-Regular.otf",
+            "/usr/share/fonts/noto/NotoSansSC-Regular.ttf",
+            "/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf",
             "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf",
+            "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
+            "/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
+            "/usr/share/fonts/truetype/arphic/uming.ttc",
+            "/usr/share/fonts/truetype/arphic/ukai.ttc",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
         ];
 
-        for path_str in &font_candidates {
-            let path = Path::new(path_str);
-            if path.exists() {
-                if let Ok(font_data) = fs::read(path) {
-                    let mut fonts = FontDefinitions::default();
-                    fonts.font_data.insert(
-                        "cjk_fallback".to_owned(),
-                        Arc::new(FontData::from_owned(font_data).tweak(egui::FontTweak {
-                            scale: 1.0,
-                            ..Default::default()
-                        })),
-                    );
+        for path in system_paths {
+            if let Ok(data) = fs::read(path) {
+                return Some(data);
+            }
+        }
 
-                    fonts
-                        .families
-                        .entry(FontFamily::Proportional)
-                        .or_default()
-                        .insert(0, "cjk_fallback".to_owned());
-
-                    fonts
-                        .families
-                        .entry(FontFamily::Monospace)
-                        .or_default()
-                        .push("cjk_fallback".to_owned());
-
-                    ctx.set_fonts(fonts);
-                    break;
+        if let Some(home) = crate::config::env_var_non_empty("HOME") {
+            for sub in ["NotoSansCJK-Regular.ttc", "NotoSansSC-Regular.otf"] {
+                let user_font = format!("{}/.local/share/fonts/{}", home, sub);
+                if let Ok(data) = fs::read(user_font) {
+                    return Some(data);
                 }
             }
+        }
+        None
+    }
+
+    /// 配置系统与备选中文字体
+    pub fn configure_chinese_fonts(ctx: &egui::Context) {
+        if let Some(font_data) = Self::find_cjk_font_data() {
+            let mut fonts = FontDefinitions::default();
+            fonts.font_data.insert(
+                "cjk_fallback".to_owned(),
+                Arc::new(FontData::from_owned(font_data).tweak(egui::FontTweak {
+                    scale: 1.0,
+                    ..Default::default()
+                })),
+            );
+
+            fonts
+                .families
+                .entry(FontFamily::Proportional)
+                .or_default()
+                .insert(0, "cjk_fallback".to_owned());
+
+            fonts
+                .families
+                .entry(FontFamily::Monospace)
+                .or_default()
+                .push("cjk_fallback".to_owned());
+
+            ctx.set_fonts(fonts);
         }
     }
 }
@@ -329,8 +357,16 @@ impl eframe::App for SettingsApp {
 
                 if ui.button("恢复默认设置").clicked() {
                     self.config = AppConfig::default();
-                    self.status_message =
-                        Some("已重置为系统默认配置，请点击保存生效。".to_string());
+                    match self.config.save_default() {
+                        Ok(_) => {
+                            self.status_message =
+                                Some("已重置为系统默认配置并成功保存持久化！".to_string());
+                        }
+                        Err(e) => {
+                            self.status_message =
+                                Some(format!("已重置为默认配置，但落盘保存失败: {}", e));
+                        }
+                    }
                 }
             });
 
@@ -383,4 +419,33 @@ pub fn run_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reset_default_config_persistence() {
+        let mut app = SettingsApp::new();
+        app.config.page_size = 9;
+        app.config.auto_pangu_spacing = true;
+        assert_ne!(app.config.page_size, AppConfig::default().page_size);
+
+        app.config = AppConfig::default();
+        assert_eq!(app.config.page_size, 7);
+        assert!(!app.config.auto_pangu_spacing);
+
+        let temp_dir = tempfile::tempdir().expect("创建测试临时目录失败");
+        let temp_file = temp_dir.path().join("config.toml");
+        app.config
+            .save_to_file(&temp_file)
+            .expect("重置配置保存应成功");
+        assert!(temp_file.exists());
+    }
+
+    #[test]
+    fn test_find_cjk_font_data_does_not_panic() {
+        let _ = SettingsApp::find_cjk_font_data();
+    }
 }
