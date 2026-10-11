@@ -56,7 +56,7 @@ impl StatusNotifierItem {
     /// 图标名称（根据中英文状态动态切换）
     #[zbus(property)]
     pub(crate) fn icon_name(&self) -> String {
-        if self.is_chinese.load(Ordering::Relaxed) {
+        if self.is_chinese.load(Ordering::Acquire) {
             "input-keyboard".to_string()
         } else {
             "input-latin".to_string()
@@ -66,7 +66,7 @@ impl StatusNotifierItem {
     /// 提示文本结构
     #[zbus(property)]
     fn tool_tip(&self) -> ToolTipData {
-        let mode_str = if self.is_chinese.load(Ordering::Relaxed) {
+        let mode_str = if self.is_chinese.load(Ordering::Acquire) {
             "中文拼音"
         } else {
             "英文模式"
@@ -93,9 +93,9 @@ impl StatusNotifierItem {
 
     /// 用户左键点击托盘图标：触发中英文快速切换
     pub(crate) fn activate(&self, _x: i32, _y: i32) {
-        let current = self.is_chinese.load(Ordering::Relaxed);
+        let current = self.is_chinese.load(Ordering::Acquire);
         let next = !current;
-        self.is_chinese.store(next, Ordering::Relaxed);
+        self.is_chinese.store(next, Ordering::Release);
         let _ = self.icon_update_tx.try_send(());
         info!(
             "[系统托盘] 用户点击托盘图标，切换输入模式为: {}",
