@@ -230,7 +230,7 @@ pub fn keycode_to_char_with_layout(keycode: u32, layout: &KeymapLayout) -> Optio
     layout.get_char(keycode)
 }
 
-/// 将扫描码转换为 1-indexed 选词序号
+/// 将扫描码转换为 1-indexed 选词序号（1..=9 对应 1..=9 号候选，0 对应第 10 号候选）
 pub fn keycode_to_digit(keycode: u32) -> Option<usize> {
     match keycode {
         KEY_1 => Some(1),
@@ -242,6 +242,7 @@ pub fn keycode_to_digit(keycode: u32) -> Option<usize> {
         KEY_7 => Some(7),
         KEY_8 => Some(8),
         KEY_9 => Some(9),
+        KEY_0 => Some(10),
         _ => None,
     }
 }
