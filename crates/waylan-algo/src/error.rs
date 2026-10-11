@@ -72,5 +72,16 @@ mod tests {
             format: "doc".to_string(),
         };
         assert!(format_err.to_string().contains("不支持的词库文件格式"));
+
+        let parse_err = AlgoError::DictParseFailed {
+            reason: "数据长度不符合头结构".to_string(),
+        };
+        assert!(parse_err.to_string().contains("数据长度不符合头结构"));
+
+        let cursor_err = AlgoError::InvalidCursorPosition {
+            current_len: 5,
+            target_pos: 10,
+        };
+        assert!(cursor_err.to_string().contains("状态机操作越界"));
     }
 }
