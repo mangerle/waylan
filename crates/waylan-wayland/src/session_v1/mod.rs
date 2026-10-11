@@ -47,6 +47,8 @@ pub struct WaylanV1Session {
     pub mode: InputMode,
     /// 与外部系统托盘共享的中英文状态标志
     pub shared_is_chinese: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// 键盘切换中英文时唤醒系统托盘刷新图标的通知发送端
+    pub mode_notify_tx: Option<std::sync::mpsc::SyncSender<()>>,
     /// 与外部系统托盘共享的配置与词库重载请求标志
     pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
@@ -89,6 +91,7 @@ impl Default for WaylanV1Session {
             surface_manager: crate::surface::CandidateSurfaceManager::new(),
             mode: InputMode::Chinese,
             shared_is_chinese: None,
+            mode_notify_tx: None,
             reload_requested: None,
             reload_callback: None,
             watched_paths: Vec::new(),
@@ -123,6 +126,7 @@ impl WaylanV1Session {
             surface_manager: crate::surface::CandidateSurfaceManager::new(),
             mode: InputMode::Chinese,
             shared_is_chinese: None,
+            mode_notify_tx: None,
             reload_requested: None,
             reload_callback: None,
             watched_paths: Vec::new(),

@@ -113,11 +113,22 @@ pub type DbusMenuLayout = (
     ),
 );
 
+/// 异步等待并收割外部子进程退出状态，防止产生僵尸进程（<defunct>）
+fn reap_child_process(mut child: std::process::Child, running_guard: Option<Arc<AtomicBool>>) {
+    thread::spawn(move || {
+        let _ = child.wait();
+        if let Some(guard) = running_guard {
+            guard.store(false, Ordering::Release);
+        }
+    });
+}
+
 /// 标准 FreeDesktop DBusMenu 菜单实现
 pub struct DBusMenu {
     is_chinese: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
     exit_requested: Arc<AtomicBool>,
+    settings_running: Arc<AtomicBool>,
     icon_update_tx: std::sync::mpsc::SyncSender<()>,
 }
 
@@ -140,17 +151,17 @@ impl DBusMenu {
         _recursion_depth: i32,
         _property_names: Vec<String>,
     ) -> DbusMenuLayout {
-        let mode_text = if self.is_chinese.load(Ordering::Relaxed) {
+        let mode_text = if self.is_chinese.load(Ordering::Acquire) {
             "当前输入: 中文拼音 (点击切换)"
         } else {
             "当前输入: 英文模式 (点击切换)"
         };
 
-        // 构造子菜单项
-        let mut menu_items = Vec::new();
+        // 构造子菜单项（预分配 5 项容量）
+        let mut menu_items = Vec::with_capacity(5);
 
         // 1. 模式切换
-        let mut item1 = std::collections::HashMap::new();
+        let mut item1 = std::collections::HashMap::with_capacity(1);
         item1.insert("label".to_string(), zbus::zvariant::Value::from(mode_text));
         menu_items.push(zbus::zvariant::Value::from((
             1,
@@ -159,7 +170,7 @@ impl DBusMenu {
         )));
 
         // 2. 重新加载词库与配置
-        let mut item2 = std::collections::HashMap::new();
+        let mut item2 = std::collections::HashMap::with_capacity(1);
         item2.insert(
             "label".to_string(),
             zbus::zvariant::Value::from("重新加载词库与配置"),
@@ -171,7 +182,7 @@ impl DBusMenu {
         )));
 
         // 3. 偏好设置
-        let mut item3 = std::collections::HashMap::new();
+        let mut item3 = std::collections::HashMap::with_capacity(1);
         item3.insert(
             "label".to_string(),
             zbus::zvariant::Value::from("偏好设置..."),
@@ -183,7 +194,7 @@ impl DBusMenu {
         )));
 
         // 4. 查看运行日志
-        let mut item4 = std::collections::HashMap::new();
+        let mut item4 = std::collections::HashMap::with_capacity(1);
         item4.insert(
             "label".to_string(),
             zbus::zvariant::Value::from("查看运行日志 (~/.local/state/waylan/waylan.log)"),
@@ -195,7 +206,7 @@ impl DBusMenu {
         )));
 
         // 5. 退出输入法
-        let mut item5 = std::collections::HashMap::new();
+        let mut item5 = std::collections::HashMap::with_capacity(1);
         item5.insert(
             "label".to_string(),
             zbus::zvariant::Value::from("退出微澜输入法"),
@@ -218,9 +229,9 @@ impl DBusMenu {
 
         match id {
             1 => {
-                let current = self.is_chinese.load(Ordering::Relaxed);
+                let current = self.is_chinese.load(Ordering::Acquire);
                 let next = !current;
-                self.is_chinese.store(next, Ordering::Relaxed);
+                self.is_chinese.store(next, Ordering::Release);
                 let _ = self.icon_update_tx.try_send(());
                 info!(
                     "[系统托盘] 右键菜单切换输入模式为: {}",
@@ -228,29 +239,50 @@ impl DBusMenu {
                 );
             }
             2 => {
-                self.reload_requested.store(true, Ordering::Relaxed);
+                self.reload_requested.store(true, Ordering::Release);
                 info!("[系统托盘] 右键菜单触发：已发出重新加载词库与配置信号...");
             }
             3 => {
+                if self
+                    .settings_running
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    info!("[系统托盘] 偏好设置窗口已在运行中，忽略重复唤起请求。");
+                    return;
+                }
                 info!("[系统托盘] 唤起微澜偏好设置界面...");
                 let spawned = std::process::Command::new("waylan-settings")
                     .spawn()
                     .or_else(|_| std::process::Command::new("waylan").arg("settings").spawn());
 
-                if spawned.is_err() {
-                    if let Some(path) = crate::config::AppConfig::config_path() {
-                        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+                match spawned {
+                    Ok(child) => {
+                        reap_child_process(child, Some(Arc::clone(&self.settings_running)));
+                    }
+                    Err(_) => {
+                        self.settings_running.store(false, Ordering::Release);
+                        if let Some(path) = crate::config::AppConfig::config_path() {
+                            if let Ok(child) =
+                                std::process::Command::new("xdg-open").arg(path).spawn()
+                            {
+                                reap_child_process(child, None);
+                            }
+                        }
                     }
                 }
             }
             4 => {
                 let log_path = crate::logger::log_file_path();
                 info!("[系统托盘] 查看运行日志: {:?}", log_path);
-                let _ = std::process::Command::new("xdg-open").arg(log_path).spawn();
+                if let Ok(child) = std::process::Command::new("xdg-open").arg(log_path).spawn() {
+                    reap_child_process(child, None);
+                }
             }
             5 => {
                 info!("[系统托盘] 收到退出菜单指令，正在触发优雅停机与数据落盘流程...");
-                self.exit_requested.store(true, Ordering::SeqCst);
+                self.exit_requested.store(true, Ordering::Release);
+                let _ = self.icon_update_tx.try_send(());
             }
             _ => {}
         }
@@ -266,21 +298,19 @@ impl DBusMenu {
 }
 
 /// 系统托盘服务控制器
-#[allow(dead_code)]
 pub struct TrayService {
     is_chinese: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
     exit_requested: Arc<AtomicBool>,
     icon_update_tx: std::sync::mpsc::SyncSender<()>,
+    join_handle: Option<thread::JoinHandle<()>>,
 }
 
-#[allow(dead_code)]
 impl TrayService {
-    /// 启动后台系统托盘常驻服务
-    pub fn spawn() -> Self {
+    /// 使用全局退出标志启动后台系统托盘常驻服务（实现与进程信号 SIGINT/SIGTERM 共享同一退出源）
+    pub fn spawn(exit_requested: Arc<AtomicBool>) -> Self {
         let is_chinese = Arc::new(AtomicBool::new(true));
         let reload_requested = Arc::new(AtomicBool::new(false));
-        let exit_requested = Arc::new(AtomicBool::new(false));
         let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
 
         let flag_clone = Arc::clone(&is_chinese);
@@ -288,7 +318,7 @@ impl TrayService {
         let exit_clone = Arc::clone(&exit_requested);
         let tx_clone = icon_update_tx.clone();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             Self::run_dbus_loop(
                 flag_clone,
                 reload_clone,
@@ -303,6 +333,7 @@ impl TrayService {
             reload_requested,
             exit_requested,
             icon_update_tx,
+            join_handle: Some(handle),
         }
     }
 
@@ -321,20 +352,27 @@ impl TrayService {
         Arc::clone(&self.exit_requested)
     }
 
+    /// 获取托盘图标与菜单状态刷新通知发送端句柄
+    pub fn icon_notifier(&self) -> std::sync::mpsc::SyncSender<()> {
+        self.icon_update_tx.clone()
+    }
+
     /// 查询是否已收到优雅退出请求
     pub fn is_exit_requested(&self) -> bool {
-        self.exit_requested.load(Ordering::Relaxed)
+        self.exit_requested.load(Ordering::Acquire)
     }
 
     /// 获取当前是否处于中文模式
+    #[allow(dead_code)]
     pub fn is_chinese(&self) -> bool {
-        self.is_chinese.load(Ordering::Relaxed)
+        self.is_chinese.load(Ordering::Acquire)
     }
 
     /// 更新当前输入模式并触发托盘图标变动与 D-Bus NewIcon 信号广播
+    #[allow(dead_code)]
     pub fn update_mode(&self, mode: InputMode) {
         let is_zh = matches!(mode, InputMode::Chinese);
-        let prev = self.is_chinese.swap(is_zh, Ordering::Relaxed);
+        let prev = self.is_chinese.swap(is_zh, Ordering::AcqRel);
         if prev != is_zh {
             let _ = self.icon_update_tx.try_send(());
         }
@@ -355,7 +393,8 @@ impl TrayService {
         let menu = DBusMenu {
             is_chinese,
             reload_requested,
-            exit_requested,
+            exit_requested: Arc::clone(&exit_requested),
+            settings_running: Arc::new(AtomicBool::new(false)),
             icon_update_tx,
         };
 
@@ -406,6 +445,9 @@ impl TrayService {
         // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon、NewToolTip 与 LayoutUpdated 信号
         let mut menu_revision: u32 = 1;
         while let Ok(()) = icon_update_rx.recv() {
+            if exit_requested.load(Ordering::Acquire) {
+                break;
+            }
             if let Err(e) = conn.emit_signal(
                 Option::<&str>::None,
                 "/StatusNotifierItem",
@@ -415,7 +457,7 @@ impl TrayService {
             ) {
                 warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
             } else {
-                info!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
+                log::debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
             }
 
             let _ = conn.emit_signal(
@@ -436,11 +478,21 @@ impl TrayService {
             ) {
                 warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
             } else {
-                info!(
+                log::debug!(
                     "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
                     menu_revision
                 );
             }
+        }
+    }
+}
+
+impl Drop for TrayService {
+    fn drop(&mut self) {
+        self.exit_requested.store(true, Ordering::Release);
+        let _ = self.icon_update_tx.try_send(());
+        if let Some(handle) = self.join_handle.take() {
+            let _ = handle.join();
         }
     }
 }

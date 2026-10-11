@@ -93,9 +93,14 @@ pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui:
                     let _ =
                         waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
                 }
-                let _ = std::process::Command::new("xdg-open")
+                if let Ok(mut child) = std::process::Command::new("xdg-open")
                     .arg(&phrase_path)
-                    .spawn();
+                    .spawn()
+                {
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
             }
         });
 

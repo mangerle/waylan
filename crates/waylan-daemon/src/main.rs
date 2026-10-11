@@ -25,27 +25,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 1. 处理 settings 子命令（图形化偏好设置界面）
+    // 1. 处理 settings 子命令（图形化偏好设置界面，内部自建日志或直接启动 GUI）
     if args.len() >= 2 && (args[1] == "settings" || args[1] == "--settings") {
         return settings_gui::run_settings_gui();
     }
 
-    // 2. 处理 dict 子命令（支持词库打包与用户自定义词库导入）
+    // 2. 初始化双通道日志系统（终端输出 + 文件落盘），确保后续 CLI 子命令与主服务日志正常输出
+    let log_init_res = logger::init_logger();
+
+    // 3. 处理帮助查询参数
+    if args.len() >= 2 && (args[1] == "--help" || args[1] == "-h" || args[1] == "help") {
+        cli::print_main_usage();
+        return Ok(());
+    }
+
+    // 4. 处理 dict 子命令（支持词库打包与用户自定义词库导入）
     if args.len() >= 2 && args[1] == "dict" {
         return cli::handle_dict_subcommand(&args[2..]);
     }
 
-    // 2. 初始化双通道日志系统（终端输出 + 文件落盘）
-    match logger::init_logger() {
-        Ok(path) => {
-            info!("微澜 (WayLan) 日志系统初始化完成，持久化文件: {:?}", path);
-        }
-        Err(e) => {
-            eprintln!(
-                "[日志警告] 初始化文件日志失败 ({})，将仅输出到标准错误。",
-                e
-            );
-        }
+    if let Ok(path) = log_init_res {
+        info!("微澜 (WayLan) 日志系统初始化完成，持久化文件: {:?}", path);
     }
 
     // 注册进程系统退出信号拦截 (SIGINT / SIGTERM)，确保能够平滑停机并持久化数据
@@ -142,8 +142,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 8. 启动系统任务栏托盘常驻服务 (StatusNotifierItem)
-    let tray = tray::TrayService::spawn();
+    // 8. 启动系统任务栏托盘常驻服务 (StatusNotifierItem)，与系统退出信号共享同一退出标志
+    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now));
 
     info!("------------------------------------------------------------");
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
@@ -177,6 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
         };
         session_v2.shared_is_chinese = Some(tray.mode_flag());
+        session_v2.mode_notify_tx = Some(tray.icon_notifier());
         session_v2.reload_requested = Some(tray.reload_flag());
         session_v2.exit_requested = Some(tray.exit_flag());
         session_v2.reload_callback = Some(Box::new(|s| {
@@ -249,6 +250,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
                 };
                 session.shared_is_chinese = Some(tray.mode_flag());
+                session.mode_notify_tx = Some(tray.icon_notifier());
                 session.reload_requested = Some(tray.reload_flag());
                 session.exit_requested = Some(tray.exit_flag());
                 session.reload_callback = Some(Box::new(|s| {
@@ -311,6 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
         };
         session.shared_is_chinese = Some(tray.mode_flag());
+        session.mode_notify_tx = Some(tray.icon_notifier());
         session.reload_requested = Some(tray.reload_flag());
         session.exit_requested = Some(tray.exit_flag());
         session.reload_callback = Some(Box::new(|s| {

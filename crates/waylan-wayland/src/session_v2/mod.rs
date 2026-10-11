@@ -56,6 +56,8 @@ pub struct WaylanV2Session {
     pub mode: InputMode,
     /// 与外部系统托盘共享的中英文状态标志
     pub shared_is_chinese: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// 键盘切换中英文时唤醒系统托盘刷新图标的通知发送端
+    pub mode_notify_tx: Option<std::sync::mpsc::SyncSender<()>>,
     /// 与外部系统托盘共享的配置与词库重载请求标志
     pub reload_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
@@ -96,6 +98,7 @@ impl WaylanV2Session {
             current_cursor: CursorRect::default(),
             mode: InputMode::Chinese,
             shared_is_chinese: None,
+            mode_notify_tx: None,
             reload_requested: None,
             reload_callback: None,
             watched_paths: Vec::new(),
@@ -358,8 +361,11 @@ impl WaylanV2Session {
             if let Some(ref zh_flag) = self.shared_is_chinese {
                 zh_flag.store(
                     matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Release,
                 );
+            }
+            if let Some(ref notify_tx) = self.mode_notify_tx {
+                let _ = notify_tx.try_send(());
             }
             let mode_str = match new_mode {
                 InputMode::Chinese => "中文",

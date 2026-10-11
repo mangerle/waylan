@@ -11,6 +11,7 @@ fn test_tray_mode_toggle() {
         reload_requested,
         exit_requested,
         icon_update_tx,
+        join_handle: None,
     };
 
     assert!(tray.is_chinese());
@@ -34,6 +35,7 @@ fn test_tray_menu_layout_and_event() {
         is_chinese: Arc::clone(&is_chinese),
         reload_requested: Arc::clone(&reload_requested),
         exit_requested,
+        settings_running: Arc::new(AtomicBool::new(false)),
         icon_update_tx,
     };
 
@@ -66,6 +68,7 @@ fn test_tray_menu_exit_event() {
         is_chinese,
         reload_requested,
         exit_requested: Arc::clone(&exit_requested),
+        settings_running: Arc::new(AtomicBool::new(false)),
         icon_update_tx,
     };
 

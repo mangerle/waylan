@@ -46,8 +46,11 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     if let Some(ref zh_flag) = state.shared_is_chinese {
                         zh_flag.store(
                             matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                            std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Release,
                         );
+                    }
+                    if let Some(ref notify_tx) = state.mode_notify_tx {
+                        let _ = notify_tx.try_send(());
                     }
                     let mode_str = match new_mode {
                         InputMode::Chinese => "中文",
