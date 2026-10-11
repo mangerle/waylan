@@ -213,66 +213,60 @@ impl PunctuationProcessor {
 
         self.last_char_was_digit = false;
 
-        // 3. 成对符号处理（开启自动配对时闭合双符号并回退光标，关闭时仅输出单侧中文符号）
+        // 3. 成对符号处理
+        if let Some(actions) = self.handle_paired_punctuation(ch) {
+            return Some(actions);
+        }
+
+        // 4. 常规中文标点全角映射
+        self.handle_regular_punctuation(ch)
+    }
+
+    /// 处理括号与引号等成对符号
+    fn handle_paired_punctuation(&mut self, ch: char) -> Option<Vec<TextAction>> {
         match ch {
-            '(' => {
-                if self.auto_complete_pairs {
-                    return Some(vec![
-                        TextAction::Commit("（）".to_string()),
-                        TextAction::MoveCursor(-1),
-                    ]);
-                } else {
-                    return Some(vec![TextAction::Commit("（".to_string())]);
-                }
-            }
-            ')' => {
-                return Some(vec![TextAction::Commit("）".to_string())]);
-            }
-            '<' => {
-                if self.auto_complete_pairs {
-                    return Some(vec![
-                        TextAction::Commit("《》".to_string()),
-                        TextAction::MoveCursor(-1),
-                    ]);
-                } else {
-                    return Some(vec![TextAction::Commit("《".to_string())]);
-                }
-            }
-            '>' => {
-                return Some(vec![TextAction::Commit("》".to_string())]);
-            }
-            '[' => {
-                if self.auto_complete_pairs {
-                    return Some(vec![
-                        TextAction::Commit("【】".to_string()),
-                        TextAction::MoveCursor(-1),
-                    ]);
-                } else {
-                    return Some(vec![TextAction::Commit("【".to_string())]);
-                }
-            }
-            ']' => {
-                return Some(vec![TextAction::Commit("】".to_string())]);
-            }
-            '{' => {
-                if self.auto_complete_pairs {
-                    return Some(vec![
-                        TextAction::Commit("｛｝".to_string()),
-                        TextAction::MoveCursor(-1),
-                    ]);
-                } else {
-                    return Some(vec![TextAction::Commit("｛".to_string())]);
-                }
-            }
-            '}' => {
-                return Some(vec![TextAction::Commit("｝".to_string())]);
-            }
+            '(' => Some(if self.auto_complete_pairs {
+                vec![
+                    TextAction::Commit("（）".to_string()),
+                    TextAction::MoveCursor(-1),
+                ]
+            } else {
+                vec![TextAction::Commit("（".to_string())]
+            }),
+            ')' => Some(vec![TextAction::Commit("）".to_string())]),
+            '<' => Some(if self.auto_complete_pairs {
+                vec![
+                    TextAction::Commit("《》".to_string()),
+                    TextAction::MoveCursor(-1),
+                ]
+            } else {
+                vec![TextAction::Commit("《".to_string())]
+            }),
+            '>' => Some(vec![TextAction::Commit("》".to_string())]),
+            '[' => Some(if self.auto_complete_pairs {
+                vec![
+                    TextAction::Commit("【】".to_string()),
+                    TextAction::MoveCursor(-1),
+                ]
+            } else {
+                vec![TextAction::Commit("【".to_string())]
+            }),
+            ']' => Some(vec![TextAction::Commit("】".to_string())]),
+            '{' => Some(if self.auto_complete_pairs {
+                vec![
+                    TextAction::Commit("｛｝".to_string()),
+                    TextAction::MoveCursor(-1),
+                ]
+            } else {
+                vec![TextAction::Commit("｛".to_string())]
+            }),
+            '}' => Some(vec![TextAction::Commit("｝".to_string())]),
             '"' => {
                 if self.auto_complete_pairs {
-                    return Some(vec![
+                    Some(vec![
                         TextAction::Commit("“”".to_string()),
                         TextAction::MoveCursor(-1),
-                    ]);
+                    ])
                 } else {
                     let quote_str = if self.double_quote_open {
                         self.double_quote_open = false;
@@ -281,16 +275,15 @@ impl PunctuationProcessor {
                         self.double_quote_open = true;
                         "“"
                     };
-                    return Some(vec![TextAction::Commit(quote_str.to_string())]);
+                    Some(vec![TextAction::Commit(quote_str.to_string())])
                 }
             }
-            // 单引号（在独立标点输入模式下）
             '\'' => {
                 if self.auto_complete_pairs {
-                    return Some(vec![
+                    Some(vec![
                         TextAction::Commit("‘’".to_string()),
                         TextAction::MoveCursor(-1),
-                    ]);
+                    ])
                 } else {
                     let quote_str = if self.single_quote_open {
                         self.single_quote_open = false;
@@ -299,13 +292,15 @@ impl PunctuationProcessor {
                         self.single_quote_open = true;
                         "‘"
                     };
-                    return Some(vec![TextAction::Commit(quote_str.to_string())]);
+                    Some(vec![TextAction::Commit(quote_str.to_string())])
                 }
             }
-            _ => {}
+            _ => None,
         }
+    }
 
-        // 4. 常规中文标点全角映射
+    /// 处理常规单字符全角中文标点映射
+    fn handle_regular_punctuation(&self, ch: char) -> Option<Vec<TextAction>> {
         match ch {
             ',' => Some(vec![TextAction::Commit("，".to_string())]),
             '.' => Some(vec![TextAction::Commit("。".to_string())]),
