@@ -3,6 +3,7 @@ use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::mpsc::sync_channel;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 外部导入文本词库最大允许字节数（64 MB），防止误导入超大文件触发 OOM
@@ -150,7 +151,7 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
                         Some("词库文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
                 } else {
                     let path_buf = path.to_path_buf();
-                    let (tx, rx) = std::sync::mpsc::channel();
+                    let (tx, rx) = sync_channel(1);
                     app.import_rx = Some(rx);
                     app.import_in_progress = true;
                     app.import_status_message =

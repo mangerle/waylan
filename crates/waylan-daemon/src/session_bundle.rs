@@ -178,7 +178,19 @@ pub fn apply_reload_v2(s: &mut waylan_wayland::session_v2::WaylanV2Session) {
     s.punctuation_processor = b.punct_processor;
     s.page_keys = b.page_keys;
     s.engine.custom_phrases = b.custom_phrases;
-    s.engine.set_user_dict_path(&b.user_dict_path);
+    if b.user_dict_path.exists() {
+        if let Ok(m) = std::fs::metadata(&b.user_dict_path) {
+            if m.len() == 0 {
+                info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
+                s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+            }
+        }
+        s.engine.set_user_dict_path(&b.user_dict_path);
+    } else {
+        info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
+        s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+        s.engine.set_user_dict_path(&b.user_dict_path);
+    }
     s.engine.load_auxiliary_dict(b.aux_dict);
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
@@ -195,7 +207,19 @@ pub fn apply_reload_v1(s: &mut waylan_wayland::session_v1::WaylanV1Session) {
     s.punctuation_processor = b.punct_processor;
     s.page_keys = b.page_keys;
     s.engine.custom_phrases = b.custom_phrases;
-    s.engine.set_user_dict_path(&b.user_dict_path);
+    if b.user_dict_path.exists() {
+        if let Ok(m) = std::fs::metadata(&b.user_dict_path) {
+            if m.len() == 0 {
+                info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
+                s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+            }
+        }
+        s.engine.set_user_dict_path(&b.user_dict_path);
+    } else {
+        info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
+        s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+        s.engine.set_user_dict_path(&b.user_dict_path);
+    }
     s.engine.load_auxiliary_dict(b.aux_dict);
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();

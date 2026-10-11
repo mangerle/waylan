@@ -192,12 +192,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
     info!("------------------------------------------------------------");
 
-    let mut watched_paths = Vec::with_capacity(3);
+    let mut watched_paths = Vec::with_capacity(4);
     if let Some(c_path) = AppConfig::config_path() {
         watched_paths.push(c_path);
     }
     watched_paths.push(waylan_algo::custom_phrase::CustomPhraseManager::default_path());
     watched_paths.push(AppConfig::user_aux_dict_path());
+    watched_paths.push(AppConfig::user_dict_path());
 
     let initial_mtime = watched_paths
         .iter()
@@ -242,28 +243,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[微澜守护进程] Wayland V2 协议会话不可用或异常结束 ({})，正在自动降级启动 V1 协议会话...",
                     e
                 );
+                let returned_session = *returned_session;
                 let engine = returned_session.engine;
-                let renderer = returned_session.surface_manager.renderer;
+                let mut surface_manager = returned_session.surface_manager;
+                surface_manager.clear_wayland_resources();
                 let watched_paths = returned_session.watched_paths;
+                let last_watched_mtime = returned_session.last_watched_mtime;
+                let keymap_layout = returned_session.keymap_layout;
+                let shift_sm = returned_session.shift_state;
+                let punctuation_processor = returned_session.punctuation_processor;
+                let page_keys = returned_session.page_keys;
+
                 let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
-                session.surface_manager.renderer = renderer;
-                session.keymap_layout = returned_session.keymap_layout;
+                session.surface_manager = surface_manager;
+                session.keymap_layout = keymap_layout;
                 session.watched_paths = watched_paths;
-                session.last_watched_mtime = returned_session.last_watched_mtime;
-                session.shift_sm = ShiftToggleStateMachine::with_toggle_key(match cfg.switch_key {
-                    SwitchKey::Shift => ToggleKeyMode::Shift,
-                    SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
-                });
-                session.punctuation_processor = PunctuationProcessor::with_options(
-                    cfg.slash_to_dunhao,
-                    cfg.protect_digits_punctuation,
-                    cfg.auto_complete_pairs,
-                );
-                session.page_keys = match cfg.page_keys {
-                    PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
-                    PageKeys::Bracket => PageKeyConfig::Bracket,
-                    PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
-                };
+                session.last_watched_mtime = last_watched_mtime;
+                session.shift_sm = shift_sm;
+                session.punctuation_processor = punctuation_processor;
+                session.page_keys = page_keys;
                 session.shared_is_chinese = Some(tray.mode_flag());
                 session.mode_notify_tx = Some(tray.icon_notifier());
                 session.reload_requested = Some(tray.reload_flag());
