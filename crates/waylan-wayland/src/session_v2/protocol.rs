@@ -234,6 +234,7 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
             if let Some((commit_text, remaining_len)) = select_res {
                 state.is_grid_expanded = false;
                 state.grid_selected_index = 0;
+                state.punctuation_processor.record_commit(&commit_text);
                 if remaining_len == 0 {
                     state.commit_text(&commit_text);
                 } else {

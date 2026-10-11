@@ -290,6 +290,9 @@ impl WaylanV1Session {
                 .compute_popup_position_constrained(logical_w, logical_h, screen_w, screen_h);
             layer_surf.set_size(logical_w, logical_h);
             layer_surf.set_margin(pos_y.max(0), 0, 0, pos_x.max(0));
+            if let Some(ref surf) = self.popup_wl_surface {
+                surf.commit();
+            }
         }
     }
 

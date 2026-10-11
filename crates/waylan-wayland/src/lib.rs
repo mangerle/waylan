@@ -216,6 +216,7 @@ pub fn run_session_v1_loop(
             );
             layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer_surface.set_anchor(Anchor::Top | Anchor::Left);
+            layer_surface.set_size(1, 1);
             wl_surface.commit();
             session.layer_surface = Some(layer_surface);
             log::info!(
