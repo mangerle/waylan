@@ -15,11 +15,12 @@ impl SpatialTypoCorrector {
     /// - **排序与截断**：按替换物理代价升序、词频降序综合排序，仅返回前 3 个最优纠错结果。
     pub fn generate_candidates(raw_input: &str, table: &LexiconTable) -> Vec<AlgoCandidate> {
         let n = raw_input.len();
-        if !(3..=20).contains(&n) || !raw_input.is_ascii() {
+        // 限制拼写纠错仅在常用词长（3..=8）内启用，避免长拼音下触发数百次全量 DAG 搜索导致击键延迟退化
+        if !(3..=8).contains(&n) || !raw_input.is_ascii() {
             return Vec::new();
         }
 
-        let mut candidates: Vec<(AlgoCandidate, u32)> = Vec::new();
+        let mut candidates: Vec<(AlgoCandidate, u32)> = Vec::with_capacity(8);
         let mut buf = [0u8; 24];
         buf[..n].copy_from_slice(raw_input.as_bytes());
 
@@ -43,17 +44,31 @@ impl SpatialTypoCorrector {
 
                 buf[i] = alt_b;
                 if let Ok(mutated) = std::str::from_utf8(&buf[..n]) {
-                    let paths = PrismEngine::build_paths(mutated, &types::FuzzyConfig::default());
-                    if let Some(best) = paths.first() {
-                        if best.remaining.is_empty() && !best.syllables.is_empty() {
-                            let key = best.to_key_string();
-                            if let Some(entries) = table.get_raw_entries(&key) {
-                                let cost = syllables::char_substitution_cost(orig_c, alt_c);
-                                for (text, raw_score) in entries.iter().take(2) {
-                                    let mut cand = AlgoCandidate::new(text, &key, *raw_score);
-                                    cand.tier = CandidateTier::TypoCorrection;
-                                    cand.comment = Some(format!("[纠错: {}]", key));
-                                    candidates.push((cand, cost));
+                    // 轻量快速路径：若变异后本身构成单个合法音节，直接查询词库无需跑完整 DAG
+                    if syllables::is_valid_syllable(mutated) {
+                        if let Some(entries) = table.get_raw_entries(mutated) {
+                            let cost = syllables::char_substitution_cost(orig_c, alt_c);
+                            for (text, raw_score) in entries.iter().take(2) {
+                                let mut cand = AlgoCandidate::new(text, mutated, *raw_score);
+                                cand.tier = CandidateTier::TypoCorrection;
+                                cand.comment = Some(format!("[纠错: {}]", mutated));
+                                candidates.push((cand, cost));
+                            }
+                        }
+                    } else {
+                        let paths =
+                            PrismEngine::build_paths(mutated, &types::FuzzyConfig::default());
+                        if let Some(best) = paths.first() {
+                            if best.remaining.is_empty() && !best.syllables.is_empty() {
+                                let key = best.to_key_string();
+                                if let Some(entries) = table.get_raw_entries(&key) {
+                                    let cost = syllables::char_substitution_cost(orig_c, alt_c);
+                                    for (text, raw_score) in entries.iter().take(2) {
+                                        let mut cand = AlgoCandidate::new(text, &key, *raw_score);
+                                        cand.tier = CandidateTier::TypoCorrection;
+                                        cand.comment = Some(format!("[纠错: {}]", key));
+                                        candidates.push((cand, cost));
+                                    }
                                 }
                             }
                         }
@@ -67,17 +82,29 @@ impl SpatialTypoCorrector {
         for i in 0..n.saturating_sub(1) {
             buf.swap(i, i + 1);
             if let Ok(swapped) = std::str::from_utf8(&buf[..n]) {
-                let paths = PrismEngine::build_paths(swapped, &types::FuzzyConfig::default());
-                if let Some(best) = paths.first() {
-                    if best.remaining.is_empty() && !best.syllables.is_empty() {
-                        let key = best.to_key_string();
-                        if let Some(entries) = table.get_raw_entries(&key) {
-                            let cost = 16;
-                            for (text, raw_score) in entries.iter().take(2) {
-                                let mut cand = AlgoCandidate::new(text, &key, *raw_score);
-                                cand.tier = CandidateTier::TypoCorrection;
-                                cand.comment = Some(format!("[纠错: {}]", key));
-                                candidates.push((cand, cost));
+                if syllables::is_valid_syllable(swapped) {
+                    if let Some(entries) = table.get_raw_entries(swapped) {
+                        let cost = 16;
+                        for (text, raw_score) in entries.iter().take(2) {
+                            let mut cand = AlgoCandidate::new(text, swapped, *raw_score);
+                            cand.tier = CandidateTier::TypoCorrection;
+                            cand.comment = Some(format!("[纠错: {}]", swapped));
+                            candidates.push((cand, cost));
+                        }
+                    }
+                } else {
+                    let paths = PrismEngine::build_paths(swapped, &types::FuzzyConfig::default());
+                    if let Some(best) = paths.first() {
+                        if best.remaining.is_empty() && !best.syllables.is_empty() {
+                            let key = best.to_key_string();
+                            if let Some(entries) = table.get_raw_entries(&key) {
+                                let cost = 16;
+                                for (text, raw_score) in entries.iter().take(2) {
+                                    let mut cand = AlgoCandidate::new(text, &key, *raw_score);
+                                    cand.tier = CandidateTier::TypoCorrection;
+                                    cand.comment = Some(format!("[纠错: {}]", key));
+                                    candidates.push((cand, cost));
+                                }
                             }
                         }
                     }
