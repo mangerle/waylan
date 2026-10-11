@@ -114,3 +114,47 @@ fn test_engine_persist_and_drop_saves_user_dict() {
     );
     let _ = std::fs::remove_file(&dict_path);
 }
+
+#[test]
+fn test_special_and_traditional_candidates_do_not_pollute_user_dict() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+
+    // 1. 选中动态日期扩展项不应写入用户词库
+    for ch in "riqi".chars() {
+        engine.push_char(ch);
+    }
+    let exp_idx = engine
+        .candidates()
+        .iter()
+        .position(|c| c.is_expandable)
+        .expect("应包含可展开日期项");
+    engine.select_candidate(exp_idx, 1000).unwrap();
+    assert_eq!(
+        engine.user_model.total_entries(),
+        0,
+        "可展开动态功能项不得写入用户自适应词库"
+    );
+
+    // 2. 选中 V 模式计算结果不应写入用户词库
+    for ch in "v2+3".chars() {
+        engine.push_char(ch);
+    }
+    engine.select_candidate(0, 1001).unwrap();
+    assert_eq!(
+        engine.user_model.total_entries(),
+        0,
+        "V 模式计算候选不得写入用户自适应词库"
+    );
+
+    // 3. 繁体模式下选词不应将繁体字写入简体用户词库
+    engine.config.traditional_chinese = true;
+    for ch in "nihao".chars() {
+        engine.push_char(ch);
+    }
+    engine.select_candidate(0, 1002).unwrap();
+    assert_eq!(
+        engine.user_model.total_entries(),
+        0,
+        "繁体模式下转换后的候选词不得污染底层简体用户词库"
+    );
+}

@@ -21,13 +21,21 @@ impl AlgoEngine {
 
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
         if let Some(dispatched) = ModeDispatcher::try_dispatch(raw_input, &self.config) {
-            self.current_candidates =
-                CandidatePipeline::process(dispatched, &self.config, self.page_index);
+            self.current_candidates = CandidatePipeline::process_with_opencc(
+                dispatched,
+                &self.config,
+                self.page_index,
+                Some(&self.opencc_dict),
+            );
             return;
         }
 
         // 2. 拼音模式：利用 Prism 构建 DAG 音节路径
-        let paths = PrismEngine::build_paths(raw_input, &self.config.fuzzy);
+        let paths = PrismEngine::build_paths_with_entities(
+            raw_input,
+            &self.config.fuzzy,
+            Some(&self.entity_manager),
+        );
 
         let mut raw_candidates = Vec::new();
 
@@ -39,7 +47,7 @@ impl AlgoEngine {
             raw_candidates.push(cand);
         }
 
-        let eval_ts = self.user_model.latest_timestamp();
+        let eval_ts = self.user_model.latest_timestamp().max(self.last_timestamp);
 
         for path in &paths {
             let key = path.to_key_string();
@@ -117,6 +125,21 @@ impl AlgoEngine {
                     .lookup_prefix_extension(&best_path.syllables, &best_path.remaining);
                 raw_candidates.append(&mut prefix_matches);
 
+                if self.config.fuzzy.has_active_rules() && !best_path.syllables.is_empty() {
+                    for fuzzy_syls in crate::prism_fuzzy::PrismFuzzy::expand_fuzzy_syllable_lists(
+                        &best_path.syllables,
+                        &self.config.fuzzy,
+                    ) {
+                        let mut fuzzy_prefix = self
+                            .table
+                            .lookup_prefix_extension(&fuzzy_syls, &best_path.remaining);
+                        for fp in &mut fuzzy_prefix {
+                            fp.score = fp.score.saturating_sub(50);
+                        }
+                        raw_candidates.append(&mut fuzzy_prefix);
+                    }
+                }
+
                 // 2.2.1 跨词边界短语前缀合成检索（解决诸如 "womendeshij" 召回“我们的时间”、“我们的世界”等）
                 let mut phrase_matches =
                     self.synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
@@ -134,8 +157,18 @@ impl AlgoEngine {
             }
         }
 
-        // 2.2 检索首字母缩写简拼（如 bj -> 北京，yyds -> 永远的神）
-        let mut acronym_matches = self.table.lookup_acronym(raw_input);
+        // 2.2 检索首字母缩写简拼（支持用户输入单引号隔开的简拼，如 bj / b'j -> 北京，yyds -> 永远的神）
+        let acronym_query = if raw_input.contains('\'') {
+            raw_input.replace('\'', "")
+        } else {
+            raw_input.to_string()
+        };
+        let mut acronym_matches = self.table.lookup_acronym(&acronym_query);
+        if raw_input.contains('\'') {
+            for am in &mut acronym_matches {
+                am.pinyin = raw_input.to_string();
+            }
+        }
         raw_candidates.append(&mut acronym_matches);
 
         // 2.3 若多音节切分未能命中整词，将首段已完成音节或首声母单字作为保真降级备选（如 "ni" -> "你", "r" -> "人"）
@@ -233,7 +266,13 @@ impl AlgoEngine {
 
             // 6. 动态扩展功能（日期、时间、干支等）注入：
             // 若命中动态日期/时间指令，将动态功能项插入到第 2 位（仅次于首选的常规成词）
-            if let Some(dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
+            if let Some(mut dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
+                if self.config.traditional_chinese {
+                    dynamic_cand.text = self.opencc_dict.convert_text(&dynamic_cand.text);
+                    for sub in &mut dynamic_cand.sub_candidates {
+                        *sub = self.opencc_dict.convert_text(sub);
+                    }
+                }
                 let insert_pos = if candidates.is_empty() { 0 } else { 1 };
                 candidates.insert(insert_pos, dynamic_cand);
             }
@@ -283,6 +322,12 @@ impl AlgoEngine {
                                 if self.config.traditional_chinese {
                                     cand.text = self.opencc_dict.convert_text(&cand.text);
                                 }
+                                if self.config.show_pinyin_comment
+                                    && cand.comment.is_none()
+                                    && !cand.pinyin.is_empty()
+                                {
+                                    cand.comment = Some(format!("[{}]", cand.pinyin));
+                                }
                                 cand.tier = CandidateTier::PrefixPartial;
                                 prefix_items.push(cand);
                                 break;
@@ -300,6 +345,12 @@ impl AlgoEngine {
                             if self.config.traditional_chinese {
                                 cand.text = self.opencc_dict.convert_text(&cand.text);
                             }
+                            if self.config.show_pinyin_comment
+                                && cand.comment.is_none()
+                                && !cand.pinyin.is_empty()
+                            {
+                                cand.comment = Some(format!("[{}]", cand.pinyin));
+                            }
                             cand.tier = CandidateTier::PrefixPartial;
                             prefix_items.push(cand);
                             found_exact_2 = true;
@@ -315,6 +366,9 @@ impl AlgoEngine {
                                 cand.text = self.opencc_dict.convert_text(&cand.text);
                             }
                             cand.pinyin = key_2.clone();
+                            if self.config.show_pinyin_comment && cand.comment.is_none() {
+                                cand.comment = Some(format!("[{}]", cand.pinyin));
+                            }
                             cand.tier = CandidateTier::PrefixPartial;
                             prefix_items.push(cand);
                         }
@@ -481,10 +535,12 @@ impl AlgoEngine {
                         }
                     });
 
-                let final_score = head_score
-                    .saturating_add(tail.score)
+                let head_base = (*head_score % 600_000) / 8;
+                let tail_base = (tail.score % 600_000) / 4;
+                let final_score = head_base
+                    .saturating_add(tail_base)
                     .saturating_add(length_boost)
-                    .saturating_add((bigram_bonus.max(0) as u32).min(50_000));
+                    .saturating_add((bigram_bonus.max(0) as u32).min(50_000) / 2);
 
                 let cand = AlgoCandidate::new(phrase_text, phrase_pinyin, final_score)
                     .with_tier(CandidateTier::ExactWord);

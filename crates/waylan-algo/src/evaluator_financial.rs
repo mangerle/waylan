@@ -118,15 +118,15 @@ impl FinancialEvaluator {
         result
     }
 
-    /// 将整数部分转换为中文大写（分四位一节处理：万、亿）
+    /// 将整数部分转换为中文大写（分四位一节处理：万、亿、万亿、亿亿）
     fn convert_integer_part(mut num: u64) -> String {
-        const RADIX_UNITS: &[&str] = &["", "万", "亿", "万亿"];
+        const RADIX_UNITS: &[&str] = &["", "万", "亿", "万亿", "亿亿"];
 
         if num == 0 {
             return "零".to_string();
         }
 
-        let mut sections = Vec::new();
+        let mut sections = Vec::with_capacity(5);
         while num > 0 {
             sections.push((num % 10000) as u16);
             num /= 10000;
@@ -143,7 +143,9 @@ impl FinancialEvaluator {
                 }
                 let sec_str = Self::convert_section(sec);
                 res.push_str(&sec_str);
-                res.push_str(RADIX_UNITS[idx]);
+                if let Some(&unit) = RADIX_UNITS.get(idx) {
+                    res.push_str(unit);
+                }
                 has_high_section = true;
                 has_zero_section = false;
             } else if has_high_section {

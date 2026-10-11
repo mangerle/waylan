@@ -93,6 +93,7 @@ impl LexiconTable {
             }
         }
 
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
         candidates
     }
 }

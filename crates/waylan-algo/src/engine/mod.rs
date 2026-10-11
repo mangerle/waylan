@@ -8,6 +8,10 @@ mod tests;
 
 pub use pangu::PanguSpacing;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::composition::Composition;
 use crate::custom_phrase::{
     AuxiliaryDict, CustomPhraseManager, EnglishSuggestionManager, SymbolSuggestionManager,
@@ -43,7 +47,7 @@ pub struct AlgoEngine {
     /// 专有名词与实体保护管理器
     pub entity_manager: EntityProtectionManager,
     /// 简繁转换两级词库引擎（STPhrases + STCharacters）
-    pub opencc_dict: std::sync::Arc<OpenCcDict>,
+    pub opencc_dict: Arc<OpenCcDict>,
     /// 增量敲击编辑状态机
     pub(crate) composition: Composition,
     /// 全局算法配置
@@ -61,9 +65,11 @@ pub struct AlgoEngine {
     /// 二级扩展卡片中当前选中的子项索引（0-indexed）
     pub expanded_selected_index: usize,
     /// 用户自适应词库 WAL 持久化文件路径（若设置则每次选词自动追加写盘）
-    pub user_dict_path: Option<std::path::PathBuf>,
+    pub user_dict_path: Option<PathBuf>,
     /// 单次连续拼音输入过程中的分段选词累积器 (词条文本, 拼音片段)，用于整串消费完毕时自动合成用户自造新词
     pub(crate) partial_commit_segments: Vec<(String, String)>,
+    /// 最近一次交互/选词的时间戳（秒级 UNIX 时间，用于驱动词频半衰期衰减评估）
+    pub(crate) last_timestamp: u64,
 }
 
 impl AlgoEngine {
@@ -87,11 +93,12 @@ impl AlgoEngine {
             expanded_selected_index: 0,
             user_dict_path: None,
             partial_commit_segments: Vec::new(),
+            last_timestamp: 0,
         }
     }
 
     /// 设置用户自适应词库持久化文件路径并自动重放加载已有 WAL 记录
-    pub fn set_user_dict_path(&mut self, path: impl Into<std::path::PathBuf>) {
+    pub fn set_user_dict_path(&mut self, path: impl Into<PathBuf>) {
         let p = path.into();
         if p.exists() {
             if let Ok(model) = UserAdaptiveModel::load_or_replay_wal(&p) {
@@ -140,7 +147,7 @@ impl AlgoEngine {
 
     /// 载入外部简繁转换二进制词库（STPhrases + STCharacters）
     pub fn load_opencc_dict(&mut self, dict: OpenCcDict) {
-        self.opencc_dict = std::sync::Arc::new(dict);
+        self.opencc_dict = Arc::new(dict);
     }
 
     /// 获取当前生效的高频英文混输词目数量
@@ -246,7 +253,14 @@ impl AlgoEngine {
 
     /// 批量导入外部词库条目到用户自适应模型
     pub fn import_dict_entries(&mut self, entries: &[ImportedDictEntry]) {
-        let now = 1_700_000_000;
+        let sys_now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(1_700_000_000);
+        let now = sys_now
+            .max(self.user_model.latest_timestamp())
+            .max(self.last_timestamp);
+        self.last_timestamp = now;
         for entry in entries {
             self.user_model
                 .record_commit(&entry.text, &entry.pinyin, now);
@@ -265,7 +279,11 @@ impl AlgoEngine {
             return String::new();
         }
 
-        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy);
+        let paths = PrismEngine::build_paths_with_entities(
+            raw,
+            &self.config.fuzzy,
+            Some(&self.entity_manager),
+        );
         if let Some(first_path) = paths.first() {
             return first_path.to_key_string();
         }
@@ -311,7 +329,11 @@ impl AlgoEngine {
         }
 
         // 前缀切分场景：基于前缀切分路径长度计算字节偏移
-        let prefix_paths = PrismEngine::build_paths(raw_prefix, &self.config.fuzzy);
+        let prefix_paths = PrismEngine::build_paths_with_entities(
+            raw_prefix,
+            &self.config.fuzzy,
+            Some(&self.entity_manager),
+        );
         if let Some(first) = prefix_paths.first() {
             let key_len = first.to_key_string().len().min(formatted.len());
             if formatted.is_char_boundary(key_len) {

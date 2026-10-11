@@ -225,7 +225,7 @@ impl CompactDictBuilder {
 
             for &(wid, score) in cands {
                 candidates_data.extend_from_slice(&wid.to_le_bytes());
-                let score_u16 = (score.min(65535)) as u16;
+                let score_u16 = encode_compact_score(score);
                 candidates_data.extend_from_slice(&score_u16.to_le_bytes());
                 cand_counter += 1;
             }
@@ -397,5 +397,18 @@ impl CompactDictBuilder {
             total_keys,
             elapsed_ms,
         })
+    }
+}
+
+/// 将 32 位原始词频单调映射为 16 位紧凑存储分：
+/// - `0..=32_767` 保持 1:1 线性原值；
+/// - `> 32_767` 采用对数压缩映射至 `32_768..=65_534`，保留百万级高频词之间的相对梯度。
+#[inline]
+pub(crate) fn encode_compact_score(score: u32) -> u16 {
+    if score <= 32_767 {
+        score as u16
+    } else {
+        let extra = ((score - 32_767) as f64 + 1.0).ln() * 2_000.0;
+        (32_768 + (extra as u32).min(32_766)) as u16
     }
 }

@@ -92,14 +92,17 @@ impl PrismFuzzy {
         all_variants
     }
 
-    /// 展开一条切分路径在当前模糊音配置下的所有等价词典查询键（不含原始 `path.to_key_string()`）
-    pub fn expand_fuzzy_keys(path: &SegmentPath, fuzzy: &FuzzyConfig) -> Vec<String> {
-        if !fuzzy.has_active_rules() || path.syllables.is_empty() || !path.remaining.is_empty() {
+    /// 展开音节序列在当前模糊音配置下的所有等价音节组合（不含原始音节序列自身）
+    pub fn expand_fuzzy_syllable_lists(
+        syllables: &[String],
+        fuzzy: &FuzzyConfig,
+    ) -> Vec<Vec<String>> {
+        if !fuzzy.has_active_rules() || syllables.is_empty() {
             return Vec::new();
         }
 
         let mut combos: Vec<Vec<String>> = vec![Vec::new()];
-        for syl in &path.syllables {
+        for syl in syllables {
             let mut syl_options = Vec::new();
             if is_valid_syllable(syl) {
                 syl_options.push(syl.clone());
@@ -130,11 +133,21 @@ impl PrismFuzzy {
             combos = next_combos;
         }
 
-        let orig_key = path.to_key_string();
         combos
             .into_iter()
+            .filter(|parts| parts != syllables)
+            .collect()
+    }
+
+    /// 展开一条切分路径在当前模糊音配置下的所有等价词典查询键（不含原始 `path.to_key_string()`）
+    pub fn expand_fuzzy_keys(path: &SegmentPath, fuzzy: &FuzzyConfig) -> Vec<String> {
+        if !fuzzy.has_active_rules() || path.syllables.is_empty() || !path.remaining.is_empty() {
+            return Vec::new();
+        }
+
+        Self::expand_fuzzy_syllable_lists(&path.syllables, fuzzy)
+            .into_iter()
             .map(|parts| parts.join("'"))
-            .filter(|k| k != &orig_key)
             .collect()
     }
 

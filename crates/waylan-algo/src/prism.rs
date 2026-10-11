@@ -1,5 +1,10 @@
+use crate::entity::EntityProtectionManager;
 use crate::prism_fsa::PrismFsa;
-use crate::syllables::{has_syllable_prefix, is_valid_syllable};
+use crate::prism_fuzzy::PrismFuzzy;
+use crate::syllables::{
+    get_spatial_typo_corrections, get_typo_corrections, has_strictly_longer_syllable,
+    has_syllable_prefix, is_valid_syllable,
+};
 use crate::types::FuzzyConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,8 +47,17 @@ pub static STANDARD_INITIALS: &[&str] = &[
 ];
 
 impl PrismEngine {
-    /// 构建拼写音节图并求解所有合法切分路径
+    /// 构建拼写音节图并求解所有合法切分路径（使用默认全局实体保护器）
     pub fn build_paths(input: &str, fuzzy: &FuzzyConfig) -> Vec<SegmentPath> {
+        Self::build_paths_with_entities(input, fuzzy, Some(EntityProtectionManager::global()))
+    }
+
+    /// 构建拼写音节图并求解所有合法切分路径（支持注入自定义实体保护管理器实例）
+    pub fn build_paths_with_entities(
+        input: &str,
+        fuzzy: &FuzzyConfig,
+        entity_mgr: Option<&EntityProtectionManager>,
+    ) -> Vec<SegmentPath> {
         if input.is_empty() {
             return Vec::new();
         }
@@ -57,8 +71,8 @@ impl PrismEngine {
         let mut paths = Vec::new();
 
         // 3.1 专有名词与实体保护机制 (NER 原型)：若输入精确匹配受保护实体，直接生成零代价原子路径
-        let entity_mgr = crate::entity::EntityProtectionManager::global();
-        if let Some(entity) = entity_mgr.match_exact(input) {
+        let mgr = entity_mgr.unwrap_or_else(|| EntityProtectionManager::global());
+        if let Some(entity) = mgr.match_exact(input) {
             paths.push(SegmentPath {
                 syllables: vec![entity],
                 remaining: String::new(),
@@ -81,11 +95,12 @@ impl PrismEngine {
         );
 
         // 判定是否属于正常击键流程：
-        // 1. 前驱音节全部属于完整标准音节（无单字母辅音声母降级）；
+        // 1. 前驱音节全部属于完整标准音节或合法模糊音音节（无单字母辅音声母降级）；
         // 2. 末尾闭合（remaining 为空）或处于合法音节前缀键入中（如 "bei" + "j"）
         let is_normal_typing = paths.iter().any(|p| {
             let all_prev_valid = p.syllables.iter().all(|s| {
-                is_valid_syllable(s) && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e"))
+                (is_valid_syllable(s) || PrismFuzzy::is_fuzzy_valid(s, fuzzy))
+                    && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e"))
             });
             if !all_prev_valid {
                 return false;
@@ -218,7 +233,7 @@ impl PrismEngine {
         if fuzzy.has_active_rules() {
             for len in (1..=max_len).rev() {
                 let slice = &input[start..start + len];
-                if crate::prism_fuzzy::PrismFuzzy::is_fuzzy_valid(slice, fuzzy)
+                if PrismFuzzy::is_fuzzy_valid(slice, fuzzy)
                     && !fsa_matches.iter().any(|m| m.0 == slice)
                 {
                     matched_full = true;
@@ -282,7 +297,7 @@ impl PrismEngine {
             }
         }
 
-        // 1.4 容错虚边：物理键盘紧邻按键高斯误触（如 nihso -> nihao, beikin -> beijin）
+        // 1.4 容错虚边：物理键盘紧邻按键高斯误触与常见韵母规则纠错（如 nihso -> nihao, zhegn -> zheng）
         // 防候选词爆炸：仅在第二阶段且未匹配出 4 字符以上音节时探索
         if enable_typo
             && typo_count == 0
@@ -291,7 +306,12 @@ impl PrismEngine {
         {
             for len in (2..=max_len).rev() {
                 let slice = &input[start..start + len];
-                let corrections = crate::syllables::get_spatial_typo_corrections(slice, 25);
+                let mut corrections = get_spatial_typo_corrections(slice, 25);
+                for rule_alt in get_typo_corrections(slice) {
+                    if !corrections.iter().any(|(s, _)| s == &rule_alt) {
+                        corrections.push((rule_alt, 16));
+                    }
+                }
                 for (std_syl, edit_cost) in corrections {
                     if !fsa_matches.iter().any(|m| m.0 == std_syl) {
                         current.push(std_syl);
@@ -374,9 +394,7 @@ impl PrismEngine {
         let mut paths = Vec::new();
 
         // 1. 若末尾片段本身是合法音节（或末尾输入了单引号强制确认），生成闭合音节路径
-        if is_valid_syllable(last_part)
-            || crate::prism_fuzzy::PrismFuzzy::is_fuzzy_valid(last_part, fuzzy)
-        {
+        if is_valid_syllable(last_part) || PrismFuzzy::is_fuzzy_valid(last_part, fuzzy) {
             let mut syls = base_syllables.clone();
             syls.push(last_part.to_string());
             let cost = syls.len() as u32;
@@ -391,8 +409,7 @@ impl PrismEngine {
         // 2. 若末尾未以单引号显式封口，且末尾片段不是合法音节或存在更长的合法音节前缀，
         // 则同时生成将末尾片段作为未完成前缀 (remaining) 的扩展路径（支持如 xi'a 联想 喜爱 xi'ai / 西安 xi'an）
         if !is_trailing_quote
-            && (!is_valid_syllable(last_part)
-                || crate::syllables::has_strictly_longer_syllable(last_part))
+            && (!is_valid_syllable(last_part) || has_strictly_longer_syllable(last_part))
         {
             let cost = (base_syllables.len() + 1) as u32;
             paths.push(SegmentPath {
@@ -419,21 +436,21 @@ impl PrismEngine {
 impl PrismEngine {
     #[inline]
     pub fn expand_fuzzy_syllables(slice: &str, fuzzy: &FuzzyConfig) -> Vec<String> {
-        crate::prism_fuzzy::PrismFuzzy::expand_fuzzy_syllables(slice, fuzzy)
+        PrismFuzzy::expand_fuzzy_syllables(slice, fuzzy)
     }
 
     #[inline]
     pub fn expand_fuzzy_keys(path: &SegmentPath, fuzzy: &FuzzyConfig) -> Vec<String> {
-        crate::prism_fuzzy::PrismFuzzy::expand_fuzzy_keys(path, fuzzy)
+        PrismFuzzy::expand_fuzzy_keys(path, fuzzy)
     }
 
     #[inline]
     pub fn is_zero_initial_syllable(syl: &str) -> bool {
-        crate::prism_fuzzy::PrismFuzzy::is_zero_initial_syllable(syl)
+        PrismFuzzy::is_zero_initial_syllable(syl)
     }
 
     #[inline]
     pub fn is_zero_initial_borrowing_split(prev: &str, curr: &str) -> bool {
-        crate::prism_fuzzy::PrismFuzzy::is_zero_initial_borrowing_split(prev, curr)
+        PrismFuzzy::is_zero_initial_borrowing_split(prev, curr)
     }
 }

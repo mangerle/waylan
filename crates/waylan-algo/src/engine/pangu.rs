@@ -194,6 +194,6 @@ impl PanguSpacing {
             "兆",
         ];
 
-        CLASSIFIERS.contains(&word)
+        CLASSIFIERS.iter().any(|&c| word.starts_with(c))
     }
 }

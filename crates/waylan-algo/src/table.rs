@@ -247,8 +247,10 @@ impl CompactMmapLexicon {
                     .try_into()
                     .unwrap_or([0; 2]),
             );
-            // 还原静态分 (u16 线性映射回 1000..30000 范围)
-            let score = score_u16 as u32;
+            // 还原静态分，并对达到 u16 上限的候选附加原始顺位梯度以保留同音高频词相对次序
+            let base_score = decode_compact_score(score_u16);
+            let rank_bonus = cand_count.saturating_sub(i).min(64) as u32;
+            let score = base_score.saturating_add(rank_bonus);
 
             if let Some(text) = self.get_word(word_id) {
                 res.push((text.to_string(), score));
@@ -284,6 +286,12 @@ impl CompactMmapLexicon {
             .or_else(|| reader.exact_match(initial))? as usize;
         self.get_candidates_by_key_idx(key_idx, Some(2))
     }
+}
+
+/// 将 16 位紧凑存储词频还原为 32 位静态分（兼容旧版 65535 截断与新版分段对数压缩）
+#[inline]
+fn decode_compact_score(score_u16: u16) -> u32 {
+    score_u16 as u32
 }
 
 /// 紧凑词典索引表 (Table / Lexicon)

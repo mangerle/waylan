@@ -1,9 +1,37 @@
 use super::pangu::PanguSpacing;
 use super::AlgoEngine;
+use crate::dispatcher::ModeDispatcher;
 use crate::prism::PrismEngine;
 use crate::types::{AlgoCandidate, CandidateTier};
 
 impl AlgoEngine {
+    /// 判断当前选中的候选词是否应当被记录到用户自适应词频模型中
+    fn should_record_to_user_dict(&self, selected: &AlgoCandidate) -> bool {
+        if selected.is_expandable
+            || selected.pinyin.is_empty()
+            || selected.text.is_empty()
+            || self.config.traditional_chinese
+        {
+            return false;
+        }
+        if matches!(
+            selected.tier,
+            CandidateTier::TypoCorrection | CandidateTier::ProtectedEntity
+        ) {
+            return false;
+        }
+        if selected.comment.as_deref() == Some("自定义短语") {
+            return false;
+        }
+        if ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config).is_some() {
+            return false;
+        }
+        selected
+            .text
+            .chars()
+            .all(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c))
+    }
+
     pub fn select_candidate(
         &mut self,
         index: usize,
@@ -13,7 +41,9 @@ impl AlgoEngine {
             return None;
         }
 
+        self.last_timestamp = self.last_timestamp.max(current_timestamp);
         let selected = self.current_candidates[index].clone();
+        let should_record = self.should_record_to_user_dict(&selected);
 
         // 若选中的是可展开项，且直接按数字键确认（未展开时）：
         // 优先将首个格式化子候选文本（如当前标准日期 2026年10月9日）上屏
@@ -23,17 +53,19 @@ impl AlgoEngine {
             selected.text.clone()
         };
 
-        // 记录用户选词并动态调频（若配置了持久化路径则同步追加至 WAL 日志）
-        if let Some(ref path) = self.user_dict_path {
-            let _ = self.user_model.append_to_wal(
-                path,
-                &selected.text,
-                &selected.pinyin,
-                current_timestamp,
-            );
-        } else {
-            self.user_model
-                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+        // 仅当选中的候选词为标准简体中文拼音词条时，才记录用户选词并动态调频
+        if should_record {
+            if let Some(ref path) = self.user_dict_path {
+                let _ = self.user_model.append_to_wal(
+                    path,
+                    &selected.text,
+                    &selected.pinyin,
+                    current_timestamp,
+                );
+            } else {
+                self.user_model
+                    .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+            }
         }
 
         // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
@@ -65,10 +97,7 @@ impl AlgoEngine {
                 self.compute_consumed_len_for_candidate(&selected)
             };
 
-        if !selected.is_expandable
-            && selected.tier != CandidateTier::TypoCorrection
-            && !selected.pinyin.is_empty()
-        {
+        if should_record {
             self.partial_commit_segments
                 .push((selected.text.clone(), selected.pinyin.clone()));
         } else {
@@ -180,6 +209,7 @@ impl AlgoEngine {
             self.last_commit_context = Some(trimmed_text.to_string());
         }
 
+        self.partial_commit_segments.clear();
         self.composition.clear();
         self.page_index = 0;
         self.recompute_candidates();
@@ -205,7 +235,11 @@ impl AlgoEngine {
 
         // 全拼与简拼混合模式：优先按候选音节逐段对齐原始输入或最优切分路径单元
         let cand_syls: Vec<&str> = pinyin.split('\'').filter(|s| !s.is_empty()).collect();
-        let paths = PrismEngine::build_paths(raw, &self.config.fuzzy);
+        let paths = PrismEngine::build_paths_with_entities(
+            raw,
+            &self.config.fuzzy,
+            Some(&self.entity_manager),
+        );
         let mut best_units: Vec<String> = Vec::new();
         if let Some(best) = paths.first() {
             best_units.extend(best.syllables.iter().cloned());

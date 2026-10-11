@@ -52,8 +52,10 @@ impl ModeDispatcher {
 
         // 2. 算术表达式安全求值（如 v20*5, v100+20）
         if let Some(val) = Self::eval_math_simple(expr) {
-            let val_str = if (val.fract()).abs() < 1e-9 {
-                format!("{}", val as i64)
+            let val_str = if (val.fract()).abs() < 1e-9 && val.abs() < 9_007_199_254_740_992.0 {
+                format!("{}", val.round() as i64)
+            } else if (val.fract()).abs() < 1e-9 {
+                format!("{:.0}", val)
             } else {
                 format!("{:.4}", val)
                     .trim_end_matches('0')
@@ -85,7 +87,7 @@ impl ModeDispatcher {
         }
 
         let mut pos = 0;
-        let val = Self::parse_expr(&chars, &mut pos)?;
+        let val = Self::parse_expr(&chars, &mut pos, 0)?;
         if pos == chars.len() && val.is_finite() {
             Some(val)
         } else {
@@ -94,12 +96,15 @@ impl ModeDispatcher {
     }
 
     /// 解析加减级表达式：term { ('+' | '-') term }
-    fn parse_expr(chars: &[char], pos: &mut usize) -> Option<f64> {
-        let mut lhs = Self::parse_term(chars, pos)?;
+    fn parse_expr(chars: &[char], pos: &mut usize, depth: usize) -> Option<f64> {
+        if depth > 32 {
+            return None;
+        }
+        let mut lhs = Self::parse_term(chars, pos, depth)?;
         while let Some(&op) = chars.get(*pos) {
             if op == '+' || op == '-' {
                 *pos += 1;
-                let rhs = Self::parse_term(chars, pos)?;
+                let rhs = Self::parse_term(chars, pos, depth)?;
                 lhs = if op == '+' { lhs + rhs } else { lhs - rhs };
             } else {
                 break;
@@ -109,12 +114,12 @@ impl ModeDispatcher {
     }
 
     /// 解析乘除取模级项：factor { ('*' | '/' | '%') factor }
-    fn parse_term(chars: &[char], pos: &mut usize) -> Option<f64> {
-        let mut lhs = Self::parse_factor(chars, pos)?;
+    fn parse_term(chars: &[char], pos: &mut usize, depth: usize) -> Option<f64> {
+        let mut lhs = Self::parse_factor(chars, pos, depth)?;
         while let Some(&op) = chars.get(*pos) {
             if op == '*' || op == '/' || op == '%' {
                 *pos += 1;
-                let rhs = Self::parse_factor(chars, pos)?;
+                let rhs = Self::parse_factor(chars, pos, depth)?;
                 lhs = match op {
                     '*' => lhs * rhs,
                     '/' => {
@@ -139,19 +144,22 @@ impl ModeDispatcher {
     }
 
     /// 解析原子因子：一元正负号、括号子表达式或浮点数常量
-    fn parse_factor(chars: &[char], pos: &mut usize) -> Option<f64> {
+    fn parse_factor(chars: &[char], pos: &mut usize, depth: usize) -> Option<f64> {
+        if depth > 32 {
+            return None;
+        }
         let &ch = chars.get(*pos)?;
         if ch == '+' {
             *pos += 1;
-            return Self::parse_factor(chars, pos);
+            return Self::parse_factor(chars, pos, depth + 1);
         }
         if ch == '-' {
             *pos += 1;
-            return Some(-Self::parse_factor(chars, pos)?);
+            return Some(-Self::parse_factor(chars, pos, depth + 1)?);
         }
         if ch == '(' {
             *pos += 1;
-            let val = Self::parse_expr(chars, pos)?;
+            let val = Self::parse_expr(chars, pos, depth + 1)?;
             if chars.get(*pos) == Some(&')') {
                 *pos += 1;
                 return Some(val);
@@ -229,7 +237,8 @@ impl ModeDispatcher {
             }
             "+" => {
                 candidates.push(AlgoCandidate::new("±", "i+", 10_000).with_comment("正负号"));
-                candidates.push(AlgoCandidate::new("➕", "i+", 9_000).with_comment("运算符号"));
+                candidates
+                    .push(AlgoCandidate::new("\u{2795}", "i+", 9_000).with_comment("运算符号"));
             }
             "*" => {
                 candidates.push(AlgoCandidate::new("×", "i*", 10_000).with_comment("乘号"));

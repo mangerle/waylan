@@ -2,79 +2,6 @@ use crate::syllables::find_syllables_by_prefix;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 
-/// 词网格中的候选词元节点 (Lattice Node)
-#[derive(Debug, Clone)]
-pub struct LatticeNode {
-    /// 词条文本
-    pub text: String,
-    /// 音节切分起始索引 (0-indexed)
-    pub start: usize,
-    /// 音节切分结束索引 (不包含)
-    pub end: usize,
-    /// 单词自身基础静态词频对数得分 (Unigram Log Score)
-    pub unigram_score: i64,
-}
-
-/// 标准词网格 (Word Lattice)
-///
-/// # 设计原理
-/// - 将音节图上各时间区间的候选字词解耦为显式网格结构；
-/// - 为后续融合全拼、简拼、容错纠错与多跨度转移提供统一拓扑载体。
-#[derive(Debug, Default)]
-pub struct WordLattice {
-    /// 每个起始位置的候选词列表
-    pub nodes_by_start: Vec<Vec<LatticeNode>>,
-    /// 音节总跨度
-    pub total_syllables: usize,
-}
-
-impl WordLattice {
-    /// 根据音节切分序列与词典表构建显式词网格
-    pub fn build(syllables: &[String], table: &LexiconTable) -> Self {
-        let n = syllables.len();
-        let mut nodes_by_start = vec![Vec::new(); n];
-
-        for start_idx in 0..n {
-            let max_span = (n - start_idx).min(5);
-            for span in 1..=max_span {
-                let end_idx = start_idx + span;
-                let sub_syls = &syllables[start_idx..end_idx];
-                let key = sub_syls.join("'");
-
-                let raw_entries = match table.get_raw_entries(&key) {
-                    Some(entries) if !entries.is_empty() => entries,
-                    _ => {
-                        if span == 1 {
-                            if let Some(entries) = table.get_initial_raw_entries(&key) {
-                                entries
-                            } else {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
-                };
-
-                for (text, raw_score) in raw_entries.iter().take(4) {
-                    let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
-                    nodes_by_start[start_idx].push(LatticeNode {
-                        text: text.clone(),
-                        start: start_idx,
-                        end: end_idx,
-                        unigram_score: freq_score,
-                    });
-                }
-            }
-        }
-
-        Self {
-            nodes_by_start,
-            total_syllables: n,
-        }
-    }
-}
-
 /// 轻量级 2-gram 统计语言模型与平滑算法 (Bigram Language Model)
 ///
 /// # 设计原理
@@ -268,8 +195,8 @@ impl ViterbiDecoder {
                     }
                 };
 
-                for (text, raw_score) in raw_entries.iter().take(3) {
-                    let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
+                for (text, raw_score) in raw_entries.iter().take(4) {
+                    let freq_score = Self::unigram_log_score(*raw_score);
                     for &(prev_beam_idx, ref prev_word, prev_score) in &prev_states {
                         let trans_score = BigramLanguageModel::transition_score(
                             prev_word, text, freq_score, table,
@@ -279,7 +206,7 @@ impl ViterbiDecoder {
                             word: text.clone(),
                             prev_step: start_idx,
                             prev_beam_idx,
-                            total_score: prev_score + trans_score,
+                            total_score: prev_score.saturating_add(trans_score),
                         });
                     }
                 }
@@ -317,7 +244,7 @@ impl ViterbiDecoder {
                     let acronym_key = initial_chain.concat();
                     let acronym_cands = table.lookup_acronym(&acronym_key);
                     for cand in acronym_cands.iter().take(3) {
-                        let freq_score = ((cand.score as f64 + 1.0).ln() * 1000.0) as i64;
+                        let freq_score = Self::unigram_log_score(cand.score);
                         for (prev_beam_idx, prev) in dp[split_idx].iter().enumerate() {
                             let prev_word = if split_idx == 0 {
                                 prev_context.unwrap_or("")
@@ -331,7 +258,7 @@ impl ViterbiDecoder {
                                 split_idx,
                                 prev_beam_idx,
                                 cand.text.clone(),
-                                prev.total_score + trans_score,
+                                prev.total_score.saturating_add(trans_score),
                             ));
                         }
                     }
@@ -344,7 +271,7 @@ impl ViterbiDecoder {
                     let key = format!("{}'{}", last_syl, syl);
                     if let Some(entries) = table.get_raw_entries(&key) {
                         for (text, raw_score) in entries.iter().take(2) {
-                            let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
+                            let freq_score = Self::unigram_log_score(*raw_score);
                             for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
                                 let prev_word = if prev_step == 0 {
                                     prev_context.unwrap_or("")
@@ -358,7 +285,7 @@ impl ViterbiDecoder {
                                     prev_step,
                                     prev_beam_idx,
                                     text.clone(),
-                                    prev.total_score + trans_score,
+                                    prev.total_score.saturating_add(trans_score),
                                 ));
                             }
                         }
@@ -370,7 +297,7 @@ impl ViterbiDecoder {
             if ext_candidates.is_empty() && !dp[n].is_empty() {
                 if let Some(entries) = table.get_initial_raw_entries(remaining) {
                     for (text, raw_score) in entries.iter().take(3) {
-                        let freq_score = ((*raw_score as f64 + 1.0).ln() * 1000.0) as i64;
+                        let freq_score = Self::unigram_log_score(*raw_score);
                         for (prev_beam_idx, prev) in dp[n].iter().enumerate() {
                             let prev_word = if n == 0 {
                                 prev_context.unwrap_or("")
@@ -384,7 +311,7 @@ impl ViterbiDecoder {
                                 n,
                                 prev_beam_idx,
                                 text.clone(),
-                                prev.total_score + trans_score,
+                                prev.total_score.saturating_add(trans_score),
                             ));
                         }
                     }
@@ -400,7 +327,7 @@ impl ViterbiDecoder {
                 } else {
                     format!("{}'{}", syllables.join("'"), remaining)
                 };
-                let positive_score = (best_score + 100_000).max(1) as u32;
+                let positive_score = Self::to_positive_score(best_score);
                 return Some(
                     AlgoCandidate::new(full_text, pinyin_str, positive_score)
                         .with_comment("整句预测")
@@ -417,13 +344,27 @@ impl ViterbiDecoder {
         let best = &dp[n][0];
         let full_text = backtrack_sentence(&dp, n, 0, None);
         let pinyin_str = syllables.join("'");
-        let positive_score = (best.total_score + 100_000).max(1) as u32;
+        let positive_score = Self::to_positive_score(best.total_score);
 
         Some(
             AlgoCandidate::new(full_text, pinyin_str, positive_score)
                 .with_comment("整句预测")
                 .with_tier(CandidateTier::SentenceViterbi),
         )
+    }
+
+    /// 将原始静态词频转换为与二元转移矩阵同量纲的对数似然得分
+    #[inline]
+    fn unigram_log_score(raw_score: u32) -> i64 {
+        ((raw_score as f64 + 1.0).ln() * 1_200.0) as i64
+    }
+
+    /// 将 Viterbi 路径累计对数似然安全映射为正整数候选分
+    #[inline]
+    fn to_positive_score(total_score: i64) -> u32 {
+        total_score
+            .saturating_add(100_000)
+            .clamp(1, u32::MAX as i64) as u32
     }
 }
 
