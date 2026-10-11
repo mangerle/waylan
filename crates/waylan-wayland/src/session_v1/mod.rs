@@ -16,18 +16,6 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrL
 
 pub use crate::input_core::*;
 
-/// 判断按键是否为向上翻页键（向前兼容封装）
-#[inline]
-pub fn is_prev_page_key(keycode: u32, page_keys: PageKeyConfig) -> bool {
-    page_keys.is_prev_page(keycode)
-}
-
-/// 判断按键是否为向下翻页键（向前兼容封装）
-#[inline]
-pub fn is_next_page_key(keycode: u32, page_keys: PageKeyConfig) -> bool {
-    page_keys.is_next_page(keycode)
-}
-
 /// V1 会话配置与词库热重载回调函数类型
 pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;
 
