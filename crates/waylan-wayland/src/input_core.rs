@@ -600,7 +600,8 @@ mod tests {
 
         assert_eq!(keycode_to_digit(KEY_1), Some(1));
         assert_eq!(keycode_to_digit(KEY_9), Some(9));
-        assert_eq!(keycode_to_digit(KEY_0), None);
+        assert_eq!(keycode_to_digit(KEY_0), Some(10));
+        assert_eq!(keycode_to_digit(KEY_ESC), None);
 
         assert_eq!(keycode_to_ascii_digit_char(KEY_0), Some('0'));
         assert_eq!(keycode_to_punctuation(KEY_COMMA), Some(','));
