@@ -138,7 +138,7 @@ fn flush_chunk_to_disk(
     temp_chunk_dir: &Path,
     chunk_index: usize,
     current_chunk_map: &mut HashMap<(u32, u32), u32>,
-) -> PathBuf {
+) -> io::Result<PathBuf> {
     let chunk_path = temp_chunk_dir.join(format!("chunk_{:04}.bin", chunk_index));
     let mut sorted_chunk: Vec<RawBigramPair> = current_chunk_map
         .drain()
@@ -151,15 +151,15 @@ fn flush_chunk_to_disk(
         .collect();
     sorted_chunk.par_sort_unstable();
 
-    let f = File::create(&chunk_path).expect("创建分片文件失败");
+    let f = File::create(&chunk_path)?;
     let mut w = BufWriter::new(f);
     for item in sorted_chunk {
-        w.write_all(&item.w1_id.to_le_bytes()).unwrap();
-        w.write_all(&item.w2_id.to_le_bytes()).unwrap();
-        w.write_all(&item.count.to_le_bytes()).unwrap();
+        w.write_all(&item.w1_id.to_le_bytes())?;
+        w.write_all(&item.w2_id.to_le_bytes())?;
+        w.write_all(&item.count.to_le_bytes())?;
     }
-    w.flush().unwrap();
-    chunk_path
+    w.flush()?;
+    Ok(chunk_path)
 }
 
 /// 结算归并后的单个二元词对亲和度得分并推入结果集
@@ -372,7 +372,8 @@ fn main() {
                         chunk_index
                     );
                     let chunk_path =
-                        flush_chunk_to_disk(temp_chunk_dir, chunk_index, &mut current_chunk_map);
+                        flush_chunk_to_disk(temp_chunk_dir, chunk_index, &mut current_chunk_map)
+                            .expect("刷写临时分片文件失败");
                     chunk_index += 1;
                     chunk_files.push(chunk_path);
                 }
@@ -382,7 +383,8 @@ fn main() {
     }
 
     if !current_chunk_map.is_empty() {
-        let chunk_path = flush_chunk_to_disk(temp_chunk_dir, chunk_index, &mut current_chunk_map);
+        let chunk_path = flush_chunk_to_disk(temp_chunk_dir, chunk_index, &mut current_chunk_map)
+            .expect("刷写最终临时分片文件失败");
         chunk_files.push(chunk_path);
     }
 
@@ -394,7 +396,7 @@ fn main() {
     // 4. K-Way 多路归并流式累加
     let mut readers: Vec<BufReader<File>> = chunk_files
         .iter()
-        .map(|p| BufReader::new(File::open(p).unwrap()))
+        .map(|p| BufReader::new(File::open(p).expect("打开归并分片文件失败")))
         .collect();
 
     let mut heap = BinaryHeap::new();
@@ -402,9 +404,9 @@ fn main() {
     fn read_pair(r: &mut BufReader<File>) -> Option<RawBigramPair> {
         let mut buf = [0u8; 12];
         if r.read_exact(&mut buf).is_ok() {
-            let w1_id = u32::from_le_bytes(buf[0..4].try_into().unwrap());
-            let w2_id = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-            let count = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+            let w1_id = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            let w2_id = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+            let count = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
             Some(RawBigramPair {
                 w1_id,
                 w2_id,
