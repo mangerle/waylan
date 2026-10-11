@@ -128,7 +128,15 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
         });
 
         ui.horizontal(|ui| {
-            if ui.button("开始导入并增量合入").clicked() {
+            let button_text = if app.import_in_progress {
+                "正在后台导入中..."
+            } else {
+                "开始导入并增量合入"
+            };
+            if ui
+                .add_enabled(!app.import_in_progress, egui::Button::new(button_text))
+                .clicked()
+            {
                 let path = Path::new(app.import_file_path.trim());
                 if !path.is_file() {
                     app.import_status_message =
@@ -141,8 +149,18 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
                     app.import_status_message =
                         Some("词库文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
                 } else {
-                    match waylan_algo::dict_importer::DictImporter::import_file(path) {
-                        Ok(entries) => {
+                    let path_buf = path.to_path_buf();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    app.import_rx = Some(rx);
+                    app.import_in_progress = true;
+                    app.import_status_message =
+                        Some("正在后台异步解析与合入词库，请稍候...".to_string());
+
+                    std::thread::spawn(move || {
+                        let res = (|| -> Result<(usize, usize), String> {
+                            let entries =
+                                waylan_algo::dict_importer::DictImporter::import_file(&path_buf)
+                                    .map_err(|e| format!("{}", e))?;
                             let count = entries.len();
                             let user_dict_path = AppConfig::user_dict_path();
                             let mut user_model =
@@ -157,24 +175,13 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
                             for entry in &entries {
                                 user_model.record_commit(&entry.text, &entry.pinyin, now);
                             }
-                            match user_model.compact_wal(&user_dict_path) {
-                                Ok(()) => {
-                                    app.user_dict_count = user_model.total_entries();
-                                    app.import_status_message = Some(format!(
-                                        "成功导入 {} 条词目，并已即时合入专属用户词库！",
-                                        count
-                                    ));
-                                }
-                                Err(e) => {
-                                    app.import_status_message =
-                                        Some(format!("保存用户词库失败: {}", e));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            app.import_status_message = Some(format!("导入词库失败: {}", e));
-                        }
-                    }
+                            user_model
+                                .compact_wal(&user_dict_path)
+                                .map_err(|e| format!("保存用户词库失败: {}", e))?;
+                            Ok((count, user_model.total_entries()))
+                        })();
+                        let _ = tx.send(res);
+                    });
                 }
             }
         });

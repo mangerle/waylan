@@ -58,6 +58,10 @@ pub struct SettingsApp {
     pub user_dict_count: usize,
     /// 用户自造词库操作状态提示
     pub user_dict_status_message: Option<String>,
+    /// 词库异步导入进度接收端 (导入数, 当前总词数)
+    pub import_rx: Option<std::sync::mpsc::Receiver<Result<(usize, usize), String>>>,
+    /// 是否正在后台异步执行词库导入
+    pub import_in_progress: bool,
 }
 
 impl Default for SettingsApp {
@@ -111,6 +115,8 @@ impl SettingsApp {
             phrase_status_message: None,
             user_dict_count,
             user_dict_status_message: None,
+            import_rx: None,
+            import_in_progress: false,
         }
     }
 
@@ -173,6 +179,26 @@ impl SettingsApp {
 
 impl eframe::App for SettingsApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 轮询后台异步词库导入任务
+        if let Some(ref rx) = self.import_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.import_in_progress = false;
+                match res {
+                    Ok((imported_count, total_count)) => {
+                        self.user_dict_count = total_count;
+                        self.import_status_message = Some(format!(
+                            "成功导入 {} 条词目，并已即时合入专属用户词库！",
+                            imported_count
+                        ));
+                    }
+                    Err(e) => {
+                        self.import_status_message = Some(format!("导入词库失败: {}", e));
+                    }
+                }
+                self.import_rx = None;
+            }
+        }
+
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
 
         // 头部标题区域（翡翠青绿主题强调）
