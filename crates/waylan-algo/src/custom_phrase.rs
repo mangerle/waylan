@@ -129,7 +129,7 @@ impl CustomPhraseManager {
         }
     }
 
-    /// 将当前短语表保存写回文本文件
+    /// 将当前短语表保存写回文本文件（采用同目录临时文件 + sync_all + rename 原子写入，防并发读取撕裂）
     pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
         let mut content = String::from(
             "# 微澜输入法自定义短语配置文件\n# 格式：快捷拼音/代码=上屏内容（每行一条）\n",
@@ -141,7 +141,23 @@ impl CustomPhraseManager {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, content)
+
+        let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+        let write_res: std::io::Result<()> = (|| {
+            use std::io::Write;
+            let mut file = fs::File::create(&tmp_path)?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            fs::rename(&tmp_path, path)?;
+            Ok(())
+        })();
+
+        if let Err(e) = write_res {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+
+        Ok(())
     }
 }
 
