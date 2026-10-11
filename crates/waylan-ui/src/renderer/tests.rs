@@ -1,6 +1,6 @@
 use super::*;
 
-use waylan_core::Candidate;
+use waylan_core::{Candidate, ExpandedCardState};
 
 #[test]
 fn test_renderer_basic() {
@@ -14,7 +14,7 @@ fn test_renderer_basic() {
             Candidate::new("泥豪", "ni'hao", 6000),
         ],
         selected_index: 0,
-        expanded_card: waylan_core::ExpandedCardState::Collapsed,
+        expanded_card: ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
@@ -39,7 +39,7 @@ fn test_render_expanded_popup_card() {
                 .with_sub_candidates(vec!["2026年10月9日".to_string(), "20261009".to_string()]),
         ],
         selected_index: 1,
-        expanded_card: waylan_core::ExpandedCardState::Expanded { selected_index: 0 },
+        expanded_card: ExpandedCardState::Expanded { selected_index: 0 },
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
@@ -67,7 +67,7 @@ fn test_glyph_cache_hit_and_reuse() {
             Candidate::new("侧视", "ce'shi", 90),
         ],
         selected_index: 0,
-        expanded_card: waylan_core::ExpandedCardState::Collapsed,
+        expanded_card: ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
@@ -90,7 +90,7 @@ fn test_hidpi_scale_rendering() {
         preedit: "ce".to_string(),
         candidates: vec![Candidate::new("测试", "ce'shi", 100)],
         selected_index: 0,
-        expanded_card: waylan_core::ExpandedCardState::Collapsed,
+        expanded_card: ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
@@ -175,7 +175,7 @@ fn test_render_grid_expanded_and_hit_test() {
         preedit: "hou'xuan".to_string(),
         candidates: grid_cands.iter().take(6).cloned().collect(),
         selected_index: 0,
-        expanded_card: waylan_core::ExpandedCardState::Collapsed,
+        expanded_card: ExpandedCardState::Collapsed,
         mode_badge: String::new(),
         is_grid_expanded: true,
         grid_candidates: grid_cands,

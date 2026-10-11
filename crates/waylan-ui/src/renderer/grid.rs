@@ -10,7 +10,7 @@ use super::draw::{
 use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
 use super::CandidateBoxRenderer;
 use tiny_skia::Pixmap;
-use waylan_core::CandidateBoxState;
+use waylan_core::{Candidate, CandidateBoxState};
 
 /// 网格大面板布局常量
 const GRID_ROWS: usize = 5;
@@ -33,7 +33,7 @@ struct GridDimensions {
 /// 计算网格各列宽度与总宽高
 fn compute_grid_dimensions(
     renderer: &CandidateBoxRenderer,
-    candidates: &[waylan_core::Candidate],
+    candidates: &[Candidate],
     selected_index: usize,
     s: f32,
 ) -> GridDimensions {
@@ -140,7 +140,7 @@ fn render_grid_items(
     renderer: &CandidateBoxRenderer,
     pixmap: &mut Pixmap,
     state: &CandidateBoxState,
-    candidates: &[waylan_core::Candidate],
+    candidates: &[Candidate],
     dims: &GridDimensions,
     regions: &mut Vec<HitRegion>,
     s: f32,

@@ -6,6 +6,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::mpsc::sync_channel;
 use std::time::{SystemTime, UNIX_EPOCH};
+use waylan_algo::dict_importer::DictImporter;
+use waylan_algo::user_adaptive::UserAdaptiveModel;
+use waylan_algo::AuxiliaryDict;
 
 /// 外部导入文本词库最大允许字节数（64 MB），防止误导入超大文件触发 OOM
 const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -160,16 +163,13 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
 
                     std::thread::spawn(move || {
                         let res = (|| -> Result<(usize, usize), String> {
-                            let entries =
-                                waylan_algo::dict_importer::DictImporter::import_file(&path_buf)
-                                    .map_err(|e| format!("{}", e))?;
+                            let entries = DictImporter::import_file(&path_buf)
+                                .map_err(|e| format!("{}", e))?;
                             let count = entries.len();
                             let user_dict_path = AppConfig::user_dict_path();
                             let mut user_model =
-                                waylan_algo::user_adaptive::UserAdaptiveModel::load_or_replay_wal(
-                                    &user_dict_path,
-                                )
-                                .unwrap_or_default();
+                                UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
+                                    .unwrap_or_default();
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .map(|d| d.as_secs())
@@ -341,10 +341,7 @@ pub fn render_symbols_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
 }
 
 /// 解析外部英文词表并持久化保存至用户辅助词库
-fn parse_and_import_english(
-    path: &Path,
-    aux: &mut waylan_algo::AuxiliaryDict,
-) -> EnglishImportResult {
+fn parse_and_import_english(path: &Path, aux: &mut AuxiliaryDict) -> EnglishImportResult {
     let content = fs::read_to_string(path).map_err(|e| format!("读取英文词库文件失败: {}", e))?;
     let mut existing: HashSet<String> = aux
         .english_words
@@ -382,10 +379,7 @@ fn parse_and_import_english(
 }
 
 /// 解析外部符号映射表并持久化保存至用户辅助词库
-fn parse_and_import_symbols(
-    path: &Path,
-    aux: &mut waylan_algo::AuxiliaryDict,
-) -> SymbolsImportResult {
+fn parse_and_import_symbols(path: &Path, aux: &mut AuxiliaryDict) -> SymbolsImportResult {
     let content = fs::read_to_string(path).map_err(|e| format!("读取符号文件失败: {}", e))?;
     let mut existing: HashSet<(String, String)> = aux
         .symbols

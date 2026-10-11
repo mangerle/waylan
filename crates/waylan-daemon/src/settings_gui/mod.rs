@@ -5,6 +5,9 @@ use crate::config::AppConfig;
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichText};
 use std::fs;
 use std::sync::Arc;
+use waylan_algo::custom_phrase::CustomPhraseManager;
+use waylan_algo::user_adaptive::UserAdaptiveModel;
+use waylan_algo::AuxiliaryDict;
 
 /// 偏好设置中心导航 Tab 标签页枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,7 +43,7 @@ pub struct SettingsApp {
     pub import_status_message: Option<String>,
 
     /// 辅助与混输词库（包含英文词库与符号表情库）
-    pub aux_dict: waylan_algo::AuxiliaryDict,
+    pub aux_dict: AuxiliaryDict,
     /// 外部英文词库导入路径
     pub english_import_path: String,
     /// 英文词库导入反馈提示
@@ -83,23 +86,21 @@ impl SettingsApp {
         let config = AppConfig::load_or_create();
 
         // 加载现有自定义短语
-        let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-        let phrase_manager =
-            waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+        let phrase_path = CustomPhraseManager::default_path();
+        let phrase_manager = CustomPhraseManager::load_or_init(&phrase_path);
         let custom_phrases = phrase_manager.all_entries();
 
         // 加载用户自造词统计
         let user_dict_path = AppConfig::user_dict_path();
-        let user_dict_count =
-            waylan_algo::user_adaptive::UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
-                .map(|m| m.total_entries())
-                .unwrap_or(0);
+        let user_dict_count = UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
+            .map(|m| m.total_entries())
+            .unwrap_or(0);
 
         // 加载辅助与混输词库
-        let mut aux_dict = waylan_algo::AuxiliaryDict::with_default_data();
+        let mut aux_dict = AuxiliaryDict::with_default_data();
         for path in AppConfig::aux_dict_search_paths() {
             if path.exists() {
-                if let Ok(loaded) = waylan_algo::AuxiliaryDict::load_from_file(&path) {
+                if let Ok(loaded) = AuxiliaryDict::load_from_file(&path) {
                     aux_dict = loaded;
                     break;
                 }
@@ -132,8 +133,8 @@ impl SettingsApp {
 
     /// 将当前的自定义短语同步保存写回 phrases.txt
     pub fn sync_custom_phrases(&self) -> Result<(), String> {
-        let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-        let mut manager = waylan_algo::custom_phrase::CustomPhraseManager::new();
+        let phrase_path = CustomPhraseManager::default_path();
+        let mut manager = CustomPhraseManager::new();
         for (code, text) in &self.custom_phrases {
             manager.add_entry(code.clone(), text.clone());
         }

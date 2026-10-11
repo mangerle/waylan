@@ -3,12 +3,17 @@
 use std::time::Instant;
 
 use log::{info, warn};
+use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
+use waylan_algo::user_adaptive::UserAdaptiveModel;
+use waylan_algo::{AuxiliaryDict, OpenCcDict};
 use waylan_ui::UiTheme;
 use waylan_wayland::probe_wayland_environment;
-use waylan_wayland::session_v1::PageKeyConfig;
+use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
+use waylan_wayland::session_v2::WaylanV2Session;
+use waylan_wayland::WaylandCapabilities;
 
 use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 
@@ -43,14 +48,14 @@ pub fn load_lexicon_table() -> LexiconTable {
 }
 
 /// 按照多级搜索策略加载辅助与混输词库（英文与符号表情）
-pub fn load_auxiliary_dict() -> waylan_algo::AuxiliaryDict {
+pub fn load_auxiliary_dict() -> AuxiliaryDict {
     info!("[辅助词库] 正在定位并加载混输与符号词库索引...");
     let search_paths = AppConfig::aux_dict_search_paths();
 
     for path in &search_paths {
         if path.exists() {
             let load_start = Instant::now();
-            match waylan_algo::AuxiliaryDict::load_from_file(path) {
+            match AuxiliaryDict::load_from_file(path) {
                 Ok(dict) => {
                     let elapsed = load_start.elapsed();
                     info!(
@@ -70,18 +75,18 @@ pub fn load_auxiliary_dict() -> waylan_algo::AuxiliaryDict {
     }
 
     info!("  - 未检测到外部辅助词库文件，使用系统内置保底英文与符号表情库。");
-    waylan_algo::AuxiliaryDict::with_default_data()
+    AuxiliaryDict::with_default_data()
 }
 
 /// 按照多级搜索策略加载简繁转换两级词库（STPhrases + STCharacters）
-pub fn load_opencc_dict() -> waylan_algo::OpenCcDict {
+pub fn load_opencc_dict() -> OpenCcDict {
     info!("[简繁词库] 正在定位并加载简繁转换两级词库索引...");
     let search_paths = AppConfig::opencc_dict_search_paths();
 
     for path in &search_paths {
         if path.exists() {
             let load_start = Instant::now();
-            match waylan_algo::OpenCcDict::load_from_file(path) {
+            match OpenCcDict::load_from_file(path) {
                 Ok(dict) => {
                     let elapsed = load_start.elapsed();
                     info!(
@@ -101,7 +106,7 @@ pub fn load_opencc_dict() -> waylan_algo::OpenCcDict {
     }
 
     info!("  - 未检测到二进制简繁词库文件，回退加载开源 TSV 词表或内置核心表。");
-    waylan_algo::OpenCcDict::load_default()
+    OpenCcDict::load_default()
 }
 
 /// 统一会话配置包（收敛 V1 与 V2 热重载与初始化的重复配置逻辑）
@@ -112,9 +117,9 @@ pub struct SessionConfigBundle {
     pub shift_mode: ToggleKeyMode,
     pub punct_processor: PunctuationProcessor,
     pub page_keys: PageKeyConfig,
-    pub custom_phrases: waylan_algo::custom_phrase::CustomPhraseManager,
+    pub custom_phrases: CustomPhraseManager,
     pub user_dict_path: std::path::PathBuf,
-    pub aux_dict: waylan_algo::AuxiliaryDict,
+    pub aux_dict: AuxiliaryDict,
 }
 
 impl SessionConfigBundle {
@@ -150,8 +155,8 @@ impl SessionConfigBundle {
             PageKeys::Bracket => PageKeyConfig::Bracket,
             PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
         };
-        let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-        let custom_phrases = waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
+        let p_path = CustomPhraseManager::default_path();
+        let custom_phrases = CustomPhraseManager::load_or_init(&p_path);
         let user_dict_path = AppConfig::user_dict_path();
         let aux_dict = load_auxiliary_dict();
         Self {
@@ -169,7 +174,7 @@ impl SessionConfigBundle {
 }
 
 /// 执行 V2 会话的配置与词库热重载
-pub fn apply_reload_v2(s: &mut waylan_wayland::session_v2::WaylanV2Session) {
+pub fn apply_reload_v2(s: &mut WaylanV2Session) {
     let b = SessionConfigBundle::load_current();
     s.engine.config = b.algo_config;
     s.surface_manager.renderer.theme = b.theme;
@@ -182,13 +187,13 @@ pub fn apply_reload_v2(s: &mut waylan_wayland::session_v2::WaylanV2Session) {
         if let Ok(m) = std::fs::metadata(&b.user_dict_path) {
             if m.len() == 0 {
                 info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
-                s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+                s.engine.user_model = UserAdaptiveModel::new();
             }
         }
         s.engine.set_user_dict_path(&b.user_dict_path);
     } else {
         info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
-        s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+        s.engine.user_model = UserAdaptiveModel::new();
         s.engine.set_user_dict_path(&b.user_dict_path);
     }
     s.engine.load_auxiliary_dict(b.aux_dict);
@@ -198,7 +203,7 @@ pub fn apply_reload_v2(s: &mut waylan_wayland::session_v2::WaylanV2Session) {
 }
 
 /// 执行 V1 会话的配置与词库热重载
-pub fn apply_reload_v1(s: &mut waylan_wayland::session_v1::WaylanV1Session) {
+pub fn apply_reload_v1(s: &mut WaylanV1Session) {
     let b = SessionConfigBundle::load_current();
     s.engine.config = b.algo_config;
     s.surface_manager.renderer.theme = b.theme;
@@ -211,13 +216,13 @@ pub fn apply_reload_v1(s: &mut waylan_wayland::session_v1::WaylanV1Session) {
         if let Ok(m) = std::fs::metadata(&b.user_dict_path) {
             if m.len() == 0 {
                 info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
-                s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+                s.engine.user_model = UserAdaptiveModel::new();
             }
         }
         s.engine.set_user_dict_path(&b.user_dict_path);
     } else {
         info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
-        s.engine.user_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+        s.engine.user_model = UserAdaptiveModel::new();
         s.engine.set_user_dict_path(&b.user_dict_path);
     }
     s.engine.load_auxiliary_dict(b.aux_dict);
@@ -227,7 +232,7 @@ pub fn apply_reload_v1(s: &mut waylan_wayland::session_v1::WaylanV1Session) {
 }
 
 /// 检查 Wayland 合成器协议能力
-pub fn check_wayland_capabilities() -> waylan_wayland::WaylandCapabilities {
+pub fn check_wayland_capabilities() -> WaylandCapabilities {
     info!("[系统环境] 正在检查当前 Wayland 会话与合成器能力...");
     match probe_wayland_environment() {
         Ok(caps) => {

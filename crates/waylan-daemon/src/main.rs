@@ -12,6 +12,7 @@ use session_bundle::{
     load_lexicon_table, load_opencc_dict,
 };
 use std::env;
+use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::AlgoEngine;
@@ -145,9 +146,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = AlgoEngine::new(table, algo_config);
 
     // 加载自定义短语与用户历史自造词库
-    let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-    engine.custom_phrases =
-        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+    let phrase_path = CustomPhraseManager::default_path();
+    engine.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
     let user_dict = AppConfig::user_dict_path();
     engine.set_user_dict_path(&user_dict);
     if user_dict.exists() {
@@ -196,7 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(c_path) = AppConfig::config_path() {
         watched_paths.push(c_path);
     }
-    watched_paths.push(waylan_algo::custom_phrase::CustomPhraseManager::default_path());
+    watched_paths.push(CustomPhraseManager::default_path());
     watched_paths.push(AppConfig::user_aux_dict_path());
     watched_paths.push(AppConfig::user_dict_path());
 

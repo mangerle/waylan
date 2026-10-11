@@ -1,5 +1,7 @@
 use crate::config::AppConfig;
 use eframe::egui::{self, Color32, RichText};
+use waylan_algo::custom_phrase::CustomPhraseManager;
+use waylan_algo::user_adaptive::UserAdaptiveModel;
 
 /// 渲染自定义短语与用户自造词标签页
 pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut egui::Ui) {
@@ -93,10 +95,9 @@ pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui:
 
         ui.horizontal(|ui| {
             if ui.button("在外部文本编辑器中打开 (phrases.txt)").clicked() {
-                let phrase_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+                let phrase_path = CustomPhraseManager::default_path();
                 if !phrase_path.exists() {
-                    let _ =
-                        waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&phrase_path);
+                    let _ = CustomPhraseManager::load_or_init(&phrase_path);
                 }
                 let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
                     .iter()
@@ -148,7 +149,7 @@ pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui:
 
             if ui.button("清空自造词历史").clicked() {
                 let user_dict_path = AppConfig::user_dict_path();
-                let empty_model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+                let empty_model = UserAdaptiveModel::new();
                 if let Err(e) = empty_model.compact_wal(&user_dict_path) {
                     app.user_dict_status_message = Some(format!("清空失败: {}", e));
                 } else {

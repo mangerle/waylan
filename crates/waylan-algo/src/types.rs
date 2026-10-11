@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use waylan_core::Candidate;
 
 /// 模糊音细粒度配置
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -187,8 +188,8 @@ impl AlgoCandidate {
     }
 
     /// 转换为 Core 层定义的公共候选词结构体
-    pub fn to_core_candidate(&self) -> waylan_core::Candidate {
-        waylan_core::Candidate::new(&self.text, &self.pinyin, self.score)
+    pub fn to_core_candidate(&self) -> Candidate {
+        Candidate::new(&self.text, &self.pinyin, self.score)
             .with_sub_candidates(self.sub_candidates.clone())
     }
 }
