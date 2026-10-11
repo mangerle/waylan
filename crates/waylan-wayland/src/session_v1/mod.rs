@@ -129,31 +129,7 @@ impl WaylanV1Session {
     pub fn with_engine(engine: AlgoEngine) -> Self {
         Self {
             engine,
-            punctuation_processor: PunctuationProcessor::new(),
-            shift_sm: ShiftToggleStateMachine::new(),
-            page_keys: PageKeyConfig::default(),
-            surface_manager: crate::surface::CandidateSurfaceManager::new(),
-            mode: InputMode::Chinese,
-            shared_is_chinese: None,
-            mode_notify_tx: None,
-            reload_requested: None,
-            reload_callback: None,
-            watched_paths: Vec::new(),
-            last_watched_mtime: None,
-            active_context: None,
-            grabbed_keyboard: None,
-            shm: None,
-            popup_wl_surface: None,
-            panel_surface: None,
-            layer_surface: None,
-            active_buffer: None,
-            qhandle: None,
-            current_serial: 0,
-            commit_serial: 0,
-            mods_depressed: 0,
-            phys_mods: 0,
-            consumed_keys: ConsumedKeyTracker::new(),
-            exit_requested: None,
+            ..Self::default()
         }
     }
 
