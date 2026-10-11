@@ -305,10 +305,20 @@ impl eframe::App for SettingsApp {
 
 /// 运行偏好设置图形界面弹窗
 pub fn run_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
-    // 若系统无物理显卡设备 (/dev/dri 不存在)，自动回退到 CPU 软光栅渲染模式
+    // 若系统无物理显卡设备 (/dev/dri 不存在)，在主线程 UI 启动前安全回退到 CPU 软光栅渲染模式
     if !std::path::Path::new("/dev/dri").exists() {
-        std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
-        std::env::set_var("GALLIUM_DRIVER", "llvmpipe");
+        if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none() {
+            unsafe {
+                // 安全说明：该设置仅在进程启动、尚未派生多线程工作协程的前置单线程阶段执行
+                std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+            }
+        }
+        if std::env::var_os("GALLIUM_DRIVER").is_none() {
+            unsafe {
+                // 安全说明：该设置仅在进程启动、尚未派生多线程工作协程的前置单线程阶段执行
+                std::env::set_var("GALLIUM_DRIVER", "llvmpipe");
+            }
+        }
     }
 
     let native_options = eframe::NativeOptions {
