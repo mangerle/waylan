@@ -82,7 +82,13 @@ impl StatusNotifierItem {
     /// 上下文菜单 DBus 路径 (指向 /MenuBar)
     #[zbus(property)]
     fn menu(&self) -> OwnedObjectPath {
-        OwnedObjectPath::try_from("/MenuBar").expect("硬编码静态 D-Bus 路径 /MenuBar 转换必定有效")
+        OwnedObjectPath::try_from("/MenuBar").unwrap_or_else(|e| {
+            warn!(
+                "[系统托盘] 解析 /MenuBar 对象路径失败: {}，使用根路径兜底",
+                e
+            );
+            OwnedObjectPath::default()
+        })
     }
 
     /// 用户左键点击托盘图标：触发中英文快速切换
