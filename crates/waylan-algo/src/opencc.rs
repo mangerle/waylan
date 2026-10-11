@@ -167,7 +167,10 @@ impl OpenCcDict {
             }
             let off = string_pool.len() as u32;
             let bytes = s.as_bytes();
-            let capped_len = bytes.len().min(u16::MAX as usize);
+            let mut capped_len = bytes.len().min(u16::MAX as usize);
+            while !s.is_char_boundary(capped_len) {
+                capped_len -= 1;
+            }
             let len = capped_len as u16;
             string_pool.extend_from_slice(&bytes[..capped_len]);
             pool_map.insert(s.to_string(), (off, len));
@@ -287,11 +290,12 @@ impl OpenCcDict {
             .saturating_add(chars_bytes)
             .saturating_add(phrases_bytes);
 
-        if buf.len() < pool_start.saturating_add(pool_len) {
+        let pool_end = pool_start.saturating_add(pool_len);
+        if buf.len() < pool_end {
             return Err(invalid_data("简繁词库文件数据区或字符串池截断"));
         }
 
-        let pool = &buf[pool_start..pool_start + pool_len];
+        let pool = &buf[pool_start..pool_end];
         let read_str = |off: u32, len: u16| -> Result<&str, AlgoError> {
             let s = off as usize;
             let e = s.saturating_add(len as usize);
@@ -316,7 +320,7 @@ impl OpenCcDict {
                 u32::from_le_bytes(buf[cursor + 4..cursor + 8].try_into().unwrap_or([0; 4]));
             let t_len =
                 u16::from_le_bytes(buf[cursor + 8..cursor + 10].try_into().unwrap_or([0; 2]));
-            cursor += 10;
+            cursor = cursor.saturating_add(10);
 
             if let Some(simp_ch) = char::from_u32(code) {
                 let trad_str = read_str(t_off, t_len)?;
@@ -334,11 +338,12 @@ impl OpenCcDict {
                 u32::from_le_bytes(buf[cursor + 6..cursor + 10].try_into().unwrap_or([0; 4]));
             let t_len =
                 u16::from_le_bytes(buf[cursor + 10..cursor + 12].try_into().unwrap_or([0; 2]));
-            cursor += 12;
-
-            phrase_records.push((s_off, s_len, t_off, t_len));
+            cursor = cursor.saturating_add(12);
 
             let simp = read_str(s_off, s_len)?;
+            let _ = read_str(t_off, t_len)?;
+            phrase_records.push((s_off, s_len, t_off, t_len));
+
             if let Some(first_ch) = simp.chars().next() {
                 let char_len = simp.chars().count();
                 let entry = dict.first_char_max_len.entry(first_ch).or_insert(0);

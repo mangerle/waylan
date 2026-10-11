@@ -190,6 +190,10 @@ impl PrismEngine {
             return;
         }
 
+        if !ctx.input.is_char_boundary(start) {
+            return;
+        }
+
         if ctx.results.len() >= 64 || ctx.current.len() >= 32 {
             return; // 限制全局分支数量与最大递归深度（<=32 音节），保障微秒级求解并防爆栈
         }
@@ -221,7 +225,11 @@ impl PrismEngine {
         // 1.2 模糊音音节匹配扩展（若启用了模糊音开关，严格使用原输入切片 slice）
         if ctx.fuzzy.has_active_rules() {
             for len in (1..=max_len).rev() {
-                let slice = &ctx.input[start..start + len];
+                let end = start + len;
+                if !ctx.input.is_char_boundary(end) {
+                    continue;
+                }
+                let slice = &ctx.input[start..end];
                 if PrismFuzzy::is_fuzzy_valid(slice, ctx.fuzzy)
                     && !fsa_matches.iter().any(|m| m.0 == slice)
                 {
@@ -233,7 +241,7 @@ impl PrismEngine {
                         }
                     }
                     ctx.current.push(slice.to_string());
-                    Self::dfs_dag(ctx, start + len, current_cost + step_cost, typo_count);
+                    Self::dfs_dag(ctx, end, current_cost + step_cost, typo_count);
                     ctx.current.pop();
                 }
             }
@@ -257,12 +265,16 @@ impl PrismEngine {
             };
 
             for (idx1, idx2) in swap_pairs {
+                if !rem_bytes[idx1].is_ascii_alphabetic() || !rem_bytes[idx2].is_ascii_alphabetic()
+                {
+                    continue;
+                }
                 let mut swapped = Vec::from(rem_bytes);
                 swapped.swap(idx1, idx2);
                 if let Ok(swapped_str) = str::from_utf8(&swapped) {
                     let swapped_matches = fsa.match_syllables(swapped_str, 0);
                     for &(std_syl, len) in swapped_matches.iter().rev() {
-                        if len > idx2 {
+                        if len > idx2 && ctx.input.is_char_boundary(start + len) {
                             ctx.current.push(std_syl.to_string());
                             Self::dfs_dag(ctx, start + len, current_cost + 10 + 16, 1);
                             ctx.current.pop();
@@ -280,7 +292,11 @@ impl PrismEngine {
             && ctx.results.len() < 48
         {
             for len in (2..=max_len).rev() {
-                let slice = &ctx.input[start..start + len];
+                let end = start + len;
+                if !ctx.input.is_char_boundary(end) {
+                    continue;
+                }
+                let slice = &ctx.input[start..end];
                 let mut corrections = get_spatial_typo_corrections(slice, 25);
                 for rule_alt in get_typo_corrections(slice) {
                     if !corrections.iter().any(|(s, _)| s == &rule_alt) {
@@ -290,7 +306,7 @@ impl PrismEngine {
                 for (std_syl, edit_cost) in corrections {
                     if !fsa_matches.iter().any(|m| m.0 == std_syl) {
                         ctx.current.push(std_syl);
-                        Self::dfs_dag(ctx, start + len, current_cost + 10 + edit_cost, 1);
+                        Self::dfs_dag(ctx, end, current_cost + 10 + edit_cost, 1);
                         ctx.current.pop();
                     }
                 }
@@ -409,5 +425,29 @@ impl PrismEngine {
     #[inline]
     pub fn is_zero_initial_borrowing_split(prev: &str, curr: &str) -> bool {
         PrismFuzzy::is_zero_initial_borrowing_split(prev, curr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_non_ascii_input_safe_degradation() {
+        let fuzzy = FuzzyConfig {
+            z_zh: true,
+            an_ang: true,
+            ..Default::default()
+        };
+
+        // 纯中文非受保护输入应安全退化，不触发 UTF-8 字符边界切片 Panic
+        let paths = PrismEngine::build_paths("你好世界", &fuzzy);
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].syllables.is_empty());
+        assert_eq!(paths[0].remaining, "你好世界");
+
+        // 混合拼音与中文的多字节输入应安全退化，不触发 Panic
+        let mixed_paths = PrismEngine::build_paths("pin音测试", &fuzzy);
+        assert!(!mixed_paths.is_empty());
     }
 }

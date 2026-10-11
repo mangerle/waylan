@@ -222,7 +222,7 @@ impl<'a> DatReader<'a> {
             let next_b_val = self.base[next];
             if next_b_val < 0 {
                 // 进入 Tail 匹配
-                let tail_offset = (-next_b_val - 1) as usize;
+                let tail_offset = (-(next_b_val + 1)) as usize;
                 if tail_offset >= self.tail.len() {
                     return None;
                 }
@@ -266,7 +266,7 @@ impl<'a> DatReader<'a> {
 
         let val = self.base[leaf];
         if val < 0 {
-            Some((-val - 1) as u32)
+            Some((-(val + 1)) as u32)
         } else {
             None
         }

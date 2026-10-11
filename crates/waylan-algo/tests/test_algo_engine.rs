@@ -160,7 +160,7 @@ fn test_engine_entity_protection() {
     }
     let dm_cands = engine.candidates();
     assert!(!dm_cands.is_empty());
-    assert_eq!(dm_cands[0].text, "deepmind");
+    assert_eq!(dm_cands[0].text, "DeepMind");
     assert_eq!(dm_cands[0].comment.as_deref(), Some("专名"));
 }
 

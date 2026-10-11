@@ -232,7 +232,10 @@ impl AuxiliaryDict {
             }
             let off = string_pool.len() as u32;
             let bytes = s.as_bytes();
-            let capped_len = bytes.len().min(u16::MAX as usize);
+            let mut capped_len = bytes.len().min(u16::MAX as usize);
+            while !s.is_char_boundary(capped_len) {
+                capped_len -= 1;
+            }
             let len = capped_len as u16;
             string_pool.extend_from_slice(&bytes[..capped_len]);
             string_offset_map.insert(s.to_string(), (off, len));
@@ -434,8 +437,9 @@ impl AuxiliaryDict {
             })?;
 
         let get_str = |off: usize, len: usize| -> String {
-            if off + len <= string_pool.len() {
-                std::str::from_utf8(&string_pool[off..off + len])
+            let end = off.saturating_add(len);
+            if end <= string_pool.len() {
+                std::str::from_utf8(&string_pool[off..end])
                     .unwrap_or("")
                     .to_string()
             } else {

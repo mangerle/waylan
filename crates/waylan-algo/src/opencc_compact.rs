@@ -15,7 +15,7 @@ impl CompactPhraseTable {
             .records
             .binary_search_by(|&(s_off, s_len, _, _)| {
                 let start = s_off as usize;
-                let end = start + s_len as usize;
+                let end = start.saturating_add(s_len as usize);
                 if end > self.pool.len() {
                     return std::cmp::Ordering::Less;
                 }
@@ -26,7 +26,7 @@ impl CompactPhraseTable {
 
         let (_, _, t_off, t_len) = self.records[idx];
         let start = t_off as usize;
-        let end = start + t_len as usize;
+        let end = start.saturating_add(t_len as usize);
         if end > self.pool.len() {
             return None;
         }
