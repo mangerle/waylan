@@ -129,6 +129,45 @@ pub fn keycode_to_punctuation_with_shift(keycode: u32, shift_pressed: bool) -> O
     }
 }
 
+/// 将键盘扫描码及 Shift 修饰状态映射为 V 模式（算式与数字转换）所支持的输入字符
+///
+/// # 映射规则
+/// - 算术运算与括号：
+///   - '+'：Shift+KEY_EQUAL 或 KEY_KPPLUS
+///   - '-'：KEY_MINUS（未按 Shift）或 KEY_KPMINUS
+///   - '*'：Shift+KEY_8 或 KEY_KPASTERISK
+///   - '/'：KEY_SLASH（未按 Shift）或 KEY_KPSLASH
+///   - '%'：Shift+KEY_5
+///   - '('：Shift+KEY_9；')'：Shift+KEY_0
+///   - '.'：KEY_DOT（未按 Shift）或 KEY_KPDOT
+/// - 数字字符（'0'..='9'）：主键盘与小键盘数字键（未按 Shift）
+pub fn keycode_to_v_mode_char(keycode: u32, shift_pressed: bool) -> Option<char> {
+    if shift_pressed {
+        match keycode {
+            KEY_EQUAL => Some('+'),
+            KEY_8 => Some('*'),
+            KEY_5 => Some('%'),
+            KEY_9 => Some('('),
+            KEY_0 => Some(')'),
+            KEY_KPPLUS => Some('+'),
+            KEY_KPMINUS => Some('-'),
+            KEY_KPASTERISK => Some('*'),
+            KEY_KPSLASH => Some('/'),
+            KEY_KPDOT => Some('.'),
+            _ => None,
+        }
+    } else {
+        match keycode {
+            KEY_MINUS | KEY_KPMINUS => Some('-'),
+            KEY_SLASH | KEY_KPSLASH => Some('/'),
+            KEY_DOT | KEY_KPDOT => Some('.'),
+            KEY_KPPLUS => Some('+'),
+            KEY_KPASTERISK => Some('*'),
+            _ => keycode_to_ascii_digit_char(keycode),
+        }
+    }
+}
+
 /// 核心按键决策结果
 ///
 /// # 设计原理
@@ -203,8 +242,16 @@ pub fn handle_composition_key(
         }
     }
 
-    // 3. 数字键（1-9）：选取对应编号候选词
-    if !shift_active {
+    // 2.1 V模式专属字符输入：连续追加数字（0-9）与算术符号（+-*/%()）至表达式缓冲区
+    if engine.raw_input().starts_with('v') {
+        if let Some(ch) = keycode_to_v_mode_char(key, shift_active) {
+            engine.push_char(ch);
+            return Some(KeyProcessAction::Handled);
+        }
+    }
+
+    // 3. 数字键（1-9）：选取对应编号候选词（非 V 模式）
+    if !shift_active && !engine.raw_input().starts_with('v') {
         if let Some(digit) = keycode_to_digit(key) {
             let cand_idx = digit.saturating_sub(1);
             if let Some((committed_text, remaining_len)) = engine.select_candidate(cand_idx, now) {
@@ -420,39 +467,7 @@ impl ModifierState {
     }
 }
 
-/// 检查监控文件列表中是否有任何文件发生修改，并在检测到变更时更新基准时间戳
-pub fn check_watched_paths_changed(
-    watched_paths: &[std::path::PathBuf],
-    last_watched_mtime: &mut Option<std::time::SystemTime>,
-) -> bool {
-    if watched_paths.is_empty() {
-        return false;
-    }
-
-    let mut latest_mtime: Option<std::time::SystemTime> = None;
-    for p in watched_paths {
-        if let Ok(meta) = std::fs::metadata(p) {
-            if let Ok(mtime) = meta.modified() {
-                latest_mtime = Some(match latest_mtime {
-                    Some(prev) => prev.max(mtime),
-                    None => mtime,
-                });
-            }
-        }
-    }
-
-    match (*last_watched_mtime, latest_mtime) {
-        (Some(old), Some(new)) if new > old => {
-            *last_watched_mtime = Some(new);
-            true
-        }
-        (None, Some(new)) => {
-            *last_watched_mtime = Some(new);
-            false
-        }
-        _ => false,
-    }
-}
+pub use crate::fs_watcher::check_watched_paths_changed;
 
 #[cfg(test)]
 #[path = "input_core_tests.rs"]

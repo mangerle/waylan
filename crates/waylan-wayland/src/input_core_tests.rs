@@ -154,3 +154,45 @@ fn test_handle_composition_key() {
     assert!(matches!(act, Some(KeyProcessAction::Commit(_))));
     assert!(engine.raw_input().is_empty());
 }
+
+#[test]
+fn test_v_mode_composition_keys() {
+    let mut engine =
+        waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
+    let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
+    let page_keys = PageKeyConfig::MinusEqual;
+
+    // 1. 输入 'v' 进入 V 模式
+    engine.push_char('v');
+    assert_eq!(engine.raw_input(), "v");
+
+    // 2. 按主键盘数字 2：必须作为字符推入表达式，绝不可触发选词
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_2, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.raw_input(), "v2");
+
+    // 3. 按主键盘数字 0
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_0, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.raw_input(), "v20");
+
+    // 4. 按 Shift + 8（乘号 '*'）
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_8, true, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.raw_input(), "v20*");
+
+    // 5. 按小键盘数字 5
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_KP5, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.raw_input(), "v20*5");
+
+    // 6. 验证计算器召回的首位候选为计算结果 "100"
+    let cands = engine.candidates();
+    assert!(!cands.is_empty());
+    assert_eq!(cands[0].text, "100");
+
+    // 7. 按空格键选词确认：首选计算结果直接上屏并全量清空预编辑缓冲区
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Commit("100".to_string())));
+    assert!(engine.raw_input().is_empty());
+}

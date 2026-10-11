@@ -27,6 +27,11 @@ fn test_engine_v_mode() {
     let candidates = engine.candidates();
     assert!(!candidates.is_empty());
     assert_eq!(candidates[0].text, "100");
+
+    let (text, remaining) = engine.select_candidate(0, 1_700_000_000).expect("选词");
+    assert_eq!(text, "100");
+    assert_eq!(remaining, 0);
+    assert!(engine.raw_input().is_empty());
 }
 
 #[test]

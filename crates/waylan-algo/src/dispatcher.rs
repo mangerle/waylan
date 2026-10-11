@@ -1,4 +1,4 @@
-use crate::evaluator::FinancialEvaluator;
+use crate::evaluator::{DateTimeEvaluator, FinancialEvaluator};
 use crate::types::{AlgoCandidate, AlgoConfig};
 
 /// 模式分流器
@@ -24,16 +24,9 @@ impl ModeDispatcher {
         let body = &raw_input[first_char.len_utf8()..];
 
         match first_char {
-            'v' if config.enable_v_mode
-                && !body.is_empty()
-                && body.starts_with(|c: char| c.is_ascii_digit() || c == '(' || c == '-') =>
-            {
+            'v' if config.enable_v_mode => {
                 let res = Self::eval_v_mode(body);
-                if res.is_empty() {
-                    None
-                } else {
-                    Some(res)
-                }
+                Some(res)
             }
             'u' if config.enable_u_mode && !body.is_empty() => {
                 let res = Self::eval_u_mode(body);
@@ -55,16 +48,90 @@ impl ModeDispatcher {
         }
     }
 
-    /// V 模式：财务金额大写与算术表达式求值
+    /// V 模式：财务金额大写、算术表达式求值、日期时间与便捷工具箱
     fn eval_v_mode(expr: &str) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::new();
+        let now = chrono::Local::now();
 
-        // 1. 优先尝试财务金额大写转换（纯数字及小数，如 v12345, v12345.67）
+        // 1. 若只输入了 "v"，提供快捷功能入口引导
+        if expr.is_empty() {
+            let today = now.format("%Y年%m月%d日").to_string();
+            let time_str = now.format("%H:%M:%S").to_string();
+            candidates.push(AlgoCandidate::new(today, "v", 99_000).with_comment("当前日期"));
+            candidates.push(AlgoCandidate::new(time_str, "v", 95_000).with_comment("当前时间"));
+            candidates
+                .push(AlgoCandidate::new("输入算式 如: v20*5", "v", 90_000).with_comment("计算器"));
+            candidates.push(
+                AlgoCandidate::new("输入数字 如: v12345", "v", 85_000).with_comment("大写金额"),
+            );
+            return candidates;
+        }
+
+        let expr_lower = expr.to_lowercase();
+        // 2. 日期与时间快捷指令（如 vsd, vsj, vrq, vtime, vdate, vnow, vxq）
+        if matches!(
+            expr_lower.as_str(),
+            "sd" | "sj" | "rq" | "time" | "date" | "now" | "xq"
+        ) {
+            let date_list = DateTimeEvaluator::format_date_formats(now);
+            let time_list = DateTimeEvaluator::format_time_formats(now);
+            let dt_list = DateTimeEvaluator::format_datetime_formats(now);
+
+            match expr_lower.as_str() {
+                "sd" | "now" => {
+                    for (idx, dt) in dt_list.into_iter().enumerate() {
+                        candidates.push(
+                            AlgoCandidate::new(dt, expr, 99_000 - idx as u32 * 100)
+                                .with_comment("日期时间"),
+                        );
+                    }
+                    for (idx, d) in date_list.into_iter().enumerate() {
+                        candidates.push(
+                            AlgoCandidate::new(d, expr, 90_000 - idx as u32 * 100)
+                                .with_comment("当前日期"),
+                        );
+                    }
+                }
+                "rq" | "date" => {
+                    for (idx, d) in date_list.into_iter().enumerate() {
+                        candidates.push(
+                            AlgoCandidate::new(d, expr, 99_000 - idx as u32 * 100)
+                                .with_comment("当前日期"),
+                        );
+                    }
+                }
+                "sj" | "time" => {
+                    for (idx, t) in time_list.into_iter().enumerate() {
+                        candidates.push(
+                            AlgoCandidate::new(t, expr, 99_000 - idx as u32 * 100)
+                                .with_comment("当前时间"),
+                        );
+                    }
+                }
+                "xq" => {
+                    for (idx, w) in DateTimeEvaluator::format_weekday_formats(now)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        candidates.push(
+                            AlgoCandidate::new(w, expr, 99_000 - idx as u32 * 100)
+                                .with_comment("星期"),
+                        );
+                    }
+                }
+                _ => {}
+            }
+            if !candidates.is_empty() {
+                return candidates;
+            }
+        }
+
+        // 3. 优先尝试财务金额大写转换（纯数字及小数，如 v12345, v12345.67）
         if let Some(fin_cands) = FinancialEvaluator::try_evaluate(expr) {
             candidates.extend(fin_cands);
         }
 
-        // 2. 算术表达式安全求值（如 v20*5, v100+20）
+        // 4. 算术表达式安全求值（如 v20*5, v100+20）
         if let Some(val) = Self::eval_math_simple(expr) {
             let val_str = if (val.fract()).abs() < 1e-9 && val.abs() < 9_007_199_254_740_992.0 {
                 format!("{}", val.round() as i64)
@@ -83,19 +150,29 @@ impl ModeDispatcher {
                     AlgoCandidate::new(val_str.clone(), expr, 85_000).with_comment("计算结果"),
                 );
             }
-            if expr.contains(|c| "+-*/%".contains(c)) {
+            if expr.contains(|c| "+-*/%xX".contains(c)) {
                 candidates.push(
                     AlgoCandidate::new(format!("{}={}", expr, val_str), expr, 80_000)
                         .with_comment("完整算式"),
                 );
             }
         }
+
+        // 5. 兜底友好引导
+        if candidates.is_empty() {
+            candidates.push(
+                AlgoCandidate::new(format!("v{}", expr), expr, 50_000)
+                    .with_comment("V模式: 输入数字/算式/sd/sj/rq"),
+            );
+        }
+
         candidates
     }
 
     /// 轻量安全四则运算解析器（支持圆括号嵌套优先级、一元正负号与除零保护）
     fn eval_math_simple(expr: &str) -> Option<f64> {
-        let chars: Vec<char> = expr.chars().filter(|c| !c.is_whitespace()).collect();
+        let trimmed = expr.trim_end_matches('=');
+        let chars: Vec<char> = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
         if chars.is_empty() {
             return None;
         }
@@ -131,11 +208,11 @@ impl ModeDispatcher {
     fn parse_term(chars: &[char], pos: &mut usize, depth: usize) -> Option<f64> {
         let mut lhs = Self::parse_factor(chars, pos, depth)?;
         while let Some(&op) = chars.get(*pos) {
-            if op == '*' || op == '/' || op == '%' {
+            if op == '*' || op == 'x' || op == 'X' || op == '/' || op == '%' {
                 *pos += 1;
                 let rhs = Self::parse_factor(chars, pos, depth)?;
                 lhs = match op {
-                    '*' => lhs * rhs,
+                    '*' | 'x' | 'X' => lhs * rhs,
                     '/' => {
                         if rhs.abs() < 1e-12 {
                             return None;
@@ -289,8 +366,8 @@ mod tests {
         let neg_res = ModeDispatcher::try_dispatch("v-5+10", &config).expect("应支持负号开头算式");
         assert_eq!(neg_res[0].text, "5");
 
-        let div_zero = ModeDispatcher::try_dispatch("v10/0", &config);
-        assert!(div_zero.is_none());
+        let div_zero = ModeDispatcher::try_dispatch("v10/0", &config).expect("V模式应拦截");
+        assert!(!div_zero.iter().any(|c| c.text.contains('=')));
     }
 
     #[test]

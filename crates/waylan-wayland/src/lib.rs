@@ -1,3 +1,4 @@
+pub mod fs_watcher;
 pub mod input_constants;
 pub mod input_core;
 pub mod keymap;
@@ -295,6 +296,11 @@ pub fn run_session_v2_loop_fallible(
         Err(e) => return Err((e.into(), Box::new(session))),
     };
     let input_method = im_manager.get_input_method(&seat, &qh, ());
+    let pointer = seat.get_pointer(&qh, ());
+    session.pointer = Some(pointer);
+    log::info!(
+        "[微澜 Wayland] 成功向 wl_seat 注册鼠标指针(wl_pointer)，支持候选框点击与网格展开交互。"
+    );
 
     let compositor: WlCompositor = match globals.bind(&qh, 1..=6, ()) {
         Ok(c) => c,
