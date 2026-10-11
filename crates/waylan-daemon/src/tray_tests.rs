@@ -82,10 +82,11 @@ fn test_tray_menu_exit_event() {
 fn test_status_notifier_item_activate_sends_icon_update() {
     let is_chinese = Arc::new(AtomicBool::new(true));
     let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
-    let sni = StatusNotifierItem {
-        is_chinese: Arc::clone(&is_chinese),
+    let sni = StatusNotifierItem::new(
+        Arc::clone(&is_chinese),
         icon_update_tx,
-    };
+        &crate::config::AppConfig::default(),
+    );
 
     assert_eq!(sni.icon_name(), "input-keyboard");
     sni.activate(0, 0);

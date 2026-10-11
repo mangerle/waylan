@@ -1,6 +1,7 @@
 pub(crate) mod item;
 pub(crate) mod menu;
 
+use crate::config::AppConfig;
 use log::{debug, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -107,7 +108,8 @@ impl TrayService {
         icon_update_tx: SyncSender<()>,
         icon_update_rx: Receiver<()>,
     ) {
-        let sni = StatusNotifierItem::new(Arc::clone(&is_chinese), icon_update_tx.clone());
+        let config = AppConfig::load_or_create();
+        let sni = StatusNotifierItem::new(Arc::clone(&is_chinese), icon_update_tx.clone(), &config);
         let menu = DBusMenu::new(
             is_chinese,
             reload_requested,

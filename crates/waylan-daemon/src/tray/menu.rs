@@ -184,11 +184,14 @@ impl DBusMenu {
             "当前输入: 英文模式 (点击切换)"
         };
 
+        let log_path = log_file_path();
+        let log_label = format!("查看运行日志 ({})", log_path.display());
+
         let menu_items = vec![
             make_menu_item(1, mode_text),
             make_menu_item(2, "重新加载词库与配置"),
             make_menu_item(3, "偏好设置..."),
-            make_menu_item(4, "查看运行日志 (~/.local/state/waylan/waylan.log)"),
+            make_menu_item(4, &log_label),
             make_menu_item(5, "退出微澜输入法"),
         ];
 
@@ -238,4 +241,34 @@ impl DBusMenu {
         revision: u32,
         parent: i32,
     ) -> zbus::Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn test_menu_layout_contains_dynamic_log_path() {
+        let is_chinese = Arc::new(AtomicBool::new(true));
+        let reload = Arc::new(AtomicBool::new(false));
+        let exit = Arc::new(AtomicBool::new(false));
+        let settings = Arc::new(AtomicBool::new(false));
+        let (tx, _rx) = mpsc::sync_channel(1);
+
+        let menu = DBusMenu::new(is_chinese, reload, exit, settings, tx);
+        let (_rev, (_root_id, _props, items)) = menu.get_layout(0, -1, Vec::new());
+        assert_eq!(items.len(), 5);
+
+        let log_path = log_file_path();
+        let expected_label = format!("查看运行日志 ({})", log_path.display());
+
+        // 验证菜单项包含真实的日志文件路径
+        let item4 = &items[3];
+        let serialized = format!("{:?}", item4);
+        assert!(
+            serialized.contains(&expected_label),
+            "菜单项中应包含实际日志绝对路径"
+        );
+    }
 }

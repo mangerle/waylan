@@ -59,6 +59,12 @@ pub struct AppConfig {
     pub traditional_chinese: bool,
     /// 是否开启中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）
     pub auto_pangu_spacing: bool,
+    /// 自定义托盘图标主题目录或图标所在目录路径
+    pub tray_icon_theme_path: Option<String>,
+    /// 自定义中文状态托盘图标名称或路径
+    pub tray_icon_zh: Option<String>,
+    /// 自定义英文状态托盘图标名称或路径
+    pub tray_icon_en: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -76,6 +82,9 @@ impl Default for AppConfig {
             fuzzy_pinyin: false,
             traditional_chinese: false,
             auto_pangu_spacing: false,
+            tray_icon_theme_path: None,
+            tray_icon_zh: None,
+            tray_icon_en: None,
         }
     }
 }
