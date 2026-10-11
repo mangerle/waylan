@@ -15,27 +15,26 @@ pub struct CachedGlyph {
 /// 全局主字体加载结果缓存，避免 V2 降级 V1 或重建渲染器时重复扫描磁盘
 static GLOBAL_FONT_CACHE: OnceLock<Option<Arc<Font>>> = OnceLock::new();
 /// 全局回退字体链加载结果缓存，避免多次读盘与重复解析
-static GLOBAL_FALLBACK_FONTS_CACHE: OnceLock<Arc<Vec<Font>>> = OnceLock::new();
+static GLOBAL_FALLBACK_FONTS_CACHE: OnceLock<Vec<Arc<Font>>> = OnceLock::new();
 
 /// 系统字体加载与探测模块
 pub struct FontManager;
 
 impl FontManager {
-    /// 加载默认系统字体（通过全局 OnceLock 避免重复扫描与多次反序列化）
-    pub fn load_default_fonts() -> Option<Font> {
+    /// 加载默认系统字体（通过全局 OnceLock 与 Arc 共享避免重复扫描与深拷贝）
+    pub fn load_default_fonts() -> Option<Arc<Font>> {
         let cached =
             GLOBAL_FONT_CACHE.get_or_init(|| Self::load_default_fonts_impl().map(Arc::new));
-        cached.as_ref().map(|arc| (**arc).clone())
+        cached.clone()
     }
 
-    /// 加载系统回退字体链（包括 Emoji、特殊符号及常见备选字体）
-    pub fn load_fallback_fonts() -> Vec<Font> {
-        let cached =
-            GLOBAL_FALLBACK_FONTS_CACHE.get_or_init(|| Arc::new(Self::load_fallback_fonts_impl()));
-        (**cached).clone()
+    /// 加载系统回退字体链（包括特殊符号及常见备选字体，通过 Arc 共享）
+    pub fn load_fallback_fonts() -> Vec<Arc<Font>> {
+        let cached = GLOBAL_FALLBACK_FONTS_CACHE.get_or_init(Self::load_fallback_fonts_impl);
+        cached.clone()
     }
 
-    fn load_fallback_fonts_impl() -> Vec<Font> {
+    fn load_fallback_fonts_impl() -> Vec<Arc<Font>> {
         let candidates = [
             // Emoji 彩色/黑白字体
             "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
@@ -56,7 +55,7 @@ impl FontManager {
             if let Ok(data) = fs::read(path) {
                 if let Ok(font) = Font::from_bytes(&data[..], FontSettings::default()) {
                     info!("[矢量渲染] 成功加载回退字体: {}", path);
-                    fallback_fonts.push(font);
+                    fallback_fonts.push(Arc::new(font));
                 }
             }
         }

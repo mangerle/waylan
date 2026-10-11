@@ -25,9 +25,9 @@ const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
 pub struct CandidateBoxRenderer {
     pub theme: UiTheme,
-    font: Option<Font>,
+    font: Option<Arc<Font>>,
     /// 回退字体链（用于补充主字体未覆盖的符号、Emoji 及多语言字形）
-    pub fallback_fonts: Vec<Font>,
+    pub fallback_fonts: Vec<Arc<Font>>,
     /// 基础候选字号大小
     pub font_size: f32,
     /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
@@ -150,24 +150,26 @@ impl CandidateBoxRenderer {
     }
 
     /// 添加额外的回退字体到字体链末尾
-    pub fn add_fallback_font(&mut self, font: Font) {
-        self.fallback_fonts.push(font);
+    pub fn add_fallback_font(&mut self, font: impl Into<Arc<Font>>) {
+        self.fallback_fonts.push(font.into());
         self.clear_glyph_cache();
     }
 
     /// 寻找能够渲染给定字符的最佳字体（优先主中文字体，若未覆盖则依次查询回退字体链）
     pub fn get_font_for_char(&self, ch: char) -> Option<&Font> {
-        if let Some(font) = self.font.as_ref() {
+        if let Some(font) = self.font.as_deref() {
             if font.lookup_glyph_index(ch) != 0 {
                 return Some(font);
             }
         }
         for fb in &self.fallback_fonts {
             if fb.lookup_glyph_index(ch) != 0 {
-                return Some(fb);
+                return Some(fb.as_ref());
             }
         }
-        self.font.as_ref().or_else(|| self.fallback_fonts.first())
+        self.font
+            .as_deref()
+            .or_else(|| self.fallback_fonts.first().map(|f| f.as_ref()))
     }
 
     /// 手动从指定文件路径加载字体
@@ -181,7 +183,7 @@ impl CandidateBoxRenderer {
     pub fn load_font_from_bytes(&mut self, bytes: &[u8]) -> bool {
         match Font::from_bytes(bytes, FontSettings::default()) {
             Ok(font) => {
-                self.font = Some(font);
+                self.font = Some(Arc::new(font));
                 self.clear_glyph_cache();
                 true
             }
