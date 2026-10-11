@@ -36,15 +36,7 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
     }
 
     // 若现有日志文件超过最大体积限制，自动多槽位滚动（.log.2 -> 删除, .log.1 -> .log.2, .log -> .log.1）防止磁盘耗尽
-    if let Ok(meta) = fs::metadata(&log_path) {
-        if meta.len() > MAX_LOG_FILE_BYTES {
-            let backup_2 = log_path.with_extension("log.2");
-            let backup_1 = log_path.with_extension("log.1");
-            let _ = fs::remove_file(&backup_2);
-            let _ = fs::rename(&backup_1, &backup_2);
-            let _ = fs::rename(&log_path, &backup_1);
-        }
-    }
+    rotate_log_file_if_needed(&log_path, MAX_LOG_FILE_BYTES);
 
     // 根据环境变量 RUST_LOG 决定日志级别，默认为 Info
     let env_level = env_var_non_empty("RUST_LOG").unwrap_or_else(|| "info".to_string());
@@ -92,6 +84,19 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
     Ok(log_path)
 }
 
+/// 检查并执行日志文件轮转（若超过指定体积上限）
+pub(crate) fn rotate_log_file_if_needed(log_path: &std::path::Path, max_bytes: u64) {
+    if let Ok(meta) = fs::metadata(log_path) {
+        if meta.len() > max_bytes {
+            let backup_2 = log_path.with_extension("log.2");
+            let backup_1 = log_path.with_extension("log.1");
+            let _ = fs::remove_file(&backup_2);
+            let _ = fs::rename(&backup_1, &backup_2);
+            let _ = fs::rename(log_path, &backup_1);
+        }
+    }
+}
+
 /// 解析符合 Linux XDG 状态目录规范的日志存储路径
 pub fn log_file_path() -> PathBuf {
     if let Some(custom_path) = env_var_non_empty("WAYLAN_LOG_PATH") {
@@ -112,4 +117,47 @@ pub fn log_file_path() -> PathBuf {
 
     // 无 HOME 环境下统一回退至受控安全的运行时目录
     AppConfig::fallback_runtime_dir().join("waylan.log")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_log_file_path_resolution() {
+        let p = log_file_path();
+        assert!(p.is_absolute());
+        assert!(p.ends_with("waylan.log"));
+    }
+
+    #[test]
+    fn test_rotate_log_file_logic() {
+        let temp_dir = tempfile::tempdir().expect("创建测试临时目录失败");
+        let log_file = temp_dir.path().join("test.log");
+
+        // 写入初始数据
+        {
+            let mut f = fs::File::create(&log_file).expect("创建日志文件失败");
+            f.write_all(b"initial line of log").expect("写入失败");
+        }
+
+        // 阈值设为 5 字节，触发首次轮转
+        rotate_log_file_if_needed(&log_file, 5);
+        let backup_1 = temp_dir.path().join("test.log.1");
+        assert!(backup_1.exists(), "首次轮转应生成 .log.1");
+        assert!(!log_file.exists(), "原文件应已被重命名为 .log.1");
+
+        // 再次创建新日志文件
+        {
+            let mut f = fs::File::create(&log_file).expect("创建新日志文件失败");
+            f.write_all(b"second line of log").expect("写入失败");
+        }
+
+        // 再次轮转：.log.1 -> .log.2, .log -> .log.1
+        rotate_log_file_if_needed(&log_file, 5);
+        let backup_2 = temp_dir.path().join("test.log.2");
+        assert!(backup_2.exists(), "二次轮转应生成 .log.2");
+        assert!(backup_1.exists(), ".log.1 应更新为第二轮内容");
+    }
 }

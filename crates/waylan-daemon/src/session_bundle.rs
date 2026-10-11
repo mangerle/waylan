@@ -255,3 +255,31 @@ pub fn check_wayland_capabilities() -> WaylandCapabilities {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_config_bundle_load() {
+        let bundle = SessionConfigBundle::load_current();
+        assert!(bundle.algo_config.page_size >= 5 && bundle.algo_config.page_size <= 9);
+        assert!(bundle.font_size >= 12.0 && bundle.font_size <= 24.0);
+    }
+
+    #[test]
+    fn test_load_lexicon_table_fallback() {
+        let table = load_lexicon_table();
+        assert!(!table.is_empty(), "回退词库应包含基础词条数据");
+    }
+
+    #[test]
+    fn test_load_auxiliary_and_opencc_dict_fallback() {
+        let aux = load_auxiliary_dict();
+        assert!(!aux.english_words.is_empty(), "辅助词库应包含基础英文词条");
+        assert!(!aux.symbols.is_empty(), "辅助词库应包含基础符号映射");
+
+        let opencc = load_opencc_dict();
+        assert!(!opencc.chars.is_empty(), "简繁词库应包含基础字符映射");
+    }
+}

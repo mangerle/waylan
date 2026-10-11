@@ -11,7 +11,7 @@ use waylan_algo::AuxiliaryDict;
 
 /// 偏好设置中心导航 Tab 标签页枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsTab {
+pub(crate) enum SettingsTab {
     /// 常规设置（输入方案、候选外观、快捷键、标点特性）
     General,
     /// 汉字与拼音（基础单字库、核心词库、扩展词库统计与导入）
@@ -25,54 +25,54 @@ pub enum SettingsTab {
 }
 
 /// 英文词库异步导入结果类型
-pub type EnglishImportResult = Result<(usize, Vec<(String, u32)>), String>;
+pub(crate) type EnglishImportResult = Result<(usize, Vec<(String, u32)>), String>;
 /// 符号词库异步导入结果类型
-pub type SymbolsImportResult = Result<(usize, Vec<(String, String, String)>), String>;
+pub(crate) type SymbolsImportResult = Result<(usize, Vec<(String, String, String)>), String>;
 
 /// 微澜图形化偏好设置应用状态
-pub struct SettingsApp {
+pub(crate) struct SettingsApp {
     /// 当前选中的导航 Tab
-    pub current_tab: SettingsTab,
+    pub(crate) current_tab: SettingsTab,
     /// 内存中编辑的配置副本
-    pub config: AppConfig,
+    pub(crate) config: AppConfig,
     /// 全局操作反馈提示信息
-    pub status_message: Option<String>,
+    pub(crate) status_message: Option<String>,
     /// 汉语拼音词库文件导入路径
-    pub import_file_path: String,
+    pub(crate) import_file_path: String,
     /// 汉语拼音词库导入反馈提示
-    pub import_status_message: Option<String>,
+    pub(crate) import_status_message: Option<String>,
 
     /// 辅助与混输词库（包含英文词库与符号表情库）
-    pub aux_dict: AuxiliaryDict,
+    pub(crate) aux_dict: AuxiliaryDict,
     /// 外部英文词库导入路径
-    pub english_import_path: String,
+    pub(crate) english_import_path: String,
     /// 英文词库导入反馈提示
-    pub english_status_message: Option<String>,
+    pub(crate) english_status_message: Option<String>,
     /// 外部符号词库导入路径
-    pub symbols_import_path: String,
+    pub(crate) symbols_import_path: String,
     /// 符号词库导入反馈提示
-    pub symbols_status_message: Option<String>,
+    pub(crate) symbols_status_message: Option<String>,
 
     /// 当前已配置的自定义快捷短语列表 (快捷码, 展开内容)
-    pub custom_phrases: Vec<(String, String)>,
+    pub(crate) custom_phrases: Vec<(String, String)>,
     /// 新增短语的快捷代码输入
-    pub new_phrase_code: String,
+    pub(crate) new_phrase_code: String,
     /// 新增短语的展开文本输入
-    pub new_phrase_text: String,
+    pub(crate) new_phrase_text: String,
     /// 短语操作状态提示
-    pub phrase_status_message: Option<String>,
+    pub(crate) phrase_status_message: Option<String>,
     /// 用户自适应自造词库当前词条总数
-    pub user_dict_count: usize,
+    pub(crate) user_dict_count: usize,
     /// 用户自造词库操作状态提示
-    pub user_dict_status_message: Option<String>,
+    pub(crate) user_dict_status_message: Option<String>,
     /// 词库异步导入进度接收端 (导入数, 当前总词数)
-    pub import_rx: Option<std::sync::mpsc::Receiver<Result<(usize, usize), String>>>,
+    pub(crate) import_rx: Option<std::sync::mpsc::Receiver<Result<(usize, usize), String>>>,
     /// 是否正在后台异步执行词库导入
-    pub import_in_progress: bool,
+    pub(crate) import_in_progress: bool,
     /// 英文词库异步导入接收端 (新增词数, 最新词库列表)
-    pub english_import_rx: Option<std::sync::mpsc::Receiver<EnglishImportResult>>,
+    pub(crate) english_import_rx: Option<std::sync::mpsc::Receiver<EnglishImportResult>>,
     /// 符号词库异步导入接收端 (新增符号数, 最新符号列表)
-    pub symbols_import_rx: Option<std::sync::mpsc::Receiver<SymbolsImportResult>>,
+    pub(crate) symbols_import_rx: Option<std::sync::mpsc::Receiver<SymbolsImportResult>>,
 }
 
 impl Default for SettingsApp {
@@ -82,7 +82,7 @@ impl Default for SettingsApp {
 }
 
 impl SettingsApp {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let config = AppConfig::load_or_create();
 
         // 加载现有自定义短语
@@ -132,7 +132,7 @@ impl SettingsApp {
     }
 
     /// 将当前的自定义短语同步保存写回 phrases.txt
-    pub fn sync_custom_phrases(&self) -> Result<(), String> {
+    pub(crate) fn sync_custom_phrases(&self) -> Result<(), String> {
         let phrase_path = CustomPhraseManager::default_path();
         let mut manager = CustomPhraseManager::new();
         for (code, text) in &self.custom_phrases {
@@ -189,7 +189,7 @@ impl SettingsApp {
     }
 
     /// 配置系统与备选中文字体
-    pub fn configure_chinese_fonts(ctx: &egui::Context) {
+    pub(crate) fn configure_chinese_fonts(ctx: &egui::Context) {
         if let Some(font_data) = Self::find_cjk_font_data() {
             let mut fonts = FontDefinitions::default();
             fonts.font_data.insert(

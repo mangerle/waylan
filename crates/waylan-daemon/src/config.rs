@@ -436,4 +436,36 @@ mod tests {
             Some("valid_value".to_string())
         );
     }
+
+    #[test]
+    fn test_config_sanitize_clamps_values() {
+        let mut cfg = AppConfig {
+            page_size: 1,
+            font_size: 5.0,
+            ..Default::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.page_size, 5);
+        assert_eq!(cfg.font_size, 12.0);
+
+        cfg.page_size = 99;
+        cfg.font_size = 100.0;
+        cfg.sanitize();
+        assert_eq!(cfg.page_size, 9);
+        assert_eq!(cfg.font_size, 24.0);
+
+        cfg.font_size = f32::NAN;
+        cfg.sanitize();
+        assert_eq!(cfg.font_size, 15.0);
+    }
+
+    #[test]
+    fn test_dict_search_paths() {
+        let base_paths = AppConfig::base_dict_search_paths();
+        assert!(!base_paths.is_empty());
+        let aux_paths = AppConfig::aux_dict_search_paths();
+        assert!(!aux_paths.is_empty());
+        let opencc_paths = AppConfig::opencc_dict_search_paths();
+        assert!(!opencc_paths.is_empty());
+    }
 }
