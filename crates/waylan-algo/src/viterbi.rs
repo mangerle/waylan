@@ -201,17 +201,28 @@ impl ViterbiDecoder {
                         let trans_score = BigramLanguageModel::transition_score(
                             prev_word, text, freq_score, table,
                         );
+                        let candidate_total = prev_score.saturating_add(trans_score);
 
-                        dp[end_idx].push(ViterbiBeamNode {
-                            word: text.clone(),
-                            prev_step: start_idx,
-                            prev_beam_idx,
-                            total_score: prev_score.saturating_add(trans_score),
-                        });
+                        if let Some(existing) =
+                            dp[end_idx].iter_mut().find(|node| node.word == *text)
+                        {
+                            if candidate_total > existing.total_score {
+                                existing.prev_step = start_idx;
+                                existing.prev_beam_idx = prev_beam_idx;
+                                existing.total_score = candidate_total;
+                            }
+                        } else {
+                            dp[end_idx].push(ViterbiBeamNode {
+                                word: text.clone(),
+                                prev_step: start_idx,
+                                prev_beam_idx,
+                                total_score: candidate_total,
+                            });
+                        }
                     }
                 }
 
-                // 束搜索剪枝：保留得分最高的 Top-K 个状态
+                // 束搜索剪枝：保留得分最高的 Top-K 个不同末端词状态
                 dp[end_idx].sort_by_key(|state| std::cmp::Reverse(state.total_score));
                 dp[end_idx].truncate(Self::BEAM_WIDTH);
             }

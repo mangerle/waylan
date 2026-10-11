@@ -111,3 +111,34 @@ fn test_viterbi_commit_context_disambiguation() {
         "注入上屏上下文北京后，应优先推荐时间"
     );
 }
+
+#[test]
+fn test_viterbi_beam_deduplication_preserves_diversity() {
+    let mut table = LexiconTable::new();
+    // 第 1 步构造多个不同前驱字以填满前驱束状态
+    for (i, &ch) in ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛"]
+        .iter()
+        .enumerate()
+    {
+        table.insert("yi", ch, 20_000 - (i as u32) * 100);
+    }
+    // 第 2 步："qing'hua" 存在超高频词“情话”（无后续搭配）与次高频词“清华”（与第 3 步“大学”强搭配）
+    // 若第 2 步未按末端词去重，8 个前驱节点与“情话”组合将占满全部 8 个 BEAM_WIDTH 槽位，把“清华”挤出束外
+    table.insert("qing'hua", "情话", 50_000);
+    table.insert("qing'hua", "清华", 10_000);
+    // 第 3 步："da'xue" => "大学"，与“清华”具有 +20,000 Bigram 亲和度
+    table.insert("da'xue", "大学", 20_000);
+
+    let syllables = vec![
+        "yi".to_string(),
+        "qing".to_string(),
+        "hua".to_string(),
+        "da".to_string(),
+        "xue".to_string(),
+    ];
+    let best = ViterbiDecoder::decode_sentence(&syllables, "", &table).expect("应解码成功");
+    assert_eq!(
+        best.text, "甲清华大学",
+        "按末端词去重后，次高分词‘清华’不应被‘情话’的多前驱副本挤出束外"
+    );
+}

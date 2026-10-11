@@ -262,10 +262,7 @@ impl CompactMmapLexicon {
             let item_slice = self.mmap.get(item_pos..item_pos + 6)?;
             let word_id = u32::from_le_bytes(item_slice[0..4].try_into().ok()?);
             let score_u16 = u16::from_le_bytes(item_slice[4..6].try_into().ok()?);
-            // 还原静态分，并对达到 u16 上限的候选附加原始顺位梯度以保留同音高频词相对次序
-            let base_score = decode_compact_score(score_u16);
-            let rank_bonus = cand_count.saturating_sub(i).min(64) as u32;
-            let score = base_score.saturating_add(rank_bonus);
+            let score = decode_compact_score(score_u16);
 
             if let Some(text) = self.get_word(word_id) {
                 res.push((text.to_string(), score));
@@ -310,13 +307,55 @@ impl CompactMmapLexicon {
     }
 }
 
-/// 将 16 位紧凑存储分转换为 32 位静态打分
+/// 将 16 位紧凑存储分还原为 32 位真实词频量纲
 ///
 /// # 设计说明
-/// - `builder_compact::encode_compact_score` 将原始词频单调量化至 `u16` 区间（低频线性保持、超高频对数压缩），
-///   确保紧凑词库候选在 `u16` 空间内严格单调保序；
-/// - 此处将 `u16` 量化分作为静态打分基数参与流水线后续的 rank_bonus、长度加权与 Bigram 上下文重打分。
+/// - `builder_compact::encode_compact_score` 对 `<= 32_767` 保持线性原值，对 `> 32_767` 采用对数压缩；
+/// - 此处执行对称的逆指数反演，还原真实词频量纲，消除 Viterbi 解码阶段双重取对数导致的词频梯度坍缩。
 #[inline]
-fn decode_compact_score(score_u16: u16) -> u32 {
-    score_u16 as u32
+pub(crate) fn decode_compact_score(score_u16: u16) -> u32 {
+    if score_u16 <= 32_767 {
+        score_u16 as u32
+    } else {
+        let extra = (score_u16 - 32_768) as f64 / 2_000.0;
+        let delta = (extra.exp() - 1.0).round().max(1.0) as u32;
+        32_767u32.saturating_add(delta)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder_compact::encode_compact_score;
+
+    #[test]
+    fn test_compact_score_encode_decode_roundtrip() {
+        // 线性区间应 100% 精确无损还原
+        for s in [0u32, 1, 100, 1_000, 10_000, 32_767] {
+            let enc = encode_compact_score(s);
+            assert_eq!(decode_compact_score(enc), s);
+        }
+
+        // 高频对数压缩区间应保持严格单调且近似还原真实量纲（相对误差 < 0.2%）
+        let high_scores = [32_768u32, 50_000, 100_000, 500_000, 1_000_000, 5_000_000];
+        let mut prev_dec = 32_767u32;
+        for &s in &high_scores {
+            let enc = encode_compact_score(s);
+            let dec = decode_compact_score(enc);
+            assert!(
+                dec > prev_dec,
+                "解码分必须严格单调递增: {} <= {}",
+                dec,
+                prev_dec
+            );
+            let diff = (dec as i64 - s as i64).unsigned_abs() as f64;
+            assert!(
+                diff / (s as f64) < 0.002,
+                "原始分 {} 解码后为 {}，误差过大",
+                s,
+                dec
+            );
+            prev_dec = dec;
+        }
+    }
 }

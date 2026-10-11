@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 /// 拼音字符编码映射函数
@@ -54,19 +55,45 @@ impl DoubleArrayTrie {
             };
         }
 
-        let key_bytes: Vec<&[u8]> = sorted_keys.iter().map(|s| s.as_bytes()).collect();
+        let is_strictly_sorted_unique = sorted_keys.windows(2).all(|w| w[0] < w[1]);
+        let (key_bytes, effective_values): (Vec<&[u8]>, Cow<'_, [u32]>) =
+            if is_strictly_sorted_unique {
+                (
+                    sorted_keys.iter().map(|s| s.as_bytes()).collect(),
+                    Cow::Borrowed(values),
+                )
+            } else {
+                let mut pairs: Vec<(&[u8], u32)> = sorted_keys
+                    .iter()
+                    .map(|s| s.as_bytes())
+                    .zip(values.iter().copied())
+                    .collect();
+                pairs.sort_by(|a, b| a.0.cmp(b.0));
+                pairs.dedup_by(|a, b| a.0 == b.0);
+                let kb = pairs.iter().map(|(k, _)| *k).collect();
+                let vals = pairs.into_iter().map(|(_, v)| v).collect();
+                (kb, Cow::Owned(vals))
+            };
+
+        if key_bytes.is_empty() {
+            return Self {
+                base: vec![0],
+                check: vec![0],
+                tail: Vec::new(),
+            };
+        }
 
         // 初始预分配数组容量，槽位 0 和 1 为系统保留 (1 为根节点)
-        let init_cap = (sorted_keys.len() * 2).next_power_of_two().max(65536);
+        let init_cap = (key_bytes.len() * 2).next_power_of_two().max(65536);
         let mut base = vec![0i32; init_cap];
         let mut check = vec![0u32; init_cap];
-        let mut tail = Vec::with_capacity(sorted_keys.len() * 4);
+        let mut tail = Vec::with_capacity(key_bytes.len() * 4);
         let mut max_node_pos = 1usize;
         let mut free_pos = 2usize;
 
         // BFS 广度优先队列：(node_idx, key_start, key_end, depth)
         let mut queue = VecDeque::with_capacity(32768);
-        queue.push_back((1usize, 0usize, sorted_keys.len(), 0usize));
+        queue.push_back((1usize, 0usize, key_bytes.len(), 0usize));
 
         while let Some((node, start, end, depth)) = queue.pop_front() {
             // 1. 提取当前前缀下的所有子分支字符区间
@@ -144,7 +171,7 @@ impl DoubleArrayTrie {
 
                 if code == 0 {
                     // 终止符命中：叶子状态使用负值存储关联值 -(val + 1)
-                    let val = values[c_start];
+                    let val = effective_values[c_start];
                     base[target] = -(val as i32 + 1);
                 } else if c_end - c_start == 1 {
                     // 触发 Tail 压缩：当前子前缀下仅有唯一一条键，无需继续拆分状态
@@ -153,7 +180,7 @@ impl DoubleArrayTrie {
                     let rem_bytes = &key_bytes[c_start][depth + 1..];
                     tail.extend_from_slice(rem_bytes);
                     tail.push(0); // 终止符
-                    tail.extend_from_slice(&values[c_start].to_le_bytes()); // 4 字节整数值
+                    tail.extend_from_slice(&effective_values[c_start].to_le_bytes()); // 4 字节整数值
 
                     // target 节点的 base 存储负偏移 -(tail_offset + 1)
                     base[target] = -(tail_offset as i32 + 1);
@@ -201,8 +228,8 @@ impl<'a> DatReader<'a> {
         while depth < key_bytes.len() {
             let b = key_bytes[depth];
             let code = pinyin_char_to_code(b);
-            if code >= 28 {
-                return None; // 包含非合法拼音字符
+            if code == 0 || code >= 28 {
+                return None; // 拦截空字节穿透与非合法拼音字符
             }
 
             if curr >= self.base.len() {
@@ -229,6 +256,9 @@ impl<'a> DatReader<'a> {
 
                 // 剩余待匹配字符
                 let remaining = &key_bytes[depth + 1..];
+                if remaining.contains(&0) {
+                    return None;
+                }
                 let tail_slice = &self.tail[tail_offset..];
 
                 // 检查 remaining 是否与 tail_slice 完全一致且刚好以 0 结束
@@ -307,5 +337,26 @@ mod tests {
         assert_eq!(reader.exact_match("zhong"), None);
         assert_eq!(reader.exact_match("bei"), None);
         assert_eq!(reader.exact_match("wo'men'dou'shi"), None);
+        // 包含空字节的异常键必须被安全拦截，不得与叶子终止符混淆
+        assert_eq!(reader.exact_match("a\0"), None);
+        assert_eq!(reader.exact_match("bei'jing\0"), None);
+        assert_eq!(reader.exact_match("\0"), None);
+    }
+
+    #[test]
+    fn test_dat_build_unsorted_and_duplicate_keys() {
+        let keys = vec![
+            "zhong'guo".to_string(),
+            "bei'jing".to_string(),
+            "bei'jing".to_string(),
+            "an".to_string(),
+        ];
+        let values = vec![10, 20, 99, 30];
+        let dat = DoubleArrayTrie::build(&keys, &values);
+        let reader = DatReader::new(&dat.base, &dat.check, &dat.tail);
+
+        assert_eq!(reader.exact_match("an"), Some(30));
+        assert_eq!(reader.exact_match("bei'jing"), Some(20));
+        assert_eq!(reader.exact_match("zhong'guo"), Some(10));
     }
 }
