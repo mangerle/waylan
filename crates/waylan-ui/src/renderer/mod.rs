@@ -252,26 +252,26 @@ impl CandidateBoxRenderer {
         width
     }
 
-    /// 获取或光栅化指定字符的字形位图
-    fn get_or_rasterize_glyph(&self, ch: char, size: f32) -> Option<CachedGlyph> {
-        let size_key = (size * 100.0).round() as u32;
-        let font = self.get_font_for_char(ch)?;
-
-        if let Ok(mut cache) = self.glyph_cache.lock() {
-            if let Some(cached) = cache.get(&(ch, size_key)) {
-                return Some(cached.clone());
-            }
-
-            let (metrics, bitmap) = font.rasterize(ch, size);
-            let cached = CachedGlyph {
-                metrics,
-                bitmap: Arc::from(bitmap),
-            };
-            cache.insert((ch, size_key), cached.clone());
-            Some(cached)
-        } else {
-            None
+    /// 在已持有缓存锁的情况下获取或光栅化指定字符的字形位图（命中缓存时零字体查询开销）
+    fn get_or_rasterize_glyph_locked(
+        &self,
+        cache: &mut GlyphCacheState,
+        ch: char,
+        size: f32,
+        size_key: u32,
+    ) -> Option<CachedGlyph> {
+        if let Some(cached) = cache.get(&(ch, size_key)) {
+            return Some(cached.clone());
         }
+
+        let font = self.get_font_for_char(ch)?;
+        let (metrics, bitmap) = font.rasterize(ch, size);
+        let cached = CachedGlyph {
+            metrics,
+            bitmap: Arc::from(bitmap),
+        };
+        cache.insert((ch, size_key), cached.clone());
+        Some(cached)
     }
 
     /// 加载默认系统字体与回退字体链
@@ -280,7 +280,7 @@ impl CandidateBoxRenderer {
         self.fallback_fonts = FontManager::load_fallback_fonts();
     }
 
-    /// 绘制文本
+    /// 绘制文本（单次加锁查询字形缓存，消除逐字符加锁与命中时的重复字体探测）
     pub(crate) fn draw_text(
         &self,
         pixmap: &mut Pixmap,
@@ -293,34 +293,38 @@ impl CandidateBoxRenderer {
         if !self.has_font() {
             let s = self.scale.max(0.5);
             let mut current_x = x;
-            let glyph_w = size * 0.8;
-            let glyph_h = size;
+            let (glyph_w, glyph_h) = (size * 0.8, size);
             let placeholder_color =
                 Color::from_rgba(color.r, color.g, color.b, (color.a * 0.35).clamp(0.0, 1.0));
             for _ in text.chars() {
-                let rect_params = RoundedRectParams {
+                let rect = RoundedRectParams {
                     x: current_x,
                     y: y - glyph_h,
                     w: glyph_w,
                     h: glyph_h,
                     r: 2.0 * s,
                 };
-                draw_rounded_rect(pixmap, rect_params, placeholder_color);
+                draw_rounded_rect(pixmap, rect, placeholder_color);
                 current_x += glyph_w + 3.0 * s;
             }
             return;
         }
 
+        let size_key = (size * 100.0).round() as u32;
         let mut current_x = x;
-        for ch in text.chars() {
-            if let Some(glyph) = self.get_or_rasterize_glyph(ch, size) {
-                if glyph.metrics.width > 0 && glyph.metrics.height > 0 {
-                    let glyph_x = (current_x + glyph.metrics.xmin as f32) as i32;
-                    let glyph_y =
-                        (y - glyph.metrics.height as f32 - glyph.metrics.ymin as f32) as i32;
-                    blend_glyph(pixmap, &glyph, (glyph_x, glyph_y), color);
+        if let Ok(mut cache) = self.glyph_cache.lock() {
+            for ch in text.chars() {
+                if let Some(glyph) =
+                    self.get_or_rasterize_glyph_locked(&mut cache, ch, size, size_key)
+                {
+                    if glyph.metrics.width > 0 && glyph.metrics.height > 0 {
+                        let gx = (current_x + glyph.metrics.xmin as f32) as i32;
+                        let gy =
+                            (y - glyph.metrics.height as f32 - glyph.metrics.ymin as f32) as i32;
+                        blend_glyph(pixmap, &glyph, (gx, gy), color);
+                    }
+                    current_x += glyph.metrics.advance_width;
                 }
-                current_x += glyph.metrics.advance_width;
             }
         }
     }
