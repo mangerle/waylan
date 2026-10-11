@@ -433,7 +433,7 @@ impl CandidateBoxRenderer {
 
         let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
 
-        let regions = capsule::render_capsule_bar(
+        let mut regions = capsule::render_capsule_bar(
             self,
             &mut pixmap,
             state,
@@ -447,17 +447,15 @@ impl CandidateBoxRenderer {
                 scale: s,
             },
         );
-        if let Ok(mut lock) = self.hit_regions.lock() {
-            *lock = regions;
-        }
 
         if has_active_sub {
             render_expanded_popup_card(
                 self,
                 &mut pixmap,
-                state,
-                sub_candidates,
+                &mut regions,
                 ExpandedCardRenderParams {
+                    state,
+                    sub_candidates,
                     popup_x,
                     popup_top_y: bar_height + 6.0 * s,
                     popup_w,
@@ -468,6 +466,10 @@ impl CandidateBoxRenderer {
                     scale: s,
                 },
             );
+        }
+
+        if let Ok(mut lock) = self.hit_regions.lock() {
+            *lock = regions;
         }
 
         Some(pixmap)

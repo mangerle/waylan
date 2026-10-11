@@ -25,12 +25,16 @@ struct GridDimensions {
     total_height: f32,
     padding_h: f32,
     padding_v: f32,
+    actual_rows: usize,
+    selected_row: usize,
+    s: f32,
 }
 
 /// 计算网格各列宽度与总宽高
 fn compute_grid_dimensions(
     renderer: &CandidateBoxRenderer,
     candidates: &[waylan_core::Candidate],
+    selected_index: usize,
     s: f32,
 ) -> GridDimensions {
     let font_size = renderer.font_size * s;
@@ -73,6 +77,9 @@ fn compute_grid_dimensions(
         total_height,
         padding_h,
         padding_v,
+        actual_rows,
+        selected_row: selected_index / GRID_COLS,
+        s,
     }
 }
 
@@ -92,11 +99,10 @@ pub fn render_grid_expanded_panel(
         return None;
     }
 
-    let dims = compute_grid_dimensions(renderer, candidates_source, s);
-    let mut pixmap = Pixmap::new(
-        dims.total_width.ceil() as u32,
-        dims.total_height.ceil() as u32,
-    )?;
+    let dims = compute_grid_dimensions(renderer, candidates_source, state.selected_index, s);
+    let canvas_w = dims.total_width.ceil().clamp(1.0, 4096.0) as u32;
+    let canvas_h = dims.total_height.ceil().clamp(1.0, 2048.0) as u32;
+    let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
 
     // 绘制大面板圆角卡片背景
     draw_card_background_at(
@@ -105,8 +111,8 @@ pub fn render_grid_expanded_panel(
         CardBackgroundParams {
             x: 0.0,
             y: 0.0,
-            width: dims.total_width,
-            height: dims.total_height,
+            width: canvas_w as f32,
+            height: canvas_h as f32,
             radius: renderer.theme.corner_radius.max(6.0) * s,
             stroke_width: 1.0 * s,
         },
@@ -121,7 +127,7 @@ pub fn render_grid_expanded_panel(
         regions,
         s,
     );
-    render_grid_controls(renderer, &mut pixmap, &dims, regions, s);
+    render_grid_controls(renderer, &mut pixmap, &dims, regions);
 
     Some(pixmap)
 }
@@ -172,8 +178,7 @@ fn render_grid_items(
         let baseline_y = item_y + (item_h + font_size * 0.72) / 2.0;
         let mut cur_x = item_x + 4.0 * s;
 
-        let selected_row = state.selected_index / GRID_COLS;
-        if row == selected_row {
+        if row == dims.selected_row {
             let num_str = if col < PRECACHED_INDEX_STRINGS.len() {
                 PRECACHED_INDEX_STRINGS[col]
             } else {
@@ -213,14 +218,14 @@ fn render_grid_items(
     }
 }
 
-/// 渲染右侧折叠箭头与指示滚动条
+/// 渲染右侧折叠箭头、动态指示滚动条及上下翻页命中区域
 fn render_grid_controls(
     renderer: &CandidateBoxRenderer,
     pixmap: &mut Pixmap,
     dims: &GridDimensions,
     regions: &mut Vec<HitRegion>,
-    s: f32,
 ) {
+    let s = dims.s;
     let ctrl_center_x = dims.total_width - 14.0 * s;
     let ctrl_top_y = dims.padding_v + 12.0 * s;
 
@@ -241,17 +246,42 @@ fn render_grid_controls(
         CandidateHitTarget::ToggleExpand,
     ));
 
-    // 绘制右侧细长滚动条滑块
+    // 绘制右侧细长动态滚动条滑块
     let scroll_x = dims.total_width - 9.0 * s;
     let scroll_y = ctrl_top_y + 16.0 * s;
     let scroll_h = (dims.total_height - scroll_y - dims.padding_v).max(18.0 * s);
+    let thumb_h = (scroll_h / (dims.actual_rows.max(1) as f32)).clamp(12.0 * s, scroll_h);
+    let thumb_y = if dims.actual_rows > 1 {
+        let ratio =
+            dims.selected_row.min(dims.actual_rows - 1) as f32 / (dims.actual_rows - 1) as f32;
+        scroll_y + (scroll_h - thumb_h) * ratio
+    } else {
+        scroll_y
+    };
     draw_scrollbar(
         pixmap,
         scroll_x,
-        scroll_y,
+        thumb_y,
         3.0 * s,
-        scroll_h * 0.45,
+        thumb_h,
         1.5 * s,
         renderer.theme.border,
     );
+
+    // 注册右侧上下滚动区域为上一页与下一页点击目标
+    let half_scroll_h = scroll_h * 0.5;
+    regions.push(HitRegion::new(
+        ctrl_center_x - 10.0 * s,
+        scroll_y,
+        20.0 * s,
+        half_scroll_h,
+        CandidateHitTarget::PrevPage,
+    ));
+    regions.push(HitRegion::new(
+        ctrl_center_x - 10.0 * s,
+        scroll_y + half_scroll_h,
+        20.0 * s,
+        half_scroll_h,
+        CandidateHitTarget::NextPage,
+    ));
 }

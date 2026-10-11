@@ -5,13 +5,15 @@
 use super::draw::{
     draw_card_background_at, draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
 };
-use super::layout::PRECACHED_INDEX_STRINGS;
+use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
 use super::CandidateBoxRenderer;
 use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
 
 /// 二级浮层卡片几何布局与渲染参数
-pub struct ExpandedCardRenderParams {
+pub struct ExpandedCardRenderParams<'a> {
+    pub state: &'a CandidateBoxState,
+    pub sub_candidates: &'a [String],
     pub popup_x: f32,
     pub popup_top_y: f32,
     pub popup_w: f32,
@@ -22,13 +24,12 @@ pub struct ExpandedCardRenderParams {
     pub scale: f32,
 }
 
-/// 绘制微信键盘风格二级展开浮层卡片背景与子候选条目
+/// 绘制微信键盘风格二级展开浮层卡片背景与子候选条目，并注册子项鼠标点击区域
 pub fn render_expanded_popup_card(
     renderer: &CandidateBoxRenderer,
     pixmap: &mut Pixmap,
-    state: &CandidateBoxState,
-    sub_candidates: &[String],
-    params: ExpandedCardRenderParams,
+    regions: &mut Vec<HitRegion>,
+    params: ExpandedCardRenderParams<'_>,
 ) {
     let s = params.scale;
     draw_card_background_at(
@@ -44,9 +45,12 @@ pub fn render_expanded_popup_card(
         },
     );
 
-    for (s_idx, sub_str) in sub_candidates.iter().enumerate() {
+    let item_x = params.popup_x + 6.0 * s;
+    let item_w = (params.popup_w - 12.0 * s).max(1.0);
+
+    for (s_idx, sub_str) in params.sub_candidates.iter().enumerate() {
         let row_y = params.popup_top_y + 6.0 * s + s_idx as f32 * params.row_height;
-        let is_sub_selected = s_idx == state.expanded_selected_index();
+        let is_sub_selected = s_idx == params.state.expanded_selected_index();
         let sub_num_str = if s_idx < PRECACHED_INDEX_STRINGS.len() {
             PRECACHED_INDEX_STRINGS[s_idx]
         } else {
@@ -57,15 +61,23 @@ pub fn render_expanded_popup_card(
             draw_rounded_rect(
                 pixmap,
                 RoundedRectParams {
-                    x: params.popup_x + 6.0 * s,
+                    x: item_x,
                     y: row_y,
-                    w: params.popup_w - 12.0 * s,
+                    w: item_w,
                     h: params.row_height,
                     r: 6.0 * s,
                 },
                 renderer.theme.highlight_badge,
             );
         }
+
+        regions.push(HitRegion::new(
+            item_x,
+            row_y,
+            item_w,
+            params.row_height,
+            CandidateHitTarget::Select(s_idx),
+        ));
 
         let sub_num_x = params.popup_x + 14.0 * s;
         let sub_baseline_y = row_y + (params.row_height + params.font_size * 0.72) / 2.0;

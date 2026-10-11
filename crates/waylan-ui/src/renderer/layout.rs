@@ -92,7 +92,7 @@ where
 /// 鼠标在候选框上的命中交互目标
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CandidateHitTarget {
-    /// 选中指定候选词（包含单行展示页索引或多行网格全局索引）
+    /// 选中指定候选词（包含单行展示页索引、二级展开卡片子项索引或多行网格全局索引）
     Select(usize),
     /// 展开或折叠 5 行大网格候选面板
     ToggleExpand,
