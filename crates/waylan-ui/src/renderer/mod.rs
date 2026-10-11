@@ -4,17 +4,18 @@ pub mod layout;
 
 use crate::theme::{Color, UiTheme};
 use draw::{
-    draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow, draw_rounded_rect,
-    CardBackgroundParams, RoundedRectParams,
+    blend_glyph, draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow,
+    draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
 };
 pub use font::CachedGlyph;
 use font::FontManager;
 use fontdue::{Font, FontSettings};
 use layout::{measure_candidates_bar, LayoutParams, PRECACHED_INDEX_STRINGS};
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tiny_skia::{Pixmap, PremultipliedColorU8};
+use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
 
 /// 最大字形位图缓存条目数（覆盖绝大多数常用汉字与符号，占用内存不足 1MB）
@@ -61,7 +62,7 @@ impl CandidateBoxRenderer {
 
     /// 手动从指定文件路径加载字体
     pub fn load_font_from_path(&mut self, path: &Path) -> bool {
-        std::fs::read(path)
+        fs::read(path)
             .map(|data| self.load_font_from_bytes(&data))
             .unwrap_or(false)
     }
@@ -185,72 +186,9 @@ impl CandidateBoxRenderer {
                     let glyph_x = (current_x + glyph.metrics.xmin as f32) as i32;
                     let glyph_y =
                         (y - glyph.metrics.height as f32 - glyph.metrics.ymin as f32) as i32;
-                    self.blend_glyph(pixmap, &glyph, (glyph_x, glyph_y), color);
+                    blend_glyph(pixmap, &glyph, (glyph_x, glyph_y), color);
                 }
                 current_x += glyph.metrics.advance_width;
-            }
-        }
-    }
-
-    /// 混合字形位图（采用标准 Porter-Duff Source-Over）
-    fn blend_glyph(&self, pixmap: &mut Pixmap, glyph: &CachedGlyph, pos: (i32, i32), color: Color) {
-        let (x, y) = pos;
-        let width = glyph.metrics.width;
-        let height = glyph.metrics.height;
-        let bitmap = &glyph.bitmap;
-        let pixmap_w = pixmap.width() as i32;
-        let pixmap_h = pixmap.height() as i32;
-        let pixels = pixmap.pixels_mut();
-
-        for row in 0..height {
-            let py = y + row as i32;
-            if py < 0 || py >= pixmap_h {
-                continue;
-            }
-
-            for col in 0..width {
-                let px = x + col as i32;
-                if px < 0 || px >= pixmap_w {
-                    continue;
-                }
-
-                let alpha = bitmap[row * width + col] as f32 / 255.0;
-                if alpha <= 0.01 {
-                    continue;
-                }
-
-                let pixel_idx = (py * pixmap_w + px) as usize;
-                let target = &mut pixels[pixel_idx];
-
-                let src_a = (color.a * alpha).clamp(0.0, 1.0);
-                let inv_sa = 1.0 - src_a;
-
-                let src_r = color.r * src_a * 255.0;
-                let src_g = color.g * src_a * 255.0;
-                let src_b = color.b * src_a * 255.0;
-                let src_a_255 = src_a * 255.0;
-
-                let out_a = (src_a_255 + target.alpha() as f32 * inv_sa)
-                    .round()
-                    .clamp(0.0, 255.0) as u8;
-                let out_r = (src_r + target.red() as f32 * inv_sa)
-                    .round()
-                    .clamp(0.0, 255.0) as u8;
-                let out_g = (src_g + target.green() as f32 * inv_sa)
-                    .round()
-                    .clamp(0.0, 255.0) as u8;
-                let out_b = (src_b + target.blue() as f32 * inv_sa)
-                    .round()
-                    .clamp(0.0, 255.0) as u8;
-
-                if let Some(blended) = PremultipliedColorU8::from_rgba(
-                    out_r.min(out_a),
-                    out_g.min(out_a),
-                    out_b.min(out_a),
-                    out_a,
-                ) {
-                    *target = blended;
-                }
             }
         }
     }

@@ -2,10 +2,12 @@ use jieba_rs::Jieba;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::path::Path;
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::mem;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use waylan_algo::bigram::{BIGRAM_HEADER_SIZE, BIGRAM_MAGIC, CODEBOOK_SIZE};
@@ -20,43 +22,32 @@ struct RawBigramPair {
 }
 
 impl PartialOrd for RawBigramPair {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for RawBigramPair {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // 先按 w1_id 升序，再按 w2_id 升序
-        self.w1_id
-            .cmp(&other.w1_id)
-            .then_with(|| self.w2_id.cmp(&other.w2_id))
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.w1_id, self.w2_id).cmp(&(other.w1_id, other.w2_id))
     }
 }
 
-/// K路归并堆节点
+/// K路归并堆节点（最小堆逆序比较）
+#[derive(PartialEq, Eq)]
 struct MergeNode {
     pair: RawBigramPair,
     chunk_idx: usize,
 }
 
-impl PartialEq for MergeNode {
-    fn eq(&self, other: &Self) -> bool {
-        self.pair == other.pair
-    }
-}
-
-impl Eq for MergeNode {}
-
 impl PartialOrd for MergeNode {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for MergeNode {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // 最小堆：逆序比较
+    fn cmp(&self, other: &Self) -> Ordering {
         other.pair.cmp(&self.pair)
     }
 }
@@ -98,13 +89,100 @@ impl Cleaner {
     }
 }
 
+/// 从单段文本中切分提取相邻二元词对并累加至输出容器
+fn collect_text_pairs(
+    text: &str,
+    weight: u32,
+    cleaner: &Cleaner,
+    jieba: &Jieba,
+    out: &mut Vec<(String, String, u32)>,
+) {
+    for sent in cleaner.clean_and_split(text) {
+        let words = jieba.cut(&sent, false);
+        for pair in words.windows(2) {
+            out.push((pair[0].to_string(), pair[1].to_string(), weight));
+        }
+    }
+}
+
+/// 解析单行 JSONL 语料并提取相邻二元词对
+fn extract_line_pairs(
+    raw_line: &str,
+    is_sft: bool,
+    cleaner: &Cleaner,
+    jieba: &Jieba,
+) -> Vec<(String, String, u32)> {
+    let mut local_res = Vec::new();
+    let Ok(val) = serde_json::from_str::<Value>(raw_line) else {
+        return local_res;
+    };
+
+    if is_sft {
+        if let Some(convs) = val.get("conversations").and_then(|v| v.as_array()) {
+            for turn in convs {
+                let content = turn.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let role = turn.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                let weight: u32 = if role == "user" { 2 } else { 1 };
+                collect_text_pairs(content, weight, cleaner, jieba, &mut local_res);
+            }
+        }
+    } else if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
+        collect_text_pairs(text, 1, cleaner, jieba, &mut local_res);
+    }
+
+    local_res
+}
+
+/// 将内存中的局部二元词频表剪枝、排序并刷盘为有序临时分片文件
+fn flush_chunk_to_disk(
+    temp_chunk_dir: &Path,
+    chunk_index: usize,
+    current_chunk_map: &mut HashMap<(u32, u32), u32>,
+) -> PathBuf {
+    let chunk_path = temp_chunk_dir.join(format!("chunk_{:04}.bin", chunk_index));
+    let mut sorted_chunk: Vec<RawBigramPair> = current_chunk_map
+        .drain()
+        .filter(|&(_, cnt)| cnt >= 2)
+        .map(|((id1, id2), cnt)| RawBigramPair {
+            w1_id: id1,
+            w2_id: id2,
+            count: cnt,
+        })
+        .collect();
+    sorted_chunk.par_sort_unstable();
+
+    let f = File::create(&chunk_path).expect("创建分片文件失败");
+    let mut w = BufWriter::new(f);
+    for item in sorted_chunk {
+        w.write_all(&item.w1_id.to_le_bytes()).unwrap();
+        w.write_all(&item.w2_id.to_le_bytes()).unwrap();
+        w.write_all(&item.count.to_le_bytes()).unwrap();
+    }
+    w.flush().unwrap();
+    chunk_path
+}
+
+/// 结算归并后的单个二元词对亲和度得分并推入结果集
+fn settle_pair_affinity(
+    cur: RawBigramPair,
+    global_unigram: &HashMap<u32, u32>,
+    aggregated_pairs: &mut Vec<(u32, u32, i32, u32)>,
+) {
+    if cur.count >= 3 {
+        let u_count = global_unigram.get(&cur.w1_id).copied().unwrap_or(cur.count);
+        let prob = (cur.count as f64 / u_count as f64).max(1e-7);
+        let aff = (20000.0 + prob.ln() * 2000.0).clamp(1000.0, 30000.0) as i32;
+        aggregated_pairs.push((cur.w1_id, cur.w2_id, aff, cur.count));
+    }
+}
+
 /// 写入 CSR 紧凑二进制格式模型文件
 fn export_csr_model(
     output_path: &Path,
     vocab_size: usize,
     target_capacity: usize,
     pairs: &[(u32, u32, i32, u32)], // (w1, w2, affinity, count)
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let num_pairs = pairs.len().min(target_capacity);
     let selected = &pairs[..num_pairs];
 
@@ -115,8 +193,7 @@ fn export_csr_model(
 
     // 1. 生成 256 阶码本
     let mut codebook = [0i32; 256];
-    let min_score = 1000i32;
-    let max_score = 30000i32;
+    let (min_score, max_score) = (1000i32, 30000i32);
     for (i, item) in codebook.iter_mut().enumerate() {
         let ratio = i as f64 / 255.0;
         *item = (min_score as f64 + (max_score - min_score) as f64 * ratio) as i32;
@@ -129,7 +206,6 @@ fn export_csr_model(
             row_counts[w1 as usize] += 1;
         }
     }
-
     let mut row_offsets = vec![0u32; vocab_size + 1];
     let mut current_offset = 0u32;
     for i in 0..vocab_size {
@@ -141,48 +217,36 @@ fn export_csr_model(
     // 3. 构建列数据数组 Cols: [u32; num_pairs] (低24位next_id, 高8位q_score)
     let mut cols_data = Vec::with_capacity(num_pairs);
     for &(_, w2, aff, _) in selected {
-        // 量化为 0..255
         let clamped_aff = aff.clamp(min_score, max_score);
         let q_score = (((clamped_aff - min_score) as f64 / (max_score - min_score) as f64) * 255.0)
             .round() as u8;
-        let entry = (w2 & 0x00FF_FFFF) | ((q_score as u32) << 24);
-        cols_data.push(entry);
+        cols_data.push((w2 & 0x00FF_FFFF) | ((q_score as u32) << 24));
     }
 
     // 4. 构造标准二进制文件
-    let file = File::create(output_path)?;
-    let mut writer = BufWriter::new(file);
-
+    let mut writer = BufWriter::new(File::create(output_path)?);
     let codebook_offset = BIGRAM_HEADER_SIZE as u64;
     let row_offsets_offset = codebook_offset + CODEBOOK_SIZE as u64;
     let cols_offset = row_offsets_offset + ((vocab_size + 1) * 4) as u64;
 
-    // 写入 Header (64字节)
     let mut header = [0u8; 64];
     header[0..16].copy_from_slice(BIGRAM_MAGIC);
-    header[16..20].copy_from_slice(&2u32.to_le_bytes()); // version = 2
+    header[16..20].copy_from_slice(&2u32.to_le_bytes());
     header[20..24].copy_from_slice(&(vocab_size as u32).to_le_bytes());
     header[24..28].copy_from_slice(&(num_pairs as u32).to_le_bytes());
     header[28..36].copy_from_slice(&codebook_offset.to_le_bytes());
     header[36..44].copy_from_slice(&row_offsets_offset.to_le_bytes());
     header[44..52].copy_from_slice(&cols_offset.to_le_bytes());
     writer.write_all(&header)?;
-
-    // 写入 Codebook (1024字节)
     for &val in &codebook {
         writer.write_all(&val.to_le_bytes())?;
     }
-
-    // 写入 Row Offsets
     for &off in &row_offsets {
         writer.write_all(&off.to_le_bytes())?;
     }
-
-    // 写入 Cols
     for &col in &cols_data {
         writer.write_all(&col.to_le_bytes())?;
     }
-
     writer.flush()?;
     let size_mb = fs::metadata(output_path)?.len() as f64 / (1024.0 * 1024.0);
     println!(
@@ -226,7 +290,6 @@ fn main() {
     let mut vocab = Vocabulary::load_from_dict_yamls(&yaml_files).expect("解析词典YAML失败");
     println!("   从词典YAML载入基础核心词条: {} 条", vocab.len());
 
-    // 预热结巴分词器并导入词表
     println!("   正在初始化 Jieba 分词器并注入微澜词条...");
     let jieba = Arc::new(Jieba::new());
     vocab.save_binary(vocab_bin_path).expect("持久化词表成功");
@@ -240,8 +303,8 @@ fn main() {
     let mut global_unigram: HashMap<u32, u32> = HashMap::with_capacity(vocab.len());
     let mut current_chunk_map: HashMap<(u32, u32), u32> = HashMap::with_capacity(3_000_000);
 
-    let batch_lines_limit = 50_000; // 每5万行由Rayon并发分词切句
-    let chunk_flush_pairs_limit = 4_000_000; // 局部二元对超400万对时刷盘写临时分片，锁死内存占用
+    let batch_lines_limit = 50_000;
+    let chunk_flush_pairs_limit = 4_000_000;
 
     let datasets = vec![
         (
@@ -268,75 +331,24 @@ fn main() {
         let mut processed_lines: usize = 0;
 
         for line_res in reader.lines() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(_) => continue,
+            let Ok(line) = line_res else {
+                continue;
             };
             batch_buffer.push(line);
 
             if batch_buffer.len() >= batch_lines_limit {
                 processed_lines += batch_buffer.len();
                 let lines_to_process =
-                    std::mem::replace(&mut batch_buffer, Vec::with_capacity(batch_lines_limit));
+                    mem::replace(&mut batch_buffer, Vec::with_capacity(batch_lines_limit));
 
-                // Rayon 并发切词
-                let cleaner_clone = cleaner.clone();
-                let jieba_clone = jieba.clone();
+                let cleaner_ref = Arc::clone(&cleaner);
+                let jieba_ref = Arc::clone(&jieba);
 
                 let local_pairs_list: Vec<Vec<(String, String, u32)>> = lines_to_process
                     .par_iter()
-                    .map(|raw_line| {
-                        let mut local_res = Vec::new();
-                        let Ok(val) = serde_json::from_str::<Value>(raw_line) else {
-                            return local_res;
-                        };
-
-                        if is_sft {
-                            if let Some(convs) = val.get("conversations").and_then(|v| v.as_array())
-                            {
-                                for turn in convs {
-                                    let content =
-                                        turn.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                                    let role =
-                                        turn.get("role").and_then(|v| v.as_str()).unwrap_or("");
-                                    let weight: u32 = if role == "user" { 2 } else { 1 };
-                                    let sents = cleaner_clone.clean_and_split(content);
-                                    for sent in sents {
-                                        let words: Vec<&str> = jieba_clone.cut(&sent, false);
-                                        for j in 0..words.len() {
-                                            let w1 = words[j];
-                                            if j + 1 < words.len() {
-                                                let w2 = words[j + 1];
-                                                local_res.push((
-                                                    w1.to_string(),
-                                                    w2.to_string(),
-                                                    weight,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
-                                let sents = cleaner_clone.clean_and_split(text);
-                                for sent in sents {
-                                    let words: Vec<&str> = jieba_clone.cut(&sent, false);
-                                    for j in 0..words.len() {
-                                        let w1 = words[j];
-                                        if j + 1 < words.len() {
-                                            let w2 = words[j + 1];
-                                            local_res.push((w1.to_string(), w2.to_string(), 1));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        local_res
-                    })
+                    .map(|raw_line| extract_line_pairs(raw_line, is_sft, &cleaner_ref, &jieba_ref))
                     .collect();
 
-                // 累加局部 Map 并执行 Word ID 转换
                 for local_pairs in local_pairs_list {
                     for (w1, w2, weight) in local_pairs {
                         let id1 = vocab.insert_or_get(&w1);
@@ -352,37 +364,16 @@ fn main() {
                     current_chunk_map.len(),
                     vocab.len()
                 );
-                std::io::stdout().flush().unwrap();
+                io::stdout().flush().unwrap();
 
-                // 内存守护：超出安全阈值立即排序刷盘
                 if current_chunk_map.len() >= chunk_flush_pairs_limit {
                     println!(
                         "\n   -> [内存控制] 触发局部剪枝与分片刷盘 (分片 #{}) ...",
                         chunk_index
                     );
-                    let chunk_path = temp_chunk_dir.join(format!("chunk_{:04}.bin", chunk_index));
+                    let chunk_path =
+                        flush_chunk_to_disk(temp_chunk_dir, chunk_index, &mut current_chunk_map);
                     chunk_index += 1;
-
-                    let mut sorted_chunk: Vec<RawBigramPair> = current_chunk_map
-                        .drain()
-                        .filter(|&(_, cnt)| cnt >= 2) // 局部淘汰只出现1次的低质单次词，立省60%磁盘
-                        .map(|((id1, id2), cnt)| RawBigramPair {
-                            w1_id: id1,
-                            w2_id: id2,
-                            count: cnt,
-                        })
-                        .collect();
-
-                    sorted_chunk.par_sort_unstable();
-
-                    let f = File::create(&chunk_path).expect("创建分片文件失败");
-                    let mut w = BufWriter::new(f);
-                    for item in sorted_chunk {
-                        w.write_all(&item.w1_id.to_le_bytes()).unwrap();
-                        w.write_all(&item.w2_id.to_le_bytes()).unwrap();
-                        w.write_all(&item.count.to_le_bytes()).unwrap();
-                    }
-                    w.flush().unwrap();
                     chunk_files.push(chunk_path);
                 }
             }
@@ -390,28 +381,8 @@ fn main() {
         println!("\n   -> 当前语料完成，累计行数: {}", processed_lines);
     }
 
-    // 刷出最后一个残存分片
     if !current_chunk_map.is_empty() {
-        let chunk_path = temp_chunk_dir.join(format!("chunk_{:04}.bin", chunk_index));
-        let mut sorted_chunk: Vec<RawBigramPair> = current_chunk_map
-            .drain()
-            .filter(|&(_, cnt)| cnt >= 2)
-            .map(|((id1, id2), cnt)| RawBigramPair {
-                w1_id: id1,
-                w2_id: id2,
-                count: cnt,
-            })
-            .collect();
-        sorted_chunk.par_sort_unstable();
-
-        let f = File::create(&chunk_path).expect("创建分片文件失败");
-        let mut w = BufWriter::new(f);
-        for item in sorted_chunk {
-            w.write_all(&item.w1_id.to_le_bytes()).unwrap();
-            w.write_all(&item.w2_id.to_le_bytes()).unwrap();
-            w.write_all(&item.count.to_le_bytes()).unwrap();
-        }
-        w.flush().unwrap();
+        let chunk_path = flush_chunk_to_disk(temp_chunk_dir, chunk_index, &mut current_chunk_map);
         chunk_files.push(chunk_path);
     }
 
@@ -462,20 +433,13 @@ fn main() {
                 cur.count += top.pair.count;
                 current_pair = Some(cur);
             } else {
-                // 结算上一个配对，只保留全局频次 >= 3 的有效搭配
-                if cur.count >= 3 {
-                    let u_count = global_unigram.get(&cur.w1_id).copied().unwrap_or(cur.count);
-                    let prob = (cur.count as f64 / u_count as f64).max(1e-7);
-                    let aff = (20000.0 + prob.ln() * 2000.0).clamp(1000.0, 30000.0) as i32;
-                    aggregated_pairs.push((cur.w1_id, cur.w2_id, aff, cur.count));
-                }
+                settle_pair_affinity(cur, &global_unigram, &mut aggregated_pairs);
                 current_pair = Some(top.pair);
             }
         } else {
             current_pair = Some(top.pair);
         }
 
-        // 从对应的 chunk 流式补入下一个元素
         if let Some(next_p) = read_pair(&mut readers[top.chunk_idx]) {
             heap.push(MergeNode {
                 pair: next_p,
@@ -485,12 +449,7 @@ fn main() {
     }
 
     if let Some(cur) = current_pair {
-        if cur.count >= 3 {
-            let u_count = global_unigram.get(&cur.w1_id).copied().unwrap_or(cur.count);
-            let prob = (cur.count as f64 / u_count as f64).max(1e-7);
-            let aff = (20000.0 + prob.ln() * 2000.0).clamp(1000.0, 30000.0) as i32;
-            aggregated_pairs.push((cur.w1_id, cur.w2_id, aff, cur.count));
-        }
+        settle_pair_affinity(cur, &global_unigram, &mut aggregated_pairs);
     }
 
     println!(
@@ -500,27 +459,19 @@ fn main() {
 
     // 5. 按频次排序并输出 16MB 与 32MB 两个标准规格
     println!("\n[4/5] 按照综合权重排序并导出 16MB 与 32MB 两个标准规格模型...");
-
-    // 按实际频次降序排序以进行容量截断
     aggregated_pairs.par_sort_unstable_by(|a, b| b.3.cmp(&a.3));
 
-    // 规格 A: 16MB 标准版（对标微信键盘，截取 Top 3,800,000 对）
     let cap_16mb = 3_800_000.min(aggregated_pairs.len());
     let mut pairs_16mb = aggregated_pairs[..cap_16mb].to_vec();
-    // 恢复 CSR 所需的 (w1_id, w2_id) 升序
     pairs_16mb.par_sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     export_csr_model(out_16mb_path, vocab.len(), cap_16mb, &pairs_16mb).expect("生成16MB模型失败");
 
-    // 规格 B: 32MB 满血长尾版（截取 Top 7,800,000 对）
     let cap_32mb = 7_800_000.min(aggregated_pairs.len());
     let mut pairs_32mb = aggregated_pairs[..cap_32mb].to_vec();
     pairs_32mb.par_sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     export_csr_model(out_32mb_path, vocab.len(), cap_32mb, &pairs_32mb).expect("生成32MB模型失败");
 
-    // 清理临时文件
     let _ = fs::remove_dir_all(temp_chunk_dir);
-
-    // 重新保存最终扩充全量词表
     vocab.save_binary(vocab_bin_path).expect("更新词表成功");
 
     let elapsed_total = start_total.elapsed();

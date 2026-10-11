@@ -9,6 +9,8 @@ Type=simple
 ExecStart=/usr/bin/waylan
 Restart=on-failure
 RestartSec=2s
+KillMode=process
+TimeoutStopSec=5s
 Slice=session.slice
 
 [Install]

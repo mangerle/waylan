@@ -1,5 +1,6 @@
 pub mod candidates;
 pub mod pangu;
+pub(crate) mod prefix_synthesis;
 pub mod selection;
 pub mod typo;
 

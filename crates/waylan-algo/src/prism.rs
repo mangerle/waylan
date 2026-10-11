@@ -6,6 +6,7 @@ use crate::syllables::{
     has_syllable_prefix, is_valid_syllable,
 };
 use crate::types::FuzzyConfig;
+use std::str;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentPath {
@@ -46,6 +47,15 @@ pub static STANDARD_INITIALS: &[&str] = &[
     "z", "c", "s", "y", "w",
 ];
 
+/// 音节图深度优先搜索上下文（收敛递归参数）
+struct DfsContext<'a> {
+    input: &'a str,
+    fuzzy: &'a FuzzyConfig,
+    enable_typo: bool,
+    current: &'a mut Vec<String>,
+    results: &'a mut Vec<SegmentPath>,
+}
+
 impl PrismEngine {
     /// 构建拼写音节图并求解所有合法切分路径（使用默认全局实体保护器）
     pub fn build_paths(input: &str, fuzzy: &FuzzyConfig) -> Vec<SegmentPath> {
@@ -83,16 +93,16 @@ impl PrismEngine {
 
         let mut current_syllables = Vec::new();
         // 第一阶段：正向严格搜索（不启用容错虚边，保证正常长句以微秒级极致性能直通）
-        Self::dfs_dag(
-            input,
-            0,
-            &mut current_syllables,
-            0,
-            0,
-            false,
-            &mut paths,
-            fuzzy,
-        );
+        {
+            let mut ctx = DfsContext {
+                input,
+                fuzzy,
+                enable_typo: false,
+                current: &mut current_syllables,
+                results: &mut paths,
+            };
+            Self::dfs_dag(&mut ctx, 0, 0, 0);
+        }
 
         // 判定是否属于正常击键流程：
         // 1. 前驱音节全部属于完整标准音节或合法模糊音音节（无单字母辅音声母降级）；
@@ -140,16 +150,14 @@ impl PrismEngine {
 
         // 第二阶段：若非纯声母缩写，且非正常全拼键入流（存在断流、孤立辅音声母或非法残余前缀），启动容错虚边补救搜索
         if !is_pure_initials && !is_normal_typing {
-            Self::dfs_dag(
+            let mut ctx = DfsContext {
                 input,
-                0,
-                &mut current_syllables,
-                0,
-                0,
-                true,
-                &mut paths,
                 fuzzy,
-            );
+                enable_typo: true,
+                current: &mut current_syllables,
+                results: &mut paths,
+            };
+            Self::dfs_dag(&mut ctx, 0, 0, 0);
         }
 
         // 如果完全无法形成完整音节切分，尝试提取最长可能前缀
@@ -169,21 +177,11 @@ impl PrismEngine {
     }
 
     /// 深度优先搜索构建音节与声母混合 DAG 路径（保证 100% 原始击键字母保真）
-    #[allow(clippy::too_many_arguments)]
-    fn dfs_dag(
-        input: &str,
-        start: usize,
-        current: &mut Vec<String>,
-        current_cost: u32,
-        typo_count: u8,
-        enable_typo: bool,
-        results: &mut Vec<SegmentPath>,
-        fuzzy: &FuzzyConfig,
-    ) {
-        if start >= input.len() {
-            if !current.is_empty() {
-                results.push(SegmentPath {
-                    syllables: current.clone(),
+    fn dfs_dag(ctx: &mut DfsContext<'_>, start: usize, current_cost: u32, typo_count: u8) {
+        if start >= ctx.input.len() {
+            if !ctx.current.is_empty() {
+                ctx.results.push(SegmentPath {
+                    syllables: ctx.current.clone(),
                     remaining: String::new(),
                     cost: current_cost,
                     is_typo: typo_count > 0,
@@ -192,21 +190,21 @@ impl PrismEngine {
             return;
         }
 
-        if results.len() >= 64 {
+        if ctx.results.len() >= 64 {
             return; // 限制全局分支数量，保障微秒级求解
         }
 
-        let max_len = (input.len() - start).min(6);
+        let max_len = (ctx.input.len() - start).min(6);
         let mut matched_full = false;
 
         // 1. 优先尝试标准完整音节（利用 PrismFsa 编译型有限状态机单向步进匹配，消灭二分查找，保持原字母切片）
         let fsa = PrismFsa::global();
-        let fsa_matches = fsa.match_syllables(input, start);
+        let fsa_matches = fsa.match_syllables(ctx.input, start);
         for &(std_syl, len) in fsa_matches.iter().rev() {
             matched_full = true;
             let mut step_cost = 10;
             // 检查零声母借音碎切：当前音节若以 a, o, e 开头，且与前一个音节可合并成合法单音节，则判定为借音碎切并施加惩罚
-            if let Some(prev) = current.last() {
+            if let Some(prev) = ctx.current.last() {
                 if Self::is_zero_initial_borrowing_split(prev, std_syl) {
                     step_cost += if matches!(std_syl, "n" | "ng" | "m") {
                         50
@@ -215,54 +213,40 @@ impl PrismEngine {
                     };
                 }
             }
-            current.push(std_syl.to_string());
-            Self::dfs_dag(
-                input,
-                start + len,
-                current,
-                current_cost + step_cost,
-                typo_count,
-                enable_typo,
-                results,
-                fuzzy,
-            );
-            current.pop();
+            ctx.current.push(std_syl.to_string());
+            Self::dfs_dag(ctx, start + len, current_cost + step_cost, typo_count);
+            ctx.current.pop();
         }
 
         // 1.2 模糊音音节匹配扩展（若启用了模糊音开关，严格使用原输入切片 slice）
-        if fuzzy.has_active_rules() {
+        if ctx.fuzzy.has_active_rules() {
             for len in (1..=max_len).rev() {
-                let slice = &input[start..start + len];
-                if PrismFuzzy::is_fuzzy_valid(slice, fuzzy)
+                let slice = &ctx.input[start..start + len];
+                if PrismFuzzy::is_fuzzy_valid(slice, ctx.fuzzy)
                     && !fsa_matches.iter().any(|m| m.0 == slice)
                 {
                     matched_full = true;
                     let mut step_cost = 12;
-                    if let Some(prev) = current.last() {
+                    if let Some(prev) = ctx.current.last() {
                         if Self::is_zero_initial_borrowing_split(prev, slice) {
                             step_cost += 35;
                         }
                     }
-                    current.push(slice.to_string());
-                    Self::dfs_dag(
-                        input,
-                        start + len,
-                        current,
-                        current_cost + step_cost,
-                        typo_count,
-                        enable_typo,
-                        results,
-                        fuzzy,
-                    );
-                    current.pop();
+                    ctx.current.push(slice.to_string());
+                    Self::dfs_dag(ctx, start + len, current_cost + step_cost, typo_count);
+                    ctx.current.pop();
                 }
             }
         }
 
         // 1.3 容错虚边：相邻按键倒置（Adjacent Transpose，如 cehng -> cheng, shiohu -> shihou）
         // 防候选词爆炸：仅在第二阶段（enable_typo=true）且单路径未曾容错时探索
-        if enable_typo && typo_count == 0 && start + 1 < input.len() && results.len() < 48 {
-            let bytes = input.as_bytes();
+        if ctx.enable_typo
+            && typo_count == 0
+            && start + 1 < ctx.input.len()
+            && ctx.results.len() < 48
+        {
+            let bytes = ctx.input.as_bytes();
             let rem_bytes = &bytes[start..];
 
             // 尝试互换相邻索引 (0, 1) 或 (1, 2)
@@ -275,22 +259,13 @@ impl PrismEngine {
             for (idx1, idx2) in swap_pairs {
                 let mut swapped = Vec::from(rem_bytes);
                 swapped.swap(idx1, idx2);
-                if let Ok(swapped_str) = std::str::from_utf8(&swapped) {
+                if let Ok(swapped_str) = str::from_utf8(&swapped) {
                     let swapped_matches = fsa.match_syllables(swapped_str, 0);
                     for &(std_syl, len) in swapped_matches.iter().rev() {
                         if len > idx2 {
-                            current.push(std_syl.to_string());
-                            Self::dfs_dag(
-                                input,
-                                start + len,
-                                current,
-                                current_cost + 10 + 16,
-                                1,
-                                enable_typo,
-                                results,
-                                fuzzy,
-                            );
-                            current.pop();
+                            ctx.current.push(std_syl.to_string());
+                            Self::dfs_dag(ctx, start + len, current_cost + 10 + 16, 1);
+                            ctx.current.pop();
                         }
                     }
                 }
@@ -299,13 +274,13 @@ impl PrismEngine {
 
         // 1.4 容错虚边：物理键盘紧邻按键高斯误触与常见韵母规则纠错（如 nihso -> nihao, zhegn -> zheng）
         // 防候选词爆炸：仅在第二阶段且未匹配出 4 字符以上音节时探索
-        if enable_typo
+        if ctx.enable_typo
             && typo_count == 0
             && !fsa_matches.iter().any(|m| m.1 >= 4)
-            && results.len() < 48
+            && ctx.results.len() < 48
         {
             for len in (2..=max_len).rev() {
-                let slice = &input[start..start + len];
+                let slice = &ctx.input[start..start + len];
                 let mut corrections = get_spatial_typo_corrections(slice, 25);
                 for rule_alt in get_typo_corrections(slice) {
                     if !corrections.iter().any(|(s, _)| s == &rule_alt) {
@@ -314,18 +289,9 @@ impl PrismEngine {
                 }
                 for (std_syl, edit_cost) in corrections {
                     if !fsa_matches.iter().any(|m| m.0 == std_syl) {
-                        current.push(std_syl);
-                        Self::dfs_dag(
-                            input,
-                            start + len,
-                            current,
-                            current_cost + 10 + edit_cost,
-                            1,
-                            enable_typo,
-                            results,
-                            fuzzy,
-                        );
-                        current.pop();
+                        ctx.current.push(std_syl);
+                        Self::dfs_dag(ctx, start + len, current_cost + 10 + edit_cost, 1);
+                        ctx.current.pop();
                     }
                 }
             }
@@ -335,24 +301,15 @@ impl PrismEngine {
         // 若当前声母位于输入中间（后面还有更多字符）：作为跨音节声母转移（代价值 +25）
         // 若当前声母位于输入末尾（start + len == input.len()）：作为未闭合的残余 remaining 前缀记录
         for &initial in STANDARD_INITIALS {
-            if input[start..].starts_with(initial) {
+            if ctx.input[start..].starts_with(initial) {
                 let len = initial.len();
-                if start + len < input.len() {
-                    current.push(initial.to_string());
-                    Self::dfs_dag(
-                        input,
-                        start + len,
-                        current,
-                        current_cost + 25,
-                        typo_count,
-                        enable_typo,
-                        results,
-                        fuzzy,
-                    );
-                    current.pop();
-                } else if !current.is_empty() {
-                    results.push(SegmentPath {
-                        syllables: current.clone(),
+                if start + len < ctx.input.len() {
+                    ctx.current.push(initial.to_string());
+                    Self::dfs_dag(ctx, start + len, current_cost + 25, typo_count);
+                    ctx.current.pop();
+                } else if !ctx.current.is_empty() {
+                    ctx.results.push(SegmentPath {
+                        syllables: ctx.current.clone(),
                         remaining: initial.to_string(),
                         cost: current_cost + 30,
                         is_typo: typo_count > 0,
@@ -362,11 +319,11 @@ impl PrismEngine {
         }
 
         // 3. 若当前处于末尾且无法凑成完整音节，但属于合法前缀，记录为带有 remaining 的候选路径
-        if !matched_full && !current.is_empty() {
-            let remaining = &input[start..];
+        if !matched_full && !ctx.current.is_empty() {
+            let remaining = &ctx.input[start..];
             if has_syllable_prefix(remaining) {
-                results.push(SegmentPath {
-                    syllables: current.clone(),
+                ctx.results.push(SegmentPath {
+                    syllables: ctx.current.clone(),
                     remaining: remaining.to_string(),
                     cost: current_cost + 50,
                     is_typo: typo_count > 0,

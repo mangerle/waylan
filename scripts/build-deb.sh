@@ -9,7 +9,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 PKG_NAME="waylan"
 PKG_VERSION="$(grep -m1 '^version' "${PROJECT_ROOT}/Cargo.toml" | tr -d ' "' | cut -d'=' -f2)"
-PKG_ARCH="amd64"
+PKG_ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 DEB_DIR_NAME="${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}"
 BUILD_ROOT="${PROJECT_ROOT}/target/debian/${DEB_DIR_NAME}"
 OUTPUT_DEB="${PROJECT_ROOT}/target/debian/${DEB_DIR_NAME}.deb"
@@ -118,8 +118,9 @@ cat << 'EOF' > "${BUILD_ROOT}/DEBIAN/prerm"
 set -e
 
 if [ "$1" = "remove" ]; then
-    # 尝试通知当前图形会话停止服务
+    # 尝试通知当前图形会话停止服务并向运行中的守护进程发送优雅停机信号
     systemctl --user stop waylan.service >/dev/null 2>&1 || true
+    pkill -TERM -x waylan >/dev/null 2>&1 || true
 fi
 exit 0
 EOF
