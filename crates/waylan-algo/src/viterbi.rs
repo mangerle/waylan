@@ -180,7 +180,7 @@ impl ViterbiDecoder {
                 let sub_syls = &syllables[start_idx..end_idx];
                 let key = sub_syls.join("'");
 
-                let raw_entries = match table.get_raw_entries(&key) {
+                let raw_entries = match table.get_top_raw_entries(&key, 4) {
                     Some(entries) if !entries.is_empty() => entries,
                     _ => {
                         if span == 1 {
@@ -269,7 +269,7 @@ impl ViterbiDecoder {
                 let prev_step = split_idx - 1;
                 for &syl in find_syllables_by_prefix(remaining) {
                     let key = format!("{}'{}", last_syl, syl);
-                    if let Some(entries) = table.get_raw_entries(&key) {
+                    if let Some(entries) = table.get_top_raw_entries(&key, 2) {
                         for (text, raw_score) in entries.iter().take(2) {
                             let freq_score = Self::unigram_log_score(*raw_score);
                             for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {

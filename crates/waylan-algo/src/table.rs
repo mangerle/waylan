@@ -210,11 +210,12 @@ impl CompactMmapLexicon {
         None
     }
 
-    /// 获取指定 key_idx 的候选列表
+    /// 获取指定 key_idx 的候选列表（支持按需截取前 `limit` 条以减少无效堆分配）
     fn get_candidates_by_key_idx(
         &self,
         key_idx: usize,
         expected_type: Option<u8>,
+        limit: Option<usize>,
     ) -> Option<Vec<(String, u32)>> {
         if key_idx >= self.num_keys {
             return None;
@@ -234,8 +235,9 @@ impl CompactMmapLexicon {
             }
         }
 
-        let mut res = Vec::with_capacity(cand_count);
-        for i in 0..cand_count {
+        let take_count = limit.map_or(cand_count, |max_k| cand_count.min(max_k));
+        let mut res = Vec::with_capacity(take_count);
+        for i in 0..take_count {
             let item_pos = self
                 .candidates_offset
                 .saturating_add(cand_start.saturating_add(i).saturating_mul(6));
@@ -259,7 +261,14 @@ impl CompactMmapLexicon {
     pub fn lookup(&self, key: &str) -> Option<Vec<(String, u32)>> {
         let reader = self.get_dat_reader();
         let key_idx = reader.exact_match(key)? as usize;
-        self.get_candidates_by_key_idx(key_idx, Some(0))
+        self.get_candidates_by_key_idx(key_idx, Some(0), None)
+    }
+
+    /// 全拼按需截取 Top-K 检索（用于 Viterbi 束搜索热路径，消除同音长尾无用分配）
+    pub fn lookup_top_k(&self, key: &str, k: usize) -> Option<Vec<(String, u32)>> {
+        let reader = self.get_dat_reader();
+        let key_idx = reader.exact_match(key)? as usize;
+        self.get_candidates_by_key_idx(key_idx, Some(0), Some(k))
     }
 
     /// 简拼缩写检索
@@ -269,7 +278,7 @@ impl CompactMmapLexicon {
         let key_idx = reader
             .exact_match(&prefixed)
             .or_else(|| reader.exact_match(key))? as usize;
-        self.get_candidates_by_key_idx(key_idx, Some(1))
+        self.get_candidates_by_key_idx(key_idx, Some(1), None)
     }
 
     /// 声母高频单字检索
@@ -279,7 +288,7 @@ impl CompactMmapLexicon {
         let key_idx = reader
             .exact_match(&prefixed)
             .or_else(|| reader.exact_match(initial))? as usize;
-        self.get_candidates_by_key_idx(key_idx, Some(2))
+        self.get_candidates_by_key_idx(key_idx, Some(2), None)
     }
 }
 
@@ -454,6 +463,23 @@ impl LexiconTable {
             }
         }
         self.entries.get(key).cloned()
+    }
+
+    /// 按需获取指定拼音键的前 `k` 条高频原始词条（用于 Viterbi 束搜索热路径，消除同音长尾无用分配）
+    pub fn get_top_raw_entries(&self, key: &str, k: usize) -> Option<Vec<(String, u32)>> {
+        if let Some(compact) = &self.compact_mmap {
+            if let Some(entries) = compact.lookup_top_k(key, k) {
+                return Some(entries);
+            }
+        }
+        self.entries.get(key).map(|list| {
+            let mut top = list.clone();
+            if top.len() > 1 {
+                top.sort_by_key(|b| std::cmp::Reverse(b.1));
+            }
+            top.truncate(k);
+            top
+        })
     }
 
     /// 获取索引中词条总数

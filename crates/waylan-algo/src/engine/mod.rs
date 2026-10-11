@@ -70,6 +70,8 @@ pub struct AlgoEngine {
     pub(crate) partial_commit_segments: Vec<(String, String)>,
     /// 最近一次交互/选词的时间戳（秒级 UNIX 时间，用于驱动词频半衰期衰减评估）
     pub(crate) last_timestamp: u64,
+    /// 当前输入缓冲区经 Prism 切分后的格式化预编辑文本缓存（避免渲染与光标定位重复执行 DAG 搜索）
+    pub(crate) cached_preedit: String,
 }
 
 impl AlgoEngine {
@@ -94,6 +96,7 @@ impl AlgoEngine {
             user_dict_path: None,
             partial_commit_segments: Vec::new(),
             last_timestamp: 0,
+            cached_preedit: String::new(),
         }
     }
 
@@ -278,6 +281,9 @@ impl AlgoEngine {
         if raw.is_empty() {
             return String::new();
         }
+        if !self.cached_preedit.is_empty() {
+            return self.cached_preedit.clone();
+        }
 
         let paths = PrismEngine::build_paths_with_entities(
             raw,
@@ -374,6 +380,7 @@ impl AlgoEngine {
         self.current_candidates.clear();
         self.last_commit_context = None;
         self.partial_commit_segments.clear();
+        self.cached_preedit.clear();
     }
 }
 

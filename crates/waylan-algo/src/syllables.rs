@@ -177,6 +177,45 @@ pub fn weighted_edit_distance(source: &str, target: &str) -> u32 {
     if source == target {
         return 0;
     }
+    if source.is_ascii() && target.is_ascii() {
+        let s_bytes = source.as_bytes();
+        let t_bytes = target.as_bytes();
+        let m = s_bytes.len();
+        let n = t_bytes.len();
+
+        if m == 0 {
+            return (n as u32) * 26;
+        }
+        if n == 0 {
+            return (m as u32) * 26;
+        }
+        if m.abs_diff(n) > 2 {
+            return 100;
+        }
+
+        if m <= 9 && n <= 9 {
+            let mut dp = [[0u32; 10]; 10];
+            for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+                row[0] = (i as u32) * 26;
+            }
+            for (j, item) in dp[0].iter_mut().enumerate().take(n + 1) {
+                *item = (j as u32) * 26;
+            }
+            for i in 1..=m {
+                let sc = s_bytes[i - 1] as char;
+                for j in 1..=n {
+                    let tc = t_bytes[j - 1] as char;
+                    let sub_cost = char_substitution_cost(sc, tc);
+                    let cost_sub = dp[i - 1][j - 1] + sub_cost;
+                    let cost_del = dp[i - 1][j] + 26;
+                    let cost_ins = dp[i][j - 1] + 26;
+                    dp[i][j] = cost_sub.min(cost_del).min(cost_ins);
+                }
+            }
+            return dp[m][n];
+        }
+    }
+
     let s_chars: Vec<char> = source.chars().collect();
     let t_chars: Vec<char> = target.chars().collect();
     let m = s_chars.len();

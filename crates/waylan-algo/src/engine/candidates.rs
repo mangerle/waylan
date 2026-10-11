@@ -16,11 +16,13 @@ impl AlgoEngine {
         let raw_input = self.composition.as_str();
         if raw_input.is_empty() {
             self.current_candidates.clear();
+            self.cached_preedit.clear();
             return;
         }
 
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
         if let Some(dispatched) = ModeDispatcher::try_dispatch(raw_input, &self.config) {
+            self.cached_preedit = raw_input.to_string();
             self.current_candidates = CandidatePipeline::process_with_opencc(
                 dispatched,
                 &self.config,
@@ -36,6 +38,10 @@ impl AlgoEngine {
             &self.config.fuzzy,
             Some(&self.entity_manager),
         );
+        self.cached_preedit = paths
+            .first()
+            .map(|p| p.to_key_string())
+            .unwrap_or_else(|| raw_input.to_string());
 
         let mut raw_candidates = Vec::new();
 

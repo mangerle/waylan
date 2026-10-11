@@ -5,8 +5,8 @@ use std::collections::HashMap;
 /// 常用高频英文单词联想管理器
 #[derive(Debug, Clone)]
 pub struct EnglishSuggestionManager {
-    /// 单词与词频列表（按小写字母序排序，便于二分前缀查找）
-    words: Vec<(String, u32)>,
+    /// 单词与词频列表：(小写检索键, 原始词形, 词频)，按小写字母序排序便于零分配二分前缀查找
+    words: Vec<(String, String, u32)>,
     /// 精确匹配哈希索引 (小写单词 -> (原词, 词频))
     exact_index: HashMap<String, (String, u32)>,
 }
@@ -26,11 +26,13 @@ impl EnglishSuggestionManager {
     /// 从单词列表加载
     pub fn from_words(words: Vec<(String, u32)>) -> Self {
         let mut exact_index = HashMap::with_capacity(words.len());
-        for (w, score) in &words {
-            exact_index.insert(w.to_lowercase(), (w.clone(), *score));
+        let mut sorted_words = Vec::with_capacity(words.len());
+        for (w, score) in words {
+            let lower = w.to_lowercase();
+            exact_index.insert(lower.clone(), (w.clone(), score));
+            sorted_words.push((lower, w, score));
         }
-        let mut sorted_words = words;
-        sorted_words.sort_by_key(|a| a.0.to_lowercase());
+        sorted_words.sort_by(|a, b| a.0.cmp(&b.0));
         Self {
             words: sorted_words,
             exact_index,
@@ -62,24 +64,27 @@ impl EnglishSuggestionManager {
             return results;
         }
 
-        // 2. 前缀匹配（输入至少 3 个字母时提供补全联想，利用二分查找定位）
+        // 2. 前缀匹配（输入至少 3 个字母时提供补全联想，利用预存小写键零分配二分查找定位）
         if input_lower.len() >= 3 {
             let idx = match self
                 .words
-                .binary_search_by(|(w, _)| w.to_lowercase().cmp(&input_lower))
+                .binary_search_by(|(w_lower, _, _)| w_lower.as_str().cmp(input_lower.as_str()))
             {
                 Ok(i) => i,
                 Err(i) => i,
             };
 
-            for (w, score) in &self.words[idx..] {
-                let w_lower = w.to_lowercase();
+            for (w_lower, orig_word, score) in &self.words[idx..] {
                 if w_lower.starts_with(&input_lower) {
-                    if w_lower != input_lower {
+                    if w_lower != &input_lower {
                         results.push(
-                            AlgoCandidate::new(w, input, 3_000_000_u32.saturating_add(*score / 2))
-                                .with_comment("英文联想")
-                                .with_tier(CandidateTier::PrefixPartial),
+                            AlgoCandidate::new(
+                                orig_word,
+                                input,
+                                3_000_000_u32.saturating_add(*score / 2),
+                            )
+                            .with_comment("英文联想")
+                            .with_tier(CandidateTier::PrefixPartial),
                         );
                         if results.len() >= 3 {
                             break;
