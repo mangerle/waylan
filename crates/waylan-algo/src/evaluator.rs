@@ -61,7 +61,7 @@ impl DateTimeEvaluator {
         let month = now.month();
         let day = now.day();
 
-        vec![
+        let mut list = vec![
             // 1. 中文常用格式: 2026年10月9日
             format!("{}年{}月{}日", year, month, day),
             // 2. 紧凑纯数字: 20261009
@@ -74,9 +74,14 @@ impl DateTimeEvaluator {
             format!("{:04}.{:02}.{:02}", year, month, day),
             // 6. 中文全大写: 二〇二六年十月九日
             Self::to_chinese_date(year, month, day),
-            // 7. 农历/干支纪年: 丙午[马]年八月廿九
-            Self::to_lunar_chinese_str(year, month, day),
-        ]
+        ];
+
+        // 7. 农历/干支纪年: 丙午[马]年八月廿九（若超出 1900-2100 农历推算范围安全略过）
+        if let Some(lunar_str) = Self::to_lunar_chinese_str(year, month, day) {
+            list.push(lunar_str);
+        }
+
+        list
     }
 
     /// 格式化全量时间格式列表
@@ -225,7 +230,7 @@ impl DateTimeEvaluator {
     }
 
     /// 计算干支年及生肖（如：丙午[马]年）与农历月日（基于 1900-2100 标准农历数据表精确推算）
-    fn to_lunar_chinese_str(year: i32, month: u32, day: u32) -> String {
+    fn to_lunar_chinese_str(year: i32, month: u32, day: u32) -> Option<String> {
         const TIAN_GAN: [&str; 10] = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"];
         const DI_ZHI: [&str; 12] = [
             "子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥",
@@ -234,8 +239,7 @@ impl DateTimeEvaluator {
             "鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪",
         ];
 
-        let (lunar_year, is_leap, lunar_month, lunar_day) =
-            Self::solar_to_lunar(year, month, day).unwrap_or((year, false, month, day));
+        let (lunar_year, is_leap, lunar_month, lunar_day) = Self::solar_to_lunar(year, month, day)?;
 
         let gan_idx = (((lunar_year - 4) % 10 + 10) % 10) as usize;
         let zhi_idx = (((lunar_year - 4) % 12 + 12) % 12) as usize;
@@ -247,10 +251,10 @@ impl DateTimeEvaluator {
 
         let (lunar_month_str, lunar_day_str) = Self::format_lunar_month_day(lunar_month, lunar_day);
         let leap_prefix = if is_leap { "闰" } else { "" };
-        format!(
+        Some(format!(
             "{}{}{}{}",
             ganzhi_year, leap_prefix, lunar_month_str, lunar_day_str
-        )
+        ))
     }
 
     /// 格式化农历月份与农历日名称
@@ -370,3 +374,20 @@ impl DateTimeEvaluator {
     }
 }
 pub use crate::evaluator_financial::FinancialEvaluator;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lunar_chinese_str_bounds() {
+        // 在 1900-2100 范围内能正确计算农历
+        let valid_lunar = DateTimeEvaluator::to_lunar_chinese_str(2026, 10, 9);
+        assert!(valid_lunar.is_some());
+        assert!(valid_lunar.unwrap().contains("丙午[马]年"));
+
+        // 超出 1900-2100 范围时安全返回 None，不使用公历冒充农历
+        assert_eq!(DateTimeEvaluator::to_lunar_chinese_str(1899, 1, 1), None);
+        assert_eq!(DateTimeEvaluator::to_lunar_chinese_str(2102, 1, 1), None);
+    }
+}

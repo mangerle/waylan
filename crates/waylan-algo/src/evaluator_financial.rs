@@ -120,8 +120,6 @@ impl FinancialEvaluator {
 
     /// 将整数部分转换为中文大写（分四位一节处理：万、亿、万亿、亿亿）
     fn convert_integer_part(mut num: u64) -> String {
-        const RADIX_UNITS: &[&str] = &["", "万", "亿", "万亿", "亿亿"];
-
         if num == 0 {
             return "零".to_string();
         }
@@ -136,6 +134,10 @@ impl FinancialEvaluator {
         let mut has_high_section = false;
         let mut has_zero_section = false;
 
+        // 统计“亿”大节（idx = 2 与 idx = 3）是否包含非零数值
+        let yi_has_val =
+            sections.get(2).copied().unwrap_or(0) > 0 || sections.get(3).copied().unwrap_or(0) > 0;
+
         for (idx, &sec) in sections.iter().enumerate().rev() {
             if sec > 0 {
                 if has_zero_section || (has_high_section && sec < 1000) {
@@ -143,13 +145,26 @@ impl FinancialEvaluator {
                 }
                 let sec_str = Self::convert_section(sec);
                 res.push_str(&sec_str);
-                if let Some(&unit) = RADIX_UNITS.get(idx) {
-                    res.push_str(unit);
+
+                match idx {
+                    4 => res.push_str("亿亿"),
+                    3 => res.push('万'),
+                    2 => res.push('亿'),
+                    1 => res.push('万'),
+                    _ => {}
                 }
+
                 has_high_section = true;
                 has_zero_section = false;
-            } else if has_high_section {
-                has_zero_section = true;
+            } else {
+                // 若当前为亿节且整个亿大节非空（万亿节有值），离开亿大节时需补上“亿”单位
+                if idx == 2 && yi_has_val {
+                    res.push('亿');
+                }
+
+                if has_high_section {
+                    has_zero_section = true;
+                }
             }
         }
 
@@ -227,5 +242,43 @@ impl FinancialEvaluator {
             }
         }
         format!("{}.{:02}", formatted_int, frac_val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_financial_trillion_and_billion_capital() {
+        // 万亿级且亿节非零：不得重复输出“亿”
+        assert_eq!(
+            FinancialEvaluator::to_rmb_capital(1_0001_0000_0000, 0),
+            "壹万零壹亿元整"
+        );
+        // 万亿整
+        assert_eq!(
+            FinancialEvaluator::to_rmb_capital(1_0000_0000_0000, 0),
+            "壹万亿元整"
+        );
+        // 万亿带万节
+        assert_eq!(
+            FinancialEvaluator::to_rmb_capital(1_0000_0001_0000, 0),
+            "壹万亿零壹万元整"
+        );
+        // 亿整
+        assert_eq!(
+            FinancialEvaluator::to_rmb_capital(1_0000_0000, 0),
+            "壹亿元整"
+        );
+        // 常规金额带角分
+        assert_eq!(
+            FinancialEvaluator::to_rmb_capital(12345, 67),
+            "壹万贰仟叁佰肆拾伍元陆角柒分"
+        );
+        // 仅有角
+        assert_eq!(FinancialEvaluator::to_rmb_capital(0, 50), "伍角整");
+        // 仅有分
+        assert_eq!(FinancialEvaluator::to_rmb_capital(0, 5), "伍分");
     }
 }

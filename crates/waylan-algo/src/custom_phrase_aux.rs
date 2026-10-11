@@ -74,10 +74,11 @@ impl EnglishSuggestionManager {
                 Err(i) => i,
             };
 
+            let mut prefix_cands = Vec::new();
             for (w_lower, orig_word, score) in &self.words[idx..] {
                 if w_lower.starts_with(&input_lower) {
                     if w_lower != &input_lower {
-                        results.push(
+                        prefix_cands.push(
                             AlgoCandidate::new(
                                 orig_word,
                                 input,
@@ -86,14 +87,14 @@ impl EnglishSuggestionManager {
                             .with_comment("英文联想")
                             .with_tier(CandidateTier::PrefixPartial),
                         );
-                        if results.len() >= 3 {
-                            break;
-                        }
                     }
                 } else {
                     break;
                 }
             }
+            prefix_cands.sort_by_key(|c| std::cmp::Reverse(c.score));
+            prefix_cands.truncate(3);
+            results.extend(prefix_cands);
         }
 
         results
@@ -126,7 +127,10 @@ impl SymbolSuggestionManager {
         let total_len = symbols.len();
         let mut index: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for (py, sym, desc) in symbols {
-            index.entry(py).or_default().push((sym, desc));
+            index
+                .entry(py.to_lowercase())
+                .or_default()
+                .push((sym, desc));
         }
         Self { index, total_len }
     }
@@ -143,7 +147,7 @@ impl SymbolSuggestionManager {
 
     /// 检索符号表情候选 (O(1) 哈希查询)
     pub fn lookup(&self, pinyin: &str) -> Vec<AlgoCandidate> {
-        let pinyin_clean = pinyin.replace('\'', "");
+        let pinyin_clean = pinyin.replace('\'', "").to_lowercase();
         let mut results = Vec::new();
         if let Some(list) = self.index.get(&pinyin_clean) {
             for (sym, desc) in list {
@@ -155,5 +159,40 @@ impl SymbolSuggestionManager {
             }
         }
         results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_english_prefix_lookup_top3_score_ordering() {
+        let words = vec![
+            ("appal".to_string(), 10),
+            ("apparel".to_string(), 20),
+            ("apple".to_string(), 1000),
+            ("application".to_string(), 900),
+            ("apply".to_string(), 500),
+        ];
+        let manager = EnglishSuggestionManager::from_words(words);
+        let res = manager.lookup("app");
+        assert_eq!(res.len(), 3);
+        assert_eq!(res[0].text, "apple");
+        assert_eq!(res[1].text, "application");
+        assert_eq!(res[2].text, "apply");
+    }
+
+    #[test]
+    fn test_symbol_lookup_case_insensitive() {
+        let symbols = vec![("wx".to_string(), "^_^".to_string(), "微笑".to_string())];
+        let manager = SymbolSuggestionManager::from_symbols(symbols);
+        let res_lower = manager.lookup("wx");
+        assert_eq!(res_lower.len(), 1);
+        assert_eq!(res_lower[0].text, "^_^");
+
+        let res_upper = manager.lookup("WX");
+        assert_eq!(res_upper.len(), 1);
+        assert_eq!(res_upper[0].text, "^_^");
     }
 }

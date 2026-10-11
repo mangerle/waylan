@@ -81,30 +81,46 @@ impl ModeDispatcher {
                 "sd" | "now" => {
                     for (idx, dt) in dt_list.into_iter().enumerate() {
                         candidates.push(
-                            AlgoCandidate::new(dt, expr, 99_000 - idx as u32 * 100)
-                                .with_comment("日期时间"),
+                            AlgoCandidate::new(
+                                dt,
+                                expr,
+                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
+                            )
+                            .with_comment("日期时间"),
                         );
                     }
                     for (idx, d) in date_list.into_iter().enumerate() {
                         candidates.push(
-                            AlgoCandidate::new(d, expr, 90_000 - idx as u32 * 100)
-                                .with_comment("当前日期"),
+                            AlgoCandidate::new(
+                                d,
+                                expr,
+                                90_000u32.saturating_sub((idx as u32).saturating_mul(100)),
+                            )
+                            .with_comment("当前日期"),
                         );
                     }
                 }
                 "rq" | "date" => {
                     for (idx, d) in date_list.into_iter().enumerate() {
                         candidates.push(
-                            AlgoCandidate::new(d, expr, 99_000 - idx as u32 * 100)
-                                .with_comment("当前日期"),
+                            AlgoCandidate::new(
+                                d,
+                                expr,
+                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
+                            )
+                            .with_comment("当前日期"),
                         );
                     }
                 }
                 "sj" | "time" => {
                     for (idx, t) in time_list.into_iter().enumerate() {
                         candidates.push(
-                            AlgoCandidate::new(t, expr, 99_000 - idx as u32 * 100)
-                                .with_comment("当前时间"),
+                            AlgoCandidate::new(
+                                t,
+                                expr,
+                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
+                            )
+                            .with_comment("当前时间"),
                         );
                     }
                 }
@@ -114,8 +130,12 @@ impl ModeDispatcher {
                         .enumerate()
                     {
                         candidates.push(
-                            AlgoCandidate::new(w, expr, 99_000 - idx as u32 * 100)
-                                .with_comment("星期"),
+                            AlgoCandidate::new(
+                                w,
+                                expr,
+                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
+                            )
+                            .with_comment("星期"),
                         );
                     }
                 }
@@ -133,12 +153,20 @@ impl ModeDispatcher {
 
         // 4. 算术表达式安全求值（如 v20*5, v100+20）
         if let Some(val) = Self::eval_math_simple(expr) {
-            let val_str = if (val.fract()).abs() < 1e-9 && val.abs() < 9_007_199_254_740_992.0 {
-                format!("{}", val.round() as i64)
-            } else if (val.fract()).abs() < 1e-9 {
-                format!("{:.0}", val)
+            let effective_val = if val.abs() < 1e-9 { 0.0 } else { val };
+            let val_str = if (effective_val.fract()).abs() < 1e-9
+                && effective_val.abs() < 9_007_199_254_740_992.0
+            {
+                let round_int = effective_val.round() as i64;
+                if round_int == 0 {
+                    "0".to_string()
+                } else {
+                    format!("{}", round_int)
+                }
+            } else if (effective_val.fract()).abs() < 1e-9 {
+                format!("{:.0}", effective_val)
             } else {
-                format!("{:.4}", val)
+                format!("{:.4}", effective_val)
                     .trim_end_matches('0')
                     .trim_end_matches('.')
                     .to_string()
@@ -180,7 +208,8 @@ impl ModeDispatcher {
         let mut pos = 0;
         let val = Self::parse_expr(&chars, &mut pos, 0)?;
         if pos == chars.len() && val.is_finite() {
-            Some(val)
+            let normalized = if val.abs() < 1e-9 { 0.0 } else { val };
+            Some(normalized)
         } else {
             None
         }
@@ -239,21 +268,33 @@ impl ModeDispatcher {
         if depth > 32 {
             return None;
         }
+
+        // 解析一元正负号（限制至多允许 2 个连续一元正负号）
+        let mut sign = 1.0;
+        let mut sign_count = 0;
+        while let Some(&c) = chars.get(*pos) {
+            if c == '+' {
+                *pos += 1;
+                sign_count += 1;
+            } else if c == '-' {
+                *pos += 1;
+                sign = -sign;
+                sign_count += 1;
+            } else {
+                break;
+            }
+            if sign_count > 2 {
+                return None;
+            }
+        }
+
         let &ch = chars.get(*pos)?;
-        if ch == '+' {
-            *pos += 1;
-            return Self::parse_factor(chars, pos, depth + 1);
-        }
-        if ch == '-' {
-            *pos += 1;
-            return Some(-Self::parse_factor(chars, pos, depth + 1)?);
-        }
         if ch == '(' {
             *pos += 1;
             let val = Self::parse_expr(chars, pos, depth + 1)?;
             if chars.get(*pos) == Some(&')') {
                 *pos += 1;
-                return Some(val);
+                return Some(sign * val);
             }
             return None;
         }
@@ -270,7 +311,12 @@ impl ModeDispatcher {
             return None;
         }
         let num_str: String = chars[start..*pos].iter().collect();
-        num_str.parse::<f64>().ok()
+        // 拒绝以小数点开头/结尾或含有多个小数点的未完成/非法浮点数（如 "10." 或 ".5"）
+        if num_str.starts_with('.') || num_str.ends_with('.') || num_str.matches('.').count() > 1 {
+            return None;
+        }
+        let val = num_str.parse::<f64>().ok()?;
+        Some(sign * val)
     }
 
     /// U 模式：拆字与笔画反查
@@ -364,5 +410,24 @@ mod tests {
     fn test_regular_pinyin_passthrough() {
         let config = AlgoConfig::default();
         assert!(ModeDispatcher::try_dispatch("nihao", &config).is_none());
+    }
+
+    #[test]
+    fn test_math_eval_boundary_conditions() {
+        // 极小负数或相反数相加不得输出 -0
+        assert_eq!(ModeDispatcher::eval_math_simple("-0.0000000001"), Some(0.0));
+        assert_eq!(ModeDispatcher::eval_math_simple("1-1"), Some(0.0));
+        let cands = ModeDispatcher::eval_v_mode("1-1");
+        assert!(cands.iter().any(|c| c.text == "0"));
+        assert!(!cands.iter().any(|c| c.text == "-0"));
+
+        // 拒绝尾随小数点输入
+        assert_eq!(ModeDispatcher::eval_math_simple("10."), None);
+        assert_eq!(ModeDispatcher::eval_math_simple(".5"), None);
+
+        // 连续一元符号支持至多 2 个，超过 2 个直接拒绝
+        assert_eq!(ModeDispatcher::eval_math_simple("--5"), Some(5.0));
+        assert_eq!(ModeDispatcher::eval_math_simple("+-5"), Some(-5.0));
+        assert_eq!(ModeDispatcher::eval_math_simple("---5"), None);
     }
 }
