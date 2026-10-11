@@ -31,12 +31,16 @@ pub fn check_watched_paths_changed(
     }
 
     match (*last_watched_mtime, latest_mtime) {
-        (Some(old), Some(new)) if new > old => {
+        (Some(old), Some(new)) if new != old => {
             *last_watched_mtime = Some(new);
             true
         }
         (None, Some(new)) => {
             *last_watched_mtime = Some(new);
+            false
+        }
+        (None, None) => {
+            *last_watched_mtime = Some(SystemTime::UNIX_EPOCH);
             false
         }
         _ => false,

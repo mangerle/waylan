@@ -235,6 +235,7 @@ pub fn run_session_v1_loop(
 
     log::info!("[微澜 Wayland] 成功绑定 zwp_input_method_v1 接口，进入输入法事件分发循环。");
 
+    let mut last_ext_sync = std::time::Instant::now();
     loop {
         if session
             .exit_requested
@@ -259,12 +260,17 @@ pub fn run_session_v1_loop(
                 Ok(0) => {
                     drop(guard);
                     session.sync_external_state();
+                    last_ext_sync = std::time::Instant::now();
                 }
                 Ok(_) => {
                     if let Err(wayland_client::backend::WaylandError::Io(io_err)) = guard.read() {
                         if io_err.kind() != std::io::ErrorKind::WouldBlock {
                             return Err(io_err.into());
                         }
+                    }
+                    if last_ext_sync.elapsed() >= std::time::Duration::from_secs(1) {
+                        session.sync_external_state();
+                        last_ext_sync = std::time::Instant::now();
                     }
                 }
                 Err(rustix::io::Errno::INTR) => {}
@@ -355,6 +361,7 @@ pub fn run_session_v2_loop_fallible(
         "[微澜 Wayland] 成功绑定 zwp_input_method_manager_v2、wl_compositor 与 wl_shm，进入 V2 输入法事件分发循环。"
     );
 
+    let mut last_ext_sync = std::time::Instant::now();
     loop {
         if session
             .exit_requested
@@ -394,12 +401,17 @@ pub fn run_session_v2_loop_fallible(
                     drop(guard);
                     session.drive_key_repeat();
                     session.sync_external_state();
+                    last_ext_sync = std::time::Instant::now();
                 }
                 Ok(_) => {
                     if let Err(wayland_client::backend::WaylandError::Io(io_err)) = guard.read() {
                         if io_err.kind() != std::io::ErrorKind::WouldBlock {
                             return Err((io_err.into(), Box::new(session)));
                         }
+                    }
+                    if last_ext_sync.elapsed() >= std::time::Duration::from_secs(1) {
+                        session.sync_external_state();
+                        last_ext_sync = std::time::Instant::now();
                     }
                 }
                 Err(rustix::io::Errno::INTR) => {}

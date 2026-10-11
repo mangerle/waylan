@@ -201,11 +201,14 @@ impl WaylanV2Session {
         if now_active {
             self.surrounding_text = self.pending_surrounding_text.clone();
             self.is_password_context = self.pending_is_password;
-            self.sync_external_state();
             if !was_active || focus_reset {
+                self.sync_external_state();
                 self.reset_focus_state();
-            } else if self.is_password_context && !self.engine.raw_input().is_empty() {
-                self.cancel_input();
+            } else {
+                self.sync_atomic_state();
+                if self.is_password_context && !self.engine.raw_input().is_empty() {
+                    self.cancel_input();
+                }
             }
         } else {
             self.pending_surrounding_text = None;
