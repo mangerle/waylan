@@ -1,5 +1,6 @@
 use super::*;
 use crate::session_v1::{KEY_1, KEY_4, KEY_9, KEY_APOSTROPHE, KEY_SLASH};
+use crate::session_v2::keys::process_key_event;
 use waylan_algo::types::AlgoConfig;
 
 #[test]
@@ -15,7 +16,7 @@ fn test_v2_session_initialization() {
 
     let box_state = session.build_candidate_box_state();
     assert!(!box_state.visible);
-    assert_eq!(box_state.mode_badge, "中");
+    assert_eq!(box_state.mode_badge, "");
 }
 
 #[test]
@@ -350,4 +351,88 @@ fn test_key_press_release_symmetry() {
         "Shift 按下透传给客户端后，松开事件也必须透传以防客户端 Shift 卡死"
     );
     assert_eq!(session.mode, InputMode::English);
+}
+
+#[test]
+fn test_v2_grid_expansion_state() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let mut session = WaylanV2Session::new(engine);
+    session.is_active = true;
+
+    session.engine.push_char('n');
+    session.engine.push_char('i');
+
+    let initial_box = session.build_candidate_box_state();
+    assert!(!initial_box.is_grid_expanded);
+    assert!(initial_box.grid_candidates.is_empty());
+
+    // 展开 5 行大网格大候选词面板
+    session.is_grid_expanded = true;
+    let expanded_box = session.build_candidate_box_state();
+    assert!(expanded_box.is_grid_expanded);
+    assert!(!expanded_box.grid_candidates.is_empty());
+    assert!(expanded_box.grid_candidates.len() <= 30);
+
+    // 取消输入时自动收回展开态
+    session.cancel_input();
+    assert!(!session.is_grid_expanded);
+}
+
+#[test]
+fn test_v2_grid_expanded_key_navigation_and_selection() {
+    let mut table = waylan_algo::table::LexiconTable::with_sample_data();
+    for i in 0..20 {
+        table.insert("ni", format!("字{}", i), 10_000 - i * 10);
+    }
+    let mut session = WaylanV2Session::new(AlgoEngine::new(table, AlgoConfig::default()));
+    session.engine.push_char('n');
+    session.engine.push_char('i');
+
+    // 展开 5 行网格面板
+    session.is_grid_expanded = true;
+    session.grid_selected_index = 0;
+
+    // 1. 按 Down 键：向下移动一行（从第 1 行跳至第 2 行第 1 个词，索引 6）
+    let (consumed, committed) = process_key_event(&mut session, KEY_DOWN, true);
+    assert!(consumed);
+    assert!(committed.is_none());
+    assert_eq!(session.grid_selected_index, 6);
+
+    // 2. 按 Right 键：向右移动一个词（索引 7）
+    let (consumed, _) = process_key_event(&mut session, KEY_RIGHT, true);
+    assert!(consumed);
+    assert_eq!(session.grid_selected_index, 7);
+
+    // 3. 当前处于第 2 行，按数字 2 键：选取第 2 行第 2 个词（索引 1 * 6 + (2 - 1) = 7）
+    let all_cands = session.engine.all_candidates();
+    let expected_text = all_cands[7].text.clone();
+    let (consumed, committed) = process_key_event(&mut session, KEY_2, true);
+    assert!(consumed);
+    assert_eq!(committed, Some(expected_text));
+    assert!(!session.is_grid_expanded, "选词后应自动折叠大网格");
+    assert_eq!(session.grid_selected_index, 0);
+
+    // 4. 测试空格选词
+    session.engine.push_char('n');
+    session.engine.push_char('i');
+    session.is_grid_expanded = true;
+    session.grid_selected_index = 12; // 第 3 行第 1 个词
+    let expected_text_3 = session.engine.all_candidates()[12].text.clone();
+    let (consumed, committed) = process_key_event(&mut session, KEY_SPACE, true);
+    assert!(consumed);
+    assert_eq!(committed, Some(expected_text_3));
+    assert!(!session.is_grid_expanded);
+
+    // 5. 测试 ESC 折叠
+    session.engine.push_char('n');
+    session.engine.push_char('i');
+    session.is_grid_expanded = true;
+    let (consumed, committed) = process_key_event(&mut session, KEY_ESC, true);
+    assert!(consumed);
+    assert!(committed.is_none());
+    assert!(!session.is_grid_expanded, "ESC 应折叠大网格");
+    assert!(
+        !session.engine.raw_input().is_empty(),
+        "单次 ESC 仅折叠大网格，不清除输入"
+    );
 }

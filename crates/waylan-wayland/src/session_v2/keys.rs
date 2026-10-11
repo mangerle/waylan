@@ -10,12 +10,126 @@ pub fn process_english_mode_key(
     (false, None)
 }
 
+/// 提交指定全局索引的网格候选词上屏并退出大网格展开态
+fn commit_grid_candidate_by_index(
+    session: &mut WaylanV2Session,
+    target_idx: usize,
+    now: u64,
+) -> Option<(bool, Option<String>)> {
+    if let Some((committed_text, remaining_len)) =
+        session.engine.select_candidate_from_all(target_idx, now)
+    {
+        session.is_grid_expanded = false;
+        session.grid_selected_index = 0;
+        session.punctuation_processor.record_commit(&committed_text);
+        if remaining_len > 0 {
+            let remaining_preedit = session.engine.formatted_preedit();
+            session.commit_partial(&committed_text, &remaining_preedit);
+        } else {
+            session.commit_text(&committed_text);
+        }
+        Some((true, Some(committed_text)))
+    } else {
+        Some((true, None))
+    }
+}
+
+/// 处理处于 5 行网格大候选词面板展开态下的专属键盘导航与选词
+fn process_grid_expanded_key(
+    session: &mut WaylanV2Session,
+    key: u32,
+    now: u64,
+) -> Option<(bool, Option<String>)> {
+    let total = session.engine.all_candidates().len().min(30);
+    if total == 0 {
+        return None;
+    }
+    const GRID_COLS: usize = 6;
+    let row_count = total.div_ceil(GRID_COLS).clamp(1, 5);
+    let row = session.grid_selected_index / GRID_COLS;
+    let col = session.grid_selected_index % GRID_COLS;
+
+    // 1. 下方向键（Down）：移动至下一行的对应列（循环跳转）
+    if key == KEY_DOWN {
+        let next_row = (row + 1) % row_count;
+        session.grid_selected_index = (next_row * GRID_COLS + col).min(total.saturating_sub(1));
+        session.refresh_candidate_surface();
+        return Some((true, None));
+    }
+
+    // 2. 上方向键（Up）：移动至上一行的对应列（循环跳转）
+    if key == KEY_UP {
+        let prev_row = if row == 0 {
+            row_count.saturating_sub(1)
+        } else {
+            row - 1
+        };
+        session.grid_selected_index = (prev_row * GRID_COLS + col).min(total.saturating_sub(1));
+        session.refresh_candidate_surface();
+        return Some((true, None));
+    }
+
+    // 3. 右方向键（Right）：在网格候选词中向后移动一项
+    if key == KEY_RIGHT {
+        session.grid_selected_index = (session.grid_selected_index + 1) % total;
+        session.refresh_candidate_surface();
+        return Some((true, None));
+    }
+
+    // 4. 左方向键（Left）：在网格候选词中向前移动一项
+    if key == KEY_LEFT {
+        session.grid_selected_index = if session.grid_selected_index == 0 {
+            total.saturating_sub(1)
+        } else {
+            session.grid_selected_index - 1
+        };
+        session.refresh_candidate_surface();
+        return Some((true, None));
+    }
+
+    // 5. 数字键（1-6，主键盘与小键盘，未按住 Shift）：选取当前行的第 1..=6 个候选词
+    if !session.is_shift_active() {
+        if let Some(digit) = keycode_to_digit(key) {
+            if (1..=6).contains(&digit) {
+                let target_idx = row * GRID_COLS + (digit - 1);
+                if target_idx < total {
+                    return commit_grid_candidate_by_index(session, target_idx, now);
+                }
+            }
+            // 超出范围的数字键（如 7-9 或 0）吞掉，防止穿透污染
+            return Some((true, None));
+        }
+    }
+
+    // 6. 空格键（Space）：将当前高亮选中的网格候选词确认上屏
+    if key == KEY_SPACE {
+        let idx = session.grid_selected_index.min(total.saturating_sub(1));
+        return commit_grid_candidate_by_index(session, idx, now);
+    }
+
+    // 7. ESC 键：折叠大网格并恢复常规单行条形候选框
+    if key == KEY_ESC {
+        session.is_grid_expanded = false;
+        session.grid_selected_index = 0;
+        session.refresh_candidate_surface();
+        return Some((true, None));
+    }
+
+    None
+}
+
 /// 处理处于拼音组词状态下的键盘拦截
 pub fn process_composition_key(
     session: &mut WaylanV2Session,
     key: u32,
     now: u64,
 ) -> Option<(bool, Option<String>)> {
+    if session.is_grid_expanded {
+        if let Some(res) = process_grid_expanded_key(session, key, now) {
+            return Some(res);
+        }
+    }
+
     let shift_active = session.is_shift_active();
     let page_keys = session.page_keys;
     let action = handle_composition_key(
@@ -30,6 +144,7 @@ pub fn process_composition_key(
     match action {
         KeyProcessAction::PassThrough => None,
         KeyProcessAction::Handled => {
+            session.grid_selected_index = 0;
             let preedit = session.engine.formatted_preedit();
             session.update_preedit(&preedit);
             Some((true, None))
@@ -211,6 +326,7 @@ pub fn process_key_press_inner(session: &mut WaylanV2Session, key: u32) -> (bool
     // 5. 字母键输入（A-Z）：进入拼音算法管线（支持动态键盘布局）
     if let Some(ch) = session.keymap_layout.get_char(key) {
         session.engine.push_char(ch);
+        session.grid_selected_index = 0;
         let preedit = session.engine.formatted_preedit();
         session.update_preedit(&preedit);
         return (true, None);
