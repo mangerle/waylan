@@ -13,8 +13,8 @@ impl LexiconTable {
             return Vec::new();
         }
 
-        let mut candidates = Vec::new();
         let matched_syllables = find_syllables_by_prefix(remaining_initial);
+        let mut candidates = Vec::with_capacity(matched_syllables.len() * 4);
 
         if prefix_syllables.is_empty() {
             for &syl in matched_syllables {
@@ -68,7 +68,7 @@ impl LexiconTable {
 
     /// 检索首字母缩写简拼候选词（如 "bj" 匹配 "北京"）
     pub fn lookup_acronym(&self, key: &str) -> Vec<AlgoCandidate> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(16);
 
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup_acronym(key) {

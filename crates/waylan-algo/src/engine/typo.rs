@@ -89,8 +89,8 @@ impl SpatialTypoCorrector {
         // 3. 排序与去重：优先代价低，次优先词频高
         candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.score.cmp(&a.0.score)));
 
-        let mut deduped = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut deduped = Vec::with_capacity(3);
+        let mut seen = std::collections::HashSet::with_capacity(8);
         for (cand, _) in candidates {
             if seen.insert(cand.text.clone()) {
                 deduped.push(cand);
