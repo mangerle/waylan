@@ -124,6 +124,8 @@ pub struct CandidateSurfaceManager {
     pub current_slot: usize,
     /// 复用的像素格式转换内存缓冲区（避免每次按键触发堆内存重新分配）
     pub pixel_buffer: Vec<u8>,
+    /// 目标显示器逻辑分辨率 (宽, 高)，用于贴边防溢出平移与向上翻转
+    pub screen_size: (i32, i32),
 }
 
 impl Default for CandidateSurfaceManager {
@@ -144,6 +146,7 @@ impl CandidateSurfaceManager {
             slot_buffers: [None, None],
             current_slot: 0,
             pixel_buffer: Vec::with_capacity(64 * 1024),
+            screen_size: (1920, 1080),
         }
     }
 
