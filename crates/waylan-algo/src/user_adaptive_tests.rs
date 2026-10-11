@@ -191,3 +191,25 @@ fn test_wal_truncation_and_corrupt_resilience() {
 
     let _ = std::fs::remove_file(wal_path);
 }
+
+#[test]
+fn test_save_and_load_bincode_with_limit() {
+    let temp_dir = std::env::temp_dir();
+    let bin_path = temp_dir.join("test_user_adaptive_bincode_limit.bin");
+
+    let mut model = UserAdaptiveModel::new();
+    model.record_commit("微澜输入法", "wei'lan'shu'ru'fa", 1_700_000_500);
+    model.save_to_file(&bin_path).expect("保存用户词库成功");
+
+    let loaded = UserAdaptiveModel::load_from_file(&bin_path).expect("带上限反序列化加载成功");
+    assert_eq!(loaded.total_entries(), 1);
+    let words = loaded.lookup_user_words("wei'lan'shu'ru'fa", 1_700_000_600);
+    assert_eq!(words.len(), 1);
+    assert_eq!(words[0].text, "微澜输入法");
+
+    // 伪造声明包含 u64::MAX 个元素的损坏 bincode 头部，验证不会触发 OOM 且安全返回错误
+    std::fs::write(&bin_path, u64::MAX.to_le_bytes()).expect("写入损坏头部");
+    assert!(UserAdaptiveModel::load_from_file(&bin_path).is_err());
+
+    let _ = std::fs::remove_file(bin_path);
+}

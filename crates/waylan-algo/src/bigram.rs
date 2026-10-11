@@ -3,6 +3,9 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_endian = "little"))]
+compile_error!("仅支持小端序架构");
+
 /// 微澜 2-Gram 紧凑高密度转移概率矩阵魔数标识（16 字节对齐）
 pub const BIGRAM_MAGIC: &[u8; 16] = b"WAYLAN_BIGRAM02\0";
 
@@ -52,6 +55,7 @@ impl CompactMmapBigram {
             path: PathBuf::from(path_ref),
             source: e,
         })?;
+        // SAFETY: 二元语言模型矩阵文件属于编译期固化的静态只读资产，运行期仅以只读方式映射且不会在外部被并发截断或原地修改。
         let mmap = unsafe {
             Mmap::map(&file).map_err(|e| AlgoError::DictionaryIo {
                 path: PathBuf::from(path_ref),
@@ -63,7 +67,7 @@ impl CompactMmapBigram {
 
     /// 从已映射的内存切片解析矩阵元数据并验证合法性
     pub fn from_mmap(mmap: Mmap, path: &Path) -> Result<Self, AlgoError> {
-        if mmap.len() < BIGRAM_HEADER_SIZE + CODEBOOK_SIZE {
+        if mmap.len() < BIGRAM_HEADER_SIZE.saturating_add(CODEBOOK_SIZE) {
             return Err(AlgoError::DeserializeFailed {
                 path: PathBuf::from(path),
                 source: bincode::ErrorKind::Custom("Bigram文件体积过小".to_string()).into(),
@@ -137,7 +141,9 @@ impl CompactMmapBigram {
     /// 查询 8 位量化码本中指定等级还原后的分数
     #[inline]
     fn decode_score(&self, q_idx: u8) -> i64 {
-        let off = self.codebook_offset + (q_idx as usize) * 4;
+        let off = self
+            .codebook_offset
+            .saturating_add((q_idx as usize).saturating_mul(4));
         read_i32_le(&self.mmap, off).unwrap_or(0) as i64
     }
 
@@ -149,8 +155,10 @@ impl CompactMmapBigram {
             return None;
         }
 
-        let off1 = self.row_offsets_offset + pid * 4;
-        let off2 = off1 + 4;
+        let off1 = self
+            .row_offsets_offset
+            .saturating_add(pid.saturating_mul(4));
+        let off2 = off1.saturating_add(4);
         let start = read_u32_le(&self.mmap, off1)? as usize;
         let end = read_u32_le(&self.mmap, off2)? as usize;
         Some((start, end))
@@ -169,7 +177,7 @@ impl CompactMmapBigram {
 
         while left < right {
             let mid = left + (right - left) / 2;
-            let item_off = self.cols_offset + mid * 4;
+            let item_off = self.cols_offset.saturating_add(mid.saturating_mul(4));
             let entry = read_u32_le(&self.mmap, item_off)?;
 
             // 低 24 位为后继词 ID，高 8 位为量化分数
@@ -192,7 +200,7 @@ impl CompactMmapBigram {
 #[inline]
 fn read_u32_le(slice: &[u8], offset: usize) -> Option<u32> {
     slice
-        .get(offset..offset + 4)?
+        .get(offset..offset.saturating_add(4))?
         .try_into()
         .ok()
         .map(u32::from_le_bytes)
@@ -201,7 +209,7 @@ fn read_u32_le(slice: &[u8], offset: usize) -> Option<u32> {
 #[inline]
 fn read_u64_le(slice: &[u8], offset: usize) -> Option<u64> {
     slice
-        .get(offset..offset + 8)?
+        .get(offset..offset.saturating_add(8))?
         .try_into()
         .ok()
         .map(u64::from_le_bytes)
@@ -210,7 +218,7 @@ fn read_u64_le(slice: &[u8], offset: usize) -> Option<u64> {
 #[inline]
 fn read_i32_le(slice: &[u8], offset: usize) -> Option<i32> {
     slice
-        .get(offset..offset + 4)?
+        .get(offset..offset.saturating_add(4))?
         .try_into()
         .ok()
         .map(i32::from_le_bytes)
@@ -219,6 +227,46 @@ fn read_i32_le(slice: &[u8], offset: usize) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 构造测试用最小合法 WAYLAN_BIGRAM02 二进制镜像字节流
+    fn build_synthetic_bigram_bytes() -> Vec<u8> {
+        let vocab_size: u32 = 3;
+        let total_pairs: u32 = 3;
+        let codebook_offset: u64 = BIGRAM_HEADER_SIZE as u64;
+        let row_offsets_offset: u64 = codebook_offset + CODEBOOK_SIZE as u64;
+        let cols_offset: u64 = row_offsets_offset + ((vocab_size as u64 + 1) * 4);
+
+        let mut buf = Vec::new();
+        // 1. Header (64B)
+        buf.extend_from_slice(BIGRAM_MAGIC);
+        buf.extend_from_slice(&2u32.to_le_bytes());
+        buf.extend_from_slice(&vocab_size.to_le_bytes());
+        buf.extend_from_slice(&total_pairs.to_le_bytes());
+        buf.extend_from_slice(&codebook_offset.to_le_bytes());
+        buf.extend_from_slice(&row_offsets_offset.to_le_bytes());
+        buf.extend_from_slice(&cols_offset.to_le_bytes());
+        buf.resize(BIGRAM_HEADER_SIZE, 0);
+
+        // 2. Codebook (256 * 4B): q_idx = i 对应分值 i * 100
+        for i in 0..256i32 {
+            buf.extend_from_slice(&(i * 100).to_le_bytes());
+        }
+
+        // 3. Row offsets (vocab_size + 1 = 4 个 u32):
+        // word 0 -> [0..2] (含后继词 1, 2), word 1 -> [2..3] (含后继词 2), word 2 -> [3..3] (空)
+        for &row_off in &[0u32, 2, 3, 3] {
+            buf.extend_from_slice(&row_off.to_le_bytes());
+        }
+
+        // 4. Cols (total_pairs = 3 个 u32, 按 col_id 升序排列):
+        // (0 -> 1, q=10 => 1000), (0 -> 2, q=25 => 2500), (1 -> 2, q=50 => 5000)
+        let pack = |col_id: u32, q: u8| (col_id & 0x00FF_FFFF) | ((q as u32) << 24);
+        buf.extend_from_slice(&pack(1, 10).to_le_bytes());
+        buf.extend_from_slice(&pack(2, 25).to_le_bytes());
+        buf.extend_from_slice(&pack(2, 50).to_le_bytes());
+
+        buf
+    }
 
     #[test]
     fn test_entry_bit_pack() {
@@ -231,5 +279,33 @@ mod tests {
         assert_eq!(BIGRAM_MAGIC, b"WAYLAN_BIGRAM02\0");
         assert_eq!(BIGRAM_HEADER_SIZE, 64);
         assert_eq!(CODEBOOK_SIZE, 1024);
+    }
+
+    #[test]
+    fn test_compact_mmap_bigram_open_lookup_and_corrupted_bounds() {
+        let tmp_path = std::env::temp_dir().join("test_waylan_bigram_mmap.bin");
+        let valid_bytes = build_synthetic_bigram_bytes();
+        std::fs::write(&tmp_path, &valid_bytes).expect("写入测试 Bigram 文件成功");
+
+        let bigram = CompactMmapBigram::open(&tmp_path).expect("加载 Bigram 映射成功");
+        assert_eq!(bigram.vocab_size, 3);
+        assert_eq!(bigram.total_pairs, 3);
+
+        // 验证二分查找命中与码本解码分值
+        assert_eq!(bigram.get_affinity_by_id(0, 1), Some(1000));
+        assert_eq!(bigram.get_affinity_by_id(0, 2), Some(2500));
+        assert_eq!(bigram.get_affinity_by_id(1, 2), Some(5000));
+
+        // 验证未命中与越界 Word ID 安全返回 None
+        assert_eq!(bigram.get_affinity_by_id(0, 0), None);
+        assert_eq!(bigram.get_affinity_by_id(2, 0), None);
+        assert_eq!(bigram.get_affinity_by_id(99, 1), None);
+
+        // 验证数据区被截断时安全报错拒绝加载
+        let truncated = &valid_bytes[..valid_bytes.len() - 4];
+        std::fs::write(&tmp_path, truncated).expect("写入截断 Bigram 文件");
+        assert!(CompactMmapBigram::open(&tmp_path).is_err());
+
+        let _ = std::fs::remove_file(tmp_path);
     }
 }

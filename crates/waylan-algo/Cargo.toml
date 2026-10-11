@@ -6,6 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "微澜 (WayLan) - 纯 Rust 现代中文拼音输入核心算法库"
 
+[features]
+default = ["corpus-builder"]
+corpus-builder = ["dep:jieba-rs", "dep:rayon", "dep:regex"]
+
+[[bin]]
+name = "build_bigram"
+path = "src/bin/build_bigram.rs"
+required-features = ["corpus-builder"]
+
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 serde.workspace = true
@@ -14,8 +23,8 @@ thiserror.workspace = true
 log.workspace = true
 memmap2.workspace = true
 chrono.workspace = true
-jieba-rs.workspace = true
-rayon.workspace = true
+jieba-rs = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 serde_json.workspace = true
-regex.workspace = true
+regex = { workspace = true, optional = true }
 rustix.workspace = true

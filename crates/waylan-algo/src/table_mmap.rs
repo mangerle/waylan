@@ -4,6 +4,9 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_endian = "little"))]
+compile_error!("仅支持小端序架构");
+
 /// 紧凑词典魔数标识（16 字节）
 pub const COMPACT_DICT_MAGIC: &[u8; 16] = b"WAYLAN_COMPACT02";
 
@@ -50,6 +53,7 @@ impl CompactMmapLexicon {
             path: PathBuf::from(path_ref),
             source: e,
         })?;
+        // SAFETY: 紧凑词库文件属于编译期生成的只读静态资产，运行期仅以只读方式映射且不会在外部被并发截断或原地修改。
         let mmap = unsafe {
             Mmap::map(&file).map_err(|e| AlgoError::DictionaryIo {
                 path: PathBuf::from(path_ref),
@@ -161,19 +165,24 @@ impl CompactMmapLexicon {
     /// 获取只读 DAT 视图
     #[inline]
     fn get_dat_reader(&self) -> DatReader<'_> {
+        // SAFETY: `from_mmap` 构造期已严格验证 `mmap` 总长度覆盖 `dat_base_offset + dat_node_count * 4`
+        // 且映射基地址与 `dat_base_offset` 均满足 `i32` 的 4 字节对齐要求，目标架构为小端序。
         let base_slice = unsafe {
             std::slice::from_raw_parts(
                 self.mmap[self.dat_base_offset..].as_ptr() as *const i32,
                 self.dat_node_count,
             )
         };
+        // SAFETY: `from_mmap` 构造期已严格验证 `mmap` 总长度覆盖 `dat_check_offset + dat_node_count * 4`
+        // 且映射基地址与 `dat_check_offset` 均满足 `u32` 的 4 字节对齐要求，目标架构为小端序。
         let check_slice = unsafe {
             std::slice::from_raw_parts(
                 self.mmap[self.dat_check_offset..].as_ptr() as *const u32,
                 self.dat_node_count,
             )
         };
-        let tail_slice = &self.mmap[self.dat_tail_offset..self.dat_tail_offset + self.dat_tail_len];
+        let tail_end = self.dat_tail_offset.saturating_add(self.dat_tail_len);
+        let tail_slice = &self.mmap[self.dat_tail_offset..tail_end];
         DatReader::new(base_slice, check_slice, tail_slice)
     }
 
@@ -189,10 +198,10 @@ impl CompactMmapLexicon {
             .vocab_offsets_offset
             .saturating_add(wid.saturating_mul(4));
         let off2_pos = off1_pos.saturating_add(4);
+        let off3_pos = off2_pos.saturating_add(4);
         let start =
-            u32::from_le_bytes(self.mmap.get(off1_pos..off1_pos + 4)?.try_into().ok()?) as usize;
-        let end =
-            u32::from_le_bytes(self.mmap.get(off2_pos..off2_pos + 4)?.try_into().ok()?) as usize;
+            u32::from_le_bytes(self.mmap.get(off1_pos..off2_pos)?.try_into().ok()?) as usize;
+        let end = u32::from_le_bytes(self.mmap.get(off2_pos..off3_pos)?.try_into().ok()?) as usize;
 
         let s_start = self.vocab_strings_offset.saturating_add(start);
         let s_end = self.vocab_strings_offset.saturating_add(end);
@@ -215,7 +224,8 @@ impl CompactMmapLexicon {
             let id_pos = self
                 .sorted_vocab_ids_offset
                 .saturating_add(mid.saturating_mul(4));
-            let cand_id = u32::from_le_bytes(self.mmap.get(id_pos..id_pos + 4)?.try_into().ok()?);
+            let id_end = id_pos.saturating_add(4);
+            let cand_id = u32::from_le_bytes(self.mmap.get(id_pos..id_end)?.try_into().ok()?);
             let cand_word = self.get_word(cand_id).unwrap_or("");
 
             match cand_word.cmp(word) {
@@ -242,7 +252,7 @@ impl CompactMmapLexicon {
         let meta_pos = self
             .key_metas_offset
             .saturating_add(key_idx.saturating_mul(8));
-        let meta_slice = self.mmap.get(meta_pos..meta_pos + 8)?;
+        let meta_slice = self.mmap.get(meta_pos..meta_pos.saturating_add(8))?;
         let cand_start = u32::from_le_bytes(meta_slice[0..4].try_into().ok()?) as usize;
         let cand_count = u16::from_le_bytes(meta_slice[4..6].try_into().ok()?) as usize;
         let key_type = meta_slice[6];
@@ -259,7 +269,7 @@ impl CompactMmapLexicon {
             let item_pos = self
                 .candidates_offset
                 .saturating_add(cand_start.saturating_add(i).saturating_mul(6));
-            let item_slice = self.mmap.get(item_pos..item_pos + 6)?;
+            let item_slice = self.mmap.get(item_pos..item_pos.saturating_add(6))?;
             let word_id = u32::from_le_bytes(item_slice[0..4].try_into().ok()?);
             let score_u16 = u16::from_le_bytes(item_slice[4..6].try_into().ok()?);
             let score = decode_compact_score(score_u16);

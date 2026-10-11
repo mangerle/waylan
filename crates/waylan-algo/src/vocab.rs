@@ -24,6 +24,11 @@ pub struct Vocabulary {
 }
 
 impl Vocabulary {
+    /// 词表二进制格式版本号
+    pub const FORMAT_VERSION: u32 = 1;
+    /// 词表最大允许容纳的词条数量上限（500 万条），防止损坏文件伪造超大容量导致 OOM
+    pub const MAX_VOCAB_ENTRIES: usize = 5_000_000;
+
     /// 创建空的词表
     pub fn new() -> Self {
         Self {
@@ -132,7 +137,7 @@ impl Vocabulary {
                 source: e,
             })?;
         writer
-            .write_all(&1u32.to_le_bytes())
+            .write_all(&Self::FORMAT_VERSION.to_le_bytes())
             .map_err(|e| AlgoError::DictionaryIo {
                 path: PathBuf::from(path_ref),
                 source: e,
@@ -176,6 +181,10 @@ impl Vocabulary {
             path: PathBuf::from(path_ref),
             source: e,
         })?;
+        let file_len = file
+            .metadata()
+            .map(|m| m.len() as usize)
+            .unwrap_or(usize::MAX);
         let mut reader = BufReader::new(file);
 
         let mut magic = [0u8; 16];
@@ -200,7 +209,14 @@ impl Vocabulary {
                 path: PathBuf::from(path_ref),
                 source: e,
             })?;
-        let _version = u32::from_le_bytes(ver_bytes);
+        let version = u32::from_le_bytes(ver_bytes);
+        if version != Self::FORMAT_VERSION {
+            return Err(AlgoError::DeserializeFailed {
+                path: PathBuf::from(path_ref),
+                source: bincode::ErrorKind::Custom(format!("不支持的词表格式版本: {}", version))
+                    .into(),
+            });
+        }
 
         let mut count_bytes = [0u8; 4];
         reader
@@ -210,6 +226,18 @@ impl Vocabulary {
                 source: e,
             })?;
         let count = u32::from_le_bytes(count_bytes) as usize;
+        // 每个词条至少包含 2 字节长度前缀，校验剩余字节数可容纳的最大条目数防止伪造大数触发 OOM
+        let max_possible = file_len.saturating_sub(24) / 2;
+        if count > max_possible || count > Self::MAX_VOCAB_ENTRIES {
+            return Err(AlgoError::DeserializeFailed {
+                path: PathBuf::from(path_ref),
+                source: bincode::ErrorKind::Custom(format!(
+                    "词表头部声明的词条数量异常越界: {}",
+                    count
+                ))
+                .into(),
+            });
+        }
 
         let mut words = Vec::with_capacity(count);
         let mut word_to_id = HashMap::with_capacity(count);
@@ -289,6 +317,29 @@ mod tests {
         assert_eq!(loaded.get_id("时间"), Some(1));
         assert_eq!(loaded.get_id("清风拂面"), Some(2));
         assert_eq!(loaded.get_word(2), Some("清风拂面"));
+
+        let _ = std::fs::remove_file(tmp_path);
+    }
+
+    #[test]
+    fn test_vocab_rejects_invalid_version_and_corrupted_count() {
+        let tmp_path = std::env::temp_dir().join("test_waylan_vocab_corrupt.bin");
+
+        // 1. 版本号不匹配应拒绝加载
+        let mut bad_ver = Vec::new();
+        bad_ver.extend_from_slice(VOCAB_MAGIC);
+        bad_ver.extend_from_slice(&99u32.to_le_bytes());
+        bad_ver.extend_from_slice(&0u32.to_le_bytes());
+        std::fs::write(&tmp_path, &bad_ver).expect("写入错误版本文件");
+        assert!(Vocabulary::load_binary(&tmp_path).is_err());
+
+        // 2. 伪造超大 count 应被拦截，不触发 OOM
+        let mut bad_count = Vec::new();
+        bad_count.extend_from_slice(VOCAB_MAGIC);
+        bad_count.extend_from_slice(&Vocabulary::FORMAT_VERSION.to_le_bytes());
+        bad_count.extend_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&tmp_path, &bad_count).expect("写入越界数量文件");
+        assert!(Vocabulary::load_binary(&tmp_path).is_err());
 
         let _ = std::fs::remove_file(tmp_path);
     }

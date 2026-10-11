@@ -1,12 +1,16 @@
 pub mod wal;
 use crate::error::AlgoError;
 use crate::types::{AlgoCandidate, CandidateTier};
+use bincode::Options;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 pub use wal::{WAL_MAGIC, WAL_MAGIC_V1};
+
+/// 用户词库反序列化最大允许字节数（64 MB），防止损坏文件伪造超长容器长度触发 OOM
+const MAX_USER_DICT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 用户词条使用记录
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -179,7 +183,7 @@ impl UserAdaptiveModel {
     /// 从本地文件加载用户词库
     ///
     /// # Errors
-    /// 当文件读取或反序列化失败时返回 [`AlgoError::DictionaryIo`]。
+    /// 当文件读取或反序列化失败时返回 [`AlgoError::DictionaryIo`] 或 [`AlgoError::DeserializeFailed`]。
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, AlgoError> {
         let path_ref = path.as_ref();
         let file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
@@ -187,8 +191,12 @@ impl UserAdaptiveModel {
             source: e,
         })?;
         let reader = BufReader::new(file);
-        let model: Self =
-            bincode::deserialize_from(reader).map_err(|e| AlgoError::DeserializeFailed {
+        let model: Self = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(MAX_USER_DICT_BYTES)
+            .deserialize_from(reader)
+            .map_err(|e| AlgoError::DeserializeFailed {
                 path: PathBuf::from(path_ref),
                 source: e,
             })?;
