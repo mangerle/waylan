@@ -75,7 +75,14 @@ impl CandidateBoxRenderer {
                 self.clear_glyph_cache();
                 true
             }
-            Err(_) => false,
+            Err(e) => {
+                log::warn!(
+                    "[候选框渲染] 从内存字节流解析字体失败，字节长度: {}，原因: {}",
+                    bytes.len(),
+                    e
+                );
+                false
+            }
         }
     }
 
@@ -94,7 +101,8 @@ impl CandidateBoxRenderer {
     /// 测量一段文字的排版宽度（单次加锁并顺带预热字形缓存，使后续绘制 100% 命中缓存）
     pub fn measure_text(&self, text: &str, size: f32) -> f32 {
         let Some(font) = self.font.as_ref() else {
-            return text.chars().count() as f32 * (size * 0.8 + 3.0);
+            let s = self.scale.max(0.5);
+            return text.chars().count() as f32 * (size * 0.8 + 3.0 * s);
         };
 
         let size_key = (size * 100.0).round() as u32;
@@ -257,20 +265,29 @@ impl CandidateBoxRenderer {
             .unwrap_or(padding_h);
         let popup_x = active_item_x.max(padding_h);
 
-        let canvas_w = if has_active_sub {
+        let raw_w = if has_active_sub {
             total_bar_width.max(popup_x + popup_w + padding_h)
         } else {
             total_bar_width
         }
-        .ceil()
-        .clamp(1.0, 4096.0) as u32;
-        let canvas_h = if has_active_sub {
+        .ceil();
+        let raw_h = if has_active_sub {
             bar_height + 6.0 * s + popup_h
         } else {
             bar_height
         }
-        .ceil()
-        .clamp(1.0, 2048.0) as u32;
+        .ceil();
+
+        if raw_w > 4096.0 || raw_h > 2048.0 {
+            log::warn!(
+                "[候选框渲染] 候选框画布尺寸超出上限并进行安全截断，原始尺寸: {}x{}，安全上限: 4096x2048",
+                raw_w,
+                raw_h
+            );
+        }
+
+        let canvas_w = raw_w.clamp(1.0, 4096.0) as u32;
+        let canvas_h = raw_h.clamp(1.0, 2048.0) as u32;
 
         if canvas_w == 0 || canvas_h == 0 {
             return None;
