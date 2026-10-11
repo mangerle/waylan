@@ -112,7 +112,11 @@ impl CompactMmapBigram {
             source: bincode::ErrorKind::Custom("Bigram列数据偏移读取失败".to_string()).into(),
         })? as usize;
 
-        let expected_size = cols_offset.saturating_add(total_pairs.saturating_mul(4));
+        let codebook_end = codebook_offset.saturating_add(CODEBOOK_SIZE);
+        let row_offsets_end =
+            row_offsets_offset.saturating_add(vocab_size.saturating_add(1).saturating_mul(4));
+        let cols_end = cols_offset.saturating_add(total_pairs.saturating_mul(4));
+        let expected_size = codebook_end.max(row_offsets_end).max(cols_end);
         if mmap.len() < expected_size {
             return Err(AlgoError::DeserializeFailed {
                 path: PathBuf::from(path),

@@ -204,8 +204,9 @@ impl AuxiliaryDict {
             }
             let off = string_pool.len() as u32;
             let bytes = s.as_bytes();
-            let len = bytes.len() as u16;
-            string_pool.extend_from_slice(bytes);
+            let capped_len = bytes.len().min(u16::MAX as usize);
+            let len = capped_len as u16;
+            string_pool.extend_from_slice(&bytes[..capped_len]);
             string_offset_map.insert(s.to_string(), (off, len));
             (off, len)
         };
@@ -303,7 +304,8 @@ impl AuxiliaryDict {
             path: PathBuf::from(path_ref),
             source: e,
         })?;
-        if metadata.len() < 32 {
+        let file_len = metadata.len() as usize;
+        if file_len < 36 {
             return Err(AlgoError::DeserializeFailed {
                 path: PathBuf::from(path_ref),
                 source: bincode::ErrorKind::Custom("辅助词典文件体积过小或已损坏".to_string())
@@ -333,7 +335,22 @@ impl AuxiliaryDict {
         let num_english = u32::from_le_bytes(header[0..4].try_into().unwrap_or([0; 4])) as usize;
         let num_symbols = u32::from_le_bytes(header[4..8].try_into().unwrap_or([0; 4])) as usize;
 
-        let en_bytes = num_english * 12;
+        let en_bytes = num_english.saturating_mul(12);
+        let sym_bytes = num_symbols.saturating_mul(18);
+        let meta_end = 32usize
+            .saturating_add(en_bytes)
+            .saturating_add(sym_bytes)
+            .saturating_add(4);
+        if meta_end > file_len {
+            return Err(AlgoError::DeserializeFailed {
+                path: PathBuf::from(path_ref),
+                source: bincode::ErrorKind::Custom(
+                    "辅助词典索引段长度超出文件边界，文件可能已损坏".to_string(),
+                )
+                .into(),
+            });
+        }
+
         let mut en_buf = vec![0u8; en_bytes];
         file.read_exact(&mut en_buf)
             .map_err(|e| AlgoError::DictionaryIo {
@@ -341,7 +358,6 @@ impl AuxiliaryDict {
                 source: e,
             })?;
 
-        let sym_bytes = num_symbols * 18;
         let mut sym_buf = vec![0u8; sym_bytes];
         file.read_exact(&mut sym_buf)
             .map_err(|e| AlgoError::DictionaryIo {
@@ -356,6 +372,15 @@ impl AuxiliaryDict {
                 source: e,
             })?;
         let pool_len = u32::from_le_bytes(pool_len_buf) as usize;
+        if meta_end.saturating_add(pool_len) > file_len {
+            return Err(AlgoError::DeserializeFailed {
+                path: PathBuf::from(path_ref),
+                source: bincode::ErrorKind::Custom(
+                    "辅助词典字符串池长度超出文件边界，文件可能已损坏".to_string(),
+                )
+                .into(),
+            });
+        }
 
         let mut string_pool = vec![0u8; pool_len];
         file.read_exact(&mut string_pool)

@@ -84,6 +84,9 @@ impl UserAdaptiveModel {
 
         let py_bytes = pinyin.as_bytes();
         let text_bytes = text.as_bytes();
+        if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
+            return Ok(());
+        }
         let py_len = py_bytes.len() as u16;
         let text_len = text_bytes.len() as u16;
         let count: u32 = 1;
@@ -148,6 +151,7 @@ impl UserAdaptiveModel {
 
                 let mut record_count = 0;
                 let mut cursor = 0;
+                let mut has_corrupted_tail = false;
                 while cursor + 16 <= buf.len() {
                     let record_start = cursor;
                     let timestamp =
@@ -167,6 +171,7 @@ impl UserAdaptiveModel {
                         warn!(
                             "[用户词库 WAL] 检测到文件末尾记录截断损坏，安全截断并在后续自动压缩"
                         );
+                        has_corrupted_tail = true;
                         break;
                     }
 
@@ -186,10 +191,11 @@ impl UserAdaptiveModel {
                         .fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
                     if actual_checksum != expected_checksum {
                         warn!(
-                            "[用户词库 WAL] 记录校验和不匹配 (预期: {:#x}, 实际: {:#x})，跳过损坏记录",
+                            "[用户词库 WAL] 记录校验和不匹配 (预期: {:#x}, 实际: {:#x})，终止后续失步帧解析并执行归并清理",
                             expected_checksum, actual_checksum
                         );
-                        continue;
+                        has_corrupted_tail = true;
+                        break;
                     }
 
                     let py_str = std::str::from_utf8(py_bytes).unwrap_or("");
@@ -202,8 +208,10 @@ impl UserAdaptiveModel {
                 }
 
                 // 启动加载自动压缩判定：
-                // 若记录流水数 >= 50 且流水数超过独立有效词条数的 3 倍，说明存在大量历史冗余流水，自动触发一次原子压缩
-                if record_count >= 50 && record_count > model.total_entries() * 3 {
+                // 若存在尾部截断/校验损坏，或者记录流水数 >= 50 且超过独立有效词条数的 3 倍，自动触发一次原子压缩
+                if has_corrupted_tail
+                    || (record_count >= 50 && record_count > model.total_entries() * 3)
+                {
                     let _ = model.compact_wal(path_ref);
                 }
 
@@ -219,6 +227,7 @@ impl UserAdaptiveModel {
 
                 let mut record_count = 0;
                 let mut cursor = 0;
+                let mut has_corrupted_tail = false;
                 while cursor + 12 <= buf.len() {
                     let record_start = cursor;
                     let timestamp =
@@ -233,6 +242,7 @@ impl UserAdaptiveModel {
 
                     if cursor + py_len + text_len + 4 > buf.len() {
                         warn!("[用户词库 WAL V1] 检测到文件末尾记录截断损坏，安全截断并在后续自动压缩");
+                        has_corrupted_tail = true;
                         break;
                     }
 
@@ -250,8 +260,11 @@ impl UserAdaptiveModel {
                         .iter()
                         .fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
                     if actual_checksum != expected_checksum {
-                        warn!("[用户词库 WAL V1] 记录校验和不匹配，跳过损坏记录");
-                        continue;
+                        warn!(
+                            "[用户词库 WAL V1] 记录校验和不匹配，终止后续失步帧解析并执行归并清理"
+                        );
+                        has_corrupted_tail = true;
+                        break;
                     }
 
                     let py_str = std::str::from_utf8(py_bytes).unwrap_or("");
@@ -263,7 +276,9 @@ impl UserAdaptiveModel {
                     }
                 }
 
-                if record_count >= 50 && record_count > model.total_entries() * 3 {
+                if has_corrupted_tail
+                    || (record_count >= 50 && record_count > model.total_entries() * 3)
+                {
                     let _ = model.compact_wal(path_ref);
                 }
 
@@ -308,6 +323,9 @@ impl UserAdaptiveModel {
                 for entry in list {
                     let py_bytes = entry.pinyin.as_bytes();
                     let text_bytes = entry.text.as_bytes();
+                    if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
+                        continue;
+                    }
                     let py_len = py_bytes.len() as u16;
                     let text_len = text_bytes.len() as u16;
 
@@ -328,6 +346,12 @@ impl UserAdaptiveModel {
                         })?;
                 }
             }
+
+            file.sync_all()
+                .map_err(|e| AlgoError::UserDictPersistFailed {
+                    path: temp_path.clone(),
+                    source: e,
+                })?;
         }
 
         std::fs::rename(&temp_path, path_ref).map_err(|e| AlgoError::UserDictPersistFailed {

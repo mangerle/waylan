@@ -97,15 +97,25 @@ impl CompactMmapLexicon {
             u64::from_le_bytes(mmap[48..56].try_into().unwrap_or([0; 8])) as usize;
         let vocab_offset = u64::from_le_bytes(mmap[56..64].try_into().unwrap_or([0; 8])) as usize;
 
-        let dat_base_offset = 64;
-        let dat_check_offset = dat_base_offset + dat_node_count * 4;
-        let dat_tail_offset = dat_check_offset + dat_node_count * 4;
+        let dat_base_offset = 64usize;
+        let dat_check_offset = dat_base_offset.saturating_add(dat_node_count.saturating_mul(4));
+        let dat_tail_offset = dat_check_offset.saturating_add(dat_node_count.saturating_mul(4));
+        let dat_tail_end = dat_tail_offset.saturating_add(dat_tail_len);
+        let key_metas_end = key_metas_offset.saturating_add(num_keys.saturating_mul(8));
+        let candidates_end = candidates_offset.saturating_add(num_candidates.saturating_mul(6));
 
         let vocab_offsets_offset = vocab_offset;
-        let sorted_vocab_ids_offset = vocab_offsets_offset + (vocab_size + 1) * 4;
-        let vocab_strings_offset = sorted_vocab_ids_offset + vocab_size * 4;
+        let sorted_vocab_ids_offset =
+            vocab_offsets_offset.saturating_add(vocab_size.saturating_add(1).saturating_mul(4));
+        let vocab_strings_offset =
+            sorted_vocab_ids_offset.saturating_add(vocab_size.saturating_mul(4));
 
-        if mmap.len() < vocab_strings_offset {
+        let min_required_len = dat_tail_end
+            .max(key_metas_end)
+            .max(candidates_end)
+            .max(vocab_strings_offset);
+
+        if mmap.len() < min_required_len {
             return Err(AlgoError::DeserializeFailed {
                 path: path.to_path_buf(),
                 source: bincode::ErrorKind::Custom("紧凑词典数据区截断".to_string()).into(),
@@ -157,26 +167,20 @@ impl CompactMmapLexicon {
             return None;
         }
 
-        let off1_pos = self.vocab_offsets_offset + wid * 4;
-        let off2_pos = off1_pos + 4;
-        let start = u32::from_le_bytes(
-            self.mmap[off1_pos..off1_pos + 4]
-                .try_into()
-                .unwrap_or([0; 4]),
-        ) as usize;
-        let end = u32::from_le_bytes(
-            self.mmap[off2_pos..off2_pos + 4]
-                .try_into()
-                .unwrap_or([0; 4]),
-        ) as usize;
+        let off1_pos = self
+            .vocab_offsets_offset
+            .saturating_add(wid.saturating_mul(4));
+        let off2_pos = off1_pos.saturating_add(4);
+        let start =
+            u32::from_le_bytes(self.mmap.get(off1_pos..off1_pos + 4)?.try_into().ok()?) as usize;
+        let end =
+            u32::from_le_bytes(self.mmap.get(off2_pos..off2_pos + 4)?.try_into().ok()?) as usize;
 
-        let s_start = self.vocab_strings_offset + start;
-        let s_end = self.vocab_strings_offset + end;
-        if s_end > self.mmap.len() || s_start > s_end {
-            return None;
-        }
+        let s_start = self.vocab_strings_offset.saturating_add(start);
+        let s_end = self.vocab_strings_offset.saturating_add(end);
+        let slice = self.mmap.get(s_start..s_end)?;
 
-        std::str::from_utf8(&self.mmap[s_start..s_end]).ok()
+        std::str::from_utf8(slice).ok()
     }
 
     /// 根据词条文本快速二分反查对应的 Word ID（纳秒级）
@@ -190,9 +194,10 @@ impl CompactMmapLexicon {
 
         while left < right {
             let mid = left + (right - left) / 2;
-            let id_pos = self.sorted_vocab_ids_offset + mid * 4;
-            let cand_id =
-                u32::from_le_bytes(self.mmap[id_pos..id_pos + 4].try_into().unwrap_or([0; 4]));
+            let id_pos = self
+                .sorted_vocab_ids_offset
+                .saturating_add(mid.saturating_mul(4));
+            let cand_id = u32::from_le_bytes(self.mmap.get(id_pos..id_pos + 4)?.try_into().ok()?);
             let cand_word = self.get_word(cand_id).unwrap_or("");
 
             match cand_word.cmp(word) {
@@ -215,18 +220,13 @@ impl CompactMmapLexicon {
             return None;
         }
 
-        let meta_pos = self.key_metas_offset + key_idx * 8;
-        let cand_start = u32::from_le_bytes(
-            self.mmap[meta_pos..meta_pos + 4]
-                .try_into()
-                .unwrap_or([0; 4]),
-        ) as usize;
-        let cand_count = u16::from_le_bytes(
-            self.mmap[meta_pos + 4..meta_pos + 6]
-                .try_into()
-                .unwrap_or([0; 2]),
-        ) as usize;
-        let key_type = self.mmap[meta_pos + 6];
+        let meta_pos = self
+            .key_metas_offset
+            .saturating_add(key_idx.saturating_mul(8));
+        let meta_slice = self.mmap.get(meta_pos..meta_pos + 8)?;
+        let cand_start = u32::from_le_bytes(meta_slice[0..4].try_into().ok()?) as usize;
+        let cand_count = u16::from_le_bytes(meta_slice[4..6].try_into().ok()?) as usize;
+        let key_type = meta_slice[6];
 
         if let Some(exp_type) = expected_type {
             if key_type != exp_type {
@@ -236,17 +236,12 @@ impl CompactMmapLexicon {
 
         let mut res = Vec::with_capacity(cand_count);
         for i in 0..cand_count {
-            let item_pos = self.candidates_offset + (cand_start + i) * 6;
-            let word_id = u32::from_le_bytes(
-                self.mmap[item_pos..item_pos + 4]
-                    .try_into()
-                    .unwrap_or([0; 4]),
-            );
-            let score_u16 = u16::from_le_bytes(
-                self.mmap[item_pos + 4..item_pos + 6]
-                    .try_into()
-                    .unwrap_or([0; 2]),
-            );
+            let item_pos = self
+                .candidates_offset
+                .saturating_add(cand_start.saturating_add(i).saturating_mul(6));
+            let item_slice = self.mmap.get(item_pos..item_pos + 6)?;
+            let word_id = u32::from_le_bytes(item_slice[0..4].try_into().ok()?);
+            let score_u16 = u16::from_le_bytes(item_slice[4..6].try_into().ok()?);
             // 还原静态分，并对达到 u16 上限的候选附加原始顺位梯度以保留同音高频词相对次序
             let base_score = decode_compact_score(score_u16);
             let rank_bonus = cand_count.saturating_sub(i).min(64) as u32;

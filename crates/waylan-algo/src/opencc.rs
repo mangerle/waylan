@@ -167,8 +167,9 @@ impl OpenCcDict {
             }
             let off = string_pool.len() as u32;
             let bytes = s.as_bytes();
-            let len = bytes.len() as u16;
-            string_pool.extend_from_slice(bytes);
+            let capped_len = bytes.len().min(u16::MAX as usize);
+            let len = capped_len as u16;
+            string_pool.extend_from_slice(&bytes[..capped_len]);
             pool_map.insert(s.to_string(), (off, len));
             (off, len)
         };
@@ -199,14 +200,20 @@ impl OpenCcDict {
         } else if let Some(ref compact) = self.compact_phrases {
             phrase_records.reserve(compact.records.len());
             for &(s_off, s_len, t_off, t_len) in &compact.records {
-                let s_str = std::str::from_utf8(
-                    &compact.pool[s_off as usize..s_off as usize + s_len as usize],
-                )
-                .unwrap_or("");
-                let t_str = std::str::from_utf8(
-                    &compact.pool[t_off as usize..t_off as usize + t_len as usize],
-                )
-                .unwrap_or("");
+                let s_start = s_off as usize;
+                let s_end = s_start.saturating_add(s_len as usize);
+                let t_start = t_off as usize;
+                let t_end = t_start.saturating_add(t_len as usize);
+                let s_str = compact
+                    .pool
+                    .get(s_start..s_end)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("");
+                let t_str = compact
+                    .pool
+                    .get(t_start..t_end)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("");
                 let (ns_off, ns_len) = intern(s_str);
                 let (nt_off, nt_len) = intern(t_str);
                 phrase_records.push((ns_off, ns_len, nt_off, nt_len));
@@ -270,9 +277,9 @@ impl OpenCcDict {
             return Err(invalid_data("简繁词库文件魔数或头部长度不合法"));
         }
 
-        let char_count = u32::from_le_bytes(buf[16..20].try_into().unwrap()) as usize;
-        let phrase_count = u32::from_le_bytes(buf[20..24].try_into().unwrap()) as usize;
-        let pool_len = u32::from_le_bytes(buf[24..28].try_into().unwrap()) as usize;
+        let char_count = u32::from_le_bytes(buf[16..20].try_into().unwrap_or([0; 4])) as usize;
+        let phrase_count = u32::from_le_bytes(buf[20..24].try_into().unwrap_or([0; 4])) as usize;
+        let pool_len = u32::from_le_bytes(buf[24..28].try_into().unwrap_or([0; 4])) as usize;
 
         let chars_bytes = char_count.saturating_mul(10);
         let phrases_bytes = phrase_count.saturating_mul(12);
@@ -304,9 +311,11 @@ impl OpenCcDict {
 
         let mut cursor = 28usize;
         for _ in 0..char_count {
-            let code = u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap());
-            let t_off = u32::from_le_bytes(buf[cursor + 4..cursor + 8].try_into().unwrap());
-            let t_len = u16::from_le_bytes(buf[cursor + 8..cursor + 10].try_into().unwrap());
+            let code = u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap_or([0; 4]));
+            let t_off =
+                u32::from_le_bytes(buf[cursor + 4..cursor + 8].try_into().unwrap_or([0; 4]));
+            let t_len =
+                u16::from_le_bytes(buf[cursor + 8..cursor + 10].try_into().unwrap_or([0; 2]));
             cursor += 10;
 
             if let Some(simp_ch) = char::from_u32(code) {
@@ -318,10 +327,13 @@ impl OpenCcDict {
 
         let mut phrase_records = Vec::with_capacity(phrase_count);
         for _ in 0..phrase_count {
-            let s_off = u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap());
-            let s_len = u16::from_le_bytes(buf[cursor + 4..cursor + 6].try_into().unwrap());
-            let t_off = u32::from_le_bytes(buf[cursor + 6..cursor + 10].try_into().unwrap());
-            let t_len = u16::from_le_bytes(buf[cursor + 10..cursor + 12].try_into().unwrap());
+            let s_off = u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap_or([0; 4]));
+            let s_len =
+                u16::from_le_bytes(buf[cursor + 4..cursor + 6].try_into().unwrap_or([0; 2]));
+            let t_off =
+                u32::from_le_bytes(buf[cursor + 6..cursor + 10].try_into().unwrap_or([0; 4]));
+            let t_len =
+                u16::from_le_bytes(buf[cursor + 10..cursor + 12].try_into().unwrap_or([0; 2]));
             cursor += 12;
 
             phrase_records.push((s_off, s_len, t_off, t_len));
@@ -415,11 +427,7 @@ impl OpenCcDict {
 
         for mut cand in candidates.drain(..) {
             let mut char_iter = cand.text.chars();
-            let first_opt = char_iter.next();
-            let is_single_char = first_opt.is_some() && char_iter.next().is_none();
-
-            if is_single_char {
-                let simp_ch = first_opt.unwrap();
+            if let (Some(simp_ch), None) = (char_iter.next(), char_iter.next()) {
                 if let Some(trad_list) = self.chars.get(&simp_ch) {
                     if let Some(&primary) = trad_list.first() {
                         let base_cand = cand.clone();
