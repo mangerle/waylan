@@ -450,6 +450,11 @@ impl WaylanV2Session {
     /// 将未被输入法消费的原始物理按键通过虚拟键盘协议回投到席位，确保快捷键与控制键正常透传
     pub fn forward_key_to_seat(&mut self, time: u32, key: u32, is_press: bool) {
         if !self.has_virtual_keymap {
+            log::warn!(
+                "[Wayland v2 键盘回投 警告] 虚拟键盘 keymap 尚未就绪，无法转发键码 {} (press={})",
+                key,
+                is_press
+            );
             return;
         }
         if let Some(ref vk) = self.virtual_keyboard {
@@ -461,6 +466,11 @@ impl WaylanV2Session {
             );
             let state_val = if is_press { 1 } else { 0 };
             vk.key(time, key, state_val);
+        } else {
+            log::warn!(
+                "[Wayland v2 键盘回投 警告] 当前会话未绑定 zwp_virtual_keyboard_v1 实例，键码 {} 被丢弃",
+                key
+            );
         }
     }
 
