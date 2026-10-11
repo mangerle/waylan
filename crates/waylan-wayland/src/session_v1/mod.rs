@@ -422,3 +422,6 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
 
 mod dispatch;
 mod keyboard;
+
+#[cfg(test)]
+mod session_v1_tests;
