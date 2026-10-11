@@ -126,6 +126,8 @@ pub struct CandidateSurfaceManager {
     pub pixel_buffer: Vec<u8>,
     /// 目标显示器逻辑分辨率 (宽, 高)，用于贴边防溢出平移与向上翻转
     pub screen_size: (i32, i32),
+    /// 待合成器 release 的退役缓冲区列表（防止因重入替换丢失引用引发代理泄漏）
+    pub pending_release_buffers: Vec<WlBuffer>,
 }
 
 impl Default for CandidateSurfaceManager {
@@ -147,6 +149,7 @@ impl CandidateSurfaceManager {
             current_slot: 0,
             pixel_buffer: Vec::with_capacity(64 * 1024),
             screen_size: (1920, 1080),
+            pending_release_buffers: Vec::new(),
         }
     }
 
@@ -213,9 +216,19 @@ impl CandidateSurfaceManager {
                     }
                     buf.destroy();
                     *slot_buf = None;
-                    break;
+                    return;
                 }
             }
+        }
+
+        // 检查退役缓冲区队列中等待 release 的旧缓冲
+        if let Some(pos) = self
+            .pending_release_buffers
+            .iter()
+            .position(|b| b == released_buffer)
+        {
+            let buf = self.pending_release_buffers.remove(pos);
+            buf.destroy();
         }
     }
 
@@ -241,6 +254,8 @@ impl CandidateSurfaceManager {
                 if let Some(buf) = slot_buf.take() {
                     buf.destroy();
                 }
+            } else if let Some(buf) = slot_buf.take() {
+                self.pending_release_buffers.push(buf);
             }
         }
     }
@@ -284,6 +299,8 @@ impl CandidateSurfaceManager {
             if let Some(old) = old_slot_buf {
                 if !is_slot_busy {
                     old.destroy();
+                } else {
+                    self.pending_release_buffers.push(old);
                 }
             }
             self.slot_buffers[self.current_slot] = Some(buffer.clone());

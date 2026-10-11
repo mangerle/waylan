@@ -89,19 +89,7 @@ pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool
         }
     }
 
-    // 若当前输入框存在 surrounding_text 上下文，优先通过协议 delete_surrounding_text 进行精准多字节 UTF-8 字符/选区删除
-    if session.surrounding_text.is_some() {
-        if key == KEY_BACKSPACE {
-            session.delete_backward();
-            return Some((true, None));
-        }
-        if key == KEY_DELETE {
-            session.delete_forward();
-            return Some((true, None));
-        }
-    }
-
-    // 其他空闲编辑键（回车、退格、空格、Tab、数字等）不拦截，原生透传给焦点应用
+    // 空闲编辑键（回车、退格、删除、空格、Tab、数字等）不拦截，原生透传给焦点应用以支持客户端按键连击与撤销栈
     None
 }
 

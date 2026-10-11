@@ -134,6 +134,7 @@ impl KeymapLayout {
             (45, 'x'),
             (21, 'y'),
             (44, 'z'),
+            (KEY_APOSTROPHE, '\''),
         ];
         for (k, c) in pairs {
             map.insert(k, c);
@@ -181,6 +182,7 @@ impl KeymapLayout {
             ("AB08", 51),
             ("AB09", 52),
             ("AB10", 53),
+            ("AC11", KEY_APOSTROPHE),
         ];
 
         let mut parsed_map = std::collections::HashMap::with_capacity(32);
@@ -199,7 +201,7 @@ impl KeymapLayout {
                                 let sym = first_sym.trim();
                                 if sym.len() == 1 {
                                     let c = sym.chars().next().unwrap_or('\0').to_ascii_lowercase();
-                                    if c.is_ascii_alphabetic() {
+                                    if c.is_ascii_alphabetic() || c == '\'' {
                                         parsed_map.insert(code, c);
                                     }
                                 }
@@ -431,6 +433,12 @@ pub fn handle_composition_key(
         } else {
             return Some(KeyProcessAction::Handled);
         }
+    }
+
+    // 6.1 单引号键（'）：在拼音输入态推入音节隔音符（需未按住 Shift，避免将双引号误判为隔音符）
+    if !shift_active && key == KEY_APOSTROPHE {
+        engine.push_char('\'');
+        return Some(KeyProcessAction::Handled);
     }
 
     // 7. 候选词翻页（根据配置的翻页快捷键模式判定）
@@ -742,8 +750,18 @@ mod tests {
         assert_eq!(act, Some(KeyProcessAction::Commit("ni".to_string())));
         assert!(engine.raw_input().is_empty());
 
-        // 测试 ESC 清空
+        // 测试单引号隔音符输入
+        engine.push_char('x');
+        engine.push_char('i');
+        let act =
+            handle_composition_key(&mut engine, &mut punct, KEY_APOSTROPHE, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.raw_input(), "xi'");
         engine.push_char('a');
+        engine.push_char('n');
+        assert_eq!(engine.raw_input(), "xi'an");
+
+        // 测试 ESC 清空
         let act = handle_composition_key(&mut engine, &mut punct, KEY_ESC, false, page_keys, 0);
         assert_eq!(act, Some(KeyProcessAction::Reset));
         assert!(engine.raw_input().is_empty());
