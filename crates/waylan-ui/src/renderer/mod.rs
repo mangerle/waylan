@@ -1,16 +1,16 @@
+pub mod capsule;
 pub mod draw;
+pub mod expanded;
 pub mod font;
 pub mod layout;
 
 use crate::theme::{Color, UiTheme};
-use draw::{
-    blend_glyph, draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow,
-    draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
-};
+use draw::{blend_glyph, draw_rounded_rect, RoundedRectParams};
+use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 pub use font::CachedGlyph;
 use font::FontManager;
 use fontdue::{Font, FontSettings};
-use layout::{measure_candidates_bar, LayoutParams, PRECACHED_INDEX_STRINGS};
+use layout::{measure_candidates_bar, LayoutParams};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -21,10 +21,12 @@ use waylan_core::CandidateBoxState;
 /// 最大字形位图缓存条目数（覆盖绝大多数常用汉字与符号，占用内存不足 1MB）
 const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 
-/// 候选框矢量渲染器（1:1 对标现代单行胶囊样式）
+/// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
 pub struct CandidateBoxRenderer {
     pub theme: UiTheme,
     font: Option<Font>,
+    /// 回退字体链（用于补充主字体未覆盖的符号、Emoji 及多语言字形）
+    pub fallback_fonts: Vec<Font>,
     /// 基础候选字号大小
     pub font_size: f32,
     /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
@@ -38,6 +40,7 @@ impl CandidateBoxRenderer {
         let mut renderer = Self {
             theme,
             font: None,
+            fallback_fonts: Vec::new(),
             font_size: 15.0,
             scale: 1.0,
             glyph_cache: Mutex::new(HashMap::with_capacity(256)),
@@ -55,9 +58,30 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 查询当前是否已加载有效字体
+    /// 查询当前是否已加载有效主字体或回退字体
     pub fn has_font(&self) -> bool {
-        self.font.is_some()
+        self.font.is_some() || !self.fallback_fonts.is_empty()
+    }
+
+    /// 添加额外的回退字体到字体链末尾
+    pub fn add_fallback_font(&mut self, font: Font) {
+        self.fallback_fonts.push(font);
+        self.clear_glyph_cache();
+    }
+
+    /// 寻找能够渲染给定字符的最佳字体（优先主中文字体，若未覆盖则依次查询回退字体链）
+    pub fn get_font_for_char(&self, ch: char) -> Option<&Font> {
+        if let Some(font) = self.font.as_ref() {
+            if font.lookup_glyph_index(ch) != 0 {
+                return Some(font);
+            }
+        }
+        for fb in &self.fallback_fonts {
+            if fb.lookup_glyph_index(ch) != 0 {
+                return Some(fb);
+            }
+        }
+        self.font.as_ref().or_else(|| self.fallback_fonts.first())
     }
 
     /// 手动从指定文件路径加载字体
@@ -112,10 +136,10 @@ impl CandidateBoxRenderer {
 
     /// 测量一段文字的排版宽度（单次加锁并顺带预热字形缓存，使后续绘制 100% 命中缓存）
     pub fn measure_text(&self, text: &str, size: f32) -> f32 {
-        let Some(font) = self.font.as_ref() else {
+        if !self.has_font() {
             let s = self.scale.max(0.5);
             return text.chars().count() as f32 * (size * 0.8 + 3.0 * s);
-        };
+        }
 
         let size_key = (size * 100.0).round() as u32;
         let mut width = 0.0;
@@ -123,7 +147,7 @@ impl CandidateBoxRenderer {
             for ch in text.chars() {
                 if let Some(cached) = cache.get(&(ch, size_key)) {
                     width += cached.metrics.advance_width;
-                } else {
+                } else if let Some(font) = self.get_font_for_char(ch) {
                     let (metrics, bitmap) = font.rasterize(ch, size);
                     width += metrics.advance_width;
                     Self::evict_cache_if_needed(&mut cache);
@@ -134,11 +158,16 @@ impl CandidateBoxRenderer {
                             bitmap: Arc::from(bitmap),
                         },
                     );
+                } else {
+                    let s = self.scale.max(0.5);
+                    width += size * 0.8 + 3.0 * s;
                 }
             }
         } else {
             for ch in text.chars() {
-                width += font.metrics(ch, size).advance_width;
+                if let Some(font) = self.get_font_for_char(ch) {
+                    width += font.metrics(ch, size).advance_width;
+                }
             }
         }
         width
@@ -147,7 +176,7 @@ impl CandidateBoxRenderer {
     /// 获取或光栅化指定字符的字形位图
     fn get_or_rasterize_glyph(&self, ch: char, size: f32) -> Option<CachedGlyph> {
         let size_key = (size * 100.0).round() as u32;
-        let font = self.font.as_ref()?;
+        let font = self.get_font_for_char(ch)?;
 
         if let Ok(mut cache) = self.glyph_cache.lock() {
             if let Some(cached) = cache.get(&(ch, size_key)) {
@@ -167,14 +196,23 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 加载默认系统字体
+    /// 加载默认系统字体与回退字体链
     fn load_default_fonts(&mut self) {
         self.font = FontManager::load_default_fonts();
+        self.fallback_fonts = FontManager::load_fallback_fonts();
     }
 
     /// 绘制文本
-    fn draw_text(&self, pixmap: &mut Pixmap, text: &str, x: f32, y: f32, size: f32, color: Color) {
-        if self.font.is_none() {
+    pub(crate) fn draw_text(
+        &self,
+        pixmap: &mut Pixmap,
+        text: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Color,
+    ) {
+        if !self.has_font() {
             let s = self.scale.max(0.5);
             let mut current_x = x;
             let glyph_w = size * 0.8;
@@ -303,220 +341,38 @@ impl CandidateBoxRenderer {
 
         let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
 
-        draw_card_background_at(
+        capsule::render_capsule_bar(
+            self,
             &mut pixmap,
-            &self.theme,
-            CardBackgroundParams {
-                x: 0.0,
-                y: 0.0,
-                width: total_bar_width,
-                height: bar_height,
-                radius: corner_radius,
-                stroke_width: 1.0 * s,
+            state,
+            capsule::CapsuleBarParams {
+                measured_items: &measured_items,
+                total_bar_width,
+                bar_height,
+                padding_h,
+                corner_radius,
+                font_size,
+                scale: s,
             },
         );
 
-        // 绘制前置模式标识徽标（如“中”、“英”、“V”）与预编辑拼音文本
-        let baseline_y = (bar_height + font_size * 0.72) / 2.0;
-        let mut prefix_draw_x = padding_h + 2.0 * s;
-
-        if !state.mode_badge.is_empty() {
-            let badge_font_size = font_size * 0.8;
-            let text_w = self.measure_text(&state.mode_badge, badge_font_size);
-            let badge_w = text_w + 10.0 * s;
-            let badge_h = 22.0 * s;
-            let badge_y = (bar_height - badge_h) / 2.0;
-
-            draw_rounded_rect(
-                &mut pixmap,
-                RoundedRectParams {
-                    x: prefix_draw_x,
-                    y: badge_y,
-                    w: badge_w,
-                    h: badge_h,
-                    r: 4.0 * s,
-                },
-                self.theme.highlight_badge,
-            );
-            self.draw_text(
-                &mut pixmap,
-                &state.mode_badge,
-                prefix_draw_x + 5.0 * s,
-                (bar_height + badge_font_size * 0.72) / 2.0,
-                badge_font_size,
-                self.theme.highlight_text,
-            );
-            prefix_draw_x += badge_w + 6.0 * s;
-        }
-
-        if !state.preedit.is_empty() {
-            let preedit_font_size = font_size * 0.9;
-            self.draw_text(
-                &mut pixmap,
-                &state.preedit,
-                prefix_draw_x,
-                baseline_y,
-                preedit_font_size,
-                self.theme.preedit_text,
-            );
-        }
-        for (idx, item) in measured_items.iter().enumerate() {
-            let cand = &state.candidates[idx];
-            let is_selected = idx == state.selected_index;
-            if is_selected {
-                let badge_h = 28.0 * s;
-                let badge_y = (bar_height - badge_h) / 2.0;
-                draw_rounded_rect(
-                    &mut pixmap,
-                    RoundedRectParams {
-                        x: item.start_x,
-                        y: badge_y,
-                        w: item.total_item_width,
-                        h: badge_h,
-                        r: 6.0 * s,
-                    },
-                    self.theme.highlight_badge,
-                );
-
-                let text_x = item.start_x + 8.0 * s;
-                self.draw_text(
-                    &mut pixmap,
-                    item.index_str,
-                    text_x,
-                    baseline_y,
-                    font_size * 0.85,
-                    self.theme.highlight_text,
-                );
-
-                let mut content_x = text_x + item.index_width + 3.0 * s;
-                if item.is_expandable {
-                    draw_calendar_icon(
-                        &mut pixmap,
-                        &self.theme,
-                        content_x,
-                        badge_y + 8.5 * s,
-                        true,
-                        s,
-                    );
-                    content_x += item.icon_width;
-                }
-
-                self.draw_text(
-                    &mut pixmap,
-                    &cand.text,
-                    content_x,
-                    baseline_y,
-                    font_size,
-                    self.theme.highlight_text,
-                );
-            } else {
-                self.draw_text(
-                    &mut pixmap,
-                    item.index_str,
-                    item.start_x,
-                    baseline_y,
-                    font_size * 0.85,
-                    self.theme.index_text,
-                );
-
-                let mut content_x = item.start_x + item.index_width + 4.0 * s;
-                if item.is_expandable {
-                    let icon_y = (bar_height - 11.0 * s) / 2.0;
-                    draw_calendar_icon(&mut pixmap, &self.theme, content_x, icon_y, false, s);
-                    content_x += item.icon_width;
-                }
-
-                self.draw_text(
-                    &mut pixmap,
-                    &cand.text,
-                    content_x,
-                    baseline_y,
-                    font_size,
-                    self.theme.candidate_text,
-                );
-            }
-        }
-
-        let action_area_width = 24.0 * s;
-        let arrow_x = total_bar_width - action_area_width;
-        let arrow_center_y = bar_height / 2.0;
-        draw_dropdown_arrow(
-            &mut pixmap,
-            &self.theme,
-            arrow_x + 6.0 * s,
-            arrow_center_y,
-            s,
-        );
-
         if has_active_sub {
-            let popup_top_y = bar_height + 6.0 * s;
-            draw_card_background_at(
+            render_expanded_popup_card(
+                self,
                 &mut pixmap,
-                &self.theme,
-                CardBackgroundParams {
-                    x: popup_x,
-                    y: popup_top_y,
-                    width: popup_w,
-                    height: popup_h,
-                    radius: corner_radius,
-                    stroke_width: 1.0 * s,
+                state,
+                sub_candidates,
+                ExpandedCardRenderParams {
+                    popup_x,
+                    popup_top_y: bar_height + 6.0 * s,
+                    popup_w,
+                    popup_h,
+                    row_height,
+                    corner_radius,
+                    font_size,
+                    scale: s,
                 },
             );
-
-            for (s_idx, sub_str) in sub_candidates.iter().enumerate() {
-                let row_y = popup_top_y + 6.0 * s + s_idx as f32 * row_height;
-                let is_sub_selected = s_idx == state.expanded_selected_index();
-                let sub_num_str = if s_idx < PRECACHED_INDEX_STRINGS.len() {
-                    PRECACHED_INDEX_STRINGS[s_idx]
-                } else {
-                    "•"
-                };
-
-                if is_sub_selected {
-                    draw_rounded_rect(
-                        &mut pixmap,
-                        RoundedRectParams {
-                            x: popup_x + 6.0 * s,
-                            y: row_y,
-                            w: popup_w - 12.0 * s,
-                            h: row_height,
-                            r: 6.0 * s,
-                        },
-                        self.theme.highlight_badge,
-                    );
-                }
-
-                let sub_num_x = popup_x + 14.0 * s;
-                let sub_baseline_y = row_y + (row_height + font_size * 0.72) / 2.0;
-                let num_color = if is_sub_selected {
-                    self.theme.highlight_text
-                } else {
-                    self.theme.index_text
-                };
-                self.draw_text(
-                    &mut pixmap,
-                    sub_num_str,
-                    sub_num_x,
-                    sub_baseline_y,
-                    font_size * 0.85,
-                    num_color,
-                );
-
-                let sub_text_x = sub_num_x + 14.0 * s;
-                let text_color = if is_sub_selected {
-                    self.theme.highlight_text
-                } else {
-                    self.theme.candidate_text
-                };
-                self.draw_text(
-                    &mut pixmap,
-                    sub_str,
-                    sub_text_x,
-                    sub_baseline_y,
-                    font_size,
-                    text_color,
-                );
-            }
         }
 
         Some(pixmap)

@@ -12,8 +12,10 @@ pub struct CachedGlyph {
     pub bitmap: Arc<[u8]>,
 }
 
-/// 全局字体加载结果缓存，避免 V2 降级 V1 或重建渲染器时重复扫描磁盘
+/// 全局主字体加载结果缓存，避免 V2 降级 V1 或重建渲染器时重复扫描磁盘
 static GLOBAL_FONT_CACHE: OnceLock<Option<Arc<Font>>> = OnceLock::new();
+/// 全局回退字体链加载结果缓存，避免多次读盘与重复解析
+static GLOBAL_FALLBACK_FONTS_CACHE: OnceLock<Arc<Vec<Font>>> = OnceLock::new();
 
 /// 系统字体加载与探测模块
 pub struct FontManager;
@@ -24,6 +26,41 @@ impl FontManager {
         let cached =
             GLOBAL_FONT_CACHE.get_or_init(|| Self::load_default_fonts_impl().map(Arc::new));
         cached.as_ref().map(|arc| (**arc).clone())
+    }
+
+    /// 加载系统回退字体链（包括 Emoji、特殊符号及常见备选字体）
+    pub fn load_fallback_fonts() -> Vec<Font> {
+        let cached =
+            GLOBAL_FALLBACK_FONTS_CACHE.get_or_init(|| Arc::new(Self::load_fallback_fonts_impl()));
+        (**cached).clone()
+    }
+
+    fn load_fallback_fonts_impl() -> Vec<Font> {
+        let candidates = [
+            // Emoji 彩色/黑白字体
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/truetype/ancient-scripts/Symbola.ttf",
+            // 特殊符号与数学符号字体
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansSymbols-Regular.otf",
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            // 常见通用备选西文字体
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ];
+
+        let mut fallback_fonts = Vec::new();
+        for path in &candidates {
+            if let Ok(data) = fs::read(path) {
+                if let Ok(font) = Font::from_bytes(&data[..], FontSettings::default()) {
+                    info!("[矢量渲染] 成功加载回退字体: {}", path);
+                    fallback_fonts.push(font);
+                }
+            }
+        }
+        fallback_fonts
     }
 
     fn load_default_fonts_impl() -> Option<Font> {

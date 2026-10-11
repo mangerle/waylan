@@ -95,3 +95,23 @@ fn test_hidpi_scale_rendering() {
     let pixmap_2x = renderer.render(&state).expect("2x 渲染失败");
     assert_eq!(pixmap_2x.height(), 76);
 }
+
+#[test]
+fn test_fallback_font_chain() {
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
+    assert!(renderer.has_font(), "默认应至少加载系统可用字体");
+
+    // 验证 get_font_for_char 能够为常规中文字符与英文字符定位有效字体
+    let font_cn = renderer.get_font_for_char('中');
+    assert!(font_cn.is_some(), "应能为主中文字符返回可用字体");
+
+    let font_en = renderer.get_font_for_char('A');
+    assert!(font_en.is_some(), "应能为英文 ASCII 字符返回可用字体");
+
+    // 若系统已存在回退字体（如 Noto Color Emoji 或 DejaVuSans），验证回退字体链已纳管
+    let fb_fonts = FontManager::load_fallback_fonts();
+    for fb in fb_fonts {
+        renderer.add_fallback_font(fb);
+    }
+    assert!(renderer.has_font());
+}
