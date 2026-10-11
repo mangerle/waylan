@@ -183,14 +183,26 @@ impl AuxiliaryDict {
             .collect()
     }
 
-    /// 持久化保存为紧凑二进制词库文件 (WAYLAN_AUXCOMP01)
+    /// 持久化保存为紧凑二进制词库文件 (WAYLAN_AUXCOMP01，采用临时文件+原子rename落盘防损坏)
     pub fn save_to_file(&self, path: impl AsRef<Path>) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
         if let Some(parent) = path_ref.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let file = fs::File::create(path_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
+        let temp_path = path_ref.with_extension("aux.tmp");
+
+        struct TempFileGuard<'a>(&'a Path, bool);
+        impl<'a> Drop for TempFileGuard<'a> {
+            fn drop(&mut self) {
+                if !self.1 {
+                    let _ = fs::remove_file(self.0);
+                }
+            }
+        }
+        let mut guard = TempFileGuard(&temp_path, false);
+
+        let file = fs::File::create(&temp_path).map_err(|e| AlgoError::DictionaryIo {
+            path: temp_path.clone(),
             source: e,
         })?;
         let mut writer = std::io::BufWriter::new(file);
@@ -287,9 +299,25 @@ impl AuxiliaryDict {
                 source: e,
             })?;
         writer.flush().map_err(|e| AlgoError::DictionaryIo {
+            path: temp_path.clone(),
+            source: e,
+        })?;
+        let inner_file = writer.into_inner().map_err(|e| AlgoError::DictionaryIo {
+            path: temp_path.clone(),
+            source: e.into_error(),
+        })?;
+        inner_file.sync_all().map_err(|e| AlgoError::DictionaryIo {
+            path: temp_path.clone(),
+            source: e,
+        })?;
+
+        fs::rename(&temp_path, path_ref).map_err(|e| AlgoError::DictionaryIo {
             path: PathBuf::from(path_ref),
             source: e,
         })?;
+
+        // 成功完成原子重命名后解除守卫删除
+        guard.1 = true;
         Ok(())
     }
 
