@@ -28,10 +28,10 @@ fn test_full_aux_english_and_symbols() {
         .iter()
         .any(|c| c.text.to_lowercase().contains("readme")));
 
-    // 2. 验证 Emoji (鸭子: yazi -> 🦆)
+    // 2. 验证特殊符号表情 (鸭子: yazi)
     let yazi_cands = sym.lookup("yazi");
     assert!(!yazi_cands.is_empty());
-    assert!(yazi_cands.iter().any(|c| c.text == "🦆"));
+    assert!(yazi_cands.iter().any(|c| c.text == "\u{1F986}"));
 
     // 3. 验证颜文字 (vv -> 颜文字表情)
     let vv_cands = sym.lookup("vv");
