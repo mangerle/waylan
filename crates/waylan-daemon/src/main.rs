@@ -48,19 +48,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("微澜 (WayLan) 日志系统初始化完成，持久化文件: {:?}", path);
     }
 
-    // 注册进程系统退出信号拦截 (SIGINT / SIGTERM)，确保能够平滑停机并持久化数据
+    // 注册进程系统退出信号拦截 (SIGINT / SIGTERM)：
+    // 首次收到信号时将 term_now 置为 true 请求平滑退出；若再次收到相同退出信号则立即退出 (exit 0) 避免进程陷入无法中断的僵死状态
     let term_now = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if let Err(e) = signal_hook::flag::register(
+    if let Err(e) = signal_hook::flag::register_conditional_shutdown(
         signal_hook::consts::SIGTERM,
+        1,
         std::sync::Arc::clone(&term_now),
     ) {
         warn!("[微澜守护进程] 注册 SIGTERM 信号拦截失败: {}", e);
     }
     if let Err(e) = signal_hook::flag::register(
+        signal_hook::consts::SIGTERM,
+        std::sync::Arc::clone(&term_now),
+    ) {
+        warn!("[微澜守护进程] 注册 SIGTERM 标志置位失败: {}", e);
+    }
+
+    if let Err(e) = signal_hook::flag::register_conditional_shutdown(
         signal_hook::consts::SIGINT,
+        1,
         std::sync::Arc::clone(&term_now),
     ) {
         warn!("[微澜守护进程] 注册 SIGINT 信号拦截失败: {}", e);
+    }
+    if let Err(e) = signal_hook::flag::register(
+        signal_hook::consts::SIGINT,
+        std::sync::Arc::clone(&term_now),
+    ) {
+        warn!("[微澜守护进程] 注册 SIGINT 标志置位失败: {}", e);
     }
 
     info!("============================================================");
@@ -97,6 +113,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. 加载全量汉字库与词库
     let table = load_lexicon_table();
+    if term_now.load(std::sync::atomic::Ordering::Relaxed) {
+        info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
+        return Ok(());
+    }
     let algo_config = AlgoConfig {
         page_size: cfg.page_size,
         enable_v_mode: cfg.v_mode,
@@ -133,8 +153,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opencc_dict = load_opencc_dict();
     engine.load_opencc_dict(opencc_dict);
 
+    if term_now.load(std::sync::atomic::Ordering::Relaxed) {
+        info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
+        return Ok(());
+    }
+
     // 6. 探测 Wayland 环境与合成器协议能力
     let caps = check_wayland_capabilities();
+
+    if term_now.load(std::sync::atomic::Ordering::Relaxed) {
+        info!("[微澜守护进程] 探测环境期间收到终止信号，立即安全退场。");
+        return Ok(());
+    }
 
     // 7. 执行环境自检（--check 参数）
     if args.len() > 1 && args[1] == "--check" {
