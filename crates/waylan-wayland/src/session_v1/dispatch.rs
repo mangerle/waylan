@@ -56,13 +56,17 @@ impl Dispatch<WlShm, ()> for WaylanV1Session {
 // 为 wl_surface 实现 Dispatch
 impl Dispatch<WlSurface, ()> for WaylanV1Session {
     fn event(
-        _state: &mut Self,
+        state: &mut Self,
         _proxy: &WlSurface,
-        _event: <WlSurface as wayland_client::Proxy>::Event,
+        event: <WlSurface as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        if let wayland_client::protocol::wl_surface::Event::PreferredBufferScale { factor } = event
+        {
+            state.surface_manager.set_scale(factor);
+        }
     }
 }
 

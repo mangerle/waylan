@@ -90,6 +90,10 @@ pub struct WaylanV2Session {
     pub mods_group: u32,
     /// 标记虚拟键盘是否已完成 keymap 映射表初始化（防止未发送 keymap 即调用 key 引发协议错误）
     pub has_virtual_keymap: bool,
+    /// 合成器下发的键盘长按连击参数 (rate_keys_per_sec, delay_ms)
+    pub repeat_info: (i32, i32),
+    /// 当前正处于长按连击计时中的消费按键状态 (keycode, next_fire_instant)
+    pub repeat_state: Option<(u32, std::time::Instant)>,
     /// 标记 V2 会话是否已被合成器宣告不可用（触发自动降级）
     pub is_unavailable: bool,
     /// 与外部系统托盘共享的优雅退出请求标志
@@ -133,6 +137,8 @@ impl WaylanV2Session {
             mods_locked: 0,
             mods_group: 0,
             has_virtual_keymap: false,
+            repeat_info: (25, 400),
+            repeat_state: None,
             is_unavailable: false,
             exit_requested: None,
         }
@@ -173,6 +179,7 @@ impl WaylanV2Session {
                 self.mods_depressed = 0;
                 self.phys_mods = 0;
                 self.consumed_keys.clear();
+                self.repeat_state = None;
                 self.mods_latched = 0;
                 self.mods_locked = 0;
                 self.mods_group = 0;
@@ -188,6 +195,7 @@ impl WaylanV2Session {
                 self.mods_depressed = 0;
                 self.phys_mods = 0;
                 self.consumed_keys.clear();
+                self.repeat_state = None;
                 self.mods_latched = 0;
                 self.mods_locked = 0;
                 self.mods_group = 0;
@@ -272,6 +280,33 @@ impl WaylanV2Session {
 
         if let Some(ref zh_flag) = self.shared_is_chinese {
             let external_zh = zh_flag.load(Ordering::Relaxed);
+            let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
+            if external_zh != current_zh {
+                self.mode = if external_zh {
+                    InputMode::Chinese
+                } else {
+                    InputMode::English
+                };
+            }
+        }
+    }
+
+    /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
+    pub fn sync_atomic_state(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        let requested = self
+            .reload_requested
+            .as_ref()
+            .map(|flag| flag.load(Ordering::Acquire))
+            .unwrap_or(false);
+        if requested {
+            self.sync_external_state();
+            return;
+        }
+
+        if let Some(ref zh_flag) = self.shared_is_chinese {
+            let external_zh = zh_flag.load(Ordering::Acquire);
             let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
             if external_zh != current_zh {
                 self.mode = if external_zh {
@@ -426,104 +461,19 @@ impl WaylanV2Session {
         }
     }
 
-    /// 处理英文模式下的按键输入
-    fn process_english_mode_key(&mut self, key: u32) -> (bool, Option<String>) {
-        keys::process_english_mode_key(self, key)
-    }
-
-    /// 处理处于拼音组词状态下的键盘拦截
-    fn process_composition_key(&mut self, key: u32, now: u64) -> Option<(bool, Option<String>)> {
-        keys::process_composition_key(self, key, now)
-    }
-
-    /// 处理输入缓冲区为空时的空闲按键输入
-    fn process_idle_key(&mut self, key: u32) -> Option<(bool, Option<String>)> {
-        keys::process_idle_key(self, key)
-    }
-
     /// 处理单个硬件按键事件并返回 (是否被输入法消费, 本次直接上屏文本)
     pub fn process_key_event(&mut self, key: u32, is_press: bool) -> (bool, Option<String>) {
-        self.update_modifier_by_key(key, is_press);
-
-        // 1. 优先经由 Shift/Ctrl 防误触状态机判定
-        let toggled_mode = self.shift_state.on_key_event(key, is_press, self.mode);
-
-        // 按键释放阶段：依据该按键按下阶段是否被输入法消费决定是否消费释放事件，确保 Press/Release 严格对称
-        if !is_press {
-            let was_press_consumed = self.consumed_keys.take_release(key);
-            if let Some(new_mode) = toggled_mode {
-                self.mode = new_mode;
-                if let Some(ref zh_flag) = self.shared_is_chinese {
-                    zh_flag.store(
-                        matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                        std::sync::atomic::Ordering::Release,
-                    );
-                }
-                if let Some(ref notify_tx) = self.mode_notify_tx {
-                    let _ = notify_tx.try_send(());
-                }
-                let mode_str = match new_mode {
-                    InputMode::Chinese => "中文",
-                    InputMode::English => "英文",
-                    InputMode::VMode => "V模式",
-                };
-                info!("[Wayland v2] 切换输入模式为：{}", mode_str);
-
-                if new_mode == InputMode::English && !self.engine.raw_input().is_empty() {
-                    let raw = self.engine.raw_input().to_string();
-                    self.commit_text(&raw);
-                    self.engine.reset();
-                    return (was_press_consumed, Some(raw));
-                }
-            }
-            return (was_press_consumed, None);
-        }
-
-        let result = self.process_key_press_inner(key);
-        self.consumed_keys.record_press(key, result.0);
-        result
+        keys::process_key_event(self, key, is_press)
     }
 
-    /// 处理按键按下阶段的核心分发逻辑
-    fn process_key_press_inner(&mut self, key: u32) -> (bool, Option<String>) {
-        // 快捷键穿透：Ctrl / Alt / Super 等修饰组合键透传
-        if self.has_ctrl_or_alt() {
-            return (false, None);
-        }
+    /// 计算下一次 poll 等待超时时间（毫秒），兼顾按键长按连击定时器
+    pub fn next_poll_timeout_ms(&self, default_ms: i32) -> i32 {
+        keys::next_poll_timeout_ms(self, default_ms)
+    }
 
-        // 2. 英文模式
-        if self.mode == InputMode::English {
-            return self.process_english_mode_key(key);
-        }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        // 3. 正在组合拼音状态下的专门按键拦截
-        if !self.engine.raw_input().is_empty() {
-            if let Some(result) = self.process_composition_key(key, now) {
-                return result;
-            }
-        }
-
-        // 4. 输入缓冲区为空时的按键处理
-        if self.engine.raw_input().is_empty() {
-            if let Some(result) = self.process_idle_key(key) {
-                return result;
-            }
-        }
-
-        // 5. 字母键输入（A-Z）：进入拼音算法管线
-        if let Some(ch) = keycode_to_char(key) {
-            self.engine.push_char(ch);
-            let preedit = self.engine.formatted_preedit();
-            self.update_preedit(&preedit);
-            return (true, None);
-        }
-
-        (false, None)
+    /// 检查并触发到期的长按按键连击事件
+    pub fn drive_key_repeat(&mut self) {
+        keys::drive_key_repeat(self);
     }
 
     /// 处理单个硬件按键按下/释放事件（返回本次直接上屏的文本，便于无合成器环境下单元测试验证）

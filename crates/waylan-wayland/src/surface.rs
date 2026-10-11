@@ -227,9 +227,8 @@ impl CandidateSurfaceManager {
             surf.attach(None, 0, 0);
             surf.commit();
         }
-        if let Some(old_buf) = active_buffer.take() {
-            old_buf.destroy();
-        }
+        // active_buffer 与 slot_buffers 引用同一底层 WlBuffer，统一由 slot_buffers 执行单次 destroy 防止重复销毁
+        *active_buffer = None;
         for (idx, slot_buf) in self.slot_buffers.iter_mut().enumerate() {
             if let Some(buf) = slot_buf.take() {
                 buf.destroy();
@@ -280,10 +279,6 @@ impl CandidateSurfaceManager {
                 slot.is_busy = true;
             }
 
-            if let Some(old_buf) = active_buffer.take() {
-                old_buf.destroy();
-            }
-
             surf.set_buffer_scale(self.scale);
             surf.attach(Some(&buffer), 0, 0);
             let logical_w = ((width as f32) / (self.scale as f32)).ceil() as i32;
@@ -325,13 +320,30 @@ impl CandidateSurfaceManager {
             }
         }
 
-        self.ensure_slot(next_slot, required_bytes).ok()?;
+        if let Err(e) = self.ensure_slot(next_slot, required_bytes) {
+            log::warn!(
+                "[悬浮窗口] 扩容共享内存槽位失败，槽位: {}，原因: {}",
+                next_slot,
+                e
+            );
+            return None;
+        }
         self.current_slot = next_slot;
 
         // 3. 复用已有文件描述符写入像素数据，消除频繁的 tempfile() 系统调用
         let slot = self.shm_slots[self.current_slot].as_mut()?;
-        slot.file.seek(SeekFrom::Start(0)).ok()?;
-        slot.file.write_all(&self.pixel_buffer).ok()?;
+        if let Err(e) = slot
+            .file
+            .seek(SeekFrom::Start(0))
+            .and_then(|_| slot.file.write_all(&self.pixel_buffer))
+        {
+            log::warn!(
+                "[悬浮窗口] 写入候选框共享内存失败，槽位: {}，原因: {}",
+                self.current_slot,
+                e
+            );
+            return None;
+        }
 
         Some((width, height, &slot.file))
     }

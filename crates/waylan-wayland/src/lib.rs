@@ -237,8 +237,16 @@ pub fn run_session_v1_loop(
                 rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
             )];
             match rustix::event::poll(&mut fds, 200) {
+                Ok(0) => {
+                    drop(guard);
+                    session.sync_external_state();
+                }
                 Ok(_) => {
-                    let _ = guard.read();
+                    if let Err(wayland_client::backend::WaylandError::Io(io_err)) = guard.read() {
+                        if io_err.kind() != std::io::ErrorKind::WouldBlock {
+                            return Err(io_err.into());
+                        }
+                    }
                 }
                 Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(e.into()),
@@ -315,19 +323,31 @@ pub fn run_session_v2_loop_fallible(
             ));
         }
 
+        session.drive_key_repeat();
+
         if let Err(e) = event_queue.flush() {
             return Err((e.into(), Box::new(session)));
         }
 
+        let timeout_ms = session.next_poll_timeout_ms(200);
         if let Some(guard) = event_queue.prepare_read() {
             let fd = guard.connection_fd();
             let mut fds = [rustix::event::PollFd::new(
                 &fd,
                 rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
             )];
-            match rustix::event::poll(&mut fds, 200) {
+            match rustix::event::poll(&mut fds, timeout_ms) {
+                Ok(0) => {
+                    drop(guard);
+                    session.drive_key_repeat();
+                    session.sync_external_state();
+                }
                 Ok(_) => {
-                    let _ = guard.read();
+                    if let Err(wayland_client::backend::WaylandError::Io(io_err)) = guard.read() {
+                        if io_err.kind() != std::io::ErrorKind::WouldBlock {
+                            return Err((io_err.into(), Box::new(session)));
+                        }
+                    }
                 }
                 Err(rustix::io::Errno::INTR) => {}
                 Err(e) => {

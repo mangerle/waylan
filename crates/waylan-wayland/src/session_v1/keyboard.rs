@@ -22,7 +22,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
             return;
         };
 
-        state.sync_external_state();
+        state.sync_atomic_state();
 
         match event {
             KeyboardEvent::Key {

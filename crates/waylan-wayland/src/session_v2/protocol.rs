@@ -117,7 +117,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        state.sync_external_state();
+        state.sync_atomic_state();
         match event {
             GrabEvent::Keymap { format, fd, size } => {
                 info!(
@@ -163,6 +163,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                 );
             }
             GrabEvent::RepeatInfo { rate, delay } => {
+                state.repeat_info = (rate, delay);
                 info!(
                     "[Wayland v2 键盘抓取] 收到按键连击设置: rate={}, delay={}",
                     rate, delay

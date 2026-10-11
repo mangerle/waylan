@@ -240,6 +240,33 @@ impl WaylanV1Session {
         }
     }
 
+    /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
+    pub fn sync_atomic_state(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        let requested = self
+            .reload_requested
+            .as_ref()
+            .map(|flag| flag.load(Ordering::Acquire))
+            .unwrap_or(false);
+        if requested {
+            self.sync_external_state();
+            return;
+        }
+
+        if let Some(ref zh_flag) = self.shared_is_chinese {
+            let external_zh = zh_flag.load(Ordering::Acquire);
+            let current_zh = matches!(self.mode, InputMode::Chinese | InputMode::VMode);
+            if external_zh != current_zh {
+                self.mode = if external_zh {
+                    InputMode::Chinese
+                } else {
+                    InputMode::English
+                };
+            }
+        }
+    }
+
     /// 构造当前候选框的渲染状态
     pub fn build_candidate_box_state(&self) -> waylan_core::CandidateBoxState {
         let candidates = self.engine.candidates();
@@ -279,6 +306,18 @@ impl WaylanV1Session {
     /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
+        if let Some(ref layer_surf) = self.layer_surface {
+            let scale = self.surface_manager.scale.max(1) as u32;
+            let (phys_w, phys_h) = self.surface_manager.current_size;
+            let logical_w = (phys_w / scale).max(200);
+            let logical_h = (phys_h / scale).max(48);
+            let (pos_x, pos_y) = self
+                .surface_manager
+                .cursor_rect
+                .compute_popup_position_constrained(logical_w, logical_h, 0, 0);
+            layer_surf.set_size(logical_w, logical_h);
+            layer_surf.set_margin(pos_y.max(0), 0, 0, pos_x.max(0));
+        }
         self.surface_manager.commit_to_wayland(
             &box_state,
             self.shm.as_ref(),
