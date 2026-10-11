@@ -173,13 +173,15 @@ impl CandidateSurfaceManager {
 
     /// 将 RGBA 像素流转换为 BGRA 格式并写入复用的内部缓冲区
     fn convert_rgba_to_pixel_buffer(&mut self, rgba: &[u8]) {
-        self.pixel_buffer.clear();
-        self.pixel_buffer.reserve(rgba.len());
-        for chunk in rgba.chunks_exact(4) {
-            self.pixel_buffer.push(chunk[2]); // B
-            self.pixel_buffer.push(chunk[1]); // G
-            self.pixel_buffer.push(chunk[0]); // R
-            self.pixel_buffer.push(chunk[3]); // A
+        let len = rgba.len();
+        self.pixel_buffer.resize(len, 0);
+        let src_chunks = rgba.chunks_exact(4);
+        let dst_chunks = self.pixel_buffer.chunks_exact_mut(4);
+        for (src, dst) in src_chunks.zip(dst_chunks) {
+            dst[0] = src[2]; // B
+            dst[1] = src[1]; // G
+            dst[2] = src[0]; // R
+            dst[3] = src[3]; // A
         }
     }
 

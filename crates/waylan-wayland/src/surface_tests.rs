@@ -32,6 +32,24 @@ fn test_rgba_to_argb8888_le_conversion() {
         manager.pixel_buffer,
         vec![30, 20, 10, 255, 200, 150, 100, 128]
     );
+
+    // 验证大批量多像素连续重排正确性
+    let mut batch_rgba = Vec::with_capacity(1024 * 4);
+    for i in 0..1024u32 {
+        batch_rgba.push((i & 0xFF) as u8); // R
+        batch_rgba.push(((i + 1) & 0xFF) as u8); // G
+        batch_rgba.push(((i + 2) & 0xFF) as u8); // B
+        batch_rgba.push(255); // A
+    }
+    manager.convert_rgba_to_pixel_buffer(&batch_rgba);
+    assert_eq!(manager.pixel_buffer.len(), 1024 * 4);
+    for (idx, chunk) in manager.pixel_buffer.chunks_exact(4).enumerate() {
+        let i = idx as u32;
+        assert_eq!(chunk[0], ((i + 2) & 0xFF) as u8); // B
+        assert_eq!(chunk[1], ((i + 1) & 0xFF) as u8); // G
+        assert_eq!(chunk[2], (i & 0xFF) as u8); // R
+        assert_eq!(chunk[3], 255); // A
+    }
 }
 
 #[test]
