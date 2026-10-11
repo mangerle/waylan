@@ -305,11 +305,10 @@ pub fn run_session_v2_loop_fallible(
     let compositor: WlCompositor = match globals.bind(&qh, 1..=6, ()) {
         Ok(c) => c,
         Err(e) => {
-            log::error!(
-                "[微澜 Wayland] 无法绑定必需的基础全局协议 wl_compositor: {}",
-                e
-            );
-            return Err((e.into(), Box::new(session)));
+            return Err((
+                format!("无法绑定必需的基础全局协议 wl_compositor: {}", e).into(),
+                Box::new(session),
+            ));
         }
     };
     let wl_surface = compositor.create_surface(&qh, ());
@@ -320,8 +319,10 @@ pub fn run_session_v2_loop_fallible(
     let shm: wayland_client::protocol::wl_shm::WlShm = match globals.bind(&qh, 1..=1, ()) {
         Ok(s) => s,
         Err(e) => {
-            log::error!("[微澜 Wayland] 无法绑定必需的共享内存协议 wl_shm: {}", e);
-            return Err((e.into(), Box::new(session)));
+            return Err((
+                format!("无法绑定必需的共享内存协议 wl_shm: {}", e).into(),
+                Box::new(session),
+            ));
         }
     };
     session.shm = Some(shm);
@@ -335,14 +336,13 @@ pub fn run_session_v2_loop_fallible(
             log::info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
         }
         Err(e) => {
-            log::warn!(
-                "[微澜 Wayland] 当前合成器不支持 zwp_virtual_keyboard_v1 ({})，无法安全透传未消费按键，将主动退出 V2 会话以触发降级。",
-                e
-            );
             return Err((
                 std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
-                    "合成器缺少 zwp_virtual_keyboard_v1 扩展协议，为避免按键黑洞主动放弃 V2 会话",
+                    format!(
+                        "合成器缺少 zwp_virtual_keyboard_v1 扩展协议 ({})，为避免按键黑洞主动放弃 V2 会话",
+                        e
+                    ),
                 )
                 .into(),
                 Box::new(session),
@@ -369,7 +369,6 @@ pub fn run_session_v2_loop_fallible(
             return Err((e.into(), Box::new(session)));
         }
         if session.is_unavailable {
-            log::warn!("[微澜 Wayland] zwp_input_method_v2 收到 Unavailable 事件，跳出 V2 事件循环以准备降级。");
             return Err((
                 "zwp_input_method_v2 协议已被合成器宣告不可用 (Unavailable)".into(),
                 Box::new(session),
