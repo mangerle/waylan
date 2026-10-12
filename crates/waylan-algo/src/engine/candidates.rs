@@ -8,17 +8,20 @@ use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
 impl AlgoEngine {
     pub(crate) fn recompute_candidates(&mut self) {
-        self.selected_index = 0;
-        self.is_expanded = false;
-        self.expanded_selected_index = 0;
-
         let raw_input = self.composition.as_str();
         if raw_input.is_empty() {
+            self.selected_index = 0;
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
             self.all_candidates_cache.clear();
             self.current_candidates.clear();
             self.cached_preedit.clear();
             return;
         }
+
+        self.selected_index = 0;
+        self.is_expanded = false;
+        self.expanded_selected_index = 0;
 
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
         if let Some(dispatched) = ModeDispatcher::try_dispatch(raw_input, &self.config) {

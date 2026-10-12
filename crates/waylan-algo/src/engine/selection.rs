@@ -177,7 +177,16 @@ impl AlgoEngine {
         }
 
         self.page_index = 0;
-        self.recompute_candidates();
+        if self.composition.is_empty() {
+            self.all_candidates_cache.clear();
+            self.current_candidates.clear();
+            self.cached_preedit.clear();
+            self.selected_index = 0;
+            self.is_expanded = false;
+            self.expanded_selected_index = 0;
+        } else {
+            self.recompute_candidates();
+        }
 
         (commit_text, self.composition.len())
     }
@@ -250,7 +259,12 @@ impl AlgoEngine {
         self.partial_commit_segments.clear();
         self.composition.clear();
         self.page_index = 0;
-        self.recompute_candidates();
+        self.all_candidates_cache.clear();
+        self.current_candidates.clear();
+        self.cached_preedit.clear();
+        self.selected_index = 0;
+        self.is_expanded = false;
+        self.expanded_selected_index = 0;
 
         Some((commit_text, 0))
     }
