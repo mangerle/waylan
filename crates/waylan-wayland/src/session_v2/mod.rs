@@ -22,6 +22,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 use crate::fs_watcher::InotifyWatcher;
 use crate::input_core::*;
 use crate::loop_wakeup::LoopWakeup;
+use crate::session_common::*;
 use crate::surface::{CandidateSurfaceManager, CursorRect};
 
 pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
@@ -185,7 +186,7 @@ impl WaylanV2Session {
 
     /// 根据按键按下/释放事件更新修饰键位掩码
     pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
-        update_modifier_masks(
+        update_session_modifiers(
             &mut self.mods_depressed,
             &mut self.phys_mods,
             keycode,
@@ -196,21 +197,13 @@ impl WaylanV2Session {
     /// 判断当前是否处于 Shift 按下状态
     #[inline]
     pub fn is_shift_active(&self) -> bool {
-        ModifierState {
-            depressed: self.mods_depressed,
-            phys_mods: self.phys_mods,
-        }
-        .is_shift_active()
+        is_shift_active_state(self.mods_depressed, self.phys_mods)
     }
 
     /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
     #[inline]
     pub fn has_ctrl_or_alt(&self) -> bool {
-        ModifierState {
-            depressed: self.mods_depressed,
-            phys_mods: self.phys_mods,
-        }
-        .has_ctrl_or_alt()
+        has_ctrl_or_alt_state(self.mods_depressed, self.phys_mods)
     }
 
     /// 设置关联的 V2 输入法实例
@@ -226,7 +219,8 @@ impl WaylanV2Session {
     /// 触发候选框悬浮表面重绘并提交至 Wayland 表面
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
-        self.surface_manager.commit_to_wayland(
+        commit_candidate_surface(
+            &mut self.surface_manager,
             &box_state,
             self.shm.as_ref(),
             self.popup_wl_surface.as_ref(),
@@ -237,8 +231,11 @@ impl WaylanV2Session {
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲
     pub fn hide_candidate_surface(&mut self) {
-        self.surface_manager
-            .hide_wayland_surface(self.popup_wl_surface.as_ref(), &mut self.active_buffer);
+        hide_candidate_surface_buffer(
+            &mut self.surface_manager,
+            self.popup_wl_surface.as_ref(),
+            &mut self.active_buffer,
+        );
     }
 
     /// 提交指定文本上屏，并重置预编辑状态

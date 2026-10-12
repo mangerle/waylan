@@ -16,6 +16,7 @@ use waylan_ui::UiTheme;
 use waylan_wayland::probe_wayland_environment;
 use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
 use waylan_wayland::session_v2::WaylanV2Session;
+use waylan_wayland::surface::CandidateSurfaceManager;
 use waylan_wayland::WaylandCapabilities;
 
 use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
@@ -199,35 +200,51 @@ impl SessionConfigBundle {
             symbol_suggester,
         }
     }
+
+    /// 将配置包原子应用到输入引擎与候选框表面管理器中
+    pub fn apply_to_session_core(
+        self,
+        engine: &mut waylan_algo::AlgoEngine,
+        surface_manager: &mut CandidateSurfaceManager,
+        punct_processor: &mut PunctuationProcessor,
+        page_keys: &mut PageKeyConfig,
+    ) {
+        engine.config = self.algo_config;
+        surface_manager.renderer.theme = self.theme;
+        surface_manager.renderer.font_size = self.font_size;
+        *punct_processor = self.punct_processor;
+        *page_keys = self.page_keys;
+        engine.custom_phrases = self.custom_phrases;
+        if self.user_dict_path.exists() {
+            if let Ok(m) = std::fs::metadata(&self.user_dict_path) {
+                if m.len() == 0 {
+                    info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
+                    engine.user_model = UserAdaptiveModel::new();
+                    engine.set_user_dict_path(&self.user_dict_path);
+                } else if engine.user_dict_path.as_deref() != Some(&self.user_dict_path) {
+                    engine.set_user_dict_path(&self.user_dict_path);
+                }
+            }
+        } else {
+            info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
+            engine.user_model = UserAdaptiveModel::new();
+            engine.set_user_dict_path(&self.user_dict_path);
+        }
+        engine.english_suggester = self.english_suggester;
+        engine.symbol_suggester = self.symbol_suggester;
+    }
 }
 
 /// 执行 V2 会话的配置与词库热重载
 pub fn apply_reload_v2(s: &mut WaylanV2Session) {
     let b = SessionConfigBundle::load_current();
-    s.engine.config = b.algo_config;
-    s.surface_manager.renderer.theme = b.theme;
-    s.surface_manager.renderer.font_size = b.font_size;
     s.shift_state = ShiftToggleStateMachine::with_toggle_key(b.shift_mode);
-    s.punctuation_processor = b.punct_processor;
-    s.page_keys = b.page_keys;
-    s.engine.custom_phrases = b.custom_phrases;
-    if b.user_dict_path.exists() {
-        if let Ok(m) = std::fs::metadata(&b.user_dict_path) {
-            if m.len() == 0 {
-                info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
-                s.engine.user_model = UserAdaptiveModel::new();
-                s.engine.set_user_dict_path(&b.user_dict_path);
-            } else if s.engine.user_dict_path.as_deref() != Some(&b.user_dict_path) {
-                s.engine.set_user_dict_path(&b.user_dict_path);
-            }
-        }
-    } else {
-        info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
-        s.engine.user_model = UserAdaptiveModel::new();
-        s.engine.set_user_dict_path(&b.user_dict_path);
-    }
-    s.engine.english_suggester = b.english_suggester;
-    s.engine.symbol_suggester = b.symbol_suggester;
+    b.apply_to_session_core(
+        &mut s.engine,
+        &mut s.surface_manager,
+        &mut s.punctuation_processor,
+        &mut s.page_keys,
+    );
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }
@@ -236,30 +253,13 @@ pub fn apply_reload_v2(s: &mut WaylanV2Session) {
 /// 执行 V1 会话的配置与词库热重载
 pub fn apply_reload_v1(s: &mut WaylanV1Session) {
     let b = SessionConfigBundle::load_current();
-    s.engine.config = b.algo_config;
-    s.surface_manager.renderer.theme = b.theme;
-    s.surface_manager.renderer.font_size = b.font_size;
     s.shift_sm = ShiftToggleStateMachine::with_toggle_key(b.shift_mode);
-    s.punctuation_processor = b.punct_processor;
-    s.page_keys = b.page_keys;
-    s.engine.custom_phrases = b.custom_phrases;
-    if b.user_dict_path.exists() {
-        if let Ok(m) = std::fs::metadata(&b.user_dict_path) {
-            if m.len() == 0 {
-                info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
-                s.engine.user_model = UserAdaptiveModel::new();
-                s.engine.set_user_dict_path(&b.user_dict_path);
-            } else if s.engine.user_dict_path.as_deref() != Some(&b.user_dict_path) {
-                s.engine.set_user_dict_path(&b.user_dict_path);
-            }
-        }
-    } else {
-        info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
-        s.engine.user_model = UserAdaptiveModel::new();
-        s.engine.set_user_dict_path(&b.user_dict_path);
-    }
-    s.engine.english_suggester = b.english_suggester;
-    s.engine.symbol_suggester = b.symbol_suggester;
+    b.apply_to_session_core(
+        &mut s.engine,
+        &mut s.surface_manager,
+        &mut s.punctuation_processor,
+        &mut s.page_keys,
+    );
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }

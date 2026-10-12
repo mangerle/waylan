@@ -5,11 +5,13 @@ pub mod keymap;
 pub mod loop_wakeup;
 pub mod protocol_v1;
 pub mod runner;
+pub mod session_common;
 pub mod session_v1;
 pub mod session_v2;
 pub mod surface;
 
 pub use runner::*;
+pub use session_common::*;
 
 pub use fs_watcher::InotifyWatcher;
 pub use input_core::{
