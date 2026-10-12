@@ -70,10 +70,10 @@ pub fn has_syllable_prefix(prefix: &str) -> bool {
 /// - **代价与局限**：仅判定全切分可达性，不包含纠错容错边与模糊音扩展，仅作为前置硬剪枝漏斗。
 pub fn can_segment_into_syllables(s: &str) -> bool {
     let n = s.len();
-    if n == 0 || n > 8 {
+    if n == 0 || n > 32 {
         return false;
     }
-    let mut reachable = [false; 9];
+    let mut reachable = [false; 33];
     reachable[0] = true;
 
     for i in 0..n {
@@ -427,6 +427,8 @@ mod tests {
         assert!(can_segment_into_syllables("cheng"));
         assert!(can_segment_into_syllables("xian"));
         assert!(can_segment_into_syllables("womende"));
+        assert!(can_segment_into_syllables("zhongguoren"));
+        assert!(can_segment_into_syllables("beijingtiananmen"));
         assert!(!can_segment_into_syllables("nihso"));
         assert!(!can_segment_into_syllables("bkxyz"));
         assert!(!can_segment_into_syllables(""));

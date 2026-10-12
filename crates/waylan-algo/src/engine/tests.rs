@@ -146,7 +146,7 @@ fn test_special_and_traditional_candidates_do_not_pollute_user_dict() {
         "V 模式计算候选不得写入用户自适应词库"
     );
 
-    // 3. 繁体模式下选词不应将繁体字写入简体用户词库
+    // 3. 繁体中文模式下选词应正常写入用户自适应词库以沉淀用词习惯
     engine.config.traditional_chinese = true;
     for ch in "nihao".chars() {
         engine.push_char(ch);
@@ -154,8 +154,8 @@ fn test_special_and_traditional_candidates_do_not_pollute_user_dict() {
     engine.select_candidate(0, 1002).unwrap();
     assert_eq!(
         engine.user_model.total_entries(),
-        0,
-        "繁体模式下转换后的候选词不得污染底层简体用户词库"
+        1,
+        "繁体中文模式下用户选词应正常记入自适应词库"
     );
 }
 

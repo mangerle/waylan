@@ -15,13 +15,13 @@ impl SpatialTypoCorrector {
     /// - **排序与截断**：按替换物理代价升序、词频降序综合排序，仅返回前 3 个最优纠错结果。
     pub fn generate_candidates(raw_input: &str, table: &LexiconTable) -> Vec<AlgoCandidate> {
         let n = raw_input.len();
-        // 限制拼写纠错仅在常用词长（3..=8）内启用，避免长拼音下触发数百次全量 DAG 搜索导致击键延迟退化
-        if !(3..=8).contains(&n) || !raw_input.is_ascii() {
+        // 限制拼写纠错在合理词长（3..=16）内启用，覆盖 1~4 音节常用多字词容错
+        if !(3..=16).contains(&n) || !raw_input.is_ascii() {
             return Vec::new();
         }
 
         let mut candidates: Vec<(AlgoCandidate, u32)> = Vec::with_capacity(8);
-        let mut buf = [0u8; 24];
+        let mut buf = [0u8; 32];
         buf[..n].copy_from_slice(raw_input.as_bytes());
 
         // 1. 单字符邻键空间替换
@@ -150,5 +150,11 @@ mod tests {
         let cands_swap = SpatialTypoCorrector::generate_candidates("cehng", &table);
         assert!(!cands_swap.is_empty());
         assert_eq!(cands_swap[0].text, "成");
+
+        // 超过 8 字节的多音节长词邻键纠错：zhongguorwn (11字节, w->e) 召回 中国人 (zhong'guo'ren)
+        table.insert("zhong'guo'ren", "中国人", 60_000);
+        let cands_long = SpatialTypoCorrector::generate_candidates("zhongguorwn", &table);
+        assert!(!cands_long.is_empty());
+        assert_eq!(cands_long[0].text, "中国人");
     }
 }

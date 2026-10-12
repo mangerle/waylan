@@ -22,11 +22,7 @@ pub(crate) fn is_cjk_ideograph(c: char) -> bool {
 impl AlgoEngine {
     /// 判断当前选中的候选词是否应当被记录到用户自适应词频模型中
     pub(crate) fn should_record_to_user_dict(&self, selected: &AlgoCandidate) -> bool {
-        if selected.is_expandable
-            || selected.pinyin.is_empty()
-            || selected.text.is_empty()
-            || self.config.traditional_chinese
-        {
+        if selected.is_expandable || selected.pinyin.is_empty() || selected.text.is_empty() {
             return false;
         }
         if matches!(
@@ -86,7 +82,7 @@ impl AlgoEngine {
             selected.text.clone()
         };
 
-        // 仅当选中的候选词为标准简体中文拼音词条时，才记录用户选词并动态调频
+        // 当选中的候选词为合规中文拼音词条（支持简繁中文）时，记录用户选词并动态调频
         if should_record {
             if let Some(ref path) = self.user_dict_path {
                 let _ = self.user_model.append_to_wal(
