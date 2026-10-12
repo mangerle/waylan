@@ -3411,6 +3411,7 @@ name = "waylan-wayland"
 version = "0.1.0"
 dependencies = [
  "log",
+ "memmap2",
  "rustix 0.38.44",
  "signal-hook",
  "tempfile",

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread;
+use waylan_wayland::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
@@ -43,6 +44,7 @@ pub struct DBusMenu {
     pub(crate) exit_requested: Arc<AtomicBool>,
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) icon_update_tx: SyncSender<()>,
+    pub(crate) loop_wakeup: Option<LoopWakeup>,
 }
 
 impl DBusMenu {
@@ -52,6 +54,7 @@ impl DBusMenu {
         exit_requested: Arc<AtomicBool>,
         settings_running: Arc<AtomicBool>,
         icon_update_tx: SyncSender<()>,
+        loop_wakeup: Option<LoopWakeup>,
     ) -> Self {
         Self {
             is_chinese,
@@ -59,6 +62,7 @@ impl DBusMenu {
             exit_requested,
             settings_running,
             icon_update_tx,
+            loop_wakeup,
         }
     }
 
@@ -210,6 +214,9 @@ impl DBusMenu {
                 let next = !current;
                 self.is_chinese.store(next, Ordering::Release);
                 let _ = self.icon_update_tx.try_send(());
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
                 info!(
                     "[系统托盘] 右键菜单切换输入模式为: {}",
                     if next { "中文" } else { "英文" }
@@ -217,6 +224,9 @@ impl DBusMenu {
             }
             2 => {
                 self.reload_requested.store(true, Ordering::Release);
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
                 info!("[系统托盘] 右键菜单触发：已发出重新加载词库与配置信号...");
             }
             3 => {
@@ -229,6 +239,9 @@ impl DBusMenu {
                 info!("[系统托盘] 收到退出菜单指令，正在触发优雅停机与数据落盘流程...");
                 self.exit_requested.store(true, Ordering::Release);
                 let _ = self.icon_update_tx.try_send(());
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
             }
             _ => {}
         }
@@ -256,7 +269,7 @@ mod tests {
         let settings = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = mpsc::sync_channel(1);
 
-        let menu = DBusMenu::new(is_chinese, reload, exit, settings, tx);
+        let menu = DBusMenu::new(is_chinese, reload, exit, settings, tx, None);
         let (_rev, (_root_id, _props, items)) = menu.get_layout(0, -1, Vec::new());
         assert_eq!(items.len(), 5);
 

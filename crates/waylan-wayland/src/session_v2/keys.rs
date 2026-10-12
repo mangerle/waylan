@@ -432,7 +432,11 @@ pub fn next_poll_timeout_ms(session: &WaylanV2Session, default_ms: i32) -> i32 {
         return 0;
     }
     let remain_ms = next_fire.duration_since(now).as_millis() as i32;
-    remain_ms.clamp(1, default_ms)
+    if default_ms < 0 {
+        remain_ms.max(1)
+    } else {
+        remain_ms.clamp(1, default_ms)
+    }
 }
 
 /// 检查并触发已到期的长按按键连击事件

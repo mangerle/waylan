@@ -185,8 +185,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 8. 启动系统任务栏托盘常驻服务 (StatusNotifierItem)，与系统退出信号共享同一退出标志
-    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now));
+    // 8. 启动事件循环跨线程唤醒通道与系统任务栏托盘常驻服务 (StatusNotifierItem)
+    let loop_wakeup = waylan_wayland::LoopWakeup::new().ok();
+    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now), loop_wakeup.clone());
 
     info!("------------------------------------------------------------");
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
@@ -230,6 +231,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_v2.mode_notify_tx = Some(tray.icon_notifier());
         session_v2.reload_requested = Some(tray.reload_flag());
         session_v2.exit_requested = Some(tray.exit_flag());
+        session_v2.loop_wakeup = loop_wakeup.clone();
         session_v2.reload_callback = Some(Box::new(apply_reload_v2));
         let v2_result = waylan_wayland::run_session_v2_loop_fallible(session_v2);
         match v2_result {
@@ -266,6 +268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 session.mode_notify_tx = Some(tray.icon_notifier());
                 session.reload_requested = Some(tray.reload_flag());
                 session.exit_requested = Some(tray.exit_flag());
+                session.loop_wakeup = loop_wakeup.clone();
                 session.reload_callback = Some(Box::new(apply_reload_v1));
                 waylan_wayland::run_session_v1_loop(session)
             }
@@ -293,6 +296,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session.mode_notify_tx = Some(tray.icon_notifier());
         session.reload_requested = Some(tray.reload_flag());
         session.exit_requested = Some(tray.exit_flag());
+        session.loop_wakeup = loop_wakeup;
         session.reload_callback = Some(Box::new(apply_reload_v1));
         waylan_wayland::run_session_v1_loop(session)
     };

@@ -2,11 +2,13 @@ pub mod fs_watcher;
 pub mod input_constants;
 pub mod input_core;
 pub mod keymap;
+pub mod loop_wakeup;
 pub mod protocol_v1;
 pub mod session_v1;
 pub mod session_v2;
 pub mod surface;
 
+pub use fs_watcher::InotifyWatcher;
 pub use input_core::{
     keycode_to_ascii_digit_char, keycode_to_char, keycode_to_digit, keycode_to_punctuation,
     keycode_to_punctuation_with_shift, ModifierState, PageKeyConfig, KEY_APOSTROPHE, KEY_BACKSPACE,
@@ -15,12 +17,12 @@ pub use input_core::{
     KEY_RIGHTALT, KEY_RIGHTBRACE, KEY_RIGHTCTRL, KEY_RIGHTSHIFT, KEY_SEMICOLON, KEY_SLASH,
     KEY_SPACE, KEY_TAB, KEY_UP, MOD_ALT, MOD_CTRL, MOD_SHIFT, MOD_SUPER,
 };
+pub use loop_wakeup::LoopWakeup;
 
 use std::error::Error;
 use std::fmt;
 use std::io::{self, ErrorKind};
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
 
 use log::{info, warn};
 use rustix::event::{poll, PollFd, PollFlags};
@@ -243,9 +245,9 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn E
     }
     session.qhandle = Some(qh.clone());
 
+    session.init_inotify_watcher();
     info!("[微澜 Wayland] 成功绑定 zwp_input_method_v1 接口，进入输入法事件分发循环。");
 
-    let mut last_ext_sync = Instant::now();
     loop {
         if session
             .exit_requested
@@ -260,24 +262,80 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn E
         event_queue.dispatch_pending(&mut session)?;
         event_queue.flush()?;
 
+        let default_poll_timeout = if session.inotify_watcher.is_some() {
+            -1
+        } else {
+            2000
+        };
+        let timeout_ms = session.next_poll_timeout_ms(default_poll_timeout);
+        let inotify_fd = session.inotify_watcher.as_ref().map(|w| w.fd());
+        let wakeup_fd = session.loop_wakeup.as_ref().map(|w| w.fd());
+
         if let Some(guard) = event_queue.prepare_read() {
-            let fd = guard.connection_fd();
-            let mut fds = [PollFd::new(&fd, PollFlags::IN | PollFlags::ERR)];
-            match poll(&mut fds, 200) {
+            let wayland_fd = guard.connection_fd();
+            let mut fds = [
+                PollFd::new(&wayland_fd, PollFlags::IN | PollFlags::ERR),
+                PollFd::new(&wayland_fd, PollFlags::empty()),
+                PollFd::new(&wayland_fd, PollFlags::empty()),
+            ];
+            let mut fd_count = 1;
+
+            let inotify_idx = if let Some(ref fd) = inotify_fd {
+                let idx = fd_count;
+                fds[idx] = PollFd::new(&**fd, PollFlags::IN | PollFlags::ERR);
+                fd_count += 1;
+                Some(idx)
+            } else {
+                None
+            };
+
+            let wakeup_idx = if let Some(ref fd) = wakeup_fd {
+                let idx = fd_count;
+                fds[idx] = PollFd::new(&**fd, PollFlags::IN | PollFlags::ERR);
+                fd_count += 1;
+                Some(idx)
+            } else {
+                None
+            };
+
+            match poll(&mut fds[..fd_count], timeout_ms) {
                 Ok(0) => {
                     drop(guard);
-                    session.sync_external_state();
-                    last_ext_sync = Instant::now();
+                    if session.inotify_watcher.is_none() {
+                        session.sync_external_state();
+                    }
                 }
                 Ok(_) => {
-                    if let Err(WaylandError::Io(io_err)) = guard.read() {
-                        if io_err.kind() != ErrorKind::WouldBlock {
-                            return Err(io_err.into());
+                    if let Some(idx) = wakeup_idx {
+                        if fds[idx]
+                            .revents()
+                            .intersects(PollFlags::IN | PollFlags::ERR)
+                        {
+                            if let Some(ref fd) = wakeup_fd {
+                                let mut buf = [0u8; 8];
+                                while rustix::io::read(&**fd, &mut buf).is_ok() {}
+                            }
+                            session.sync_external_state();
                         }
                     }
-                    if last_ext_sync.elapsed() >= Duration::from_secs(1) {
-                        session.sync_external_state();
-                        last_ext_sync = Instant::now();
+
+                    if let Some(idx) = inotify_idx {
+                        if fds[idx]
+                            .revents()
+                            .intersects(PollFlags::IN | PollFlags::ERR)
+                        {
+                            session.sync_external_state();
+                        }
+                    }
+
+                    if fds[0].revents().intersects(PollFlags::IN | PollFlags::ERR) {
+                        if let Err(WaylandError::Io(io_err)) = guard.read() {
+                            if io_err.kind() != ErrorKind::WouldBlock {
+                                return Err(io_err.into());
+                            }
+                        }
+                    } else {
+                        drop(guard);
                     }
                 }
                 Err(Errno::INTR) => {}
@@ -362,11 +420,11 @@ pub fn run_session_v2_loop_fallible(
         }
     }
 
+    session.init_inotify_watcher();
     info!(
         "[微澜 Wayland] 成功绑定 zwp_input_method_manager_v2、wl_compositor 与 wl_shm，进入 V2 输入法事件分发循环。"
     );
 
-    let mut last_ext_sync = Instant::now();
     loop {
         if session
             .exit_requested
@@ -394,26 +452,81 @@ pub fn run_session_v2_loop_fallible(
             return Err((e.into(), Box::new(session)));
         }
 
-        let timeout_ms = session.next_poll_timeout_ms(200);
+        let default_poll_timeout = if session.inotify_watcher.is_some() {
+            -1
+        } else {
+            2000
+        };
+        let timeout_ms = session.next_poll_timeout_ms(default_poll_timeout);
+        let inotify_fd = session.inotify_watcher.as_ref().map(|w| w.fd());
+        let wakeup_fd = session.loop_wakeup.as_ref().map(|w| w.fd());
+
         if let Some(guard) = event_queue.prepare_read() {
-            let fd = guard.connection_fd();
-            let mut fds = [PollFd::new(&fd, PollFlags::IN | PollFlags::ERR)];
-            match poll(&mut fds, timeout_ms) {
+            let wayland_fd = guard.connection_fd();
+            let mut fds = [
+                PollFd::new(&wayland_fd, PollFlags::IN | PollFlags::ERR),
+                PollFd::new(&wayland_fd, PollFlags::empty()),
+                PollFd::new(&wayland_fd, PollFlags::empty()),
+            ];
+            let mut fd_count = 1;
+
+            let inotify_idx = if let Some(ref fd) = inotify_fd {
+                let idx = fd_count;
+                fds[idx] = PollFd::new(&**fd, PollFlags::IN | PollFlags::ERR);
+                fd_count += 1;
+                Some(idx)
+            } else {
+                None
+            };
+
+            let wakeup_idx = if let Some(ref fd) = wakeup_fd {
+                let idx = fd_count;
+                fds[idx] = PollFd::new(&**fd, PollFlags::IN | PollFlags::ERR);
+                fd_count += 1;
+                Some(idx)
+            } else {
+                None
+            };
+
+            match poll(&mut fds[..fd_count], timeout_ms) {
                 Ok(0) => {
                     drop(guard);
                     session.drive_key_repeat();
-                    session.sync_external_state();
-                    last_ext_sync = Instant::now();
+                    if session.inotify_watcher.is_none() {
+                        session.sync_external_state();
+                    }
                 }
                 Ok(_) => {
-                    if let Err(WaylandError::Io(io_err)) = guard.read() {
-                        if io_err.kind() != ErrorKind::WouldBlock {
-                            return Err((io_err.into(), Box::new(session)));
+                    if let Some(idx) = wakeup_idx {
+                        if fds[idx]
+                            .revents()
+                            .intersects(PollFlags::IN | PollFlags::ERR)
+                        {
+                            if let Some(ref fd) = wakeup_fd {
+                                let mut buf = [0u8; 8];
+                                while rustix::io::read(&**fd, &mut buf).is_ok() {}
+                            }
+                            session.sync_external_state();
                         }
                     }
-                    if last_ext_sync.elapsed() >= Duration::from_secs(1) {
-                        session.sync_external_state();
-                        last_ext_sync = Instant::now();
+
+                    if let Some(idx) = inotify_idx {
+                        if fds[idx]
+                            .revents()
+                            .intersects(PollFlags::IN | PollFlags::ERR)
+                        {
+                            session.sync_external_state();
+                        }
+                    }
+
+                    if fds[0].revents().intersects(PollFlags::IN | PollFlags::ERR) {
+                        if let Err(WaylandError::Io(io_err)) = guard.read() {
+                            if io_err.kind() != ErrorKind::WouldBlock {
+                                return Err((io_err.into(), Box::new(session)));
+                            }
+                        }
+                    } else {
+                        drop(guard);
                     }
                 }
                 Err(Errno::INTR) => {}

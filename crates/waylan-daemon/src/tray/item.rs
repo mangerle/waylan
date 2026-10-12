@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use waylan_wayland::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::OwnedObjectPath;
@@ -23,6 +24,8 @@ pub struct StatusNotifierItem {
     pub(crate) icon_zh: String,
     /// 自定义英文图标名称
     pub(crate) icon_en: String,
+    /// 事件循环唤醒通道
+    pub(crate) loop_wakeup: Option<LoopWakeup>,
 }
 
 impl StatusNotifierItem {
@@ -30,6 +33,7 @@ impl StatusNotifierItem {
         is_chinese: Arc<AtomicBool>,
         icon_update_tx: SyncSender<()>,
         config: &AppConfig,
+        loop_wakeup: Option<LoopWakeup>,
     ) -> Self {
         let env_theme = env_var_non_empty("WAYLAN_ICON_THEME_PATH");
         let env_path = env_var_non_empty("WAYLAN_ICON_PATH");
@@ -64,6 +68,7 @@ impl StatusNotifierItem {
             icon_theme_path,
             icon_zh,
             icon_en,
+            loop_wakeup,
         }
     }
 }
@@ -144,6 +149,9 @@ impl StatusNotifierItem {
         let next = !current;
         self.is_chinese.store(next, Ordering::Release);
         let _ = self.icon_update_tx.try_send(());
+        if let Some(ref wakeup) = self.loop_wakeup {
+            wakeup.wake();
+        }
         info!(
             "[系统托盘] 用户点击托盘图标，切换输入模式为: {}",
             if next { "中文" } else { "英文" }
@@ -180,7 +188,7 @@ mod tests {
             ..Default::default()
         };
 
-        let item = StatusNotifierItem::new(Arc::clone(&is_chinese), tx, &cfg);
+        let item = StatusNotifierItem::new(Arc::clone(&is_chinese), tx, &cfg, None);
         assert_eq!(item.icon_theme_path(), "/opt/waylan/icons");
         assert_eq!(item.icon_name(), "waylan-zh-custom");
 

@@ -23,7 +23,9 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::Zw
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
+use crate::fs_watcher::InotifyWatcher;
 use crate::input_core::*;
+use crate::loop_wakeup::LoopWakeup;
 use crate::surface::{CandidateSurfaceManager, CursorRect};
 
 pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
@@ -125,6 +127,10 @@ pub struct WaylanV2Session {
     pub pointer_pos: (f64, f64),
     /// 鼠标指针当前是否位于候选表面内部
     pub pointer_in_surface: bool,
+    /// 基于 Linux inotify 的配置文件与词库变更监控器
+    pub inotify_watcher: Option<InotifyWatcher>,
+    /// 事件循环跨线程唤醒器
+    pub loop_wakeup: Option<LoopWakeup>,
 }
 
 impl WaylanV2Session {
@@ -176,6 +182,8 @@ impl WaylanV2Session {
             pointer: None,
             pointer_pos: (0.0, 0.0),
             pointer_in_surface: false,
+            inotify_watcher: None,
+            loop_wakeup: None,
         }
     }
 
@@ -284,7 +292,7 @@ impl WaylanV2Session {
         .has_ctrl_or_alt()
     }
 
-    /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
+    /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）
     pub fn sync_external_state(&mut self) {
         let mut should_reload = self
             .reload_requested
@@ -292,8 +300,11 @@ impl WaylanV2Session {
             .map(|flag| flag.swap(false, Ordering::Relaxed))
             .unwrap_or(false);
 
-        let changed =
-            check_watched_paths_changed(&self.watched_paths, &mut self.last_watched_mtime);
+        let changed = if let Some(ref mut watcher) = self.inotify_watcher {
+            watcher.drain_events()
+        } else {
+            check_watched_paths_changed(&self.watched_paths, &mut self.last_watched_mtime)
+        };
         if changed {
             should_reload = true;
         }
@@ -314,6 +325,26 @@ impl WaylanV2Session {
         }
 
         self.sync_mode_from_shared_flag();
+    }
+
+    /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
+    pub fn init_inotify_watcher(&mut self) {
+        if !self.watched_paths.is_empty() && self.inotify_watcher.is_none() {
+            match InotifyWatcher::try_new(&self.watched_paths) {
+                Ok(watcher) => {
+                    info!(
+                        "[微澜 Wayland V2] 成功初始化 inotify 文件监控，关闭高频后台 stat 轮询。"
+                    );
+                    self.inotify_watcher = Some(watcher);
+                }
+                Err(e) => {
+                    warn!(
+                        "[微澜 Wayland V2] 初始化 inotify 失败 ({})，回退至定时轮询模式。",
+                        e
+                    );
+                }
+            }
+        }
     }
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用

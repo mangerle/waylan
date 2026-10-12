@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::thread;
 #[cfg(test)]
 use waylan_core::InputMode;
+use waylan_wayland::LoopWakeup;
 use zbus::blocking::connection::Builder;
 
 pub use item::StatusNotifierItem;
@@ -29,8 +30,8 @@ pub struct TrayService {
 }
 
 impl TrayService {
-    /// 使用全局退出标志启动后台系统托盘常驻服务（实现与进程信号 SIGINT/SIGTERM 共享同一退出源）
-    pub fn spawn(exit_requested: Arc<AtomicBool>) -> Self {
+    /// 使用全局退出标志与事件循环唤醒器启动后台系统托盘常驻服务
+    pub fn spawn(exit_requested: Arc<AtomicBool>, loop_wakeup: Option<LoopWakeup>) -> Self {
         let is_chinese = Arc::new(AtomicBool::new(true));
         let reload_requested = Arc::new(AtomicBool::new(false));
         let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(8);
@@ -47,6 +48,7 @@ impl TrayService {
                 exit_clone,
                 tx_clone,
                 icon_update_rx,
+                loop_wakeup,
             );
         });
 
@@ -107,15 +109,22 @@ impl TrayService {
         exit_requested: Arc<AtomicBool>,
         icon_update_tx: SyncSender<()>,
         icon_update_rx: Receiver<()>,
+        loop_wakeup: Option<LoopWakeup>,
     ) {
         let config = AppConfig::load_or_create();
-        let sni = StatusNotifierItem::new(Arc::clone(&is_chinese), icon_update_tx.clone(), &config);
+        let sni = StatusNotifierItem::new(
+            Arc::clone(&is_chinese),
+            icon_update_tx.clone(),
+            &config,
+            loop_wakeup.clone(),
+        );
         let menu = DBusMenu::new(
             is_chinese,
             reload_requested,
             Arc::clone(&exit_requested),
             Arc::new(AtomicBool::new(false)),
             icon_update_tx,
+            loop_wakeup,
         );
 
         // 尝试连接用户 DBus 会话总线

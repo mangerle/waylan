@@ -6,7 +6,7 @@ use std::sync::{
 };
 use std::time::SystemTime;
 
-use log::{debug, info};
+use log::{debug, info, warn};
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::types::AlgoConfig;
@@ -27,7 +27,9 @@ use crate::protocol_v1::input_method_v1::zwp_input_method_v1::{
 use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1;
 use crate::surface::CandidateSurfaceManager;
 
+use crate::fs_watcher::InotifyWatcher;
 pub use crate::input_core::*;
+use crate::loop_wakeup::LoopWakeup;
 
 /// V1 会话配置与词库热重载回调函数类型
 pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;
@@ -88,6 +90,10 @@ pub struct WaylanV1Session {
     pub keymap_layout: KeymapLayout,
     /// 与外部系统托盘共享的优雅退出请求标志
     pub exit_requested: Option<Arc<AtomicBool>>,
+    /// 基于 Linux inotify 的配置文件与词库变更监控器
+    pub inotify_watcher: Option<InotifyWatcher>,
+    /// 事件循环跨线程唤醒器
+    pub loop_wakeup: Option<LoopWakeup>,
 }
 
 impl Default for WaylanV1Session {
@@ -120,6 +126,8 @@ impl Default for WaylanV1Session {
             consumed_keys: ConsumedKeyTracker::new(),
             keymap_layout: KeymapLayout::default(),
             exit_requested: None,
+            inotify_watcher: None,
+            loop_wakeup: None,
         }
     }
 }
@@ -167,7 +175,7 @@ impl WaylanV1Session {
         .has_ctrl_or_alt()
     }
 
-    /// 同步外部系统托盘的中英文状态与热重载请求（同时自动感知配置文件修改时间戳变更）
+    /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）
     pub fn sync_external_state(&mut self) {
         let mut should_reload = self
             .reload_requested
@@ -175,8 +183,11 @@ impl WaylanV1Session {
             .map(|flag| flag.swap(false, Ordering::Relaxed))
             .unwrap_or(false);
 
-        let changed =
-            check_watched_paths_changed(&self.watched_paths, &mut self.last_watched_mtime);
+        let changed = if let Some(ref mut watcher) = self.inotify_watcher {
+            watcher.drain_events()
+        } else {
+            check_watched_paths_changed(&self.watched_paths, &mut self.last_watched_mtime)
+        };
         if changed {
             should_reload = true;
         }
@@ -197,6 +208,31 @@ impl WaylanV1Session {
         }
 
         self.sync_mode_from_shared_flag();
+    }
+
+    /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
+    pub fn init_inotify_watcher(&mut self) {
+        if !self.watched_paths.is_empty() && self.inotify_watcher.is_none() {
+            match InotifyWatcher::try_new(&self.watched_paths) {
+                Ok(watcher) => {
+                    info!(
+                        "[微澜 Wayland V1] 成功初始化 inotify 文件监控，关闭高频后台 stat 轮询。"
+                    );
+                    self.inotify_watcher = Some(watcher);
+                }
+                Err(e) => {
+                    warn!(
+                        "[微澜 Wayland V1] 初始化 inotify 失败 ({})，回退至定时轮询模式。",
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    /// 计算事件循环下一次 poll 的等待超时毫秒数
+    pub fn next_poll_timeout_ms(&self, default_ms: i32) -> i32 {
+        default_ms
     }
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用

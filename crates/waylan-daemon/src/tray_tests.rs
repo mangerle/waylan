@@ -37,6 +37,7 @@ fn test_tray_menu_layout_and_event() {
         exit_requested,
         settings_running: Arc::new(AtomicBool::new(false)),
         icon_update_tx,
+        loop_wakeup: None,
     };
 
     let (_rev, (_parent_id, _props, items)) = menu.get_layout(0, -1, vec![]);
@@ -70,6 +71,7 @@ fn test_tray_menu_exit_event() {
         exit_requested: Arc::clone(&exit_requested),
         settings_running: Arc::new(AtomicBool::new(false)),
         icon_update_tx,
+        loop_wakeup: None,
     };
 
     assert!(!exit_requested.load(Ordering::Relaxed));
@@ -86,6 +88,7 @@ fn test_status_notifier_item_activate_sends_icon_update() {
         Arc::clone(&is_chinese),
         icon_update_tx,
         &crate::config::AppConfig::default(),
+        None,
     );
 
     assert_eq!(sni.icon_name(), "input-keyboard");
