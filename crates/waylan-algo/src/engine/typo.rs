@@ -55,7 +55,7 @@ impl SpatialTypoCorrector {
                                 candidates.push((cand, cost));
                             }
                         }
-                    } else {
+                    } else if syllables::can_segment_into_syllables(mutated) {
                         let paths =
                             PrismEngine::build_paths(mutated, &types::FuzzyConfig::default());
                         if let Some(best) = paths.first() {
@@ -92,7 +92,7 @@ impl SpatialTypoCorrector {
                             candidates.push((cand, cost));
                         }
                     }
-                } else {
+                } else if syllables::can_segment_into_syllables(swapped) {
                     let paths = PrismEngine::build_paths(swapped, &types::FuzzyConfig::default());
                     if let Some(best) = paths.first() {
                         if best.remaining.is_empty() && !best.syllables.is_empty() {
@@ -128,5 +128,27 @@ impl SpatialTypoCorrector {
         }
 
         deduped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spatial_typo_corrector_pruning_and_recovery() {
+        let mut table = LexiconTable::new();
+        table.insert("ni'hao", "你好", 50_000);
+        table.insert("cheng", "成", 40_000);
+
+        // 邻键替换纠错：nihso (s->a) 召回 你好
+        let cands_sub = SpatialTypoCorrector::generate_candidates("nihso", &table);
+        assert!(!cands_sub.is_empty());
+        assert_eq!(cands_sub[0].text, "你好");
+
+        // 相邻倒置纠错：cehng (eh->he) 召回 成
+        let cands_swap = SpatialTypoCorrector::generate_candidates("cehng", &table);
+        assert!(!cands_swap.is_empty());
+        assert_eq!(cands_swap[0].text, "成");
     }
 }
