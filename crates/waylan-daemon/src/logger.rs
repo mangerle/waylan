@@ -3,7 +3,7 @@ use chrono::Local;
 use log::LevelFilter;
 use std::error::Error;
 use std::fs;
-use std::io::{stdout, BufWriter};
+use std::io::{stdout, LineWriter};
 use std::path::PathBuf;
 
 /// 单个日志文件最大体积上限（10 MB），超过时自动轮转重命名以防无限膨胀
@@ -56,7 +56,7 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         open_opts.mode(0o600);
     }
     let log_file = open_opts.open(&log_path)?;
-    let buffered_log_file = BufWriter::with_capacity(8192, log_file);
+    let line_writer = LineWriter::new(log_file);
 
     // 使用 fern 构建多目标日志格式化器，并对嘈杂的第三方底层库限制在 Warn 级别
     fern::Dispatch::new()
@@ -78,8 +78,8 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         .level_for("rustix", LevelFilter::Warn)
         // 终端标准输出通道
         .chain(stdout())
-        // 日志文件持久化通道（带 8KB 内存缓冲，避免逐条触发裸 write 系统调用）
-        .chain(Box::new(buffered_log_file) as Box<dyn std::io::Write + Send>)
+        // 日志文件持久化通道（按行自动刷盘，防止未捕获异常退出或异常中断时末尾日志丢失）
+        .chain(Box::new(line_writer) as Box<dyn std::io::Write + Send>)
         .apply()?;
 
     Ok(log_path)
@@ -160,5 +160,25 @@ mod tests {
         let backup_2 = temp_dir.path().join("test.log.2");
         assert!(backup_2.exists(), "二次轮转应生成 .log.2");
         assert!(backup_1.exists(), ".log.1 应更新为第二轮内容");
+    }
+
+    #[test]
+    fn test_line_writer_flushes_on_newline() {
+        let temp_dir = tempfile::tempdir().expect("创建测试临时目录失败");
+        let log_file_path = temp_dir.path().join("line_writer.log");
+        let file = fs::File::create(&log_file_path).expect("创建测试文件失败");
+        let mut writer = LineWriter::new(file);
+
+        // 未写换行符时数据仍在缓冲区中
+        writer
+            .write_all(b"hello without newline")
+            .expect("写入失败");
+        let len_before = fs::metadata(&log_file_path).unwrap().len();
+        assert_eq!(len_before, 0, "未写入换行符时文件大小应为 0");
+
+        // 写入换行符后应自动刷盘到底层文件
+        writer.write_all(b"\n").expect("写入换行符失败");
+        let len_after = fs::metadata(&log_file_path).unwrap().len();
+        assert!(len_after > 0, "写入换行符后应自动刷盘到文件");
     }
 }
