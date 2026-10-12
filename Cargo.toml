@@ -40,6 +40,7 @@ rustix = { version = "0.38", features = ["event", "fs", "shm"] }
 toml = "0.8"
 fern = "0.7"
 zbus = "4"
-egui = "0.36"
-eframe = { version = "0.36", default-features = false, features = ["wayland", "x11", "glow", "default_fonts"] }
 signal-hook = "0.3"
+slint = "1"
+slint-build = "1"
+
