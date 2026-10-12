@@ -26,8 +26,8 @@ const MAX_GLYPH_CACHE_SIZE: usize = 2048;
 pub struct CandidateBoxRenderer {
     pub theme: UiTheme,
     font: Option<Arc<Font>>,
-    /// 回退字体链（用于补充主字体未覆盖的符号、Emoji 及多语言字形）
-    pub fallback_fonts: Vec<Arc<Font>>,
+    /// 回退字体链（用于补充主字体未覆盖的符号、Emoji 及多语言字形，通过 Arc 共享避免深拷贝）
+    pub fallback_fonts: Arc<Vec<Font>>,
     /// 基础候选字号大小
     pub font_size: f32,
     /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
@@ -114,7 +114,7 @@ impl CandidateBoxRenderer {
         let mut renderer = Self {
             theme,
             font: None,
-            fallback_fonts: Vec::new(),
+            fallback_fonts: Arc::new(Vec::new()),
             font_size: 15.0,
             scale: 1.0,
             glyph_cache: Mutex::new(GlyphCacheState::with_capacity(256)),
@@ -149,9 +149,11 @@ impl CandidateBoxRenderer {
         self.font.is_some() || !self.fallback_fonts.is_empty()
     }
 
-    /// 添加额外的回退字体到字体链末尾
-    pub fn add_fallback_font(&mut self, font: impl Into<Arc<Font>>) {
-        self.fallback_fonts.push(font.into());
+    /// 添加额外的回退字体到字体链末尾（写入时复制 Arc 内部数组）
+    pub fn add_fallback_font(&mut self, font: Font) {
+        let mut new_fonts = (*self.fallback_fonts).clone();
+        new_fonts.push(font);
+        self.fallback_fonts = Arc::new(new_fonts);
         self.clear_glyph_cache();
     }
 
@@ -166,14 +168,12 @@ impl CandidateBoxRenderer {
                 return Some(font);
             }
         }
-        for fb in &self.fallback_fonts {
+        for fb in self.fallback_fonts.iter() {
             if has_valid_outline(fb) {
-                return Some(fb.as_ref());
+                return Some(fb);
             }
         }
-        self.font
-            .as_deref()
-            .or_else(|| self.fallback_fonts.first().map(|f| f.as_ref()))
+        self.font.as_deref().or_else(|| self.fallback_fonts.first())
     }
 
     /// 手动从指定文件路径加载字体

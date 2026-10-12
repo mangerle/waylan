@@ -118,8 +118,13 @@ fn test_fallback_font_chain() {
 
     // 若系统已存在回退字体（如 Noto Color Emoji 或 DejaVuSans），验证回退字体链已纳管
     let fb_fonts = FontManager::load_fallback_fonts();
-    for fb in fb_fonts {
-        renderer.add_fallback_font(fb);
+    let fb_fonts_2 = FontManager::load_fallback_fonts();
+    assert!(
+        Arc::ptr_eq(&fb_fonts, &fb_fonts_2),
+        "FontManager::load_fallback_fonts 应返回同一 Arc 共享句柄"
+    );
+    for fb in fb_fonts.iter() {
+        renderer.add_fallback_font(fb.clone());
     }
     assert!(renderer.has_font());
 }
