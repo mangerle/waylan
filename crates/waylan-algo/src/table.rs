@@ -142,6 +142,15 @@ impl LexiconTable {
         None
     }
 
+    /// 直接根据两个词的唯一 ID 查询二元转移亲和度得分（零字符串查找，微秒级 CSR 查找）
+    #[inline]
+    pub fn get_bigram_affinity_by_ids(&self, prev_id: u32, curr_id: u32) -> Option<i64> {
+        if let Some(bg) = &self.compact_bigram {
+            return bg.get_affinity_by_id(prev_id, curr_id);
+        }
+        None
+    }
+
     /// 已知前驱词 ID 时直接查询二元词对亲和度得分（避免在候选循环内重复解析前驱词 ID）
     #[inline]
     pub fn get_bigram_affinity_by_first_id(&self, prev_id: u32, curr: &str) -> Option<i64> {
@@ -168,11 +177,13 @@ impl LexiconTable {
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup(key) {
                 candidates.reserve(matches.len());
-                for (text, score) in matches {
+                for (text, score, word_id) in matches {
                     let char_len = text.chars().count() as u32;
                     let boost = char_len.saturating_sub(1).saturating_mul(600_000);
                     let final_score = score.saturating_add(boost);
-                    candidates.push(AlgoCandidate::new(text, key, final_score));
+                    candidates.push(
+                        AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
+                    );
                 }
             }
         }
@@ -199,11 +210,13 @@ impl LexiconTable {
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup_top_k(key, k) {
                 candidates.reserve(matches.len());
-                for (text, score) in matches {
+                for (text, score, word_id) in matches {
                     let char_len = text.chars().count() as u32;
                     let boost = char_len.saturating_sub(1).saturating_mul(600_000);
                     let final_score = score.saturating_add(boost);
-                    candidates.push(AlgoCandidate::new(text, key, final_score));
+                    candidates.push(
+                        AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
+                    );
                 }
             }
         }
@@ -228,20 +241,26 @@ impl LexiconTable {
         let mem_res = self.entries.get(key);
 
         match (compact_res, mem_res) {
-            (Some(mut c_list), Some(m_list)) => {
+            (Some(c_list), Some(m_list)) => {
+                let mut res: Vec<(String, u32)> =
+                    c_list.into_iter().map(|(t, s, _)| (t, s)).collect();
                 for (text, score) in m_list {
-                    Self::upsert_entry(&mut c_list, text.clone(), *score);
+                    Self::upsert_entry(&mut res, text.clone(), *score);
                 }
-                Some(c_list)
+                Some(res)
             }
-            (Some(c_list), None) => Some(c_list),
+            (Some(c_list), None) => Some(c_list.into_iter().map(|(t, s, _)| (t, s)).collect()),
             (None, Some(m_list)) => Some(m_list.clone()),
             (None, None) => None,
         }
     }
 
-    /// 按需获取指定拼音键的前 `k` 条高频原始词条（合并紧凑词库与内存增量词表并截取 Top-K）
-    pub fn get_top_raw_entries(&self, key: &str, k: usize) -> Option<Vec<(String, u32)>> {
+    /// 按需获取指定拼音键的前 `k` 条高频原始词条（合并紧凑词库与内存增量词表并截取 Top-K，保留 word_id）
+    pub fn get_top_raw_entries(
+        &self,
+        key: &str,
+        k: usize,
+    ) -> Option<Vec<(String, u32, Option<u32>)>> {
         let compact_res = self
             .compact_mmap
             .as_ref()
@@ -249,16 +268,36 @@ impl LexiconTable {
         let mem_res = self.entries.get(key);
 
         match (compact_res, mem_res) {
-            (Some(mut c_list), Some(m_list)) => {
+            (Some(c_list), Some(m_list)) => {
+                let mut res: Vec<(String, u32, Option<u32>)> = c_list
+                    .into_iter()
+                    .map(|(t, s, wid)| (t, s, Some(wid)))
+                    .collect();
                 for (text, score) in m_list.iter().take(k) {
-                    Self::upsert_entry(&mut c_list, text.clone(), *score);
+                    if let Some(existing) = res.iter_mut().find(|(t, _, _)| t == text) {
+                        if *score > existing.1 {
+                            existing.1 = *score;
+                        }
+                    } else {
+                        res.push((text.clone(), *score, None));
+                    }
                 }
-                c_list.truncate(k);
-                Some(c_list)
+                res.sort_by_key(|b| std::cmp::Reverse(b.1));
+                res.truncate(k);
+                Some(res)
             }
-            (Some(c_list), None) => Some(c_list),
+            (Some(c_list), None) => Some(
+                c_list
+                    .into_iter()
+                    .map(|(t, s, wid)| (t, s, Some(wid)))
+                    .collect(),
+            ),
             (None, Some(m_list)) => {
-                let mut top: Vec<(String, u32)> = m_list.iter().take(k).cloned().collect();
+                let mut top: Vec<(String, u32, Option<u32>)> = m_list
+                    .iter()
+                    .take(k)
+                    .map(|(t, s)| (t.clone(), *s, None))
+                    .collect();
                 if top.len() > 1 {
                     top.sort_by_key(|b| std::cmp::Reverse(b.1));
                 }

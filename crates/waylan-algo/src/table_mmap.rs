@@ -227,13 +227,13 @@ impl CompactMmapLexicon {
         None
     }
 
-    /// 获取指定 key_idx 的候选列表（支持按需截取前 `limit` 条以减少无效堆分配）
+    /// 获取指定 key_idx 的候选列表（支持按需截取前 `limit` 条以减少无效堆分配，携带 word_id）
     fn get_candidates_by_key_idx(
         &self,
         key_idx: usize,
         expected_type: Option<u8>,
         limit: Option<usize>,
-    ) -> Option<Vec<(String, u32)>> {
+    ) -> Option<Vec<(String, u32, u32)>> {
         if key_idx >= self.num_keys {
             return None;
         }
@@ -264,7 +264,7 @@ impl CompactMmapLexicon {
             let score = decode_compact_score(score_u16);
 
             if let Some(text) = self.get_word(word_id) {
-                res.push((text.to_string(), score));
+                res.push((text.to_string(), score, word_id));
             }
         }
 
@@ -272,21 +272,21 @@ impl CompactMmapLexicon {
     }
 
     /// 全拼检索（通过 DAT 精确匹配）
-    pub fn lookup(&self, key: &str) -> Option<Vec<(String, u32)>> {
+    pub fn lookup(&self, key: &str) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
         let key_idx = reader.exact_match(key)? as usize;
         self.get_candidates_by_key_idx(key_idx, Some(0), None)
     }
 
     /// 全拼按需截取 Top-K 检索（用于 Viterbi 束搜索热路径，消除同音长尾无用分配）
-    pub fn lookup_top_k(&self, key: &str, k: usize) -> Option<Vec<(String, u32)>> {
+    pub fn lookup_top_k(&self, key: &str, k: usize) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
         let key_idx = reader.exact_match(key)? as usize;
         self.get_candidates_by_key_idx(key_idx, Some(0), Some(k))
     }
 
     /// 简拼缩写检索
-    pub fn lookup_acronym(&self, key: &str) -> Option<Vec<(String, u32)>> {
+    pub fn lookup_acronym(&self, key: &str) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
         let prefixed = format!("'{}", key);
         let key_idx = reader.exact_match(&prefixed)? as usize;
@@ -294,7 +294,7 @@ impl CompactMmapLexicon {
     }
 
     /// 简拼缩写按需截取 Top-K 检索
-    pub fn lookup_acronym_top_k(&self, key: &str, k: usize) -> Option<Vec<(String, u32)>> {
+    pub fn lookup_acronym_top_k(&self, key: &str, k: usize) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
         let prefixed = format!("'{}", key);
         let key_idx = reader.exact_match(&prefixed)? as usize;
@@ -302,7 +302,7 @@ impl CompactMmapLexicon {
     }
 
     /// 声母高频单字检索
-    pub fn lookup_initial(&self, initial: &str) -> Option<Vec<(String, u32)>> {
+    pub fn lookup_initial(&self, initial: &str) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
         let prefixed = format!("''{}", initial);
         let key_idx = reader.exact_match(&prefixed)? as usize;

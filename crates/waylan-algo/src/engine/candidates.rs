@@ -197,10 +197,11 @@ impl AlgoEngine {
                 }
                 if first_matches.is_empty() {
                     if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl) {
-                        for (text, score) in initial_entries {
+                        for (text, score, word_id) in initial_entries {
                             first_matches.push(
                                 AlgoCandidate::new(text, first_syl.clone(), score)
-                                    .with_tier(CandidateTier::PrefixPartial),
+                                    .with_tier(CandidateTier::PrefixPartial)
+                                    .with_word_id(word_id),
                             );
                         }
                     }
@@ -225,11 +226,16 @@ impl AlgoEngine {
             }
             if let Some((prev, prev_id_opt)) = prev_context_info {
                 let affinity = if let Some(prev_id) = prev_id_opt {
-                    self.table
-                        .get_bigram_affinity_by_first_id(prev_id, &c.text)
-                        .unwrap_or_else(|| {
-                            BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
-                        })
+                    let curr_id = c.word_id.or_else(|| self.table.get_word_id(&c.text));
+                    if let Some(cid) = curr_id {
+                        self.table
+                            .get_bigram_affinity_by_ids(prev_id, cid)
+                            .unwrap_or_else(|| {
+                                BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
+                            })
+                    } else {
+                        BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
+                    }
                 } else {
                     BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)
                 };

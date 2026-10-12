@@ -221,13 +221,15 @@ impl ViterbiDecoder {
                 let prev_beam = &left_dp[start_idx];
                 let target_beam = &mut right_dp[0];
 
-                for (text, raw_score) in raw_entries.iter().take(4) {
+                for (text, raw_score, word_id_opt) in raw_entries.iter().take(4) {
                     let freq_score = Self::unigram_log_score(*raw_score);
-                    let curr_word_id = if has_bigram {
-                        table.get_word_id(text)
-                    } else {
-                        None
-                    };
+                    let curr_word_id = word_id_opt.or_else(|| {
+                        if has_bigram {
+                            table.get_word_id(text)
+                        } else {
+                            None
+                        }
+                    });
                     let curr_char_len = text.chars().count() as i64;
 
                     let mut best_prev_idx = 0usize;
@@ -307,14 +309,18 @@ impl ViterbiDecoder {
                     let acronym_cands = table.lookup_acronym(&acronym_key);
                     for cand in acronym_cands.iter().take(3) {
                         let freq_score = Self::unigram_log_score(cand.score);
+                        let curr_char_len = cand.text.chars().count() as i64;
                         for (prev_beam_idx, prev) in dp[split_idx].iter().enumerate() {
                             let prev_word = if split_idx == 0 {
                                 prev_context.unwrap_or("")
                             } else {
                                 &prev.word
                             };
-                            let trans_score = BigramLanguageModel::transition_score(
-                                prev_word, &cand.text, freq_score, table,
+                            let trans_score = BigramLanguageModel::transition_score_cached(
+                                (prev_word, prev.last_word_id),
+                                (&cand.text, cand.word_id, curr_char_len),
+                                freq_score,
+                                table,
                             );
                             ext_candidates.push((
                                 split_idx,
@@ -332,16 +338,27 @@ impl ViterbiDecoder {
                 for &syl in find_syllables_by_prefix(remaining) {
                     let key = format!("{}'{}", last_syl, syl);
                     if let Some(entries) = table.get_top_raw_entries(&key, 2) {
-                        for (text, raw_score) in entries.iter().take(2) {
+                        for (text, raw_score, word_id_opt) in entries.iter().take(2) {
                             let freq_score = Self::unigram_log_score(*raw_score);
+                            let curr_word_id = word_id_opt.or_else(|| {
+                                if has_bigram {
+                                    table.get_word_id(text)
+                                } else {
+                                    None
+                                }
+                            });
+                            let curr_char_len = text.chars().count() as i64;
                             for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
                                 let prev_word = if prev_step == 0 {
                                     prev_context.unwrap_or("")
                                 } else {
                                     &prev.word
                                 };
-                                let trans_score = BigramLanguageModel::transition_score(
-                                    prev_word, text, freq_score, table,
+                                let trans_score = BigramLanguageModel::transition_score_cached(
+                                    (prev_word, prev.last_word_id),
+                                    (text, curr_word_id, curr_char_len),
+                                    freq_score,
+                                    table,
                                 );
                                 ext_candidates.push((
                                     prev_step,
@@ -358,16 +375,27 @@ impl ViterbiDecoder {
             // 策略 B：降级回退（仅当策略 A1/A2 均无法组合成词时，才允许单字母枚举为高频单字）
             if ext_candidates.is_empty() && !dp[n].is_empty() {
                 if let Some(entries) = table.get_initial_raw_entries(remaining) {
-                    for (text, raw_score) in entries.iter().take(3) {
+                    for (text, raw_score, word_id_opt) in entries.iter().take(3) {
                         let freq_score = Self::unigram_log_score(*raw_score);
+                        let curr_word_id = word_id_opt.or_else(|| {
+                            if has_bigram {
+                                table.get_word_id(text)
+                            } else {
+                                None
+                            }
+                        });
+                        let curr_char_len = text.chars().count() as i64;
                         for (prev_beam_idx, prev) in dp[n].iter().enumerate() {
                             let prev_word = if n == 0 {
                                 prev_context.unwrap_or("")
                             } else {
                                 &prev.word
                             };
-                            let trans_score = BigramLanguageModel::transition_score(
-                                prev_word, text, freq_score, table,
+                            let trans_score = BigramLanguageModel::transition_score_cached(
+                                (prev_word, prev.last_word_id),
+                                (text, curr_word_id, curr_char_len),
+                                freq_score,
+                                table,
                             );
                             ext_candidates.push((
                                 n,

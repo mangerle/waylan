@@ -145,6 +145,9 @@ pub struct AlgoCandidate {
     /// 选词时显式消费的原始输入按键字节长度（若为 None 则回退至按 pinyin 自动推断）
     #[serde(default)]
     pub consumed_len: Option<usize>,
+    /// 词条在静态词库中的全局整数 ID（若来源于系统词典，可用于直接加速二元转移打分）
+    #[serde(default)]
+    pub word_id: Option<u32>,
 }
 
 impl AlgoCandidate {
@@ -159,7 +162,14 @@ impl AlgoCandidate {
             is_expandable: false,
             sub_candidates: Vec::new(),
             consumed_len: None,
+            word_id: None,
         }
+    }
+
+    /// 设置词库全局 ID
+    pub fn with_word_id(mut self, word_id: Option<u32>) -> Self {
+        self.word_id = word_id;
+        self
     }
 
     /// 附加注释说明

@@ -19,11 +19,12 @@ impl LexiconTable {
         if prefix_syllables.is_empty() {
             for &syl in matched_syllables {
                 if let Some(matches) = self.get_top_raw_entries(syl, 8) {
-                    for (text, score) in matches {
+                    for (text, score, word_id) in matches {
                         if text.chars().count() == 1 {
                             candidates.push(
                                 AlgoCandidate::new(text, syl, score)
-                                    .with_tier(CandidateTier::ExactWord),
+                                    .with_tier(CandidateTier::ExactWord)
+                                    .with_word_id(word_id),
                             );
                         }
                     }
@@ -38,13 +39,14 @@ impl LexiconTable {
                 full_key.push('\'');
                 full_key.push_str(syl);
                 if let Some(matches) = self.get_top_raw_entries(&full_key, 8) {
-                    for (text, score) in matches {
+                    for (text, score, word_id) in matches {
                         let char_len = text.chars().count() as u32;
                         let boost = char_len.saturating_sub(1).saturating_mul(600_000);
                         let final_score = score.saturating_add(boost);
                         candidates.push(
                             AlgoCandidate::new(text, full_key.as_str(), final_score)
-                                .with_tier(CandidateTier::ExactWord),
+                                .with_tier(CandidateTier::ExactWord)
+                                .with_word_id(word_id),
                         );
                     }
                 }
@@ -64,8 +66,11 @@ impl LexiconTable {
         unique
     }
 
-    /// 检索指定单字母声母对应的高频单字原始词库条目列表（合并紧凑词库与内存动态索引）
-    pub fn get_initial_raw_entries(&self, initial: &str) -> Option<Vec<(String, u32)>> {
+    /// 检索指定单字母声母对应的高频单字原始词库条目列表（合并紧凑词库与内存动态索引，保留 word_id）
+    pub fn get_initial_raw_entries(
+        &self,
+        initial: &str,
+    ) -> Option<Vec<(String, u32, Option<u32>)>> {
         let compact_res = self
             .compact_mmap
             .as_ref()
@@ -73,15 +78,38 @@ impl LexiconTable {
         let mem_res = self.initial_entries.get(initial);
 
         match (compact_res, mem_res) {
-            (Some(mut c_list), Some(m_list)) => {
+            (Some(c_list), Some(m_list)) => {
+                let mut res: Vec<(String, u32, Option<u32>)> = c_list
+                    .into_iter()
+                    .map(|(t, s, wid)| (t, s, Some(wid)))
+                    .collect();
                 for (text, score) in m_list {
-                    Self::upsert_entry(&mut c_list, text.clone(), *score);
+                    if let Some(existing) = res.iter_mut().find(|(t, _, _)| t == text) {
+                        if *score > existing.1 {
+                            existing.1 = *score;
+                        }
+                    } else {
+                        res.push((text.clone(), *score, None));
+                    }
                 }
-                c_list.truncate(5);
-                Some(c_list)
+                res.sort_by_key(|b| std::cmp::Reverse(b.1));
+                res.truncate(5);
+                Some(res)
             }
-            (Some(c_list), None) => Some(c_list),
-            (None, Some(m_list)) => Some(m_list.clone()),
+            (Some(c_list), None) => Some(
+                c_list
+                    .into_iter()
+                    .map(|(t, s, wid)| (t, s, Some(wid)))
+                    .collect(),
+            ),
+            (None, Some(m_list)) => {
+                let mut top: Vec<(String, u32, Option<u32>)> =
+                    m_list.iter().map(|(t, s)| (t.clone(), *s, None)).collect();
+                if top.len() > 1 {
+                    top.sort_by_key(|b| std::cmp::Reverse(b.1));
+                }
+                Some(top)
+            }
             (None, None) => None,
         }
     }
@@ -92,11 +120,12 @@ impl LexiconTable {
 
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup_acronym(key) {
-                for (text, score) in matches {
+                for (text, score, word_id) in matches {
                     candidates.push(
                         AlgoCandidate::new(text, key, score)
                             .with_tier(CandidateTier::Acronym)
-                            .with_comment("[简拼]"),
+                            .with_comment("[简拼]")
+                            .with_word_id(Some(word_id)),
                     );
                 }
             }
@@ -123,11 +152,12 @@ impl LexiconTable {
 
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup_acronym_top_k(key, k) {
-                for (text, score) in matches {
+                for (text, score, word_id) in matches {
                     candidates.push(
                         AlgoCandidate::new(text, key, score)
                             .with_tier(CandidateTier::Acronym)
-                            .with_comment("[简拼]"),
+                            .with_comment("[简拼]")
+                            .with_word_id(Some(word_id)),
                     );
                 }
             }
