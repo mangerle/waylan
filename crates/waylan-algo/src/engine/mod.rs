@@ -9,6 +9,7 @@ mod tests;
 
 pub use pangu::PanguSpacing;
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -324,14 +325,14 @@ impl AlgoEngine {
         self.composition.as_str()
     }
 
-    /// 获取带智能音节切分隔音符的格式化预编辑文本（由音节语言学切分直接驱动，如 "wo'men", "shan'xi", "xian"）
-    pub fn formatted_preedit(&self) -> String {
+    /// 获取带智能音节切分隔音符的格式化预编辑文本（直接借用已缓存切分字符串或按需生成，零堆分配）
+    pub fn formatted_preedit_cow(&self) -> Cow<'_, str> {
         let raw = self.composition.as_str();
         if raw.is_empty() {
-            return String::new();
+            return Cow::Borrowed("");
         }
         if !self.cached_preedit.is_empty() {
-            return self.cached_preedit.clone();
+            return Cow::Borrowed(self.cached_preedit.as_str());
         }
 
         let paths = PrismEngine::build_paths_with_entities(
@@ -340,13 +341,18 @@ impl AlgoEngine {
             Some(&self.entity_manager),
         );
         if let Some(first_path) = paths.first() {
-            return first_path.to_key_string();
+            return Cow::Owned(first_path.to_key_string());
         }
 
-        raw.to_string()
+        Cow::Borrowed(raw)
     }
 
-    /// 计算当前光标在带隔音符的 `formatted_preedit()` 字符串中的精确 UTF-8 字节偏移
+    /// 获取带智能音节切分隔音符的格式化预编辑文本（由音节语言学切分直接驱动，如 "wo'men", "shan'xi", "xian"）
+    pub fn formatted_preedit(&self) -> String {
+        self.formatted_preedit_cow().into_owned()
+    }
+
+    /// 计算当前光标在带隔音符的预编辑字符串中的精确 UTF-8 字节偏移（直接借用缓存切片，杜绝克隆）
     pub fn formatted_cursor_byte_offset(&self) -> usize {
         let raw = self.composition.as_str();
         let raw_cursor = self.composition.cursor().min(raw.len());
@@ -354,7 +360,7 @@ impl AlgoEngine {
             return 0;
         }
 
-        let formatted = self.formatted_preedit();
+        let formatted = self.formatted_preedit_cow();
         if raw_cursor >= raw.len() {
             return formatted.len();
         }

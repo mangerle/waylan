@@ -161,8 +161,9 @@ fn handle_v1_key_press(
                 KeyProcessAction::PassThrough => {}
                 KeyProcessAction::Handled => {
                     let preedit = state.engine.formatted_preedit();
+                    let cursor = state.engine.formatted_cursor_byte_offset() as i32;
                     state.refresh_candidate_surface();
-                    context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
+                    context.preedit_cursor(cursor);
                     context.preedit_string(state.commit_serial, preedit, String::new());
                     return true;
                 }
@@ -177,9 +178,10 @@ fn handle_v1_key_press(
                     committed,
                     remaining_preedit,
                 } => {
+                    let cursor = state.engine.formatted_cursor_byte_offset() as i32;
                     context.commit_string(state.commit_serial, committed);
                     state.refresh_candidate_surface();
-                    context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
+                    context.preedit_cursor(cursor);
                     context.preedit_string(state.commit_serial, remaining_preedit, String::new());
                     return true;
                 }
@@ -237,8 +239,9 @@ fn handle_v1_key_press(
     if let Some(ch) = state.keymap_layout.get_char(key) {
         state.engine.push_char(ch);
         let preedit = state.engine.formatted_preedit();
+        let cursor = state.engine.formatted_cursor_byte_offset() as i32;
         state.refresh_candidate_surface();
-        context.preedit_cursor(state.engine.formatted_cursor_byte_offset() as i32);
+        context.preedit_cursor(cursor);
         context.preedit_string(state.commit_serial, preedit, String::new());
         return true;
     }

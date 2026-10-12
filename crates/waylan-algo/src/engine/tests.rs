@@ -237,6 +237,10 @@ fn test_formatted_cursor_byte_offset_case_and_apostrophe() {
         engine.push_char(ch);
     }
     assert_eq!(engine.formatted_preedit(), "bei'jing");
+    assert!(matches!(
+        engine.formatted_preedit_cow(),
+        std::borrow::Cow::Borrowed(_)
+    ));
     assert_eq!(engine.formatted_cursor_byte_offset(), "bei'jing".len());
 
     // 光标左移 4 次，raw_cursor 处于 3 ("bei")，应在隔音符单引号前 (3)
