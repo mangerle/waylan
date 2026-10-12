@@ -9,7 +9,7 @@ use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 use log::{info, warn};
 use session_bundle::{
     apply_reload_v1, apply_reload_v2, check_wayland_capabilities, load_auxiliary_dict,
-    load_lexicon_table, load_opencc_dict,
+    load_lexicon_table,
 };
 use std::env;
 use waylan_algo::custom_phrase::CustomPhraseManager;
@@ -162,9 +162,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aux_dict = load_auxiliary_dict();
     engine.load_auxiliary_dict(aux_dict);
 
-    // 载入简繁转换两级词库 (opencc.dict.bin)
-    let opencc_dict = load_opencc_dict();
-    engine.load_opencc_dict(opencc_dict);
+    // 简繁转换两级词库已在 AlgoEngine 构造时通过 OpenCcDict::global() 完成全局单例加载
+    info!(
+        "[简繁词库] 全局简繁转换两级词库就绪 (单字映射: {} 个, 消歧短语: {} 组)",
+        engine.opencc_dict.chars.len(),
+        engine.opencc_dict.phrases_len()
+    );
 
     // 6. 执行环境自检（--check 参数，在词库加载完成后立即自检，支持无 Wayland GUI 环境下的 CI 测试）
     if args.len() > 1 && args[1] == "--check" {

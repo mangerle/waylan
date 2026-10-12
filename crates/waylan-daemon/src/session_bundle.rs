@@ -8,7 +8,9 @@ use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, T
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::user_adaptive::UserAdaptiveModel;
-use waylan_algo::{AuxiliaryDict, OpenCcDict};
+use waylan_algo::AuxiliaryDict;
+#[cfg(test)]
+use waylan_algo::OpenCcDict;
 use waylan_ui::UiTheme;
 use waylan_wayland::probe_wayland_environment;
 use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
@@ -78,35 +80,10 @@ pub fn load_auxiliary_dict() -> AuxiliaryDict {
     AuxiliaryDict::with_default_data()
 }
 
-/// 按照多级搜索策略加载简繁转换两级词库（STPhrases + STCharacters）
-pub fn load_opencc_dict() -> OpenCcDict {
-    info!("[简繁词库] 正在定位并加载简繁转换两级词库索引...");
-    let search_paths = AppConfig::opencc_dict_search_paths();
-
-    for path in &search_paths {
-        if path.exists() {
-            let load_start = Instant::now();
-            match OpenCcDict::load_from_file(path) {
-                Ok(dict) => {
-                    let elapsed = load_start.elapsed();
-                    info!(
-                        "  - 成功加载简繁转换词库: {:?} (耗时: {:.2} ms, 单字映射: {} 个, 消歧短语: {} 组)",
-                        path,
-                        elapsed.as_secs_f64() * 1000.0,
-                        dict.chars.len(),
-                        dict.phrases_len()
-                    );
-                    return dict;
-                }
-                Err(e) => {
-                    warn!("  - 读取简繁词库文件 {:?} 失败: {}", path, e);
-                }
-            }
-        }
-    }
-
-    info!("  - 未检测到二进制简繁词库文件，回退加载开源 TSV 词表或内置核心表。");
-    OpenCcDict::load_default()
+/// 按照多级搜索策略加载简繁转换两级词库（复用 OpenCcDict 全局单例缓存，供单元测试使用）
+#[cfg(test)]
+pub fn load_opencc_dict() -> std::sync::Arc<OpenCcDict> {
+    OpenCcDict::global()
 }
 
 /// 统一会话配置包（收敛 V1 与 V2 热重载与初始化的重复配置逻辑）

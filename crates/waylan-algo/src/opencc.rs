@@ -1,6 +1,7 @@
 use crate::error::AlgoError;
 use crate::opencc_compact::CompactPhraseTable;
 use crate::types::AlgoCandidate;
+use log::info;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -58,15 +59,50 @@ impl OpenCcDict {
 
     /// 按多级路径加载默认简繁词典
     pub fn load_default() -> Self {
-        let bin_candidates = [
-            PathBuf::from("data/opencc.dict.bin"),
-            PathBuf::from("../../data/opencc.dict.bin"),
-            PathBuf::from("/usr/share/waylan/data/opencc.dict.bin"),
-            PathBuf::from("/usr/local/share/waylan/data/opencc.dict.bin"),
-        ];
+        let mut bin_candidates = Vec::with_capacity(10);
+        if let Ok(custom) = std::env::var("WAYLAN_OPENCC_DICT_PATH") {
+            if !custom.trim().is_empty() {
+                bin_candidates.push(PathBuf::from(custom));
+            }
+        }
+        if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+            if !data_home.trim().is_empty() {
+                bin_candidates.push(
+                    PathBuf::from(data_home)
+                        .join("waylan")
+                        .join("opencc.dict.bin"),
+                );
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.trim().is_empty() {
+                bin_candidates.push(
+                    PathBuf::from(home)
+                        .join(".local")
+                        .join("share")
+                        .join("waylan")
+                        .join("opencc.dict.bin"),
+                );
+            }
+        }
+        bin_candidates.push(PathBuf::from("data/opencc.dict.bin"));
+        bin_candidates.push(PathBuf::from("../../data/opencc.dict.bin"));
+        bin_candidates.push(PathBuf::from("/usr/share/waylan/data/opencc.dict.bin"));
+        bin_candidates.push(PathBuf::from("/usr/share/waylan/opencc.dict.bin"));
+        bin_candidates.push(PathBuf::from(
+            "/usr/local/share/waylan/data/opencc.dict.bin",
+        ));
+        bin_candidates.push(PathBuf::from("/usr/local/share/waylan/opencc.dict.bin"));
+
         for path in &bin_candidates {
             if path.exists() {
                 if let Ok(dict) = Self::load_from_file(path) {
+                    info!(
+                        "[简繁词库] 成功载入二进制简繁转换词库: {:?} (单字映射: {} 个, 消歧短语: {} 组)",
+                        path,
+                        dict.chars.len(),
+                        dict.phrases_len()
+                    );
                     return dict;
                 }
             }
@@ -82,11 +118,13 @@ impl OpenCcDict {
             let phrases_path = dir.join("STPhrases.txt");
             if chars_path.exists() && phrases_path.exists() {
                 if let Ok(dict) = Self::from_tsv_files(&chars_path, &phrases_path) {
+                    info!("[简繁词库] 成功从 TSV 源文件载入简繁转换词库: {:?}", dir);
                     return dict;
                 }
             }
         }
 
+        info!("[简繁词库] 未检测到外部词库文件，启用内置核心简繁映射兜底表。");
         Self::with_builtin_fallback()
     }
 
