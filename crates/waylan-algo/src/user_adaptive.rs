@@ -39,9 +39,9 @@ fn default_wal_file() -> std::sync::Mutex<Option<(PathBuf, File)>> {
 pub struct UserAdaptiveModel {
     /// 键为拼音序列，值为该拼音下记录的用户词列表
     entries: HashMap<String, Vec<UserEntry>>,
-    /// 维护的最新的使用时间戳（用于实现 O(1) 检索）
-    #[serde(default)]
-    latest_ts: u64,
+    /// 缓存维护的最大使用时间戳（用于实现 O(1) 瞬时获取，消除全表遍历）
+    #[serde(alias = "latest_ts", default)]
+    max_timestamp: u64,
     /// 运行期向 WAL 追加记录的计数器（用于触发周期性自动压缩）
     #[serde(skip)]
     wal_append_counter: usize,
@@ -57,7 +57,7 @@ impl Clone for UserAdaptiveModel {
     fn clone(&self) -> Self {
         Self {
             entries: self.entries.clone(),
-            latest_ts: self.latest_ts,
+            max_timestamp: self.max_timestamp,
             wal_append_counter: self.wal_append_counter,
             compact_threshold: self.compact_threshold,
             wal_file: std::sync::Mutex::new(None),
@@ -79,7 +79,7 @@ impl UserAdaptiveModel {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            latest_ts: 0,
+            max_timestamp: 0,
             wal_append_counter: 0,
             compact_threshold: Self::DEFAULT_COMPACT_THRESHOLD,
             wal_file: std::sync::Mutex::new(None),
@@ -123,7 +123,7 @@ impl UserAdaptiveModel {
         current_timestamp: u64,
         count: u32,
     ) {
-        self.latest_ts = self.latest_ts.max(current_timestamp);
+        self.max_timestamp = self.max_timestamp.max(current_timestamp);
         let key = pinyin.to_string();
         let list = self.entries.entry(key).or_default();
 
@@ -220,8 +220,8 @@ impl UserAdaptiveModel {
             .with_limit(MAX_USER_DICT_BYTES)
             .deserialize_from(reader)
             .map_err(|e| AlgoError::deserialize_failed(path_ref, e.to_string()))?;
-        if model.latest_ts == 0 {
-            model.latest_ts = model
+        if model.max_timestamp == 0 {
+            model.max_timestamp = model
                 .entries
                 .values()
                 .flat_map(|list| list.iter().map(|e| e.last_used_timestamp))
@@ -236,11 +236,17 @@ impl UserAdaptiveModel {
         self.entries.values().map(|list| list.len()).sum()
     }
 
-    /// 获取所有历史记录中最新的使用时间戳（若无记录则返回默认基准时间戳）
+    /// 获取缓存的最大使用时间戳
+    #[inline]
+    pub fn max_timestamp(&self) -> u64 {
+        self.max_timestamp
+    }
+
+    /// 获取所有历史记录中最新的使用时间戳（若无记录则返回默认基准时间戳，O(1) 复杂度）
     #[inline]
     pub fn latest_timestamp(&self) -> u64 {
-        if self.latest_ts > 0 {
-            self.latest_ts
+        if self.max_timestamp > 0 {
+            self.max_timestamp
         } else {
             1_700_000_000
         }
@@ -249,7 +255,7 @@ impl UserAdaptiveModel {
     /// 清空所有历史自造词与调频数据
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.latest_ts = 0;
+        self.max_timestamp = 0;
     }
 }
 

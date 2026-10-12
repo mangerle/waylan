@@ -234,3 +234,27 @@ fn test_save_and_load_bincode_with_limit() {
 
     let _ = std::fs::remove_file(bin_path);
 }
+
+#[test]
+fn test_cached_max_timestamp_o1() {
+    let mut model = UserAdaptiveModel::new();
+    assert_eq!(model.max_timestamp(), 0);
+    assert_eq!(model.latest_timestamp(), 1_700_000_000);
+
+    model.record_commit("词条一", "ci'tiao'yi", 1_700_000_100);
+    assert_eq!(model.max_timestamp(), 1_700_000_100);
+    assert_eq!(model.latest_timestamp(), 1_700_000_100);
+
+    // 更早的时间戳不会冲淡最大时间戳
+    model.record_commit("词条二", "ci'tiao'er", 1_700_000_050);
+    assert_eq!(model.max_timestamp(), 1_700_000_100);
+
+    // 更晚的时间戳会更新最大时间戳
+    model.record_commit("词条三", "ci'tiao'san", 1_700_000_300);
+    assert_eq!(model.max_timestamp(), 1_700_000_300);
+    assert_eq!(model.latest_timestamp(), 1_700_000_300);
+
+    model.clear();
+    assert_eq!(model.max_timestamp(), 0);
+    assert_eq!(model.latest_timestamp(), 1_700_000_000);
+}
