@@ -3,7 +3,7 @@ use std::io::Read;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use log::{debug, info};
+use log::debug;
 use waylan_core::{InputMode, TextAction};
 use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, WlKeyboard};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
@@ -83,7 +83,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                             InputMode::English => "英文",
                             InputMode::VMode => "V模式",
                         };
-                        info!("[微澜] 切换输入模式为：{}", mode_str);
+                        debug!("[微澜] 切换输入模式为：{}", mode_str);
 
                         // 若正在输入拼音预编辑阶段切换至英文，直接上屏原始英文字母并清空预编辑与候选框
                         if new_mode == InputMode::English && !state.engine.raw_input().is_empty() {

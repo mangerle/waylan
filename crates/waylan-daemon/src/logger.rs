@@ -3,7 +3,7 @@ use chrono::Local;
 use log::LevelFilter;
 use std::error::Error;
 use std::fs;
-use std::io::stdout;
+use std::io::{stdout, BufWriter};
 use std::path::PathBuf;
 
 /// 单个日志文件最大体积上限（10 MB），超过时自动轮转重命名以防无限膨胀
@@ -56,6 +56,7 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         open_opts.mode(0o600);
     }
     let log_file = open_opts.open(&log_path)?;
+    let buffered_log_file = BufWriter::with_capacity(8192, log_file);
 
     // 使用 fern 构建多目标日志格式化器，并对嘈杂的第三方底层库限制在 Warn 级别
     fern::Dispatch::new()
@@ -77,8 +78,8 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         .level_for("rustix", LevelFilter::Warn)
         // 终端标准输出通道
         .chain(stdout())
-        // 日志文件持久化通道
-        .chain(log_file)
+        // 日志文件持久化通道（带 8KB 内存缓冲，避免逐条触发裸 write 系统调用）
+        .chain(Box::new(buffered_log_file) as Box<dyn std::io::Write + Send>)
         .apply()?;
 
     Ok(log_path)

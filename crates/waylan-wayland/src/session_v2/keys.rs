@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use log::info;
+use log::debug;
 use waylan_core::{Candidate, CandidateBoxState, ExpandedCardState, InputMode, TextAction};
 
 use super::surrounding::{clamp_char_boundary_ceil, clamp_char_boundary_floor};
@@ -352,7 +352,7 @@ pub fn process_key_event(
                 InputMode::English => "英文",
                 InputMode::VMode => "V模式",
             };
-            info!("[Wayland v2] 切换输入模式为：{}", mode_str);
+            debug!("[Wayland v2] 切换输入模式为：{}", mode_str);
 
             if new_mode == InputMode::English && !session.engine.raw_input().is_empty() {
                 let raw = session.engine.raw_input().to_string();
