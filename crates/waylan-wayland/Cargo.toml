@@ -19,3 +19,4 @@ tempfile.workspace = true
 log.workspace = true
 rustix.workspace = true
 signal-hook.workspace = true
+memmap2.workspace = true

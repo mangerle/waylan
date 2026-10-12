@@ -1,4 +1,5 @@
 use log::{debug, warn};
+use memmap2::MmapMut;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
@@ -12,7 +13,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Dispatch, QueueHandle};
 
-/// 候选框共享内存持久槽位（复用匿名文件描述符、预分配内存空间与 Wayland 共享内存池）
+/// 候选框共享内存持久槽位（复用匿名文件描述符、预分配内存空间、持久映射与 Wayland 共享内存池）
 pub struct ShmSlot {
     /// 匿名共享内存文件
     pub file: File,
@@ -22,28 +23,37 @@ pub struct ShmSlot {
     pub is_busy: bool,
     /// 持久复用的 Wayland 共享内存池及其当前在合成器侧映射的字节大小（消除每次按键重复 mmap/munmap）
     pub pool: Option<(WlShmPool, usize)>,
+    /// 内存映射句柄（直接写入共享内存，消除通过 file.seek 与 file.write_all 的重复用户态到内核态拷贝）
+    pub mmap: Option<MmapMut>,
 }
 
 impl ShmSlot {
     /// 创建带有指定初始容量的共享内存槽位
     pub fn new(capacity: usize) -> std::io::Result<Self> {
         let file = CandidateSurfaceManager::create_shm_fd(capacity)?;
+        // SAFETY: 刚创建的匿名文件尚未与其他线程或进程共享，创建映射是安全的
+        let mmap = unsafe { MmapMut::map_mut(&file).ok() };
         Ok(Self {
             file,
             capacity,
             is_busy: false,
             pool: None,
+            mmap,
         })
     }
 
-    /// 确保文件容量至少达到目标字节数（容量不足时按 2 倍扩容）
+    /// 确保文件容量至少达到目标字节数（容量不足时按 2 倍扩容并重新映射）
     pub fn ensure_capacity(&mut self, required_bytes: usize) -> std::io::Result<()> {
         if self.capacity < required_bytes {
             let new_cap = required_bytes
                 .max(self.capacity.saturating_mul(2))
                 .max(64 * 1024);
+            self.mmap = None;
             self.file.set_len(new_cap as u64)?;
             self.capacity = new_cap;
+            self.mmap = unsafe { MmapMut::map_mut(&self.file).ok() };
+        } else if self.mmap.is_none() {
+            self.mmap = unsafe { MmapMut::map_mut(&self.file).ok() };
         }
         Ok(())
     }
@@ -127,8 +137,6 @@ pub struct CandidateSurfaceManager {
     pub slot_buffers: [Option<WlBuffer>; 4],
     /// 当前活跃槽位索引
     pub current_slot: usize,
-    /// 复用的像素格式转换内存缓冲区（避免每次按键触发堆内存重新分配）
-    pub pixel_buffer: Vec<u8>,
     /// 目标显示器逻辑分辨率 (宽, 高)，用于贴边防溢出平移与向上翻转
     pub screen_size: (i32, i32),
     /// 待合成器 release 的退役缓冲区列表（附带所属槽位索引，防止隐藏表面后 is_busy 永久锁死）
@@ -152,7 +160,6 @@ impl CandidateSurfaceManager {
             shm_slots: [None, None, None, None],
             slot_buffers: [None, None, None, None],
             current_slot: 0,
-            pixel_buffer: Vec::with_capacity(64 * 1024),
             screen_size: (1920, 1080),
             pending_release_buffers: Vec::with_capacity(4),
         }
@@ -192,20 +199,6 @@ impl CandidateSurfaceManager {
             slot.ensure_capacity(required_bytes)?;
         }
         Ok(())
-    }
-
-    /// 将 RGBA 像素流转换为 BGRA 格式并写入复用的内部缓冲区
-    fn convert_rgba_to_pixel_buffer(&mut self, rgba: &[u8]) {
-        let len = rgba.len();
-        self.pixel_buffer.resize(len, 0);
-        let src_chunks = rgba.chunks_exact(4);
-        let dst_chunks = self.pixel_buffer.chunks_exact_mut(4);
-        for (src, dst) in src_chunks.zip(dst_chunks) {
-            dst[0] = src[2]; // B
-            dst[1] = src[1]; // G
-            dst[2] = src[0]; // R
-            dst[3] = src[3]; // A
-        }
     }
 
     /// 更新来自合成器的光标矩形位置
@@ -397,9 +390,8 @@ impl CandidateSurfaceManager {
         let height = pixmap.height();
         self.on_input_active(width, height);
 
-        // 1. 复用内部内存缓冲完成 RGBA -> BGRA 格式转换
-        self.convert_rgba_to_pixel_buffer(pixmap.data());
-        let required_bytes = self.pixel_buffer.len();
+        // 1. 计算当前位图所需的字节数
+        let required_bytes = pixmap.data().len();
 
         // 2. 轮换至下一个空闲持久化槽位（双缓冲交替，严格检查合成器已 release 的空闲槽位）
         let mut available_slot = None;
@@ -433,21 +425,51 @@ impl CandidateSurfaceManager {
         }
         self.current_slot = next_slot;
 
-        // 3. 复用已有文件描述符写入像素数据，消除频繁的 tempfile() 系统调用
+        // 3. 复用持久映射句柄零拷贝写入像素数据，消除中间堆内存中转与重复 seek+write_all 内核拷贝
         let slot = self.shm_slots[self.current_slot].as_mut()?;
-        if let Err(e) = slot
-            .file
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| slot.file.write_all(&self.pixel_buffer))
-        {
+        if Self::write_rgba_to_slot(slot, pixmap.data()).is_none() {
             warn!(
-                "[悬浮窗口] 写入候选框共享内存失败，槽位: {}，原因: {}",
-                self.current_slot, e
+                "[悬浮窗口] 写入候选框共享内存失败，槽位: {}",
+                self.current_slot
             );
             return None;
         }
 
         Some((width, height, &slot.file))
+    }
+
+    /// 将 RGBA 像素流直接写入槽位的共享内存映射中（ARGB8888/BGRA 格式，零中间缓冲与零系统调用拷贝）
+    pub(crate) fn write_rgba_to_slot(slot: &mut ShmSlot, rgba: &[u8]) -> Option<()> {
+        let len = rgba.len();
+        if let Some(ref mut mmap) = slot.mmap {
+            if mmap.len() >= len {
+                let src_chunks = rgba.chunks_exact(4);
+                let dst_chunks = mmap[..len].chunks_exact_mut(4);
+                for (src, dst) in src_chunks.zip(dst_chunks) {
+                    dst[0] = src[2]; // B
+                    dst[1] = src[1]; // G
+                    dst[2] = src[0]; // R
+                    dst[3] = src[3]; // A
+                }
+                return Some(());
+            }
+        }
+
+        // 回退逻辑：若 mmap 不可用，采用文件 seek + write_all
+        if slot.file.seek(SeekFrom::Start(0)).is_err() {
+            return None;
+        }
+        let mut buf = Vec::with_capacity(len);
+        for src in rgba.chunks_exact(4) {
+            buf.push(src[2]);
+            buf.push(src[1]);
+            buf.push(src[0]);
+            buf.push(src[3]);
+        }
+        if slot.file.write_all(&buf).is_err() {
+            return None;
+        }
+        Some(())
     }
 
     /// 将 RGBA/BGRA 像素位图写入匿名内存映射文件（用于跨进程传递给 Wayland 合成器）

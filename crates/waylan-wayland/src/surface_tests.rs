@@ -24,14 +24,12 @@ fn test_cursor_popup_position() {
 
 #[test]
 fn test_rgba_to_argb8888_le_conversion() {
-    let mut manager = CandidateSurfaceManager::new();
+    let mut slot = ShmSlot::new(8 * 1024).expect("创建 ShmSlot");
     // 输入两个像素: [R=10, G=20, B=30, A=255] 与 [R=100, G=150, B=200, A=128]
     let rgba = vec![10, 20, 30, 255, 100, 150, 200, 128];
-    manager.convert_rgba_to_pixel_buffer(&rgba);
-    assert_eq!(
-        manager.pixel_buffer,
-        vec![30, 20, 10, 255, 200, 150, 100, 128]
-    );
+    CandidateSurfaceManager::write_rgba_to_slot(&mut slot, &rgba).expect("写入零拷贝 mmap");
+    let mmap = slot.mmap.as_ref().unwrap();
+    assert_eq!(&mmap[0..8], &[30, 20, 10, 255, 200, 150, 100, 128]);
 
     // 验证大批量多像素连续重排正确性
     let mut batch_rgba = Vec::with_capacity(1024 * 4);
@@ -41,9 +39,9 @@ fn test_rgba_to_argb8888_le_conversion() {
         batch_rgba.push(((i + 2) & 0xFF) as u8); // B
         batch_rgba.push(255); // A
     }
-    manager.convert_rgba_to_pixel_buffer(&batch_rgba);
-    assert_eq!(manager.pixel_buffer.len(), 1024 * 4);
-    for (idx, chunk) in manager.pixel_buffer.chunks_exact(4).enumerate() {
+    CandidateSurfaceManager::write_rgba_to_slot(&mut slot, &batch_rgba).expect("写入零拷贝 mmap");
+    let mmap = slot.mmap.as_ref().unwrap();
+    for (idx, chunk) in mmap[..1024 * 4].chunks_exact(4).enumerate() {
         let i = idx as u32;
         assert_eq!(chunk[0], ((i + 2) & 0xFF) as u8); // B
         assert_eq!(chunk[1], ((i + 1) & 0xFF) as u8); // G
@@ -146,4 +144,17 @@ fn test_shm_slot_all_busy_recycles_oldest_slot() {
     manager.hide_wayland_surface(None, &mut active_buf);
     assert!(!manager.is_visible);
     assert!(manager.pending_release_buffers.is_empty());
+}
+
+#[test]
+fn test_zero_copy_slot_mmap_writing() {
+    let mut slot = ShmSlot::new(1024).expect("创建 ShmSlot");
+    assert!(slot.mmap.is_some(), "ShmSlot 初始化必须具备有效内存映射");
+
+    let rgba = vec![10, 20, 30, 255, 100, 150, 200, 128];
+    CandidateSurfaceManager::write_rgba_to_slot(&mut slot, &rgba).expect("写入零拷贝 mmap");
+
+    let mmap = slot.mmap.as_ref().unwrap();
+    // 验证前两个像素是否已转换为 BGRA/ARGB8888 格式
+    assert_eq!(&mmap[0..8], &[30, 20, 10, 255, 200, 150, 100, 128]);
 }
