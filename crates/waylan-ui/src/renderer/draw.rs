@@ -198,7 +198,7 @@ pub fn draw_calendar_icon(
     }
 }
 
-/// 混合字形位图（采用标准 Porter-Duff Source-Over）
+/// 混合字形位图（采用整数定点 Porter-Duff Source-Over 优化，消除逐像素浮点数转换与除法）
 pub fn blend_glyph(pixmap: &mut Pixmap, glyph: &CachedGlyph, pos: (i32, i32), color: Color) {
     let (x, y) = pos;
     let width = glyph.metrics.width;
@@ -208,11 +208,21 @@ pub fn blend_glyph(pixmap: &mut Pixmap, glyph: &CachedGlyph, pos: (i32, i32), co
     let pixmap_h = pixmap.height() as i32;
     let pixels = pixmap.pixels_mut();
 
+    let ca = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
+    if ca == 0 {
+        return;
+    }
+    let cr = (color.r * 255.0).round().clamp(0.0, 255.0) as u32;
+    let cg = (color.g * 255.0).round().clamp(0.0, 255.0) as u32;
+    let cb = (color.b * 255.0).round().clamp(0.0, 255.0) as u32;
+
     for row in 0..height {
         let py = y + row as i32;
         if py < 0 || py >= pixmap_h {
             continue;
         }
+        let row_offset = row * width;
+        let py_offset = (py * pixmap_w) as usize;
 
         for col in 0..width {
             let px = x + col as i32;
@@ -220,41 +230,35 @@ pub fn blend_glyph(pixmap: &mut Pixmap, glyph: &CachedGlyph, pos: (i32, i32), co
                 continue;
             }
 
-            let alpha = bitmap[row * width + col] as f32 / 255.0;
-            if alpha <= 0.01 {
+            let cov = bitmap[row_offset + col] as u32;
+            if cov <= 2 {
                 continue;
             }
 
-            let pixel_idx = (py * pixmap_w + px) as usize;
+            let src_a = (ca * cov + 127) / 255;
+            if src_a == 0 {
+                continue;
+            }
+            let inv_sa = 255 - src_a;
+
+            let pixel_idx = py_offset + px as usize;
             let target = &mut pixels[pixel_idx];
 
-            let src_a = (color.a * alpha).clamp(0.0, 1.0);
-            let inv_sa = 1.0 - src_a;
+            let dst_a = target.alpha() as u32;
+            let dst_r = target.red() as u32;
+            let dst_g = target.green() as u32;
+            let dst_b = target.blue() as u32;
 
-            let src_r = color.r * src_a * 255.0;
-            let src_g = color.g * src_a * 255.0;
-            let src_b = color.b * src_a * 255.0;
-            let src_a_255 = src_a * 255.0;
+            let src_r_premul = (cr * src_a + 127) / 255;
+            let src_g_premul = (cg * src_a + 127) / 255;
+            let src_b_premul = (cb * src_a + 127) / 255;
 
-            let out_a = (src_a_255 + target.alpha() as f32 * inv_sa)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            let out_r = (src_r + target.red() as f32 * inv_sa)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            let out_g = (src_g + target.green() as f32 * inv_sa)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            let out_b = (src_b + target.blue() as f32 * inv_sa)
-                .round()
-                .clamp(0.0, 255.0) as u8;
+            let out_a = (src_a + (dst_a * inv_sa + 127) / 255).min(255) as u8;
+            let out_r = (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
+            let out_g = (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
+            let out_b = (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
 
-            if let Some(blended) = PremultipliedColorU8::from_rgba(
-                out_r.min(out_a),
-                out_g.min(out_a),
-                out_b.min(out_a),
-                out_a,
-            ) {
+            if let Some(blended) = PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a) {
                 *target = blended;
             }
         }

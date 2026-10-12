@@ -311,8 +311,9 @@ impl CandidateBoxRenderer {
         }
 
         let size_key = (size * 100.0).round() as u32;
-        let mut current_x = x;
-        if let Ok(mut cache) = self.glyph_cache.lock() {
+        let glyphs: Vec<(CachedGlyph, i32, i32)> = if let Ok(mut cache) = self.glyph_cache.lock() {
+            let mut list = Vec::with_capacity(text.len());
+            let mut current_x = x;
             for ch in text.chars() {
                 if let Some(glyph) =
                     self.get_or_rasterize_glyph_locked(&mut cache, ch, size, size_key)
@@ -321,11 +322,18 @@ impl CandidateBoxRenderer {
                         let gx = (current_x + glyph.metrics.xmin as f32) as i32;
                         let gy =
                             (y - glyph.metrics.height as f32 - glyph.metrics.ymin as f32) as i32;
-                        blend_glyph(pixmap, &glyph, (gx, gy), color);
+                        list.push((glyph.clone(), gx, gy));
                     }
                     current_x += glyph.metrics.advance_width;
                 }
             }
+            list
+        } else {
+            Vec::new()
+        };
+
+        for (glyph, gx, gy) in glyphs {
+            blend_glyph(pixmap, &glyph, (gx, gy), color);
         }
     }
 
