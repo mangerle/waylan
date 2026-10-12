@@ -7,7 +7,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use waylan_wayland::LoopWakeup;
 use zbus::interface;
@@ -27,14 +27,114 @@ pub(crate) fn make_menu_item(id: i32, label: &str) -> Value<'static> {
     Value::from((id, props, Vec::<Value>::new()))
 }
 
-/// 异步等待并收割外部子进程退出状态，防止产生僵尸进程
-pub(crate) fn reap_child_process(mut child: Child, running_guard: Option<Arc<AtomicBool>>) {
-    thread::spawn(move || {
-        let _ = child.wait();
-        if let Some(guard) = running_guard {
-            guard.store(false, Ordering::Release);
+/// 被纳管的外部子进程条目
+struct TrackedChild {
+    child: Child,
+    running_guard: Option<Arc<AtomicBool>>,
+    name: &'static str,
+}
+
+/// 外部子进程生命周期管理器
+///
+/// # 设计原理
+/// - **实现初衷**：统一纳管从托盘菜单或辅助工具派生的外部子进程，避免裸线程阻塞等待与脱缰孤儿进程。
+/// - **核心优势**：通过单一定时守护线程以非阻塞方式 (`try_wait`) 统一轮询回收退出子进程，在主进程退出或 Drop 时优雅清理未终止子进程 (`kill` 与 `wait`)，杜绝 PCB 残留与线程泄漏。
+/// - **代价与局限**：后台运行一个休眠 500ms 的轻量管理线程，开销极小。
+pub(crate) struct SubprocessManager {
+    children: Arc<Mutex<Vec<TrackedChild>>>,
+    shutdown: Arc<AtomicBool>,
+    reaper_handle: Option<thread::JoinHandle<()>>,
+}
+
+impl SubprocessManager {
+    pub(crate) fn new(exit_requested: Arc<AtomicBool>) -> Self {
+        let children = Arc::new(Mutex::new(Vec::<TrackedChild>::new()));
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let children_clone = Arc::clone(&children);
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let reaper_handle = thread::spawn(move || {
+            while !shutdown_clone.load(Ordering::Acquire) && !exit_requested.load(Ordering::Acquire)
+            {
+                thread::sleep(std::time::Duration::from_millis(200));
+                if let Ok(mut lock) = children_clone.lock() {
+                    lock.retain_mut(|tracked| match tracked.child.try_wait() {
+                        Ok(Some(status)) => {
+                            log::debug!(
+                                "[系统托盘] 外部子进程 [{}] 已正常退出: {:?}",
+                                tracked.name,
+                                status
+                            );
+                            if let Some(ref guard) = tracked.running_guard {
+                                guard.store(false, Ordering::Release);
+                            }
+                            false
+                        }
+                        Ok(None) => true,
+                        Err(e) => {
+                            log::warn!(
+                                "[系统托盘] 查询外部子进程 [{}] 状态失败: {}",
+                                tracked.name,
+                                e
+                            );
+                            if let Some(ref guard) = tracked.running_guard {
+                                guard.store(false, Ordering::Release);
+                            }
+                            false
+                        }
+                    });
+                }
+            }
+
+            // 收到退出信号后，主动清理所有存活子进程并收割状态
+            if let Ok(mut lock) = children_clone.lock() {
+                for tracked in lock.iter_mut() {
+                    log::info!(
+                        "[系统托盘] 正在终止被纳管的外部子进程 [{}]...",
+                        tracked.name
+                    );
+                    let _ = tracked.child.kill();
+                    let _ = tracked.child.wait();
+                    if let Some(ref guard) = tracked.running_guard {
+                        guard.store(false, Ordering::Release);
+                    }
+                }
+                lock.clear();
+            }
+        });
+
+        Self {
+            children,
+            shutdown,
+            reaper_handle: Some(reaper_handle),
         }
-    });
+    }
+
+    /// 注册纳管新启动的外部子进程
+    pub(crate) fn track(
+        &self,
+        child: Child,
+        running_guard: Option<Arc<AtomicBool>>,
+        name: &'static str,
+    ) {
+        if let Ok(mut lock) = self.children.lock() {
+            lock.push(TrackedChild {
+                child,
+                running_guard,
+                name,
+            });
+        }
+    }
+}
+
+impl Drop for SubprocessManager {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(handle) = self.reaper_handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// 标准 FreeDesktop DBusMenu 菜单实现
@@ -45,6 +145,7 @@ pub struct DBusMenu {
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) icon_update_tx: SyncSender<()>,
     pub(crate) loop_wakeup: Option<LoopWakeup>,
+    pub(crate) subprocess_manager: Arc<SubprocessManager>,
 }
 
 impl DBusMenu {
@@ -56,6 +157,7 @@ impl DBusMenu {
         icon_update_tx: SyncSender<()>,
         loop_wakeup: Option<LoopWakeup>,
     ) -> Self {
+        let subprocess_manager = Arc::new(SubprocessManager::new(Arc::clone(&exit_requested)));
         Self {
             is_chinese,
             reload_requested,
@@ -63,6 +165,7 @@ impl DBusMenu {
             settings_running,
             icon_update_tx,
             loop_wakeup,
+            subprocess_manager,
         }
     }
 
@@ -117,7 +220,11 @@ impl DBusMenu {
         let spawned = cmd1.spawn().or_else(|_| cmd2.spawn());
         match spawned {
             Ok(child) => {
-                reap_child_process(child, Some(Arc::clone(&self.settings_running)));
+                self.subprocess_manager.track(
+                    child,
+                    Some(Arc::clone(&self.settings_running)),
+                    "偏好设置界面",
+                );
             }
             Err(_) => {
                 self.settings_running.store(false, Ordering::Release);
@@ -139,7 +246,8 @@ impl DBusMenu {
             #[cfg(unix)]
             xdg_cmd.process_group(0);
             if let Ok(child) = xdg_cmd.spawn() {
-                reap_child_process(child, None);
+                self.subprocess_manager
+                    .track(child, None, "配置文件文本编辑器");
             }
         }
     }
@@ -158,7 +266,7 @@ impl DBusMenu {
         #[cfg(unix)]
         log_cmd.process_group(0);
         if let Ok(child) = log_cmd.spawn() {
-            reap_child_process(child, None);
+            self.subprocess_manager.track(child, None, "运行日志查看器");
         }
     }
 }
@@ -282,6 +390,23 @@ mod tests {
         assert!(
             serialized.contains(&expected_label),
             "菜单项中应包含实际日志绝对路径"
+        );
+    }
+
+    #[test]
+    fn test_subprocess_manager_lifecycle() {
+        let exit_requested = Arc::new(AtomicBool::new(false));
+        let manager = SubprocessManager::new(Arc::clone(&exit_requested));
+        let running = Arc::new(AtomicBool::new(true));
+
+        let child = Command::new("true").spawn().expect("执行 true 失败");
+        manager.track(child, Some(Arc::clone(&running)), "测试短进程");
+
+        // 等待轮询周期收割子进程
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(
+            !running.load(Ordering::Acquire),
+            "子进程退出后 running_guard 应被自动收割置为 false"
         );
     }
 }

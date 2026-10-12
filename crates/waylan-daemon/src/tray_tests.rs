@@ -31,14 +31,14 @@ fn test_tray_menu_layout_and_event() {
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
-    let menu = DBusMenu {
-        is_chinese: Arc::clone(&is_chinese),
-        reload_requested: Arc::clone(&reload_requested),
+    let menu = DBusMenu::new(
+        Arc::clone(&is_chinese),
+        Arc::clone(&reload_requested),
         exit_requested,
-        settings_running: Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
         icon_update_tx,
-        loop_wakeup: None,
-    };
+        None,
+    );
 
     let (_rev, (_parent_id, _props, items)) = menu.get_layout(0, -1, vec![]);
     assert_eq!(items.len(), 5);
@@ -65,14 +65,14 @@ fn test_tray_menu_exit_event() {
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, _icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
-    let menu = DBusMenu {
+    let menu = DBusMenu::new(
         is_chinese,
         reload_requested,
-        exit_requested: Arc::clone(&exit_requested),
-        settings_running: Arc::new(AtomicBool::new(false)),
+        Arc::clone(&exit_requested),
+        Arc::new(AtomicBool::new(false)),
         icon_update_tx,
-        loop_wakeup: None,
-    };
+        None,
+    );
 
     assert!(!exit_requested.load(Ordering::Relaxed));
     // 模拟点击菜单第5项（退出微澜输入法）
