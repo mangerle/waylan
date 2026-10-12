@@ -6,6 +6,7 @@ members = [
     "crates/waylan-ui",
     "crates/waylan-wayland",
     "crates/waylan-daemon",
+    "crates/waylan-settings",
 ]
 
 [workspace.package]

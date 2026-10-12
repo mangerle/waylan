@@ -1,5 +1,4 @@
-use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
-use crate::settings_gui::{EnglishImportResult, SymbolsImportResult};
+use crate::{EnglishImportResult, SymbolsImportResult};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
 use std::fs;
@@ -9,12 +8,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_algo::dict_importer::DictImporter;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AuxiliaryDict;
+use waylan_core::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 
 /// 外部导入文本词库最大允许字节数（64 MB），防止误导入超大文件触发 OOM
 const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 渲染常规设置标签页（包含候选外观、按键切换习惯与标点/算法特性）
-pub fn render_general_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut egui::Ui) {
+pub fn render_general_tab(app: &mut crate::SettingsApp, ui: &mut egui::Ui) {
     // 1. 候选外观与排版
     ui.group(|ui| {
         ui.label(RichText::new("候选框与排版外观").strong().size(14.0));
@@ -110,7 +110,7 @@ pub fn render_general_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
 }
 
 /// 渲染拼音与词库标签页（词库状态与外部词库导入）
-pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut egui::Ui) {
+pub fn render_pinyin_tab(app: &mut crate::SettingsApp, ui: &mut egui::Ui) {
     ui.group(|ui| {
         ui.label(RichText::new("全量汉语词库状态").strong().size(14.0));
         ui.label("系统预编译只读词库: base.dict.bin (约 45.7 万组词条已就绪)");
@@ -199,7 +199,7 @@ pub fn render_pinyin_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut eg
 }
 
 /// 渲染中英混输标签页
-pub fn render_english_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut egui::Ui) {
+pub fn render_english_tab(app: &mut crate::SettingsApp, ui: &mut egui::Ui) {
     ui.group(|ui| {
         ui.label(RichText::new("中英混输特性 (English Suggestion)").strong().size(14.0));
         ui.label("在中文输入模式下，直接输入常用英文单词时，候选栏次位或首位自动呈现英文原词，按空格即可直接上屏，无需按 Shift 切换。");
@@ -257,7 +257,7 @@ pub fn render_english_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut e
 }
 
 /// 渲染符号与表情标签页
-pub fn render_symbols_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut egui::Ui) {
+pub fn render_symbols_tab(app: &mut crate::SettingsApp, ui: &mut egui::Ui) {
     ui.group(|ui| {
         ui.label(RichText::new("符号与表情语义联想 (Symbol Suggestion)").strong().size(14.0));
         ui.label("输入常见语义拼音（如 dianzan, daxiao, shengri, jia, jifen）在候选栏次位呈现对应符号。");

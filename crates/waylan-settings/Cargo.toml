@@ -1,0 +1,23 @@
+[package]
+name = "waylan-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "微澜 (WayLan) 输入法偏好设置中心图形界面"
+default-run = "waylan-settings"
+
+[[bin]]
+name = "waylan-settings"
+path = "src/main.rs"
+
+[dependencies]
+waylan-core = { path = "../waylan-core" }
+waylan-algo = { path = "../waylan-algo" }
+egui.workspace = true
+eframe.workspace = true
+log.workspace = true
+fern.workspace = true
+chrono.workspace = true
+toml.workspace = true
+serde.workspace = true
+tempfile.workspace = true

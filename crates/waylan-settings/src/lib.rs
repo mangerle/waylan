@@ -1,17 +1,17 @@
-mod phrases;
-mod views;
+pub mod phrases;
+pub mod views;
 
-use crate::config::AppConfig;
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichText};
 use std::fs;
 use std::sync::Arc;
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AuxiliaryDict;
+use waylan_core::config::AppConfig;
 
 /// 偏好设置中心导航 Tab 标签页枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SettingsTab {
+pub enum SettingsTab {
     /// 常规设置（输入方案、候选外观、快捷键、标点特性）
     General,
     /// 汉字与拼音（基础单字库、核心词库、扩展词库统计与导入）
@@ -25,12 +25,12 @@ pub(crate) enum SettingsTab {
 }
 
 /// 英文词库异步导入结果类型
-pub(crate) type EnglishImportResult = Result<(usize, Vec<(String, u32)>), String>;
+pub type EnglishImportResult = Result<(usize, Vec<(String, u32)>), String>;
 /// 符号词库异步导入结果类型
-pub(crate) type SymbolsImportResult = Result<(usize, Vec<(String, String, String)>), String>;
+pub type SymbolsImportResult = Result<(usize, Vec<(String, String, String)>), String>;
 
 /// 微澜图形化偏好设置应用状态
-pub(crate) struct SettingsApp {
+pub struct SettingsApp {
     /// 当前选中的导航 Tab
     pub(crate) current_tab: SettingsTab,
     /// 内存中编辑的配置副本
@@ -82,7 +82,7 @@ impl Default for SettingsApp {
 }
 
 impl SettingsApp {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let config = AppConfig::load_or_create();
 
         // 加载现有自定义短语
@@ -145,7 +145,7 @@ impl SettingsApp {
 
     /// 探测并加载系统或用户环境中的 CJK 中文字体二进制数据
     fn find_cjk_font_data() -> Option<Vec<u8>> {
-        if let Some(custom) = crate::config::env_var_non_empty("WAYLAN_FONT_PATH") {
+        if let Some(custom) = waylan_core::config::env_var_non_empty("WAYLAN_FONT_PATH") {
             if let Ok(data) = fs::read(custom) {
                 return Some(data);
             }
@@ -177,7 +177,7 @@ impl SettingsApp {
             }
         }
 
-        if let Some(home) = crate::config::env_var_non_empty("HOME") {
+        if let Some(home) = waylan_core::config::env_var_non_empty("HOME") {
             for sub in ["NotoSansCJK-Regular.ttc", "NotoSansSC-Regular.otf"] {
                 let user_font = format!("{}/.local/share/fonts/{}", home, sub);
                 if let Ok(data) = fs::read(user_font) {

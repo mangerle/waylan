@@ -2,7 +2,6 @@ mod cli;
 mod config;
 mod logger;
 mod session_bundle;
-mod settings_gui;
 mod tray;
 
 use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
@@ -28,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 1. 初始化双通道日志系统（终端输出 + 文件落盘），确保后续 CLI 子命令、设置 GUI 与主服务日志正常输出
+    // 1. 初始化双通道日志系统（终端输出 + 文件落盘），确保后续 CLI 子命令与主服务日志正常输出
     let log_init_res = logger::init_logger();
     match log_init_res {
         Ok(ref path) => {
@@ -39,9 +38,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 2. 处理 settings 子命令（图形化偏好设置界面）
+    // 2. 处理 settings 子命令（透明转发拉起独立的 waylan-settings 偏好设置客户端）
     if args.len() >= 2 && (args[1] == "settings" || args[1] == "--settings") {
-        return settings_gui::run_settings_gui();
+        info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
+        let current_exe = env::current_exe().ok();
+        let sibling_settings = current_exe
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.join("waylan-settings"))
+            .filter(|p| p.is_file());
+
+        let mut cmd = if let Some(ref path) = sibling_settings {
+            std::process::Command::new(path)
+        } else {
+            std::process::Command::new("waylan-settings")
+        };
+
+        for var in [
+            "WAYLAND_DISPLAY",
+            "DISPLAY",
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_CURRENT_DESKTOP",
+        ] {
+            if let Ok(val) = env::var(var) {
+                cmd.env(var, &val);
+            }
+        }
+
+        match cmd.spawn() {
+            Ok(_) => {
+                info!("[微澜守护进程] 偏好设置中心已成功唤起。");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!(
+                    "[微澜守护进程] 启动偏好设置中心失败: {}。请确认 waylan-settings 已正确安装。",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
     }
 
     // 3. 处理帮助查询参数

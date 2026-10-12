@@ -1,10 +1,10 @@
-use crate::config::AppConfig;
 use eframe::egui::{self, Color32, RichText};
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
+use waylan_core::config::AppConfig;
 
 /// 渲染自定义短语与用户自造词标签页
-pub fn render_custom_phrases_tab(app: &mut crate::settings_gui::SettingsApp, ui: &mut egui::Ui) {
+pub fn render_custom_phrases_tab(app: &mut crate::SettingsApp, ui: &mut egui::Ui) {
     // 1. 用户自定义短语管理 (phrases.txt)
     ui.group(|ui| {
         ui.label(

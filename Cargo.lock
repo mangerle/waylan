@@ -3372,8 +3372,11 @@ dependencies = [
 name = "waylan-core"
 version = "0.1.0"
 dependencies = [
+ "log",
  "serde",
  "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -3381,8 +3384,6 @@ name = "waylan-daemon"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "eframe",
- "egui",
  "fern",
  "log",
  "serde",
@@ -3394,6 +3395,22 @@ dependencies = [
  "waylan-ui",
  "waylan-wayland",
  "zbus",
+]
+
+[[package]]
+name = "waylan-settings"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "eframe",
+ "egui",
+ "fern",
+ "log",
+ "serde",
+ "tempfile",
+ "toml",
+ "waylan-algo",
+ "waylan-core",
 ]
 
 [[package]]

@@ -1,3 +1,6 @@
+pub mod config;
+pub use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
+
 use serde::{Deserialize, Serialize};
 
 /// 候选词信息

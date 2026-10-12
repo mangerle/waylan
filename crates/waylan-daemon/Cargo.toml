@@ -10,10 +10,6 @@ default-run = "waylan"
 name = "waylan"
 path = "src/main.rs"
 
-[[bin]]
-name = "waylan-settings"
-path = "src/bin/settings.rs"
-
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 waylan-algo = { path = "../waylan-algo" }
@@ -25,7 +21,5 @@ log.workspace = true
 fern.workspace = true
 chrono.workspace = true
 zbus.workspace = true
-egui.workspace = true
-eframe.workspace = true
 signal-hook.workspace = true
 tempfile.workspace = true
