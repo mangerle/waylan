@@ -8,5 +8,5 @@ description = "微澜 (WayLan) 轻量无焦点矢量候选框渲染引擎"
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 tiny-skia.workspace = true
-fontdue.workspace = true
+cosmic-text.workspace = true
 log.workspace = true

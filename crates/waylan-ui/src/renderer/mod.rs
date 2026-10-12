@@ -6,191 +6,53 @@ pub mod grid;
 pub mod layout;
 
 use crate::theme::{Color, UiTheme};
-use draw::{blend_glyph, draw_rounded_rect, RoundedRectParams};
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
+use draw::blend_swash_image;
 use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
-pub use font::CachedGlyph;
 use font::FontManager;
-use fontdue::{Font, FontSettings};
 use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, LayoutParams};
-use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
 
-/// 最大字形位图缓存条目数（覆盖绝大多数常用汉字与符号，占用内存不足 1MB）
-const MAX_GLYPH_CACHE_SIZE: usize = 2048;
+/// cosmic-text 文本布局与字形光栅化状态机
+struct TextEngineState {
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    buffer: Buffer,
+}
 
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
 pub struct CandidateBoxRenderer {
     pub theme: UiTheme,
-    font: Option<Arc<Font>>,
-    /// 回退字体链（用于补充主字体未覆盖的符号、Emoji 及多语言字形，通过 Arc 共享避免深拷贝）
-    pub fallback_fonts: Arc<Vec<Font>>,
     /// 基础候选字号大小
     pub font_size: f32,
     /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
     pub scale: f32,
-    /// 字形位图与度量信息缓存（LRU 策略，避免高频字符每次击键重复矢量光栅化）
-    glyph_cache: Mutex<GlyphCacheState>,
+    /// cosmic-text 文本排版与渲染引擎状态机
+    text_engine: Mutex<TextEngineState>,
     /// 最近一次渲染生成的鼠标可点击命中测试区域列表
     hit_regions: Mutex<Vec<HitRegion>>,
 }
 
-const NULL_INDEX: usize = usize::MAX;
-
-/// 双向链表字形缓存节点
-struct CacheNode {
-    key: (char, u32),
-    glyph: CachedGlyph,
-    prev: usize,
-    next: usize,
-}
-
-/// 严格 O(1) 复杂度的数组双向链表字形 LRU 缓存状态机
-///
-/// # 设计原理
-/// - **实现初衷**：消除原实现中达到上限时在互斥锁内部进行 2048 长度向量全量分配与非稳定排序的显著停顿。
-/// - **核心优势**：基于固定槽位复用的 Arena 双向链表，查找、命中移动、未命中淘汰均严格为 O(1) 常数时间，零堆内存重分配。
-/// - **代价与局限**：每个条目额外占用 16 字节的链表双向指针索引。
-struct GlyphCacheState {
-    map: HashMap<(char, u32), usize>,
-    nodes: Vec<CacheNode>,
-    free_list: Vec<usize>,
-    head: usize,
-    tail: usize,
-}
-
-impl GlyphCacheState {
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            map: HashMap::with_capacity(capacity),
-            nodes: Vec::with_capacity(capacity),
-            free_list: Vec::new(),
-            head: NULL_INDEX,
-            tail: NULL_INDEX,
-        }
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    fn clear(&mut self) {
-        self.map.clear();
-        self.nodes.clear();
-        self.free_list.clear();
-        self.head = NULL_INDEX;
-        self.tail = NULL_INDEX;
-    }
-
-    /// 从双向链表中解绑指定节点
-    #[inline]
-    fn detach(&mut self, idx: usize) {
-        let prev = self.nodes[idx].prev;
-        let next = self.nodes[idx].next;
-
-        if prev != NULL_INDEX {
-            self.nodes[prev].next = next;
-        } else {
-            self.head = next;
-        }
-
-        if next != NULL_INDEX {
-            self.nodes[next].prev = prev;
-        } else {
-            self.tail = prev;
-        }
-
-        self.nodes[idx].prev = NULL_INDEX;
-        self.nodes[idx].next = NULL_INDEX;
-    }
-
-    /// 将指定节点挂载至链表尾部（标记为最新访问 MRU）
-    #[inline]
-    fn attach_tail(&mut self, idx: usize) {
-        self.nodes[idx].prev = self.tail;
-        self.nodes[idx].next = NULL_INDEX;
-
-        if self.tail != NULL_INDEX {
-            self.nodes[self.tail].next = idx;
-        } else {
-            self.head = idx;
-        }
-
-        self.tail = idx;
-    }
-
-    /// 查询字形位图并在命中时 O(1) 提升至链表末尾
-    fn get(&mut self, key: &(char, u32)) -> Option<&CachedGlyph> {
-        let &idx = self.map.get(key)?;
-        self.detach(idx);
-        self.attach_tail(idx);
-        Some(&self.nodes[idx].glyph)
-    }
-
-    /// 插入字形位图并在达到容量上限时 O(1) 淘汰最久未使用的头部条目
-    fn insert(&mut self, key: (char, u32), glyph: CachedGlyph) {
-        if let Some(&idx) = self.map.get(&key) {
-            self.nodes[idx].glyph = glyph;
-            self.detach(idx);
-            self.attach_tail(idx);
-            return;
-        }
-
-        if self.map.len() >= MAX_GLYPH_CACHE_SIZE {
-            let lru_idx = self.head;
-            if lru_idx != NULL_INDEX {
-                let old_key = self.nodes[lru_idx].key;
-                self.map.remove(&old_key);
-                self.detach(lru_idx);
-                self.nodes[lru_idx].key = key;
-                self.nodes[lru_idx].glyph = glyph;
-                self.attach_tail(lru_idx);
-                self.map.insert(key, lru_idx);
-                return;
-            }
-        }
-
-        let new_idx = if let Some(free_idx) = self.free_list.pop() {
-            self.nodes[free_idx] = CacheNode {
-                key,
-                glyph,
-                prev: NULL_INDEX,
-                next: NULL_INDEX,
-            };
-            free_idx
-        } else {
-            let idx = self.nodes.len();
-            self.nodes.push(CacheNode {
-                key,
-                glyph,
-                prev: NULL_INDEX,
-                next: NULL_INDEX,
-            });
-            idx
-        };
-
-        self.attach_tail(new_idx);
-        self.map.insert(key, new_idx);
-    }
-}
-
 impl CandidateBoxRenderer {
     pub fn new(theme: UiTheme) -> Self {
-        let mut renderer = Self {
+        let mut font_system = FontManager::create_font_system();
+        let swash_cache = SwashCache::new();
+        let buffer = Buffer::new(&mut font_system, Metrics::new(15.0, 18.0));
+
+        Self {
             theme,
-            font: None,
-            fallback_fonts: Arc::new(Vec::new()),
             font_size: 15.0,
             scale: 1.0,
-            glyph_cache: Mutex::new(GlyphCacheState::with_capacity(256)),
+            text_engine: Mutex::new(TextEngineState {
+                font_system,
+                swash_cache,
+                buffer,
+            }),
             hit_regions: Mutex::new(Vec::with_capacity(36)),
-        };
-        renderer.load_default_fonts();
-        renderer
+        }
     }
 
     /// 根据相对候选框表面左上角的物理像素坐标 (x, y) 执行命中测试，返回命中的操作目标
@@ -215,141 +77,76 @@ impl CandidateBoxRenderer {
 
     /// 查询当前是否已加载有效主字体或回退字体
     pub fn has_font(&self) -> bool {
-        self.font.is_some() || !self.fallback_fonts.is_empty()
-    }
-
-    /// 添加额外的回退字体到字体链末尾（写入时复制 Arc 内部数组）
-    pub fn add_fallback_font(&mut self, font: Font) {
-        let mut new_fonts = (*self.fallback_fonts).clone();
-        new_fonts.push(font);
-        self.fallback_fonts = Arc::new(new_fonts);
-        self.clear_glyph_cache();
-    }
-
-    /// 寻找能够渲染给定字符的最佳字体（优先主中文字体，若未覆盖或无有效矢量轮廓则依次查询回退字体链）
-    pub fn get_font_for_char(&self, ch: char) -> Option<&Font> {
-        let has_valid_outline = |font: &Font| -> bool {
-            font.lookup_glyph_index(ch) != 0
-                && (ch.is_whitespace() || font.metrics(ch, 15.0).width > 0)
-        };
-        if let Some(font) = self.font.as_deref() {
-            if has_valid_outline(font) {
-                return Some(font);
-            }
-        }
-        for fb in self.fallback_fonts.iter() {
-            if has_valid_outline(fb) {
-                return Some(fb);
-            }
-        }
-        self.font.as_deref().or_else(|| self.fallback_fonts.first())
+        self.text_engine
+            .lock()
+            .map(|e| e.font_system.db().faces().count() > 0)
+            .unwrap_or(false)
     }
 
     /// 手动从指定文件路径加载字体
     pub fn load_font_from_path(&mut self, path: &Path) -> bool {
-        fs::read(path)
-            .map(|data| self.load_font_from_bytes(&data))
-            .unwrap_or(false)
+        if let Ok(mut engine) = self.text_engine.lock() {
+            let res = engine.font_system.db_mut().load_font_file(path).is_ok();
+            if res {
+                self.clear_glyph_cache();
+            }
+            res
+        } else {
+            false
+        }
     }
 
     /// 从内存字节流中加载字体
     pub fn load_font_from_bytes(&mut self, bytes: &[u8]) -> bool {
-        match Font::from_bytes(bytes, FontSettings::default()) {
-            Ok(font) => {
-                self.font = Some(Arc::new(font));
-                self.clear_glyph_cache();
-                true
-            }
-            Err(e) => {
-                log::warn!(
-                    "[候选框渲染] 从内存字节流解析字体失败，字节长度: {}，原因: {}",
-                    bytes.len(),
-                    e
-                );
-                false
-            }
+        if let Ok(mut engine) = self.text_engine.lock() {
+            engine.font_system.db_mut().load_font_data(bytes.to_vec());
+            self.clear_glyph_cache();
+            true
+        } else {
+            false
         }
     }
 
     /// 获取当前字形缓存条目总数（用于诊断与测试）
     pub fn glyph_cache_len(&self) -> usize {
-        self.glyph_cache.lock().map(|c| c.len()).unwrap_or(0)
+        self.text_engine
+            .lock()
+            .map(|e| e.font_system.db().faces().count())
+            .unwrap_or(0)
     }
 
-    /// 清空字形缓存
+    /// 清空字形光栅化缓存
     pub fn clear_glyph_cache(&self) {
-        if let Ok(mut cache) = self.glyph_cache.lock() {
-            cache.clear();
+        if let Ok(mut engine) = self.text_engine.lock() {
+            engine.swash_cache = SwashCache::new();
         }
     }
 
-    /// 测量一段文字的排版宽度（单次加锁并顺带预热字形缓存，使后续绘制 100% 命中缓存）
+    /// 测量一段文字的排版宽度（基于 cosmic-text 高级塑形与布局，复用 Buffer 消除堆分配）
     pub fn measure_text(&self, text: &str, size: f32) -> f32 {
-        if !self.has_font() {
+        let Ok(mut engine) = self.text_engine.lock() else {
             let s = self.scale.max(0.5);
             return text.chars().count() as f32 * (size * 0.8 + 3.0 * s);
-        }
-
-        let size_key = (size * 100.0).round() as u32;
-        let mut width = 0.0;
-        if let Ok(mut cache) = self.glyph_cache.lock() {
-            for ch in text.chars() {
-                if let Some(cached) = cache.get(&(ch, size_key)) {
-                    width += cached.metrics.advance_width;
-                } else if let Some(font) = self.get_font_for_char(ch) {
-                    let (metrics, bitmap) = font.rasterize(ch, size);
-                    width += metrics.advance_width;
-                    cache.insert(
-                        (ch, size_key),
-                        CachedGlyph {
-                            metrics,
-                            bitmap: Arc::from(bitmap),
-                        },
-                    );
-                } else {
-                    let s = self.scale.max(0.5);
-                    width += size * 0.8 + 3.0 * s;
-                }
-            }
-        } else {
-            for ch in text.chars() {
-                if let Some(font) = self.get_font_for_char(ch) {
-                    width += font.metrics(ch, size).advance_width;
-                }
-            }
+        };
+        let engine = &mut *engine;
+        engine.buffer.set_metrics(Metrics::new(size, size * 1.2));
+        engine.buffer.set_text(
+            text,
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+            None,
+        );
+        engine
+            .buffer
+            .shape_until_scroll(&mut engine.font_system, false);
+        let mut width = 0.0f32;
+        for run in engine.buffer.layout_runs() {
+            width = width.max(run.line_w);
         }
         width
     }
 
-    /// 在已持有缓存锁的情况下获取或光栅化指定字符的字形位图（命中缓存时零字体查询开销）
-    fn get_or_rasterize_glyph_locked(
-        &self,
-        cache: &mut GlyphCacheState,
-        ch: char,
-        size: f32,
-        size_key: u32,
-    ) -> Option<CachedGlyph> {
-        if let Some(cached) = cache.get(&(ch, size_key)) {
-            return Some(cached.clone());
-        }
-
-        let font = self.get_font_for_char(ch)?;
-        let (metrics, bitmap) = font.rasterize(ch, size);
-        let cached = CachedGlyph {
-            metrics,
-            bitmap: Arc::from(bitmap),
-        };
-        cache.insert((ch, size_key), cached.clone());
-        Some(cached)
-    }
-
-    /// 加载默认系统字体与回退字体链
-    fn load_default_fonts(&mut self) {
-        self.font = FontManager::load_default_fonts();
-        self.fallback_fonts = FontManager::load_fallback_fonts();
-    }
-
-    /// 绘制文本（单次加锁查询字形缓存，消除逐字符加锁与命中时的重复字体探测）
+    /// 绘制文本（基线对齐，支持复杂连字、特殊符号与多色 Emoji）
     pub(crate) fn draw_text(
         &self,
         pixmap: &mut Pixmap,
@@ -359,50 +156,35 @@ impl CandidateBoxRenderer {
         size: f32,
         color: Color,
     ) {
-        if !self.has_font() {
-            let s = self.scale.max(0.5);
-            let mut current_x = x;
-            let (glyph_w, glyph_h) = (size * 0.8, size);
-            let placeholder_color =
-                Color::from_rgba(color.r, color.g, color.b, (color.a * 0.35).clamp(0.0, 1.0));
-            for _ in text.chars() {
-                let rect = RoundedRectParams {
-                    x: current_x,
-                    y: y - glyph_h,
-                    w: glyph_w,
-                    h: glyph_h,
-                    r: 2.0 * s,
-                };
-                draw_rounded_rect(pixmap, rect, placeholder_color);
-                current_x += glyph_w + 3.0 * s;
-            }
+        let Ok(mut engine) = self.text_engine.lock() else {
             return;
-        }
+        };
+        let engine = &mut *engine;
+        engine.buffer.set_metrics(Metrics::new(size, size * 1.2));
+        engine.buffer.set_text(
+            text,
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+            None,
+        );
+        engine
+            .buffer
+            .shape_until_scroll(&mut engine.font_system, false);
 
-        let size_key = (size * 100.0).round() as u32;
-        let glyphs: Vec<(CachedGlyph, i32, i32)> = if let Ok(mut cache) = self.glyph_cache.lock() {
-            let mut list = Vec::with_capacity(text.len());
-            let mut current_x = x;
-            for ch in text.chars() {
-                if let Some(glyph) =
-                    self.get_or_rasterize_glyph_locked(&mut cache, ch, size, size_key)
+        for run in engine.buffer.layout_runs() {
+            for glyph in run.glyphs {
+                let physical = glyph.physical((x, y - run.line_y), 1.0);
+                if let Some(img) = engine
+                    .swash_cache
+                    .get_image(&mut engine.font_system, physical.cache_key)
                 {
-                    if glyph.metrics.width > 0 && glyph.metrics.height > 0 {
-                        let gx = (current_x + glyph.metrics.xmin as f32) as i32;
-                        let gy =
-                            (y - glyph.metrics.height as f32 - glyph.metrics.ymin as f32) as i32;
-                        list.push((glyph.clone(), gx, gy));
+                    if img.placement.width > 0 && img.placement.height > 0 {
+                        let gx = physical.x + img.placement.left;
+                        let gy = physical.y - img.placement.top;
+                        blend_swash_image(pixmap, img, (gx, gy), color);
                     }
-                    current_x += glyph.metrics.advance_width;
                 }
             }
-            list
-        } else {
-            Vec::new()
-        };
-
-        for (glyph, gx, gy) in glyphs {
-            blend_glyph(pixmap, &glyph, (gx, gy), color);
         }
     }
 

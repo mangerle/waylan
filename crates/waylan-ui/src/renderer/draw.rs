@@ -1,5 +1,5 @@
-use crate::renderer::font::CachedGlyph;
 use crate::theme::{Color, UiTheme};
+use cosmic_text::{SwashContent, SwashImage};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, PremultipliedColorU8, Stroke, Transform};
 
 /// 圆角矩形几何参数
@@ -198,68 +198,137 @@ pub fn draw_calendar_icon(
     }
 }
 
-/// 混合字形位图（采用整数定点 Porter-Duff Source-Over 优化，消除逐像素浮点数转换与除法）
-pub fn blend_glyph(pixmap: &mut Pixmap, glyph: &CachedGlyph, pos: (i32, i32), color: Color) {
+/// 混合字形位图（支持 8-bit 单通道灰度 Mask 与 32-bit 彩色 Emoji，采用定点整数 Porter-Duff Source-Over 优化）
+pub fn blend_swash_image(pixmap: &mut Pixmap, image: &SwashImage, pos: (i32, i32), color: Color) {
     let (x, y) = pos;
-    let width = glyph.metrics.width;
-    let height = glyph.metrics.height;
-    let bitmap = &glyph.bitmap;
+    let width = image.placement.width as i32;
+    let height = image.placement.height as i32;
+    if width <= 0 || height <= 0 {
+        return;
+    }
     let pixmap_w = pixmap.width() as i32;
     let pixmap_h = pixmap.height() as i32;
     let pixels = pixmap.pixels_mut();
 
-    let ca = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
-    if ca == 0 {
-        return;
-    }
-    let cr = (color.r * 255.0).round().clamp(0.0, 255.0) as u32;
-    let cg = (color.g * 255.0).round().clamp(0.0, 255.0) as u32;
-    let cb = (color.b * 255.0).round().clamp(0.0, 255.0) as u32;
+    match image.content {
+        SwashContent::Mask | SwashContent::SubpixelMask => {
+            let ca = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
+            if ca == 0 {
+                return;
+            }
+            let cr = (color.r * 255.0).round().clamp(0.0, 255.0) as u32;
+            let cg = (color.g * 255.0).round().clamp(0.0, 255.0) as u32;
+            let cb = (color.b * 255.0).round().clamp(0.0, 255.0) as u32;
 
-    for row in 0..height {
-        let py = y + row as i32;
-        if py < 0 || py >= pixmap_h {
-            continue;
+            let bitmap = &image.data;
+            for row in 0..height {
+                let py = y + row;
+                if py < 0 || py >= pixmap_h {
+                    continue;
+                }
+                let row_offset = (row * width) as usize;
+                let py_offset = (py * pixmap_w) as usize;
+
+                for col in 0..width {
+                    let px = x + col;
+                    if px < 0 || px >= pixmap_w {
+                        continue;
+                    }
+
+                    let cov = bitmap[row_offset + col as usize] as u32;
+                    if cov <= 2 {
+                        continue;
+                    }
+
+                    let src_a = (ca * cov + 127) / 255;
+                    if src_a == 0 {
+                        continue;
+                    }
+                    let inv_sa = 255 - src_a;
+
+                    let pixel_idx = py_offset + px as usize;
+                    let target = &mut pixels[pixel_idx];
+
+                    let dst_a = target.alpha() as u32;
+                    let dst_r = target.red() as u32;
+                    let dst_g = target.green() as u32;
+                    let dst_b = target.blue() as u32;
+
+                    let src_r_premul = (cr * src_a + 127) / 255;
+                    let src_g_premul = (cg * src_a + 127) / 255;
+                    let src_b_premul = (cb * src_a + 127) / 255;
+
+                    let out_a = (src_a + (dst_a * inv_sa + 127) / 255).min(255) as u8;
+                    let out_r =
+                        (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
+                    let out_g =
+                        (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
+                    let out_b =
+                        (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
+
+                    if let Some(blended) =
+                        PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a)
+                    {
+                        *target = blended;
+                    }
+                }
+            }
         }
-        let row_offset = row * width;
-        let py_offset = (py * pixmap_w) as usize;
+        SwashContent::Color => {
+            let data = &image.data;
+            for row in 0..height {
+                let py = y + row;
+                if py < 0 || py >= pixmap_h {
+                    continue;
+                }
+                let row_offset = (row * width * 4) as usize;
+                let py_offset = (py * pixmap_w) as usize;
 
-        for col in 0..width {
-            let px = x + col as i32;
-            if px < 0 || px >= pixmap_w {
-                continue;
-            }
+                for col in 0..width {
+                    let px = x + col;
+                    if px < 0 || px >= pixmap_w {
+                        continue;
+                    }
 
-            let cov = bitmap[row_offset + col] as u32;
-            if cov <= 2 {
-                continue;
-            }
+                    let idx = row_offset + (col as usize * 4);
+                    if idx + 3 >= data.len() {
+                        continue;
+                    }
+                    let sr = data[idx] as u32;
+                    let sg = data[idx + 1] as u32;
+                    let sb = data[idx + 2] as u32;
+                    let sa = data[idx + 3] as u32;
+                    if sa <= 2 {
+                        continue;
+                    }
 
-            let src_a = (ca * cov + 127) / 255;
-            if src_a == 0 {
-                continue;
-            }
-            let inv_sa = 255 - src_a;
+                    let inv_sa = 255 - sa;
+                    let pixel_idx = py_offset + px as usize;
+                    let target = &mut pixels[pixel_idx];
 
-            let pixel_idx = py_offset + px as usize;
-            let target = &mut pixels[pixel_idx];
+                    let dst_a = target.alpha() as u32;
+                    let dst_r = target.red() as u32;
+                    let dst_g = target.green() as u32;
+                    let dst_b = target.blue() as u32;
 
-            let dst_a = target.alpha() as u32;
-            let dst_r = target.red() as u32;
-            let dst_g = target.green() as u32;
-            let dst_b = target.blue() as u32;
+                    let src_r_premul = (sr * sa + 127) / 255;
+                    let src_g_premul = (sg * sa + 127) / 255;
+                    let src_b_premul = (sb * sa + 127) / 255;
 
-            let src_r_premul = (cr * src_a + 127) / 255;
-            let src_g_premul = (cg * src_a + 127) / 255;
-            let src_b_premul = (cb * src_a + 127) / 255;
+                    let out_a = (sa + (dst_a * inv_sa + 127) / 255).min(255) as u8;
+                    let out_r =
+                        (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
+                    let out_g =
+                        (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
+                    let out_b =
+                        (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
 
-            let out_a = (src_a + (dst_a * inv_sa + 127) / 255).min(255) as u8;
-            let out_r = (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
-            let out_g = (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
-            let out_b = (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
-
-            if let Some(blended) = PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a) {
-                *target = blended;
+                    if let Some(blended) =
+                        PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a)
+                    {
+                        *target = blended;
+                    }
+                }
             }
         }
     }
