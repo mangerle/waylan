@@ -233,6 +233,7 @@ impl WaylanV2Session {
                     }
                 }
                 self.reset_focus_state();
+                let _ = self.engine.maybe_compact_user_dict();
             }
         }
         now_active

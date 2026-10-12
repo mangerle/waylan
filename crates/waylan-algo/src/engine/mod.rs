@@ -122,6 +122,15 @@ impl AlgoEngine {
         }
         Ok(())
     }
+
+    /// 检查并在达到压缩阈值时对用户词库执行归并压缩（通常在会话失焦时调用）
+    pub fn maybe_compact_user_dict(&mut self) -> Result<bool, AlgoError> {
+        if let Some(ref path) = self.user_dict_path {
+            self.user_model.maybe_compact_wal(path)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 impl Drop for AlgoEngine {

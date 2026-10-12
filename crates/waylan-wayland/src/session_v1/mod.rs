@@ -363,6 +363,7 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
                     state.punctuation_processor.reset();
                     state.engine.reset();
                     state.hide_candidate_surface();
+                    let _ = state.engine.maybe_compact_user_dict();
                 }
             }
         }

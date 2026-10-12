@@ -126,10 +126,14 @@ fn test_wal_runtime_auto_compaction() {
     }
     assert_eq!(model.wal_append_counter(), 4);
 
-    // 第 5 次追加达到阈值，触发自动 compact 并清零计数器
+    // 第 5 次追加达到阈值，但不会在追加写热路径中同步触发阻塞式压缩，计数器保持递增
     model
         .append_to_wal(&wal_path, "测试", "ce'shi", 1_700_000_010)
-        .expect("触发自动压缩");
+        .expect("追加写入");
+    assert_eq!(model.wal_append_counter(), 5);
+
+    // 在外部安全窗口（如会话失焦）调用 maybe_compact_wal 成功执行条件压缩并清零计数器
+    assert!(model.maybe_compact_wal(&wal_path).expect("条件压缩"));
     assert_eq!(model.wal_append_counter(), 0);
 
     // 重新加载验证数据完整无损

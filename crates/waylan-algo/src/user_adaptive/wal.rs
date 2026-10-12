@@ -149,14 +149,26 @@ impl UserAdaptiveModel {
         // 同步更新内存模型状态机（遵循 WAL 先写日志后更新内存的设计原则）
         self.record_commit(text, pinyin, timestamp);
 
-        // 运行期累计写入流水达到阈值时，自动触发一次原子压缩合并，避免 WAL 持续膨胀
+        // 运行期累计写入流水计数（解耦打字按键热路径与重度磁盘 IO，由外部在失焦或退出时调用 maybe_compact_wal）
         self.wal_append_counter += 1;
-        if self.wal_append_counter >= self.compact_threshold {
-            self.compact_wal(path_ref)?;
-            self.wal_append_counter = 0;
-        }
 
         Ok(())
+    }
+
+    /// 检查并在达到压缩阈值时执行 WAL 文件的原子压缩归并 (Compaction)
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：将耗时的全量词条扫描与 `sync_all` 磁盘落盘从用户打字热路径中剥离，
+    ///   由外部在输入法失焦（Deactivate）、闲置或退出等安全时机按需触发。
+    /// - **核心优势**：保证选词上屏维持微秒级纯页缓存写入，彻底杜绝输入过程中的瞬时停顿。
+    pub fn maybe_compact_wal<P: AsRef<Path>>(&mut self, path: P) -> Result<bool, AlgoError> {
+        if self.wal_append_counter >= self.compact_threshold {
+            self.compact_wal(path)?;
+            self.wal_append_counter = 0;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// 从二进制缓冲区重放 WAL 记录帧（公共重放逻辑）
