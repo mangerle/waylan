@@ -129,10 +129,9 @@ impl AlgoEngine {
         // 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
         if total_syls >= 4 && best_path.syllables.len() >= 3 {
             let key_3 = best_path.syllables[..3].join("'");
-            for m in self.table.lookup(&key_3) {
+            if let Some(m) = self.table.lookup_top_k(&key_3, 1).into_iter().next() {
                 if m.pinyin == key_3 {
                     prefix_items.push(self.format_prefix_candidate(m));
-                    break;
                 }
             }
         }
@@ -140,16 +139,15 @@ impl AlgoEngine {
         // 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，回退查简拼召回 Top-2 二字高频词）
         let key_2 = best_path.syllables[..2].join("'");
         let mut found_exact_2 = false;
-        for m in self.table.lookup(&key_2) {
+        if let Some(m) = self.table.lookup_top_k(&key_2, 1).into_iter().next() {
             if m.pinyin == key_2 {
                 prefix_items.push(self.format_prefix_candidate(m));
                 found_exact_2 = true;
-                break;
             }
         }
         if !found_exact_2 {
             let acronym_2 = best_path.syllables[..2].concat();
-            for mut cand in self.table.lookup_acronym(&acronym_2).into_iter().take(2) {
+            for mut cand in self.table.lookup_acronym_top_k(&acronym_2, 2) {
                 cand.consumed_len = Some(Self::compute_consumed_len(
                     self.composition.as_str(),
                     &key_2,
@@ -276,7 +274,7 @@ impl AlgoEngine {
             head_options.push((sentence.text, head_key.clone(), sentence.score));
         }
 
-        let exact_matches = self.table.lookup(&head_key);
+        let exact_matches = self.table.lookup_top_k(&head_key, 1);
         if let Some(best_exact) = exact_matches.first() {
             if !head_options.iter().any(|(t, _, _)| t == &best_exact.text) {
                 head_options.push((best_exact.text.clone(), head_key, best_exact.score));

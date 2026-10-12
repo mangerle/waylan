@@ -191,6 +191,37 @@ impl LexiconTable {
         candidates
     }
 
+    /// 根据归一化拼音键检索按需截取 Top-K 候选词（避免全量同音词解码与分配）
+    pub fn lookup_top_k(&self, key: &str, k: usize) -> Vec<AlgoCandidate> {
+        let mut candidates = Vec::with_capacity(k);
+
+        // 1. 若挂载了零拷贝 DAT 一体化紧凑词库，按需获取 Top-K
+        if let Some(compact) = &self.compact_mmap {
+            if let Some(matches) = compact.lookup_top_k(key, k) {
+                candidates.reserve(matches.len());
+                for (text, score) in matches {
+                    let char_len = text.chars().count() as u32;
+                    let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                    let final_score = score.saturating_add(boost);
+                    candidates.push(AlgoCandidate::new(text, key, final_score));
+                }
+            }
+        }
+
+        // 2. 检索内存动态词表
+        if let Some(matches) = self.entries.get(key) {
+            for (text, score) in matches.iter().take(k) {
+                let char_len = text.chars().count() as u32;
+                let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                let final_score = score.saturating_add(boost);
+                candidates.push(AlgoCandidate::new(text.clone(), key, final_score));
+            }
+        }
+
+        candidates.truncate(k);
+        candidates
+    }
+
     /// 获取指定拼音键的原始词库条目（合并紧凑词库与内存增量词表）
     pub fn get_raw_entries(&self, key: &str) -> Option<Vec<(String, u32)>> {
         let compact_res = self.compact_mmap.as_ref().and_then(|c| c.lookup(key));

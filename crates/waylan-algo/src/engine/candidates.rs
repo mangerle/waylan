@@ -154,7 +154,7 @@ impl AlgoEngine {
                 // 若前序已完成音节非空，同时将首段已完成音节的候选词作为降级备选（如“数”、“书”、“树”）
                 if !best_path.syllables.is_empty() {
                     let base_key = best_path.syllables.join("'");
-                    let mut base_matches = self.table.lookup(&base_key);
+                    let mut base_matches = self.table.lookup_top_k(&base_key, 32);
                     for bm in &mut base_matches {
                         bm.tier = CandidateTier::PrefixPartial;
                     }
@@ -169,7 +169,7 @@ impl AlgoEngine {
         } else {
             raw_input.to_string()
         };
-        let mut acronym_matches = self.table.lookup_acronym(&acronym_query);
+        let mut acronym_matches = self.table.lookup_acronym_top_k(&acronym_query, 64);
         if raw_input.contains('\'') {
             for am in &mut acronym_matches {
                 am.consumed_len = Some(raw_input.len());
@@ -182,12 +182,12 @@ impl AlgoEngine {
         if let Some(first_path) = paths.first() {
             if !first_path.syllables.is_empty() {
                 let first_syl = &first_path.syllables[0];
-                let mut first_matches = self.table.lookup(first_syl);
+                let mut first_matches = self.table.lookup_top_k(first_syl, 32);
                 if self.config.fuzzy.has_active_rules() {
                     for alt_syl in
                         PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy)
                     {
-                        let mut alt_matches = self.table.lookup(&alt_syl);
+                        let mut alt_matches = self.table.lookup_top_k(&alt_syl, 32);
                         for am in &mut alt_matches {
                             am.consumed_len = Some(first_syl.len());
                             am.score = am.score.saturating_sub(50);

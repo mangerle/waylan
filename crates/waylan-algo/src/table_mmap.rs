@@ -293,6 +293,14 @@ impl CompactMmapLexicon {
         self.get_candidates_by_key_idx(key_idx, Some(1), None)
     }
 
+    /// 简拼缩写按需截取 Top-K 检索
+    pub fn lookup_acronym_top_k(&self, key: &str, k: usize) -> Option<Vec<(String, u32)>> {
+        let reader = self.get_dat_reader();
+        let prefixed = format!("'{}", key);
+        let key_idx = reader.exact_match(&prefixed)? as usize;
+        self.get_candidates_by_key_idx(key_idx, Some(1), Some(k))
+    }
+
     /// 声母高频单字检索
     pub fn lookup_initial(&self, initial: &str) -> Option<Vec<(String, u32)>> {
         let reader = self.get_dat_reader();

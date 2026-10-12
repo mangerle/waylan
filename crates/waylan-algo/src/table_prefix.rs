@@ -116,4 +116,35 @@ impl LexiconTable {
         candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
         candidates
     }
+
+    /// 检索首字母缩写简拼候选词并按需截取 Top-K 项（如 "bj" 匹配 "北京"）
+    pub fn lookup_acronym_top_k(&self, key: &str, k: usize) -> Vec<AlgoCandidate> {
+        let mut candidates = Vec::with_capacity(k);
+
+        if let Some(compact) = &self.compact_mmap {
+            if let Some(matches) = compact.lookup_acronym_top_k(key, k) {
+                for (text, score) in matches {
+                    candidates.push(
+                        AlgoCandidate::new(text, key, score)
+                            .with_tier(CandidateTier::Acronym)
+                            .with_comment("[简拼]"),
+                    );
+                }
+            }
+        }
+
+        if let Some(matches) = self.acronym_entries.get(key) {
+            for (text, score) in matches.iter().take(k) {
+                candidates.push(
+                    AlgoCandidate::new(text.clone(), key, *score)
+                        .with_tier(CandidateTier::Acronym)
+                        .with_comment("[简拼]"),
+                );
+            }
+        }
+
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
+        candidates.truncate(k);
+        candidates
+    }
 }
