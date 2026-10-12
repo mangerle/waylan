@@ -42,9 +42,9 @@ pub struct AlgoEngine {
     /// 自定义短语管理器
     pub custom_phrases: CustomPhraseManager,
     /// 英文单词联想管理器
-    pub(crate) english_suggester: EnglishSuggestionManager,
+    pub english_suggester: Arc<EnglishSuggestionManager>,
     /// 符号表情联想管理器
-    pub(crate) symbol_suggester: SymbolSuggestionManager,
+    pub symbol_suggester: Arc<SymbolSuggestionManager>,
     /// 专有名词与实体保护管理器
     pub entity_manager: EntityProtectionManager,
     /// 简繁转换两级词库引擎（STPhrases + STCharacters）
@@ -84,8 +84,8 @@ impl AlgoEngine {
             table,
             user_model: UserAdaptiveModel::new(),
             custom_phrases: CustomPhraseManager::new(),
-            english_suggester: EnglishSuggestionManager::new(),
-            symbol_suggester: SymbolSuggestionManager::new(),
+            english_suggester: EnglishSuggestionManager::default_global(),
+            symbol_suggester: SymbolSuggestionManager::default_global(),
             entity_manager: EntityProtectionManager::new(),
             opencc_dict: OpenCcDict::global(),
             composition: Composition::new(),
@@ -157,8 +157,18 @@ impl AlgoEngine {
 
     /// 载入外部辅助与混输二进制词库（包含英文词库与符号表情库）
     pub fn load_auxiliary_dict(&mut self, dict: AuxiliaryDict) {
-        self.english_suggester = EnglishSuggestionManager::from_words(dict.english_words);
-        self.symbol_suggester = SymbolSuggestionManager::from_symbols(dict.symbols);
+        self.english_suggester = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
+        self.symbol_suggester = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
+    }
+
+    /// 设置外部预构建并以 Arc 共享的英文与符号建议管理器（零拷贝直接复用已分配内存）
+    pub fn set_suggestion_managers(
+        &mut self,
+        english: Arc<EnglishSuggestionManager>,
+        symbols: Arc<SymbolSuggestionManager>,
+    ) {
+        self.english_suggester = english;
+        self.symbol_suggester = symbols;
     }
 
     /// 载入外部简繁转换二进制词库（STPhrases + STCharacters）

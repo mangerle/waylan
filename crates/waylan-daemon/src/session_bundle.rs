@@ -1,5 +1,6 @@
 //! 输入法守护进程词库加载、环境探测与会话配置热重载管理
 
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use log::{info, warn};
@@ -8,9 +9,9 @@ use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, T
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::user_adaptive::UserAdaptiveModel;
-use waylan_algo::AuxiliaryDict;
 #[cfg(test)]
 use waylan_algo::OpenCcDict;
+use waylan_algo::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
 use waylan_ui::UiTheme;
 use waylan_wayland::probe_wayland_environment;
 use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
@@ -49,7 +50,8 @@ pub fn load_lexicon_table() -> LexiconTable {
     LexiconTable::with_sample_data()
 }
 
-/// 按照多级搜索策略加载辅助与混输词库（英文与符号表情）
+/// 按照多级搜索策略加载辅助与混输词库（英文与符号表情，供单元测试使用）
+#[cfg(test)]
 pub fn load_auxiliary_dict() -> AuxiliaryDict {
     info!("[辅助词库] 正在定位并加载混输与符号词库索引...");
     let search_paths = AppConfig::aux_dict_search_paths();
@@ -80,6 +82,53 @@ pub fn load_auxiliary_dict() -> AuxiliaryDict {
     AuxiliaryDict::with_default_data()
 }
 
+static CACHED_AUX_MANAGERS: OnceLock<(
+    Arc<EnglishSuggestionManager>,
+    Arc<SymbolSuggestionManager>,
+)> = OnceLock::new();
+
+/// 按照多级搜索策略加载辅助与混输词库管理器（单例缓存，彻底消除热重载时重复解析与 6 万次 String 堆分配）
+pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
+    CACHED_AUX_MANAGERS
+        .get_or_init(|| {
+            info!("[辅助词库] 正在定位并初始化辅助与混输词典索引...");
+            let search_paths = AppConfig::aux_dict_search_paths();
+
+            for path in &search_paths {
+                if path.exists() {
+                    let load_start = Instant::now();
+                    match AuxiliaryDict::load_from_file(path) {
+                        Ok(dict) => {
+                            let elapsed = load_start.elapsed();
+                            info!(
+                                "  - 成功加载辅助混输词库: {:?} (耗时: {:.2} ms, 英文词数: {}, 符号表情: {} 组)",
+                                path,
+                                elapsed.as_secs_f64() * 1000.0,
+                                dict.english_words.len(),
+                                dict.symbols.len()
+                            );
+                            let en =
+                                Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
+                            let sym =
+                                Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
+                            return (en, sym);
+                        }
+                        Err(e) => {
+                            warn!("  - 读取辅助词库文件 {:?} 失败: {}", path, e);
+                        }
+                    }
+                }
+            }
+
+            info!("  - 未检测到外部辅助词库文件，使用系统内置单例保底英文与符号表情库。");
+            (
+                EnglishSuggestionManager::default_global(),
+                SymbolSuggestionManager::default_global(),
+            )
+        })
+        .clone()
+}
+
 /// 按照多级搜索策略加载简繁转换两级词库（复用 OpenCcDict 全局单例缓存，供单元测试使用）
 #[cfg(test)]
 pub fn load_opencc_dict() -> std::sync::Arc<OpenCcDict> {
@@ -96,7 +145,8 @@ pub struct SessionConfigBundle {
     pub page_keys: PageKeyConfig,
     pub custom_phrases: CustomPhraseManager,
     pub user_dict_path: std::path::PathBuf,
-    pub aux_dict: AuxiliaryDict,
+    pub english_suggester: Arc<EnglishSuggestionManager>,
+    pub symbol_suggester: Arc<SymbolSuggestionManager>,
 }
 
 impl SessionConfigBundle {
@@ -135,7 +185,7 @@ impl SessionConfigBundle {
         let p_path = CustomPhraseManager::default_path();
         let custom_phrases = CustomPhraseManager::load_or_init(&p_path);
         let user_dict_path = AppConfig::user_dict_path();
-        let aux_dict = load_auxiliary_dict();
+        let (english_suggester, symbol_suggester) = load_auxiliary_managers();
         Self {
             algo_config,
             theme,
@@ -145,7 +195,8 @@ impl SessionConfigBundle {
             page_keys,
             custom_phrases,
             user_dict_path,
-            aux_dict,
+            english_suggester,
+            symbol_suggester,
         }
     }
 }
@@ -173,7 +224,8 @@ pub fn apply_reload_v2(s: &mut WaylanV2Session) {
         s.engine.user_model = UserAdaptiveModel::new();
         s.engine.set_user_dict_path(&b.user_dict_path);
     }
-    s.engine.load_auxiliary_dict(b.aux_dict);
+    s.engine.english_suggester = b.english_suggester;
+    s.engine.symbol_suggester = b.symbol_suggester;
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }
@@ -202,7 +254,8 @@ pub fn apply_reload_v1(s: &mut WaylanV1Session) {
         s.engine.user_model = UserAdaptiveModel::new();
         s.engine.set_user_dict_path(&b.user_dict_path);
     }
-    s.engine.load_auxiliary_dict(b.aux_dict);
+    s.engine.english_suggester = b.english_suggester;
+    s.engine.symbol_suggester = b.symbol_suggester;
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }

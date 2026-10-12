@@ -34,7 +34,7 @@ pub mod viterbi;
 pub mod vocab;
 
 pub use bigram::CompactMmapBigram;
-pub use custom_phrase::AuxiliaryDict;
+pub use custom_phrase::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;

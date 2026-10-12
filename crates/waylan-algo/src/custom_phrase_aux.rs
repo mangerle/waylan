@@ -1,6 +1,10 @@
 use crate::custom_phrase::AuxiliaryDict;
 use crate::types::{AlgoCandidate, CandidateTier};
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
+static DEFAULT_ENGLISH_MANAGER: OnceLock<Arc<EnglishSuggestionManager>> = OnceLock::new();
+static DEFAULT_SYMBOL_MANAGER: OnceLock<Arc<SymbolSuggestionManager>> = OnceLock::new();
 
 /// 常用高频英文单词联想管理器
 #[derive(Debug, Clone)]
@@ -18,6 +22,13 @@ impl Default for EnglishSuggestionManager {
 }
 
 impl EnglishSuggestionManager {
+    /// 获取全局单例缓存的默认英文单词联想管理器
+    pub fn default_global() -> Arc<Self> {
+        DEFAULT_ENGLISH_MANAGER
+            .get_or_init(|| Arc::new(Self::new()))
+            .clone()
+    }
+
     /// 创建带默认保底词汇的管理器
     pub fn new() -> Self {
         Self::from_words(AuxiliaryDict::default_english_words())
@@ -117,6 +128,13 @@ impl Default for SymbolSuggestionManager {
 }
 
 impl SymbolSuggestionManager {
+    /// 获取全局单例缓存的默认符号表情联想管理器
+    pub fn default_global() -> Arc<Self> {
+        DEFAULT_SYMBOL_MANAGER
+            .get_or_init(|| Arc::new(Self::new()))
+            .clone()
+    }
+
     /// 创建带默认保底符号表的管理器
     pub fn new() -> Self {
         Self::from_symbols(AuxiliaryDict::default_symbols())
@@ -194,5 +212,24 @@ mod tests {
         let res_upper = manager.lookup("WX");
         assert_eq!(res_upper.len(), 1);
         assert_eq!(res_upper[0].text, "^_^");
+    }
+
+    #[test]
+    fn test_default_global_singleton() {
+        let en1 = EnglishSuggestionManager::default_global();
+        let en2 = EnglishSuggestionManager::default_global();
+        assert!(
+            Arc::ptr_eq(&en1, &en2),
+            "多次获取英文单例应共享同一 Arc 指针"
+        );
+        assert!(!en1.is_empty(), "默认英文词库不应为空");
+
+        let sym1 = SymbolSuggestionManager::default_global();
+        let sym2 = SymbolSuggestionManager::default_global();
+        assert!(
+            Arc::ptr_eq(&sym1, &sym2),
+            "多次获取符号单例应共享同一 Arc 指针"
+        );
+        assert!(!sym1.is_empty(), "默认符号词库不应为空");
     }
 }

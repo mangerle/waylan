@@ -8,7 +8,7 @@ mod tray;
 use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
 use log::{info, warn};
 use session_bundle::{
-    apply_reload_v1, apply_reload_v2, check_wayland_capabilities, load_auxiliary_dict,
+    apply_reload_v1, apply_reload_v2, check_wayland_capabilities, load_auxiliary_managers,
     load_lexicon_table,
 };
 use std::env;
@@ -159,8 +159,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 载入混输与辅助符号词库 (aux.dict.bin)
-    let aux_dict = load_auxiliary_dict();
-    engine.load_auxiliary_dict(aux_dict);
+    let (english_suggester, symbol_suggester) = load_auxiliary_managers();
+    engine.english_suggester = english_suggester;
+    engine.symbol_suggester = symbol_suggester;
 
     // 简繁转换两级词库已在 AlgoEngine 构造时通过 OpenCcDict::global() 完成全局单例加载
     info!(
