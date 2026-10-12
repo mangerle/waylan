@@ -298,3 +298,44 @@ fn test_custom_phrase_traditional_conversion() {
     );
     assert_eq!(cands[0].tier, crate::types::CandidateTier::ProtectedEntity);
 }
+
+#[test]
+fn test_all_candidates_tagged_with_consumed_len() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    for ch in "nihao".chars() {
+        engine.push_char(ch);
+    }
+
+    let cands = engine.candidates();
+    assert!(!cands.is_empty(), "候选词列表不应为空");
+    for cand in cands {
+        assert!(
+            cand.consumed_len.is_some(),
+            "候选词 '{}' 必须预先统一标记 consumed_len",
+            cand.text
+        );
+        let len = cand.consumed_len.unwrap();
+        assert!(len > 0 && len <= 5, "消费长度必须处于合法区间 [1, 5]");
+    }
+}
+
+#[test]
+fn test_select_candidate_partial_commit_consumed_len() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    // 输入 nihaoma
+    for ch in "nihaoma".chars() {
+        engine.push_char(ch);
+    }
+
+    // 选中第一个候选词（你好）
+    let result = engine.select_candidate(0, 1000);
+    assert!(result.is_some(), "选词操作应成功");
+    let (committed, remaining_len) = result.unwrap();
+    assert!(!committed.is_empty(), "上屏文本不应为空");
+
+    // 验证剩余未消费长度：nihao 消费 5 字符，剩余 ma 共 2 字符
+    if committed.contains("你好") {
+        assert_eq!(remaining_len, 2, "你好 消费后应剩余 ma（2 字节）");
+        assert_eq!(engine.raw_input(), "ma", "引擎剩余拼音应为 ma");
+    }
+}

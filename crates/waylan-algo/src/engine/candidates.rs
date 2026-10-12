@@ -27,11 +27,17 @@ impl AlgoEngine {
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
         if let Some(dispatched) = ModeDispatcher::try_dispatch(raw_input, &self.config) {
             self.cached_preedit = raw_input.to_string();
-            self.all_candidates_cache = CandidatePipeline::process_all_with_opencc(
+            let mut cands = CandidatePipeline::process_all_with_opencc(
                 dispatched,
                 &self.config,
                 Some(&self.opencc_dict),
             );
+            for c in &mut cands {
+                if c.consumed_len.is_none() {
+                    c.consumed_len = Some(raw_input.len());
+                }
+            }
+            self.all_candidates_cache = cands;
             self.update_page_candidates();
             return;
         }
@@ -47,6 +53,14 @@ impl AlgoEngine {
             .map(|p| p.to_key_string())
             .unwrap_or_else(|| raw_input.to_string());
 
+        let mut best_units: Vec<String> = Vec::new();
+        if let Some(best) = paths.first() {
+            best_units.extend(best.syllables.iter().cloned());
+            if !best.remaining.is_empty() {
+                best_units.push(best.remaining.clone());
+            }
+        }
+
         let mut raw_candidates = Vec::new();
 
         // 2.0 专名保护机制 (NER 原型)：精确命中受保护实体时注入置顶候选
@@ -54,6 +68,7 @@ impl AlgoEngine {
             let mut cand = AlgoCandidate::new(entity, raw_input, 999_999);
             cand.tier = CandidateTier::ProtectedEntity;
             cand.comment = Some("专名".to_string());
+            cand.consumed_len = Some(raw_input.len());
             raw_candidates.push(cand);
         }
 
@@ -79,6 +94,18 @@ impl AlgoEngine {
         );
 
         self.inject_page_zero_extensions(raw_input, &paths, &mut candidates);
+
+        // 5. 在候选词产生时统一标记 consumed_len，消除选词上屏时重新计算音节图路径的微秒级冗余
+        for cand in &mut candidates {
+            if cand.consumed_len.is_none() {
+                cand.consumed_len = Some(Self::calculate_consumed_len(
+                    raw_input,
+                    &cand.pinyin,
+                    &best_units,
+                ));
+            }
+        }
+
         self.all_candidates_cache = candidates;
         self.update_page_candidates();
     }
@@ -291,6 +318,60 @@ impl AlgoEngine {
                     c.score = c.score.saturating_add((affinity as u32).min(50_000));
                 }
             }
+        }
+    }
+
+    /// 结合当前最优切分路径单元计算候选词所消费的原始按键字节长度
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在候选词生成阶段，利用已经求解出的音节路径 `best_units` 预先精确计算
+    ///   每个候选词所消费的按键长度，并在候选词中记录 `consumed_len`。
+    /// - **核心优势**：彻底消除用户选词上屏时重新调用 `PrismEngine::build_paths_with_entities`
+    ///   求解音节图路径的微秒级延迟，将按键上屏关键交互路径耗时降为纯内存字段读取。
+    pub(crate) fn calculate_consumed_len(raw: &str, pinyin: &str, best_units: &[String]) -> usize {
+        if raw.is_empty() {
+            return 0;
+        }
+
+        if raw.starts_with(pinyin) && !pinyin.is_empty() {
+            let mut len = pinyin.len();
+            if raw[len..].starts_with('\'') {
+                len = len.saturating_add(1);
+            }
+            return len;
+        }
+
+        // 全拼与简拼混合模式：优先按候选音节逐段对齐原始输入或最优切分路径单元
+        let cand_syls: Vec<&str> = pinyin.split('\'').filter(|s| !s.is_empty()).collect();
+        let mut pos = 0usize;
+        for (i, &cs) in cand_syls.iter().enumerate() {
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+            if pos >= raw.len() {
+                break;
+            }
+            if raw[pos..].starts_with(cs) {
+                pos += cs.len();
+            } else if i < best_units.len() && raw[pos..].starts_with(best_units[i].as_str()) {
+                pos += best_units[i].len();
+            } else {
+                let first_len = cs.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                if raw[pos..].starts_with(&cs[..first_len]) {
+                    pos += first_len;
+                } else {
+                    return Self::compute_consumed_len(raw, pinyin);
+                }
+            }
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+        }
+
+        if pos > 0 {
+            pos.min(raw.len())
+        } else {
+            Self::compute_consumed_len(raw, pinyin)
         }
     }
 }

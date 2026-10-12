@@ -1,7 +1,6 @@
 use super::pangu::PanguSpacing;
 use super::AlgoEngine;
 use crate::dispatcher::ModeDispatcher;
-use crate::prism::PrismEngine;
 use crate::types::{AlgoCandidate, CandidateTier};
 
 /// 判断字符是否为 CJK 表意汉字（覆盖基本区、扩展区 A~I、兼容表意文字及汉字零“〇”）
@@ -118,7 +117,7 @@ impl AlgoEngine {
             self.last_commit_context = Some(trimmed_commit.to_string());
         }
 
-        // 计算消费的拼音字母长度并执行分段确认（动态功能项、容错纠错项与特殊模式分发项全量消费输入）
+        // 计算消费的拼音字母长度并执行分段确认（优先直接读取候选词产生时统一标记的 consumed_len，避免重复构图）
         let consumed_len = if let Some(len) = selected.consumed_len {
             len.min(self.composition.len())
         } else if selected.is_expandable
@@ -128,7 +127,7 @@ impl AlgoEngine {
         {
             self.composition.len()
         } else {
-            self.compute_consumed_len_for_candidate(&selected)
+            Self::compute_consumed_len(self.composition.as_str(), &selected.pinyin)
         };
 
         if should_record {
@@ -263,69 +262,6 @@ impl AlgoEngine {
         self.expanded_selected_index = 0;
 
         Some((commit_text, 0))
-    }
-
-    /// 结合当前双拼/全拼模式与音节图计算选中候选词所消费的原始按键字节长度
-    fn compute_consumed_len_for_candidate(&self, selected: &AlgoCandidate) -> usize {
-        let raw = self.composition.as_str();
-        let pinyin = selected.pinyin.as_str();
-        if raw.is_empty() {
-            return 0;
-        }
-
-        if raw.starts_with(pinyin) && !pinyin.is_empty() {
-            let mut len = pinyin.len();
-            if raw[len..].starts_with('\'') {
-                len = len.saturating_add(1);
-            }
-            return len;
-        }
-
-        // 全拼与简拼混合模式：优先按候选音节逐段对齐原始输入或最优切分路径单元
-        let cand_syls: Vec<&str> = pinyin.split('\'').filter(|s| !s.is_empty()).collect();
-        let paths = PrismEngine::build_paths_with_entities(
-            raw,
-            &self.config.fuzzy,
-            Some(&self.entity_manager),
-        );
-        let mut best_units: Vec<String> = Vec::new();
-        if let Some(best) = paths.first() {
-            best_units.extend(best.syllables.iter().cloned());
-            if !best.remaining.is_empty() {
-                best_units.push(best.remaining.clone());
-            }
-        }
-
-        let mut pos = 0usize;
-        for (i, &cs) in cand_syls.iter().enumerate() {
-            while pos < raw.len() && raw[pos..].starts_with('\'') {
-                pos += 1;
-            }
-            if pos >= raw.len() {
-                break;
-            }
-            if raw[pos..].starts_with(cs) {
-                pos += cs.len();
-            } else if i < best_units.len() && raw[pos..].starts_with(best_units[i].as_str()) {
-                pos += best_units[i].len();
-            } else {
-                let first_len = cs.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-                if raw[pos..].starts_with(&cs[..first_len]) {
-                    pos += first_len;
-                } else {
-                    return Self::compute_consumed_len(raw, pinyin);
-                }
-            }
-            while pos < raw.len() && raw[pos..].starts_with('\'') {
-                pos += 1;
-            }
-        }
-
-        if pos > 0 {
-            pos.min(raw.len())
-        } else {
-            Self::compute_consumed_len(raw, pinyin)
-        }
     }
 
     /// 精确计算用户选词所消费的原始按键长度（含自动跳过隔音符）

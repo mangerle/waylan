@@ -29,6 +29,7 @@ impl AlgoEngine {
                 if self.config.traditional_chinese {
                     typo_cand.text = self.opencc_dict.convert_text(&typo_cand.text);
                 }
+                typo_cand.consumed_len = Some(raw_input.len());
                 candidates.retain(|c| c.text != typo_cand.text);
                 let target_pos = if candidates.is_empty() {
                     0
@@ -54,6 +55,7 @@ impl AlgoEngine {
                 phrase.text = self.opencc_dict.convert_text(&phrase.text);
             }
             phrase.tier = CandidateTier::ProtectedEntity;
+            phrase.consumed_len = Some(raw_input.len());
             extensions.push(phrase);
         }
 
@@ -65,24 +67,27 @@ impl AlgoEngine {
                     *sub = self.opencc_dict.convert_text(sub);
                 }
             }
+            dynamic_cand.consumed_len = Some(raw_input.len());
             extensions.push(dynamic_cand);
         }
 
         // 3.3 英文单词联想（次要辅助建议，至多取 1 项避免污染候选列表）
         let eng_cands = self.english_suggester.lookup(raw_input);
-        for eng in eng_cands.into_iter().take(1) {
+        for mut eng in eng_cands.into_iter().take(1) {
             if !candidates
                 .iter()
                 .any(|c| c.text.eq_ignore_ascii_case(&eng.text))
             {
+                eng.consumed_len = Some(raw_input.len());
                 extensions.push(eng);
             }
         }
 
         // 3.4 符号与表情联想（次要辅助建议，至多取 1 项）
         let sym_cands = self.symbol_suggester.lookup(raw_input);
-        for sym in sym_cands.into_iter().take(1) {
+        for mut sym in sym_cands.into_iter().take(1) {
             if !candidates.iter().any(|c| c.text == sym.text) {
+                sym.consumed_len = Some(raw_input.len());
                 extensions.push(sym);
             }
         }
@@ -129,8 +134,13 @@ impl AlgoEngine {
         // 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
         if total_syls >= 4 && best_path.syllables.len() >= 3 {
             let key_3 = best_path.syllables[..3].join("'");
-            if let Some(m) = self.table.lookup_top_k(&key_3, 1).into_iter().next() {
+            if let Some(mut m) = self.table.lookup_top_k(&key_3, 1).into_iter().next() {
                 if m.pinyin == key_3 {
+                    m.consumed_len = Some(Self::calculate_consumed_len(
+                        self.composition.as_str(),
+                        &key_3,
+                        &best_path.syllables,
+                    ));
                     prefix_items.push(self.format_prefix_candidate(m));
                 }
             }
@@ -139,8 +149,13 @@ impl AlgoEngine {
         // 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，回退查简拼召回 Top-2 二字高频词）
         let key_2 = best_path.syllables[..2].join("'");
         let mut found_exact_2 = false;
-        if let Some(m) = self.table.lookup_top_k(&key_2, 1).into_iter().next() {
+        if let Some(mut m) = self.table.lookup_top_k(&key_2, 1).into_iter().next() {
             if m.pinyin == key_2 {
+                m.consumed_len = Some(Self::calculate_consumed_len(
+                    self.composition.as_str(),
+                    &key_2,
+                    &best_path.syllables,
+                ));
                 prefix_items.push(self.format_prefix_candidate(m));
                 found_exact_2 = true;
             }
@@ -148,9 +163,10 @@ impl AlgoEngine {
         if !found_exact_2 {
             let acronym_2 = best_path.syllables[..2].concat();
             for mut cand in self.table.lookup_acronym_top_k(&acronym_2, 2) {
-                cand.consumed_len = Some(Self::compute_consumed_len(
+                cand.consumed_len = Some(Self::calculate_consumed_len(
                     self.composition.as_str(),
                     &key_2,
+                    &best_path.syllables,
                 ));
                 prefix_items.push(self.format_prefix_candidate(cand));
             }
