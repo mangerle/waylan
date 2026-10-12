@@ -189,7 +189,49 @@ impl ViterbiDecoder {
             total_score: 0,
         });
 
-        // 沿音节序列向右推进求解 Viterbi 最优路径（仅对可达节点按需查词，杜绝全量无效分配）
+        // 沿音节序列向右推进求解 Viterbi 最优路径
+        Self::solve_syllable_lattice(syllables, table, has_bigram, ctx_str, &mut dp);
+
+        // 末尾残缺音节与声母扩展（处理未完成键入态）
+        if !remaining.is_empty() {
+            if let Some(cand) = Self::expand_remaining_tail(
+                syllables,
+                remaining,
+                table,
+                has_bigram,
+                prev_context,
+                &dp,
+            ) {
+                return Some(cand);
+            }
+        }
+
+        // 若无 remaining 或扩展未命中，直接提取到达第 n 个音节的全局最优解
+        if dp[n].is_empty() {
+            return None;
+        }
+
+        let best = &dp[n][0];
+        let full_text = backtrack_sentence(&dp, n, 0, None);
+        let pinyin_str = syllables.join("'");
+        let positive_score = Self::to_positive_score(best.total_score);
+
+        Some(
+            AlgoCandidate::new(full_text, pinyin_str, positive_score)
+                .with_comment("整句预测")
+                .with_tier(CandidateTier::SentenceViterbi),
+        )
+    }
+
+    /// 遍历音节切分列表并在词格点拓扑上推进束搜索动态规划
+    fn solve_syllable_lattice(
+        syllables: &[String],
+        table: &LexiconTable,
+        has_bigram: bool,
+        ctx_str: &str,
+        dp: &mut [Vec<ViterbiBeamNode>],
+    ) {
+        let n = syllables.len();
         for start_idx in 0..n {
             if dp[start_idx].is_empty() {
                 continue;
@@ -280,102 +322,72 @@ impl ViterbiDecoder {
                 target_beam.truncate(Self::BEAM_WIDTH);
             }
         }
+    }
 
-        // 末尾残缺音节与声母扩展（处理未完成键入态，如 "shi'zhong'g" 中的 "g"，或多声母 "de'g'j"）
-        if !remaining.is_empty() {
-            // 候选记录: (prev_step, prev_beam_idx, 扩展词, 总得分)
-            let mut ext_candidates: Vec<(usize, usize, String, i64)> = Vec::new();
+    /// 对末尾残存拼音与声母链进行结合扩展与整句回溯生成
+    fn expand_remaining_tail(
+        syllables: &[String],
+        remaining: &str,
+        table: &LexiconTable,
+        has_bigram: bool,
+        prev_context: Option<&str>,
+        dp: &[Vec<ViterbiBeamNode>],
+    ) -> Option<AlgoCandidate> {
+        let n = syllables.len();
+        let mut ext_candidates: Vec<(usize, usize, String, i64)> = Vec::new();
 
-            // 1. 动态回溯提取尾部声母链 initial_chain
-            let mut initial_chain = vec![remaining.to_string()];
-            let mut split_idx = n;
-            while split_idx > 0 {
-                let prev_syl = &syllables[split_idx - 1];
-                if !crate::syllables::is_valid_syllable(prev_syl) {
-                    initial_chain.insert(0, prev_syl.clone());
-                    split_idx -= 1;
-                } else {
-                    break;
-                }
+        // 1. 动态回溯提取尾部声母链 initial_chain
+        let mut initial_chain = vec![remaining.to_string()];
+        let mut split_idx = n;
+        while split_idx > 0 {
+            let prev_syl = &syllables[split_idx - 1];
+            if !crate::syllables::is_valid_syllable(prev_syl) {
+                initial_chain.insert(0, prev_syl.clone());
+                split_idx -= 1;
+            } else {
+                break;
             }
+        }
 
-            let k = initial_chain.len();
+        let k = initial_chain.len();
 
-            if k >= 2 {
-                // 策略 A1：多声母连续简拼链绑定（如 gj -> 感觉，gwy -> 国务院，rgzn -> 人工智能）
-                // 整体接在合法前驱节点 dp[split_idx] 之后，彻底消灭“个及”碎字
-                if !dp[split_idx].is_empty() {
-                    let acronym_key = initial_chain.concat();
-                    let acronym_cands = table.lookup_acronym(&acronym_key);
-                    for cand in acronym_cands.iter().take(3) {
-                        let freq_score = Self::unigram_log_score(cand.score);
-                        let curr_char_len = cand.text.chars().count() as i64;
-                        for (prev_beam_idx, prev) in dp[split_idx].iter().enumerate() {
-                            let prev_word = if split_idx == 0 {
-                                prev_context.unwrap_or("")
-                            } else {
-                                &prev.word
-                            };
-                            let trans_score = BigramLanguageModel::transition_score_cached(
-                                (prev_word, prev.last_word_id),
-                                (&cand.text, cand.word_id, curr_char_len),
-                                freq_score,
-                                table,
-                            );
-                            ext_candidates.push((
-                                split_idx,
-                                prev_beam_idx,
-                                cand.text.clone(),
-                                prev.total_score.saturating_add(trans_score),
-                            ));
-                        }
-                    }
-                }
-            } else if split_idx >= 1 && !dp[split_idx - 1].is_empty() {
-                // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词（如 shi + j -> 时间）
-                let last_syl = &syllables[split_idx - 1];
-                let prev_step = split_idx - 1;
-                for &syl in find_syllables_by_prefix(remaining) {
-                    let key = format!("{}'{}", last_syl, syl);
-                    if let Some(entries) = table.get_top_raw_entries(&key, 2) {
-                        for (text, raw_score, word_id_opt) in entries.iter().take(2) {
-                            let freq_score = Self::unigram_log_score(*raw_score);
-                            let curr_word_id = word_id_opt.or_else(|| {
-                                if has_bigram {
-                                    table.get_word_id(text)
-                                } else {
-                                    None
-                                }
-                            });
-                            let curr_char_len = text.chars().count() as i64;
-                            for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
-                                let prev_word = if prev_step == 0 {
-                                    prev_context.unwrap_or("")
-                                } else {
-                                    &prev.word
-                                };
-                                let trans_score = BigramLanguageModel::transition_score_cached(
-                                    (prev_word, prev.last_word_id),
-                                    (text, curr_word_id, curr_char_len),
-                                    freq_score,
-                                    table,
-                                );
-                                ext_candidates.push((
-                                    prev_step,
-                                    prev_beam_idx,
-                                    text.clone(),
-                                    prev.total_score.saturating_add(trans_score),
-                                ));
-                            }
-                        }
+        if k >= 2 {
+            // 策略 A1：多声母连续简拼链绑定
+            if !dp[split_idx].is_empty() {
+                let acronym_key = initial_chain.concat();
+                let acronym_cands = table.lookup_acronym(&acronym_key);
+                for cand in acronym_cands.iter().take(3) {
+                    let freq_score = Self::unigram_log_score(cand.score);
+                    let curr_char_len = cand.text.chars().count() as i64;
+                    for (prev_beam_idx, prev) in dp[split_idx].iter().enumerate() {
+                        let prev_word = if split_idx == 0 {
+                            prev_context.unwrap_or("")
+                        } else {
+                            &prev.word
+                        };
+                        let trans_score = BigramLanguageModel::transition_score_cached(
+                            (prev_word, prev.last_word_id),
+                            (&cand.text, cand.word_id, curr_char_len),
+                            freq_score,
+                            table,
+                        );
+                        ext_candidates.push((
+                            split_idx,
+                            prev_beam_idx,
+                            cand.text.clone(),
+                            prev.total_score.saturating_add(trans_score),
+                        ));
                     }
                 }
             }
-
-            // 策略 B：降级回退（仅当策略 A1/A2 均无法组合成词时，才允许单字母枚举为高频单字）
-            if ext_candidates.is_empty() && !dp[n].is_empty() {
-                if let Some(entries) = table.get_initial_raw_entries(remaining) {
-                    for (text, raw_score, word_id_opt) in entries.iter().take(3) {
+        } else if split_idx >= 1 && !dp[split_idx - 1].is_empty() {
+            // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词
+            let last_syl = &syllables[split_idx - 1];
+            let prev_step = split_idx - 1;
+            for &syl in find_syllables_by_prefix(remaining) {
+                let key = format!("{}'{}", last_syl, syl);
+                if let Some(entries) = table.get_top_raw_entries(&key, 2) {
+                    for (text, raw_score, word_id_opt) in entries.iter().take(2) {
                         let freq_score = Self::unigram_log_score(*raw_score);
                         let curr_word_id = word_id_opt.or_else(|| {
                             if has_bigram {
@@ -385,8 +397,8 @@ impl ViterbiDecoder {
                             }
                         });
                         let curr_char_len = text.chars().count() as i64;
-                        for (prev_beam_idx, prev) in dp[n].iter().enumerate() {
-                            let prev_word = if n == 0 {
+                        for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
+                            let prev_word = if prev_step == 0 {
                                 prev_context.unwrap_or("")
                             } else {
                                 &prev.word
@@ -398,7 +410,7 @@ impl ViterbiDecoder {
                                 table,
                             );
                             ext_candidates.push((
-                                n,
+                                prev_step,
                                 prev_beam_idx,
                                 text.clone(),
                                 prev.total_score.saturating_add(trans_score),
@@ -407,40 +419,62 @@ impl ViterbiDecoder {
                     }
                 }
             }
+        }
 
-            if let Some((best_step, best_beam_idx, best_word, best_score)) =
-                ext_candidates.into_iter().max_by_key(|cand| cand.3)
-            {
-                let full_text = backtrack_sentence(&dp, best_step, best_beam_idx, Some(&best_word));
-                let pinyin_str = if syllables.is_empty() {
-                    remaining.to_string()
-                } else {
-                    format!("{}'{}", syllables.join("'"), remaining)
-                };
-                let positive_score = Self::to_positive_score(best_score);
-                return Some(
-                    AlgoCandidate::new(full_text, pinyin_str, positive_score)
-                        .with_comment("整句预测")
-                        .with_tier(CandidateTier::SentenceViterbi),
-                );
+        // 策略 B：降级回退（仅当策略 A1/A2 均无法组合成词时，才允许单字母枚举为高频单字）
+        if ext_candidates.is_empty() && !dp[n].is_empty() {
+            if let Some(entries) = table.get_initial_raw_entries(remaining) {
+                for (text, raw_score, word_id_opt) in entries.iter().take(3) {
+                    let freq_score = Self::unigram_log_score(*raw_score);
+                    let curr_word_id = word_id_opt.or_else(|| {
+                        if has_bigram {
+                            table.get_word_id(text)
+                        } else {
+                            None
+                        }
+                    });
+                    let curr_char_len = text.chars().count() as i64;
+                    for (prev_beam_idx, prev) in dp[n].iter().enumerate() {
+                        let prev_word = if n == 0 {
+                            prev_context.unwrap_or("")
+                        } else {
+                            &prev.word
+                        };
+                        let trans_score = BigramLanguageModel::transition_score_cached(
+                            (prev_word, prev.last_word_id),
+                            (text, curr_word_id, curr_char_len),
+                            freq_score,
+                            table,
+                        );
+                        ext_candidates.push((
+                            n,
+                            prev_beam_idx,
+                            text.clone(),
+                            prev.total_score.saturating_add(trans_score),
+                        ));
+                    }
+                }
             }
         }
 
-        // 若无 remaining 或扩展未命中，直接提取到达第 n 个音节的全局最优解
-        if dp[n].is_empty() {
-            return None;
+        if let Some((best_step, best_beam_idx, best_word, best_score)) =
+            ext_candidates.into_iter().max_by_key(|cand| cand.3)
+        {
+            let full_text = backtrack_sentence(dp, best_step, best_beam_idx, Some(&best_word));
+            let pinyin_str = if syllables.is_empty() {
+                remaining.to_string()
+            } else {
+                format!("{}'{}", syllables.join("'"), remaining)
+            };
+            let positive_score = Self::to_positive_score(best_score);
+            return Some(
+                AlgoCandidate::new(full_text, pinyin_str, positive_score)
+                    .with_comment("整句预测")
+                    .with_tier(CandidateTier::SentenceViterbi),
+            );
         }
 
-        let best = &dp[n][0];
-        let full_text = backtrack_sentence(&dp, n, 0, None);
-        let pinyin_str = syllables.join("'");
-        let positive_score = Self::to_positive_score(best.total_score);
-
-        Some(
-            AlgoCandidate::new(full_text, pinyin_str, positive_score)
-                .with_comment("整句预测")
-                .with_tier(CandidateTier::SentenceViterbi),
-        )
+        None
     }
 
     /// 将原始静态词频转换为与二元转移矩阵同量纲的对数似然得分

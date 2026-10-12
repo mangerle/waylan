@@ -1,12 +1,13 @@
 use super::AlgoEngine;
 use crate::dispatcher::ModeDispatcher;
 use crate::pipeline::CandidatePipeline;
-use crate::prism::PrismEngine;
+use crate::prism::{PrismEngine, SegmentPath};
 use crate::prism_fuzzy::PrismFuzzy;
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
 impl AlgoEngine {
+    /// 重新计算当前输入序列的全量候选词列表并分页刷新
     pub(crate) fn recompute_candidates(&mut self) {
         let raw_input = self.composition.as_str();
         if raw_input.is_empty() {
@@ -48,7 +49,7 @@ impl AlgoEngine {
 
         let mut raw_candidates = Vec::new();
 
-        // 2.0 专有名词与实体保护机制 (NER 原型)：精确命中受保护实体时注入置顶候选
+        // 2.0 专名保护机制 (NER 原型)：精确命中受保护实体时注入置顶候选
         if let Some(entity) = self.entity_manager.match_exact(raw_input) {
             let mut cand = AlgoCandidate::new(entity, raw_input, 999_999);
             cand.tier = CandidateTier::ProtectedEntity;
@@ -58,7 +59,34 @@ impl AlgoEngine {
 
         let eval_ts = self.user_model.latest_timestamp().max(self.last_timestamp);
 
-        for path in &paths {
+        // 2.1 聚合 DAG 路径精确匹配与模糊音等价候选
+        raw_candidates.append(&mut self.collect_path_matches(&paths, eval_ts));
+
+        // 2.2 聚合长句动态规划与前缀短语合成候选
+        raw_candidates.append(&mut self.collect_sentence_and_prefix_matches(&paths));
+
+        // 2.3 聚合首字母简拼与首音节单字降级候选
+        raw_candidates.append(&mut self.collect_acronym_and_fallback_matches(raw_input, &paths));
+
+        // 3. 动态应用用户习惯提权与上屏历史上下文亲和度加权
+        self.apply_user_and_context_boost(&mut raw_candidates, eval_ts);
+
+        // 4. 送入后处理流水线（去重、简繁、字符集、注释），保留全量已排序去重候选
+        let mut candidates = CandidatePipeline::process_all_with_opencc(
+            raw_candidates,
+            &self.config,
+            Some(&self.opencc_dict),
+        );
+
+        self.inject_page_zero_extensions(raw_input, &paths, &mut candidates);
+        self.all_candidates_cache = candidates;
+        self.update_page_candidates();
+    }
+
+    /// 遍历 DAG 音节切分路径，收集词库精确、用户自造词及模糊音匹配候选
+    fn collect_path_matches(&self, paths: &[SegmentPath], eval_ts: u64) -> Vec<AlgoCandidate> {
+        let mut results = Vec::new();
+        for path in paths {
             let key = path.to_key_string();
 
             // 词典精确及倒排检索
@@ -69,7 +97,7 @@ impl AlgoEngine {
                     m.comment = Some(format!("[纠错: {}]", key));
                 }
             }
-            raw_candidates.append(&mut matches);
+            results.append(&mut matches);
 
             // 用户自造词检索
             let mut user_matches = self.user_model.lookup_user_words(&key, eval_ts);
@@ -79,9 +107,9 @@ impl AlgoEngine {
                     m.comment = Some(format!("[纠错: {}]", key));
                 }
             }
-            raw_candidates.append(&mut user_matches);
+            results.append(&mut user_matches);
 
-            // 模糊音等价查询键联合检索（设置候选词显式 consumed_len 以保证选词消费长度一致，同时保留标准拼音）
+            // 模糊音等价查询键联合检索
             if self.config.fuzzy.has_active_rules() && !path.is_typo {
                 for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
                     let mut fuzzy_matches = self.table.lookup(&fuzzy_key);
@@ -89,7 +117,7 @@ impl AlgoEngine {
                         fm.consumed_len = Some(key.len());
                         fm.score = fm.score.saturating_sub(50);
                     }
-                    raw_candidates.append(&mut fuzzy_matches);
+                    results.append(&mut fuzzy_matches);
 
                     let mut fuzzy_user_matches =
                         self.user_model.lookup_user_words(&fuzzy_key, eval_ts);
@@ -97,73 +125,89 @@ impl AlgoEngine {
                         fum.consumed_len = Some(key.len());
                         fum.score = fum.score.saturating_sub(50);
                     }
-                    raw_candidates.append(&mut fuzzy_user_matches);
+                    results.append(&mut fuzzy_user_matches);
                 }
             }
         }
+        results
+    }
 
-        // 2.1 Viterbi 长句动态规划解码（遵循 Best Path Only 原则）
+    /// 求解 Viterbi 最佳长句路径并合成前缀扩展短语候选
+    fn collect_sentence_and_prefix_matches(&self, paths: &[SegmentPath]) -> Vec<AlgoCandidate> {
+        let mut results = Vec::new();
+        let Some(best_path) = paths.first() else {
+            return results;
+        };
+
         let min_units = if self.last_commit_context.is_some() {
             1
         } else {
             2
         };
-        if let Some(path) = paths.first() {
-            let total_units = path.syllables.len() + if path.remaining.is_empty() { 0 } else { 1 };
-            if total_units >= min_units {
-                if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context(
-                    &path.syllables,
-                    &path.remaining,
-                    &self.table,
-                    self.last_commit_context.as_deref(),
+        let total_units =
+            best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
+        if total_units >= min_units {
+            if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context(
+                &best_path.syllables,
+                &best_path.remaining,
+                &self.table,
+                self.last_commit_context.as_deref(),
+            ) {
+                sentence.score = sentence
+                    .score
+                    .saturating_sub(best_path.cost.saturating_mul(100));
+                results.push(sentence);
+            }
+        }
+
+        // 前缀残存拼音补全与跨词短语合成
+        if !best_path.remaining.is_empty() {
+            let mut prefix_matches = self
+                .table
+                .lookup_prefix_extension(&best_path.syllables, &best_path.remaining);
+            results.append(&mut prefix_matches);
+
+            if self.config.fuzzy.has_active_rules() && !best_path.syllables.is_empty() {
+                for fuzzy_syls in PrismFuzzy::expand_fuzzy_syllable_lists(
+                    &best_path.syllables,
+                    &self.config.fuzzy,
                 ) {
-                    sentence.score = sentence.score.saturating_sub(path.cost.saturating_mul(100));
-                    raw_candidates.push(sentence);
+                    let mut fuzzy_prefix = self
+                        .table
+                        .lookup_prefix_extension(&fuzzy_syls, &best_path.remaining);
+                    for fp in &mut fuzzy_prefix {
+                        fp.score = fp.score.saturating_sub(50);
+                    }
+                    results.append(&mut fuzzy_prefix);
                 }
+            }
+
+            let mut phrase_matches =
+                self.synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
+            results.append(&mut phrase_matches);
+
+            if !best_path.syllables.is_empty() {
+                let base_key = best_path.syllables.join("'");
+                let mut base_matches = self.table.lookup_top_k(&base_key, 32);
+                for bm in &mut base_matches {
+                    bm.tier = CandidateTier::PrefixPartial;
+                }
+                results.append(&mut base_matches);
             }
         }
 
-        if let Some(best_path) = paths.first() {
-            // 2.2 前缀残存拼音与声母补全检索（解决诸如 "shux" 召回“熟悉”、“数学”、“属性”等）
-            if !best_path.remaining.is_empty() {
-                let mut prefix_matches = self
-                    .table
-                    .lookup_prefix_extension(&best_path.syllables, &best_path.remaining);
-                raw_candidates.append(&mut prefix_matches);
+        results
+    }
 
-                if self.config.fuzzy.has_active_rules() && !best_path.syllables.is_empty() {
-                    for fuzzy_syls in PrismFuzzy::expand_fuzzy_syllable_lists(
-                        &best_path.syllables,
-                        &self.config.fuzzy,
-                    ) {
-                        let mut fuzzy_prefix = self
-                            .table
-                            .lookup_prefix_extension(&fuzzy_syls, &best_path.remaining);
-                        for fp in &mut fuzzy_prefix {
-                            fp.score = fp.score.saturating_sub(50);
-                        }
-                        raw_candidates.append(&mut fuzzy_prefix);
-                    }
-                }
+    /// 检索首字母缩写简拼与首音节单字降级备选候选
+    fn collect_acronym_and_fallback_matches(
+        &self,
+        raw_input: &str,
+        paths: &[SegmentPath],
+    ) -> Vec<AlgoCandidate> {
+        let mut results = Vec::new();
 
-                // 2.2.1 跨词边界短语前缀合成检索（解决诸如 "womendeshij" 召回“我们的时间”、“我们的世界”等）
-                let mut phrase_matches =
-                    self.synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
-                raw_candidates.append(&mut phrase_matches);
-
-                // 若前序已完成音节非空，同时将首段已完成音节的候选词作为降级备选（如“数”、“书”、“树”）
-                if !best_path.syllables.is_empty() {
-                    let base_key = best_path.syllables.join("'");
-                    let mut base_matches = self.table.lookup_top_k(&base_key, 32);
-                    for bm in &mut base_matches {
-                        bm.tier = CandidateTier::PrefixPartial;
-                    }
-                    raw_candidates.append(&mut base_matches);
-                }
-            }
-        }
-
-        // 2.2 检索首字母缩写简拼（支持用户输入单引号隔开的简拼，如 bj / b'j -> 北京，yyds -> 永远的神）
+        // 简拼检索
         let acronym_query = if raw_input.contains('\'') {
             raw_input.replace('\'', "")
         } else {
@@ -175,10 +219,9 @@ impl AlgoEngine {
                 am.consumed_len = Some(raw_input.len());
             }
         }
-        raw_candidates.append(&mut acronym_matches);
+        results.append(&mut acronym_matches);
 
-        // 2.3 将首音节已完成音节或首声母单字作为降级备选（如 "wo" -> "我", "握", "卧"...）
-        // 赋予 PrefixPartial 优先级，确保整词始终排在最前，同时单字可排在后续行供网格面板展开与翻页
+        // 首音节单字降级备选
         if let Some(first_path) = paths.first() {
             if !first_path.syllables.is_empty() {
                 let first_syl = &first_path.syllables[0];
@@ -210,17 +253,21 @@ impl AlgoEngine {
                         fm.tier = CandidateTier::PrefixPartial;
                     }
                 }
-                raw_candidates.append(&mut first_matches);
+                results.append(&mut first_matches);
             }
         }
 
-        // 3. 动态应用用户习惯提权与上屏历史上下文亲和度加权
+        results
+    }
+
+    /// 应用自适应词频提权与上屏历史二元语言模型亲和度加权
+    fn apply_user_and_context_boost(&self, candidates: &mut [AlgoCandidate], eval_ts: u64) {
         let prev_context_info = self
             .last_commit_context
             .as_deref()
             .map(|prev| (prev, self.table.get_word_id(prev)));
 
-        for c in &mut raw_candidates {
+        for c in candidates {
             if c.tier != CandidateTier::UserHistory {
                 self.user_model.apply_boost(c, eval_ts);
             }
@@ -245,17 +292,5 @@ impl AlgoEngine {
                 }
             }
         }
-
-        // 4. 送入后处理流水线（去重、简繁、字符集、注释），保留全量已排序去重候选
-        let mut candidates = CandidatePipeline::process_all_with_opencc(
-            raw_candidates,
-            &self.config,
-            Some(&self.opencc_dict),
-        );
-
-        self.inject_page_zero_extensions(raw_input, &paths, &mut candidates);
-
-        self.all_candidates_cache = candidates;
-        self.update_page_candidates();
     }
 }

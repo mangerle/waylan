@@ -8,28 +8,7 @@ use crate::syllables::{
 use crate::types::FuzzyConfig;
 use std::str;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SegmentPath {
-    /// 完整音节切分列表（如 ["xi", "an"] 或 ["xian"]）
-    pub syllables: Vec<String>,
-    /// 末尾未完成键入的剩余前缀（如 "h"）
-    pub remaining: String,
-    /// 路径代价值（段数越少、匹配越长代价越低，优先排序）
-    pub cost: u32,
-    /// 是否由容错纠错虚边衍生生成
-    pub is_typo: bool,
-}
-
-impl SegmentPath {
-    /// 转换为带单引号的展示字符串（如 "xi'an"）
-    pub fn to_key_string(&self) -> String {
-        let mut parts = self.syllables.clone();
-        if !self.remaining.is_empty() {
-            parts.push(self.remaining.clone());
-        }
-        parts.join("'")
-    }
-}
+pub use crate::prism_types::{SegmentPath, STANDARD_INITIALS};
 
 /// 棱镜拼写图引擎 (Prism / Syllable Graph)
 ///
@@ -40,12 +19,6 @@ impl SegmentPath {
 /// - **代价与局限**：多分支路径搜索开销略高于贪心，但在 20 字符以内的拼音序列下耗时仍低于 15 微秒。
 #[derive(Debug, Default)]
 pub struct PrismEngine;
-
-/// 现代汉语普通话标准声母列表（双字母翘舌声母排在最前优先匹配）
-pub static STANDARD_INITIALS: &[&str] = &[
-    "zh", "ch", "sh", "b", "p", "m", "f", "d", "t", "n", "l", "g", "k", "h", "j", "q", "x", "r",
-    "z", "c", "s", "y", "w",
-];
 
 /// 音节图深度优先搜索上下文（收敛递归参数）
 struct DfsContext<'a> {
@@ -512,107 +485,5 @@ impl PrismEngine {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_non_ascii_input_safe_degradation() {
-        let fuzzy = FuzzyConfig {
-            z_zh: true,
-            an_ang: true,
-            ..Default::default()
-        };
-
-        // 纯中文非受保护输入应安全退化，不触发 UTF-8 字符边界切片 Panic
-        let paths = PrismEngine::build_paths("你好世界", &fuzzy);
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].syllables.is_empty());
-        assert_eq!(paths[0].remaining, "你好世界");
-
-        // 混合拼音与中文的多字节输入应安全退化，不触发 Panic
-        let mixed_paths = PrismEngine::build_paths("pin音测试", &fuzzy);
-        assert!(!mixed_paths.is_empty());
-    }
-
-    #[test]
-    fn test_extended_transpose_and_cross_boundary_typo() {
-        let fuzzy = FuzzyConfig::default();
-
-        // 1. 长音节尾部倒置 (idx 4, 5): zhuagn -> zhuang
-        let zhuang_paths = PrismEngine::build_paths("zhuagn", &fuzzy);
-        assert!(
-            zhuang_paths
-                .iter()
-                .any(|p| p.to_key_string() == "zhuang" && p.is_typo),
-            "应支持长音节尾部 (4,5) 倒置纠错 zhuagn -> zhuang"
-        );
-
-        // 2. 跨音节边界首尾倒置: nhiao -> ni'hao, shhiou -> shi'hou
-        let nhiao_paths = PrismEngine::build_paths("nhiao", &fuzzy);
-        assert!(
-            nhiao_paths
-                .iter()
-                .any(|p| p.to_key_string() == "ni'hao" && p.is_typo),
-            "应支持跨音节边界倒置 nhiao -> ni'hao"
-        );
-
-        let shhiou_paths = PrismEngine::build_paths("shhiou", &fuzzy);
-        assert!(
-            shhiou_paths
-                .iter()
-                .any(|p| p.to_key_string() == "shi'hou" && p.is_typo),
-            "应支持跨音节边界倒置 shhiou -> shi'hou"
-        );
-
-        // 3. 第二音节开头倒置且被单字母元音伪装: shiohu -> shi'hou
-        let shiohu_paths = PrismEngine::build_paths("shiohu", &fuzzy);
-        assert!(
-            shiohu_paths
-                .iter()
-                .any(|p| p.to_key_string() == "shi'hou" && p.is_typo),
-            "应支持 shiohu -> shi'hou 倒置纠错"
-        );
-    }
-
-    #[test]
-    fn test_explicit_quote_multisyllable_part_split() {
-        let fuzzy = FuzzyConfig::default();
-        let paths = PrismEngine::build_paths("xi'anhui", &fuzzy);
-        assert!(!paths.is_empty());
-        assert_eq!(
-            paths[0].syllables,
-            vec!["xi".to_string(), "an".to_string(), "hui".to_string()]
-        );
-        assert!(paths[0].remaining.is_empty());
-    }
-
-    #[test]
-    fn test_dedup_best_paths_retains_optimal() {
-        let mut paths = vec![
-            SegmentPath {
-                syllables: vec!["ni".to_string(), "hao".to_string()],
-                remaining: String::new(),
-                cost: 36,
-                is_typo: true,
-            },
-            SegmentPath {
-                syllables: vec!["ni".to_string(), "hao".to_string()],
-                remaining: "a".to_string(),
-                cost: 25,
-                is_typo: false,
-            },
-            SegmentPath {
-                syllables: vec!["ni".to_string(), "hao".to_string()],
-                remaining: String::new(),
-                cost: 20,
-                is_typo: false,
-            },
-        ];
-        PrismEngine::dedup_best_paths(&mut paths);
-        assert_eq!(paths.len(), 2);
-        assert_eq!(paths[0].remaining, "");
-        assert_eq!(paths[0].cost, 20);
-        assert!(!paths[0].is_typo);
-        assert_eq!(paths[1].remaining, "a");
-    }
-}
+#[path = "prism_tests.rs"]
+mod tests;

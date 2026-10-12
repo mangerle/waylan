@@ -23,6 +23,7 @@ pub mod preprocessor;
 pub mod prism;
 pub(crate) mod prism_fsa;
 pub(crate) mod prism_fuzzy;
+pub mod prism_types;
 pub mod syllables;
 pub mod table;
 pub mod table_mmap;
