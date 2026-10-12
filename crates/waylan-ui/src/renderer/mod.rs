@@ -38,74 +38,143 @@ pub struct CandidateBoxRenderer {
     hit_regions: Mutex<Vec<HitRegion>>,
 }
 
-/// 字形缓存条目（附带最后访问时钟用于 LRU 淘汰）
-struct GlyphCacheEntry {
+const NULL_INDEX: usize = usize::MAX;
+
+/// 双向链表字形缓存节点
+struct CacheNode {
+    key: (char, u32),
     glyph: CachedGlyph,
-    last_accessed: u64,
+    prev: usize,
+    next: usize,
 }
 
-/// 字形缓存状态机（维护条目哈希表与逻辑访问时钟）
+/// 严格 O(1) 复杂度的数组双向链表字形 LRU 缓存状态机
+///
+/// # 设计原理
+/// - **实现初衷**：消除原实现中达到上限时在互斥锁内部进行 2048 长度向量全量分配与非稳定排序的显著停顿。
+/// - **核心优势**：基于固定槽位复用的 Arena 双向链表，查找、命中移动、未命中淘汰均严格为 O(1) 常数时间，零堆内存重分配。
+/// - **代价与局限**：每个条目额外占用 16 字节的链表双向指针索引。
 struct GlyphCacheState {
-    entries: HashMap<(char, u32), GlyphCacheEntry>,
-    clock: u64,
+    map: HashMap<(char, u32), usize>,
+    nodes: Vec<CacheNode>,
+    free_list: Vec<usize>,
+    head: usize,
+    tail: usize,
 }
 
 impl GlyphCacheState {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            entries: HashMap::with_capacity(capacity),
-            clock: 0,
+            map: HashMap::with_capacity(capacity),
+            nodes: Vec::with_capacity(capacity),
+            free_list: Vec::new(),
+            head: NULL_INDEX,
+            tail: NULL_INDEX,
         }
     }
 
+    #[inline]
     fn len(&self) -> usize {
-        self.entries.len()
+        self.map.len()
     }
 
     fn clear(&mut self) {
-        self.entries.clear();
-        self.clock = 0;
+        self.map.clear();
+        self.nodes.clear();
+        self.free_list.clear();
+        self.head = NULL_INDEX;
+        self.tail = NULL_INDEX;
     }
 
-    fn get(&mut self, key: &(char, u32)) -> Option<&CachedGlyph> {
-        self.clock = self.clock.wrapping_add(1);
-        let clock = self.clock;
-        if let Some(entry) = self.entries.get_mut(key) {
-            entry.last_accessed = clock;
-            Some(&entry.glyph)
+    /// 从双向链表中解绑指定节点
+    #[inline]
+    fn detach(&mut self, idx: usize) {
+        let prev = self.nodes[idx].prev;
+        let next = self.nodes[idx].next;
+
+        if prev != NULL_INDEX {
+            self.nodes[prev].next = next;
         } else {
-            None
+            self.head = next;
         }
+
+        if next != NULL_INDEX {
+            self.nodes[next].prev = prev;
+        } else {
+            self.tail = prev;
+        }
+
+        self.nodes[idx].prev = NULL_INDEX;
+        self.nodes[idx].next = NULL_INDEX;
     }
 
+    /// 将指定节点挂载至链表尾部（标记为最新访问 MRU）
+    #[inline]
+    fn attach_tail(&mut self, idx: usize) {
+        self.nodes[idx].prev = self.tail;
+        self.nodes[idx].next = NULL_INDEX;
+
+        if self.tail != NULL_INDEX {
+            self.nodes[self.tail].next = idx;
+        } else {
+            self.head = idx;
+        }
+
+        self.tail = idx;
+    }
+
+    /// 查询字形位图并在命中时 O(1) 提升至链表末尾
+    fn get(&mut self, key: &(char, u32)) -> Option<&CachedGlyph> {
+        let &idx = self.map.get(key)?;
+        self.detach(idx);
+        self.attach_tail(idx);
+        Some(&self.nodes[idx].glyph)
+    }
+
+    /// 插入字形位图并在达到容量上限时 O(1) 淘汰最久未使用的头部条目
     fn insert(&mut self, key: (char, u32), glyph: CachedGlyph) {
-        self.clock = self.clock.wrapping_add(1);
-        let clock = self.clock;
-        self.evict_if_needed();
-        self.entries.insert(
-            key,
-            GlyphCacheEntry {
-                glyph,
-                last_accessed: clock,
-            },
-        );
-    }
+        if let Some(&idx) = self.map.get(&key) {
+            self.nodes[idx].glyph = glyph;
+            self.detach(idx);
+            self.attach_tail(idx);
+            return;
+        }
 
-    /// 当字形缓存达到上限时，按访问时间戳升序排序，精确淘汰最久未使用的约 25% 条目 (LRU)
-    fn evict_if_needed(&mut self) {
-        if self.entries.len() >= MAX_GLYPH_CACHE_SIZE {
-            let evict_count = MAX_GLYPH_CACHE_SIZE / 4;
-            let mut entries: Vec<((char, u32), u64)> = self
-                .entries
-                .iter()
-                .map(|(k, v)| (*k, v.last_accessed))
-                .collect();
-            // 按最后访问时间升序排序，最久未使用的排在最前
-            entries.sort_unstable_by_key(|(_, last_accessed)| *last_accessed);
-            for (key, _) in entries.into_iter().take(evict_count) {
-                self.entries.remove(&key);
+        if self.map.len() >= MAX_GLYPH_CACHE_SIZE {
+            let lru_idx = self.head;
+            if lru_idx != NULL_INDEX {
+                let old_key = self.nodes[lru_idx].key;
+                self.map.remove(&old_key);
+                self.detach(lru_idx);
+                self.nodes[lru_idx].key = key;
+                self.nodes[lru_idx].glyph = glyph;
+                self.attach_tail(lru_idx);
+                self.map.insert(key, lru_idx);
+                return;
             }
         }
+
+        let new_idx = if let Some(free_idx) = self.free_list.pop() {
+            self.nodes[free_idx] = CacheNode {
+                key,
+                glyph,
+                prev: NULL_INDEX,
+                next: NULL_INDEX,
+            };
+            free_idx
+        } else {
+            let idx = self.nodes.len();
+            self.nodes.push(CacheNode {
+                key,
+                glyph,
+                prev: NULL_INDEX,
+                next: NULL_INDEX,
+            });
+            idx
+        };
+
+        self.attach_tail(new_idx);
+        self.map.insert(key, new_idx);
     }
 }
 
