@@ -74,12 +74,11 @@ impl ModeDispatcher {
             "sd" | "sj" | "rq" | "time" | "date" | "now" | "xq"
         ) {
             let now = chrono::Local::now();
-            let date_list = DateTimeEvaluator::format_date_formats(now);
-            let time_list = DateTimeEvaluator::format_time_formats(now);
-            let dt_list = DateTimeEvaluator::format_datetime_formats(now);
 
             match expr_lower.as_str() {
                 "sd" | "now" => {
+                    let dt_list = DateTimeEvaluator::format_datetime_formats(now);
+                    let date_list = DateTimeEvaluator::format_date_formats(now);
                     for (idx, dt) in dt_list.into_iter().enumerate() {
                         candidates.push(
                             AlgoCandidate::new(
@@ -102,6 +101,7 @@ impl ModeDispatcher {
                     }
                 }
                 "rq" | "date" => {
+                    let date_list = DateTimeEvaluator::format_date_formats(now);
                     for (idx, d) in date_list.into_iter().enumerate() {
                         candidates.push(
                             AlgoCandidate::new(
@@ -114,6 +114,7 @@ impl ModeDispatcher {
                     }
                 }
                 "sj" | "time" => {
+                    let time_list = DateTimeEvaluator::format_time_formats(now);
                     for (idx, t) in time_list.into_iter().enumerate() {
                         candidates.push(
                             AlgoCandidate::new(

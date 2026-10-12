@@ -132,15 +132,20 @@ fn query_number_symbols(input: &str, candidates: &mut Vec<AlgoCandidate>) {
         return;
     }
 
-    if let Some(group) = NUMBER_SYMBOLS.iter().find(|g| g.key == input) {
-        let code = format!("i{}", group.key);
-        push_sym(candidates, group.circled, &code, "带圈序号");
-        push_sym(candidates, group.parenthesized, &code, "括号序号");
-        push_sym(candidates, group.dotted, &code, "带点序号");
-        push_sym(candidates, group.roman_upper, &code, "罗马数字");
-        push_sym(candidates, group.roman_lower, &code, "小写罗马");
-        push_sym(candidates, group.chinese_cap, &code, "大写数字");
-        push_sym(candidates, group.ordinal, &code, "中文序数");
+    if let Some((idx, group)) = NUMBER_SYMBOLS
+        .iter()
+        .enumerate()
+        .find(|(_, g)| g.key == input)
+    {
+        const CODES: &[&str] = &["i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10"];
+        let code = CODES.get(idx).copied().unwrap_or("i");
+        push_sym(candidates, group.circled, code, "带圈序号");
+        push_sym(candidates, group.parenthesized, code, "括号序号");
+        push_sym(candidates, group.dotted, code, "带点序号");
+        push_sym(candidates, group.roman_upper, code, "罗马数字");
+        push_sym(candidates, group.roman_lower, code, "小写罗马");
+        push_sym(candidates, group.chinese_cap, code, "大写数字");
+        push_sym(candidates, group.ordinal, code, "中文序数");
     }
 }
 

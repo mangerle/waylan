@@ -16,10 +16,9 @@ impl DateTimeEvaluator {
     /// 若命中，生成携带二级子格式列表（sub_candidates）的动态功能候选条目
     pub fn try_evaluate(pinyin: &str) -> Option<AlgoCandidate> {
         let clean = pinyin.replace('\'', "").to_lowercase();
-        let now = Local::now();
-
         match clean.as_str() {
             "riqi" | "rq" => {
+                let now = Local::now();
                 let subs = Self::format_date_formats(now);
                 Some(
                     AlgoCandidate::new("日期", pinyin, 999_999)
@@ -28,6 +27,7 @@ impl DateTimeEvaluator {
                 )
             }
             "shijian" | "sj" => {
+                let now = Local::now();
                 let subs = Self::format_time_formats(now);
                 Some(
                     AlgoCandidate::new("时间", pinyin, 999_999)
@@ -36,6 +36,7 @@ impl DateTimeEvaluator {
                 )
             }
             "riqishijian" | "rqsj" => {
+                let now = Local::now();
                 let subs = Self::format_datetime_formats(now);
                 Some(
                     AlgoCandidate::new("日期时间", pinyin, 999_999)
@@ -44,6 +45,7 @@ impl DateTimeEvaluator {
                 )
             }
             "xingqi" | "xq" | "zhou" => {
+                let now = Local::now();
                 let subs = Self::format_weekday_formats(now);
                 Some(
                     AlgoCandidate::new("星期", pinyin, 999_999)
