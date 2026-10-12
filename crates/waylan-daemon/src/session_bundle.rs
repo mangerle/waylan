@@ -216,9 +216,11 @@ pub fn apply_reload_v2(s: &mut WaylanV2Session) {
             if m.len() == 0 {
                 info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
                 s.engine.user_model = UserAdaptiveModel::new();
+                s.engine.set_user_dict_path(&b.user_dict_path);
+            } else if s.engine.user_dict_path.as_deref() != Some(&b.user_dict_path) {
+                s.engine.set_user_dict_path(&b.user_dict_path);
             }
         }
-        s.engine.set_user_dict_path(&b.user_dict_path);
     } else {
         info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
         s.engine.user_model = UserAdaptiveModel::new();
@@ -246,9 +248,11 @@ pub fn apply_reload_v1(s: &mut WaylanV1Session) {
             if m.len() == 0 {
                 info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
                 s.engine.user_model = UserAdaptiveModel::new();
+                s.engine.set_user_dict_path(&b.user_dict_path);
+            } else if s.engine.user_dict_path.as_deref() != Some(&b.user_dict_path) {
+                s.engine.set_user_dict_path(&b.user_dict_path);
             }
         }
-        s.engine.set_user_dict_path(&b.user_dict_path);
     } else {
         info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
         s.engine.user_model = UserAdaptiveModel::new();
