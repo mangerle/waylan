@@ -422,21 +422,12 @@ impl DBusMenu {
                 }
             }
             9 => {
-                info!("[系统托盘] 收到重启菜单指令，正在拉起新实例并退出当前进程...");
-                if let Ok(exe) = std::env::current_exe() {
-                    let mut cmd = Command::new(exe);
-                    for arg in std::env::args().skip(1) {
-                        cmd.arg(arg);
-                    }
-                    #[cfg(unix)]
-                    cmd.process_group(0);
-                    let _ = cmd.spawn();
-                }
-                self.exit_requested.store(true, Ordering::Release);
+                info!("[系统托盘] 收到重启菜单指令，正在排队等待旧实例完全释放后拉起新实例...");
+                crate::session_bundle::trigger_graceful_restart_and_exit(
+                    self.exit_requested.as_ref(),
+                    self.loop_wakeup.as_ref(),
+                );
                 let _ = self.icon_update_tx.try_send(());
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
             }
             6 => {
                 let current = self.traditional_chinese.load(Ordering::Acquire);

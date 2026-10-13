@@ -44,45 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. 处理 settings 子命令（透明转发拉起独立的 waylan-settings 偏好设置客户端）
     if args.len() >= 2 && (args[1] == "settings" || args[1] == "--settings") {
-        info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
-        let current_exe = env::current_exe().ok();
-        let sibling_settings = current_exe
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|d| d.join("waylan-settings"))
-            .filter(|p| p.is_file());
-
-        let mut cmd = if let Some(ref path) = sibling_settings {
-            std::process::Command::new(path)
-        } else {
-            std::process::Command::new("waylan-settings")
-        };
-
-        for var in [
-            "WAYLAND_DISPLAY",
-            "DISPLAY",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-            "XDG_CURRENT_DESKTOP",
-        ] {
-            if let Ok(val) = env::var(var) {
-                cmd.env(var, &val);
-            }
-        }
-
-        match cmd.spawn() {
-            Ok(_) => {
-                info!("[微澜守护进程] 偏好设置中心已成功唤起。");
-                return Ok(());
-            }
-            Err(e) => {
-                eprintln!(
-                    "[微澜守护进程] 启动偏好设置中心失败: {}。请确认 waylan-settings 已正确安装。",
-                    e
-                );
-                std::process::exit(1);
-            }
-        }
+        launch_settings_gui()?;
+        return Ok(());
     }
 
     // 3. 处理帮助查询参数
@@ -103,6 +66,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("错误: 未知的命令行参数 '{}'", args[1]);
         cli::print_main_usage();
         std::process::exit(2);
+    }
+
+    // 5. 单例防多开检测：若无参数启动且检测到后台已有活跃微澜输入法守护进程，直接唤起偏好设置中心
+    if !is_ibus_arg
+        && (args.len() == 1 || (args.len() == 2 && args[1] != "--check"))
+        && check_another_instance_running()
+    {
+        info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心...");
+        let _ = launch_settings_gui();
+        return Ok(());
     }
 
     // 注册进程系统退出信号拦截 (SIGINT / SIGTERM)：
@@ -310,7 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit_requested: std::sync::Arc::clone(&term_now),
             loop_wakeup,
             suppress_properties,
-            exclusive_input_source: exclusive_source || should_spawn_tray,
+            exclusive_input_source: exclusive_source,
         });
         return match ibus_res {
             Ok(_) => {
@@ -446,4 +419,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// 唤起独立的微澜偏好设置中心图形界面
+///
+/// # 设计原理
+/// - **实现初衷**：统一 CLI `settings` 子命令与桌面单例防多开时的偏好设置界面唤起逻辑。
+/// - **核心优势**：自动继承当前 Wayland/X11 会话与 D-Bus 上下文，无缝拉起 Slint 设置中心。
+/// - **代价与局限**：若目标可执行文件缺失则返回对应 I/O 错误。
+fn launch_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
+    info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
+    let current_exe = env::current_exe().ok();
+    let sibling_settings = current_exe
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|d| d.join("waylan-settings"))
+        .filter(|p| p.is_file());
+
+    let mut cmd = if let Some(ref path) = sibling_settings {
+        std::process::Command::new(path)
+    } else {
+        std::process::Command::new("waylan-settings")
+    };
+
+    for var in [
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_CURRENT_DESKTOP",
+    ] {
+        if let Ok(val) = env::var(var) {
+            cmd.env(var, &val);
+        }
+    }
+
+    cmd.spawn()?;
+    Ok(())
+}
+
+/// 检查当前系统桌面会话中是否已有活跃的微澜输入法守护进程正在运行
+///
+/// # 设计原理
+/// - **实现初衷**：防止用户从桌面应用菜单重复点击“微澜输入法”导致多实例冲突与托盘抢占失败。
+/// - **核心优势**：通过 Linux 原生 `/proc` 文件系统快速遍历 `comm`，微秒级判定，不依赖特定总线连接。
+/// - **代价与局限**：仅适用于 Linux 操作系统环境。
+fn check_another_instance_running() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let current_pid = std::process::id();
+        if let Ok(entries) = std::fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let Ok(pid) = file_name.parse::<u32>() else {
+                    continue;
+                };
+                if pid == current_pid {
+                    continue;
+                }
+                if let Ok(comm) = std::fs::read_to_string(path.join("comm")) {
+                    if comm.trim() == "waylan" {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }

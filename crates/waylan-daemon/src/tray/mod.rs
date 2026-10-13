@@ -180,10 +180,13 @@ impl TrayService {
             loop_wakeup,
         );
 
-        // 尝试连接用户 DBus 会话总线
+        // 尝试连接用户 DBus 会话总线（依据 FreeDesktop/KDE 规范，使用基于当前 PID 的唯一名称以避免重启或多实例时的总线名抢占冲突）
+        let pid = std::process::id();
+        let item_service = format!("org.kde.StatusNotifierItem-{}-1", pid);
+
         let conn = match Builder::session() {
             Ok(builder) => match builder
-                .name("org.kde.StatusNotifierItem.waylan")
+                .name(item_service.as_str())
                 .and_then(|b| b.serve_at("/StatusNotifierItem", sni))
                 .and_then(|b| b.serve_at("/MenuBar", menu))
                 .and_then(|b| b.build())
@@ -206,29 +209,36 @@ impl TrayService {
             }
         };
 
-        info!("[系统托盘] 成功注册 DBus 托盘与右键菜单服务对象: /StatusNotifierItem, /MenuBar");
+        info!(
+            "[系统托盘] 成功注册 DBus 托盘与右键菜单服务对象: {} (路径: /StatusNotifierItem, /MenuBar)",
+            item_service
+        );
 
-        // 尝试向系统托盘监视器注册自身（优先传递服务名，备选传递对象路径）
-        let item_service = "org.kde.StatusNotifierItem.waylan";
-        let mut registered = conn
-            .call_method(
-                Some("org.kde.StatusNotifierWatcher"),
-                "/StatusNotifierWatcher",
-                Some("org.kde.StatusNotifierWatcher"),
-                "RegisterStatusNotifierItem",
-                &(item_service,),
-            )
-            .is_ok();
-        if !registered {
+        // 尝试向系统托盘监视器注册自身（带轮询重试机制，确保平滑自重启后可靠挂载至顶栏）
+        let mut registered = false;
+        for _ in 0..5 {
             registered = conn
                 .call_method(
                     Some("org.kde.StatusNotifierWatcher"),
                     "/StatusNotifierWatcher",
                     Some("org.kde.StatusNotifierWatcher"),
                     "RegisterStatusNotifierItem",
-                    &("/StatusNotifierItem",),
+                    &(item_service.as_str(),),
                 )
-                .is_ok();
+                .is_ok()
+                || conn
+                    .call_method(
+                        Some("org.kde.StatusNotifierWatcher"),
+                        "/StatusNotifierWatcher",
+                        Some("org.kde.StatusNotifierWatcher"),
+                        "RegisterStatusNotifierItem",
+                        &("/StatusNotifierItem",),
+                    )
+                    .is_ok();
+            if registered {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         if registered {

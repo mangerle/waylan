@@ -91,15 +91,7 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
                 Ok(()) => {
                     let hide_ext = base_cfg.exclusive_input_source;
                     *current_cfg_cell.borrow_mut() = base_cfg;
-                    if std::env::var("XDG_CURRENT_DESKTOP")
-                        .map(|d| d.to_uppercase().contains("GNOME"))
-                        .unwrap_or(false)
-                    {
-                        let action = if hide_ext { "enable" } else { "disable" };
-                        let _ = std::process::Command::new("gnome-extensions")
-                            .args([action, "waylan-hide-input-source@waylan.org"])
-                            .output();
-                    }
+                    sync_gnome_indicator_mode(hide_ext);
                     win.set_global_status(SharedString::from("配置已成功保存并同步！"));
                 }
                 Err(e) => {
@@ -246,6 +238,46 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
 
     window.run()?;
     Ok(())
+}
+
+/// 同步更新 GNOME 输入源列表与指示器隐藏扩展
+///
+/// # 设计原理
+/// - **实现初衷**：在用户修改设置并点击保存时，无需等待守护进程重启或注销桌面，即时响应顶栏形态变化。
+/// - **核心优势**：独占模式下设置单一输入源 `[('ibus', 'waylan')]` 促使 GNOME 自动折叠隐藏原生指示器，
+///   同时配合扩展启用/禁用，双保险保障即时呈现期望效果。
+/// - **代价与局限**：仅在检测到当前桌面环境为 GNOME 时生效，非 GNOME 环境直接跳过。
+fn sync_gnome_indicator_mode(exclusive: bool) {
+    if !std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_uppercase().contains("GNOME"))
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let sources = if exclusive {
+        "[('ibus', 'waylan')]"
+    } else {
+        "[('ibus', 'waylan'), ('xkb', 'us')]"
+    };
+
+    for key in ["sources", "mru-sources"] {
+        let _ = std::process::Command::new("gsettings")
+            .args(["set", "org.gnome.desktop.input-sources", key, sources])
+            .output();
+    }
+    let _ = std::process::Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
+        .output();
+    let _ = std::process::Command::new("ibus")
+        .args(["engine", "waylan"])
+        .output();
+
+    let action = if exclusive { "enable" } else { "disable" };
+    let uuid = "waylan-hide-input-source@waylan.org";
+    let _ = std::process::Command::new("gnome-extensions")
+        .args([action, uuid])
+        .output();
 }
 
 #[cfg(test)]

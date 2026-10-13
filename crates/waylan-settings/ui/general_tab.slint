@@ -186,21 +186,21 @@ export component GeneralTab inherits VerticalLayout {
 
     SettingCard {
         title: "系统托盘与指示器";
-        subtitle: "配置桌面系统托盘图标显示形态与 GNOME 顶栏指示器行为";
+        subtitle: "配置桌面顶栏指示器显示形态（提供专属彩色托盘与系统原生单图标等多种风格）";
 
         HorizontalLayout {
             spacing: 12px;
             alignment: start;
-            Text { text: "托盘模式:"; vertical-alignment: center; width: 80px; }
+            Text { text: "指示器形态:"; vertical-alignment: center; width: 90px; }
             ComboBox {
-                model: ["自动检测 (推荐)", "强制启用彩色托盘", "强制关闭独立托盘"];
+                model: [
+                    "微澜专属彩色托盘 (推荐，隐藏系统原生白色图标)",
+                    "GNOME 原生单图标 (融入系统，关闭微澜独立托盘)",
+                    "双指示器并存 (同时显示原生图标与微澜彩色托盘)"
+                ];
                 current-index <=> root.enable_tray_index;
-                width: 180px;
+                width: 330px;
             }
-        }
-        CheckBox {
-            text: "隐藏 GNOME 顶栏原生输入法指示器（仅保留微澜彩色托盘）";
-            checked <=> root.exclusive_input_source;
         }
     }
 }

@@ -376,8 +376,7 @@ pub fn ensure_gnome_input_source_registered(exclusive: bool) {
 /// GNOME 规范严格要求必须存在至少一项底层 XKB 键盘布局以处理基础硬件映射。
 /// 独占优先模式将微澜设为首位，并仅保留单个兜底英文 XKB，促使 GNOME 原生顶栏折叠并确保引擎稳定激活。
 pub fn set_waylan_as_exclusive_input_source() {
-    let base_xkb = get_existing_first_xkb_or_default();
-    let exclusive_sources = format!("[('ibus', 'waylan'), {}]", base_xkb);
+    let exclusive_sources = "[('ibus', 'waylan')]";
 
     for key in ["sources", "mru-sources"] {
         let _ = Command::new("gsettings")
@@ -385,7 +384,7 @@ pub fn set_waylan_as_exclusive_input_source() {
                 "set",
                 "org.gnome.desktop.input-sources",
                 key,
-                &exclusive_sources,
+                exclusive_sources,
             ])
             .output();
     }
@@ -394,30 +393,9 @@ pub fn set_waylan_as_exclusive_input_source() {
         .output();
     let _ = Command::new("ibus").args(["engine", "waylan"]).output();
     info!(
-        "[微澜 IBus] 已将微澜设为 GNOME 独占首选输入源并挂载底层 XKB: {}",
+        "[微澜 IBus] 已将微澜设为 GNOME 独占单一输入源以自动折叠隐藏原生顶栏指示器: {}",
         exclusive_sources
     );
-}
-
-/// 从当前 GNOME 输入源列表中提取首个合法的 XKB 布局项，若无则默认返回 "('xkb', 'us')"
-fn get_existing_first_xkb_or_default() -> String {
-    let Ok(out) = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.input-sources", "sources"])
-        .output()
-    else {
-        return "('xkb', 'us')".to_string();
-    };
-    if !out.status.success() {
-        return "('xkb', 'us')".to_string();
-    }
-    let raw = String::from_utf8_lossy(&out.stdout);
-    for item in parse_gsettings_source_tuples(&raw) {
-        let trimmed = item.trim();
-        if trimmed.starts_with("('xkb',") {
-            return trimmed.to_string();
-        }
-    }
-    "('xkb', 'us')".to_string()
 }
 
 /// 读取并更新指定的 GSettings 输入源键（将微澜置顶）

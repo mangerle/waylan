@@ -383,6 +383,48 @@ pub fn check_wayland_capabilities() -> WaylandCapabilities {
     }
 }
 
+/// 派生延迟等待当前进程退出的新实例并向旧实例发出优雅停机信号
+///
+/// # 设计原理
+/// - **实现初衷**：Linux 桌面环境下多实例共享同一 D-Bus 总线名（如 `org.freedesktop.IBus.Waylan`）
+///   与 StatusNotifierItem 托盘通道。旧实例未释放 D-Bus 节点前直接启动新实例会触发冲突退化。
+/// - **核心优势**：通过脱钩的后台子进程轮询等待旧进程 PID 消亡并在 1 秒超时后保底强杀，确保总线名称彻底释放后再无缝拉起新实例。
+/// - **代价与局限**：重启过程伴随约 150ms 缓冲，保证进程与连接清理的时序隔离。
+pub fn trigger_graceful_restart_and_exit(
+    exit_requested: &std::sync::atomic::AtomicBool,
+    loop_wakeup: Option<&waylan_wayland::LoopWakeup>,
+) {
+    if let Ok(exe) = std::env::current_exe() {
+        let pid = std::process::id();
+        let args = std::env::args().skip(1).collect::<Vec<_>>();
+        let args_str = args
+            .iter()
+            .map(|a| format!("\"{}\"", a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let shell_cmd = format!(
+            "trap '' HUP; for _ in $(seq 1 30); do if ! kill -0 {pid} 2>/dev/null; then break; fi; sleep 0.05; done; \
+             if kill -0 {pid} 2>/dev/null; then kill -9 {pid} 2>/dev/null; fi; \
+             sleep 0.35; exec \"{exe}\" {args} >/dev/null 2>&1",
+            pid = pid,
+            exe = exe.display(),
+            args = args_str
+        );
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg(shell_cmd);
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        let _ = cmd.spawn();
+    }
+    exit_requested.store(true, std::sync::atomic::Ordering::Release);
+    if let Some(wakeup) = loop_wakeup {
+        wakeup.wake();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

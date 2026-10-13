@@ -77,12 +77,11 @@ pub fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_fuzzy_g_k(cfg.fuzzy_rules.g_k);
 
     // 系统托盘与指示器
-    window.set_enable_tray_index(match cfg.enable_tray {
-        None => 0,
-        Some(true) => 1,
-        Some(false) => 2,
+    window.set_enable_tray_index(match (cfg.enable_tray, cfg.exclusive_input_source) {
+        (Some(false), _) => 1,    // GNOME 原生单图标
+        (Some(true), false) => 2, // 双指示器并存
+        _ => 0,                   // 微澜专属彩色托盘（推荐）
     });
-    window.set_exclusive_input_source(cfg.exclusive_input_source);
 
     // 高级模式与候选特性
     window.set_enable_u_mode(cfg.enable_u_mode);
@@ -149,12 +148,23 @@ pub fn update_config_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
         on_ong: window.get_typo_on_ong(),
     };
     cfg.auto_pangu_spacing = window.get_auto_pangu_spacing();
-    cfg.enable_tray = match window.get_enable_tray_index() {
-        1 => Some(true),
-        2 => Some(false),
-        _ => None,
-    };
-    cfg.exclusive_input_source = window.get_exclusive_input_source();
+    match window.get_enable_tray_index() {
+        1 => {
+            // GNOME 原生单图标（融入系统，关闭微澜独立托盘）
+            cfg.enable_tray = Some(false);
+            cfg.exclusive_input_source = false;
+        }
+        2 => {
+            // 双指示器并存
+            cfg.enable_tray = Some(true);
+            cfg.exclusive_input_source = false;
+        }
+        _ => {
+            // 微澜专属彩色托盘（推荐）
+            cfg.enable_tray = Some(true);
+            cfg.exclusive_input_source = true;
+        }
+    }
     cfg.enable_u_mode = window.get_enable_u_mode();
     cfg.enable_i_mode = window.get_enable_i_mode();
     cfg.filter_uncommon_charset = window.get_filter_uncommon_charset();
@@ -193,18 +203,17 @@ mod tests {
 
         sync_config_to_window(&window, &initial_cfg);
 
-        // 验证界面读取与同步状态
-        assert_eq!(window.get_enable_tray_index(), 1);
-        assert!(window.get_exclusive_input_source());
+        // 验证界面读取与同步状态（Some(true) + true 对应索引 0: 微澜专属彩色托盘）
+        assert_eq!(window.get_enable_tray_index(), 0);
         assert!(!window.get_enable_u_mode());
         assert!(!window.get_enable_i_mode());
         assert!(window.get_filter_uncommon_charset());
         assert!(!window.get_show_pinyin_comment());
         assert!(!window.get_auto_dedup());
 
-        // 模拟用户在界面修改某项（如切回浅色、修改候选数）
+        // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标）
         window.set_page_size_val(8.0);
-        window.set_enable_tray_index(2); // 强制关闭
+        window.set_enable_tray_index(1);
 
         let mut updated_cfg = initial_cfg.clone();
         update_config_from_window(&window, &mut updated_cfg);
@@ -212,6 +221,7 @@ mod tests {
         // 验证修改生效
         assert_eq!(updated_cfg.page_size, 8);
         assert_eq!(updated_cfg.enable_tray, Some(false));
+        assert!(!updated_cfg.exclusive_input_source);
         // 关键：未在界面展示的高级图标配置绝对不可被清空
         assert_eq!(
             updated_cfg.tray_icon_theme_path.as_deref(),

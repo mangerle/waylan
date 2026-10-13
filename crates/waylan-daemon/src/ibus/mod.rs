@@ -24,7 +24,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use log::{debug, info, warn};
+use log::{debug, info};
 use rustix::event::{poll, PollFd, PollFlags};
 use waylan_algo::AlgoEngine;
 use waylan_wayland::session_common::{
@@ -303,35 +303,26 @@ fn register_or_activate_ibus_engine(
         .unwrap_or_else(|| "waylan".to_string());
 
     if is_ibus_child_mode {
-        conn.request_name("org.freedesktop.IBus.Waylan")?;
-        info!("[微澜 IBus] 已在子进程模式下成功注册总线名称 org.freedesktop.IBus.Waylan");
-        return Ok(());
-    }
+        let _ = conn.request_name("org.freedesktop.IBus.Waylan");
+        info!("[微澜 IBus] 已在子进程模式下成功申请总线名称 org.freedesktop.IBus.Waylan");
+    } else {
+        ensure_ibus_and_gnome_integration(&exe_path, exclusive);
 
-    ensure_ibus_and_gnome_integration(&exe_path, exclusive);
-
-    let exec_cmd = format!("{} --ibus", exe_path);
-    let setup_cmd = format!("{} settings", exe_path);
-    let comp_val = build_waylan_ibus_component(&exec_cmd, &setup_cmd)?;
-
-    match conn.call_method(
-        Some("org.freedesktop.IBus"),
-        "/org/freedesktop/IBus",
-        Some("org.freedesktop.IBus"),
-        "RegisterComponent",
-        &(Value::from(comp_val),),
-    ) {
-        Ok(_) => {
+        let exec_cmd = format!("{} --ibus", exe_path);
+        let setup_cmd = format!("{} settings", exe_path);
+        if let Ok(comp_val) = build_waylan_ibus_component(&exec_cmd, &setup_cmd) {
+            let _ = conn.call_method(
+                Some("org.freedesktop.IBus"),
+                "/org/freedesktop/IBus",
+                Some("org.freedesktop.IBus"),
+                "RegisterComponent",
+                &(Value::from(comp_val),),
+            );
             info!("[微澜 IBus] 成功向 ibus-daemon 动态注册微澜输入法组件 (org.freedesktop.IBus.Waylan)");
         }
-        Err(e) => {
-            warn!(
-                "[微澜 IBus] 动态调用 RegisterComponent 返回提示 ({})，尝试直接申请服务名",
-                e
-            );
-            let _ = conn.request_name("org.freedesktop.IBus.Waylan");
-        }
     }
+
+    let _ = conn.request_name("org.freedesktop.IBus.Waylan");
 
     if let Err(e) = conn.call_method(
         Some("org.freedesktop.IBus"),
@@ -340,8 +331,8 @@ fn register_or_activate_ibus_engine(
         "SetGlobalEngine",
         &("waylan",),
     ) {
-        warn!(
-            "[微澜 IBus] 自动切换全局引擎至 waylan 提示: {}（可在系统输入源中手动选择微澜）",
+        debug!(
+            "[微澜 IBus] 切换全局引擎至 waylan 提示: {}（系统输入源就绪）",
             e
         );
     } else {
@@ -380,9 +371,32 @@ fn run_ibus_monitor_loop(
         if should_reload {
             let bundle = SessionConfigBundle::load_current();
             let hide_ext = bundle.exclusive_input_source;
+            let current_has_tray = shared_core
+                .lock()
+                .map(|g| g.shared_is_chinese.is_some())
+                .unwrap_or(false);
+            let new_cfg = crate::config::AppConfig::load_or_create();
+            let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+                .map(|d| d.to_uppercase().contains("GNOME"))
+                .unwrap_or(false);
+            let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
+
+            if expected_tray != current_has_tray {
+                info!(
+                    "[微澜 IBus] 检测到指示器形态变更 (当前托盘: {}, 期望托盘: {})，正在触发平滑自重启...",
+                    current_has_tray, expected_tray
+                );
+                crate::session_bundle::trigger_graceful_restart_and_exit(
+                    params.exit_requested.as_ref(),
+                    params.loop_wakeup.as_ref(),
+                );
+                break;
+            }
+
             if let Ok(mut guard) = shared_core.lock() {
                 apply_bundle_to_ibus_core(bundle, &mut guard);
             }
+            desktop_integration::ensure_gnome_input_source_registered(hide_ext);
             desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
             info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
         }
