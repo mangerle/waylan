@@ -51,6 +51,14 @@ impl ShiftToggleStateMachine {
         self.other_key_pressed = false;
     }
 
+    /// 动态更新中英文切换键模式（若模式未发生改变则保留当前按键状态，避免热重载打断按键状态机）
+    pub fn set_toggle_key(&mut self, toggle_key: ToggleKeyMode) {
+        if self.toggle_key != toggle_key {
+            self.toggle_key = toggle_key;
+            self.reset();
+        }
+    }
+
     /// 接收原始按键扫描码事件并判定是否应当翻转中英文模式
     pub fn on_key_event(
         &mut self,
@@ -154,6 +162,13 @@ impl PunctuationProcessor {
             auto_complete_pairs,
             recent_context: String::with_capacity(128),
         }
+    }
+
+    /// 从新配置实例同步标点特性布尔开关，同时完整保留当前引号开闭状态与最近输入上下文
+    pub fn apply_options_from(&mut self, other: &Self) {
+        self.slash_to_dunhao = other.slash_to_dunhao;
+        self.protect_digits_punctuation = other.protect_digits_punctuation;
+        self.auto_complete_pairs = other.auto_complete_pairs;
     }
 
     /// 重置成对引号的开闭记忆状态

@@ -257,6 +257,34 @@ impl UserAdaptiveModel {
         self.entries.clear();
         self.max_timestamp = 0;
     }
+
+    /// 判断磁盘上的 WAL 文件是否与当前模型持有的常驻追加句柄指向同一底层文件（相同 inode 且长度一致）
+    pub fn is_same_wal_file(&self, path: &Path) -> bool {
+        let Ok(guard) = self.wal_file.lock() else {
+            return false;
+        };
+        let Some((ref opened_path, ref opened_file)) = *guard else {
+            return false;
+        };
+        if opened_path != path {
+            return false;
+        }
+        let (Ok(opened_meta), Ok(disk_meta)) = (opened_file.metadata(), std::fs::metadata(path))
+        else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            opened_meta.dev() == disk_meta.dev()
+                && opened_meta.ino() == disk_meta.ino()
+                && opened_meta.len() == disk_meta.len()
+        }
+        #[cfg(not(unix))]
+        {
+            opened_meta.len() == disk_meta.len()
+        }
+    }
 }
 
 #[cfg(test)]

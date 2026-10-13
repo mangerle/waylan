@@ -1,7 +1,8 @@
 //! 输入法守护进程词库加载、环境探测与会话配置热重载管理
 
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use log::{info, warn};
 use waylan_algo::custom_phrase::CustomPhraseManager;
@@ -16,7 +17,6 @@ use waylan_ui::UiTheme;
 use waylan_wayland::probe_wayland_environment;
 use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
 use waylan_wayland::session_v2::WaylanV2Session;
-use waylan_wayland::surface::CandidateSurfaceManager;
 use waylan_wayland::WaylandCapabilities;
 
 use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
@@ -83,51 +83,90 @@ pub fn load_auxiliary_dict() -> AuxiliaryDict {
     AuxiliaryDict::with_default_data()
 }
 
-static CACHED_AUX_MANAGERS: OnceLock<(
-    Arc<EnglishSuggestionManager>,
-    Arc<SymbolSuggestionManager>,
-)> = OnceLock::new();
+struct AuxManagerCache {
+    source_path: Option<PathBuf>,
+    mtime: Option<SystemTime>,
+    managers: (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>),
+}
 
-/// 按照多级搜索策略加载辅助与混输词库管理器（单例缓存，彻底消除热重载时重复解析与 6 万次 String 堆分配）
-pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
-    CACHED_AUX_MANAGERS
-        .get_or_init(|| {
-            info!("[辅助词库] 正在定位并初始化辅助与混输词典索引...");
-            let search_paths = AppConfig::aux_dict_search_paths();
+static CACHED_AUX_MANAGERS: OnceLock<Mutex<AuxManagerCache>> = OnceLock::new();
 
-            for path in &search_paths {
-                if path.exists() {
-                    let load_start = Instant::now();
-                    match AuxiliaryDict::load_from_file(path) {
-                        Ok(dict) => {
-                            let elapsed = load_start.elapsed();
-                            info!(
-                                "  - 成功加载辅助混输词库: {:?} (耗时: {:.2} ms, 英文词数: {}, 符号表情: {} 组)",
-                                path,
-                                elapsed.as_secs_f64() * 1000.0,
-                                dict.english_words.len(),
-                                dict.symbols.len()
-                            );
-                            let en =
-                                Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
-                            let sym =
-                                Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
-                            return (en, sym);
-                        }
-                        Err(e) => {
-                            warn!("  - 读取辅助词库文件 {:?} 失败: {}", path, e);
-                        }
-                    }
+/// 探测当前应当生效的辅助词库文件路径及其最新修改时间
+fn probe_active_aux_dict_meta() -> (Option<PathBuf>, Option<SystemTime>) {
+    for path in AppConfig::aux_dict_search_paths() {
+        if path.exists() {
+            let mtime = std::fs::metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok());
+            return (Some(path), mtime);
+        }
+    }
+    (None, None)
+}
+
+/// 从磁盘构建辅助与混输词库管理器缓存实例
+fn build_auxiliary_managers() -> AuxManagerCache {
+    info!("[辅助词库] 正在定位并初始化辅助与混输词典索引...");
+    let search_paths = AppConfig::aux_dict_search_paths();
+
+    for path in search_paths {
+        if path.exists() {
+            let mtime = std::fs::metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok());
+            let load_start = Instant::now();
+            match AuxiliaryDict::load_from_file(&path) {
+                Ok(dict) => {
+                    let elapsed = load_start.elapsed();
+                    info!(
+                        "  - 成功加载辅助混输词库: {:?} (耗时: {:.2} ms, 英文词数: {}, 符号表情: {} 组)",
+                        path,
+                        elapsed.as_secs_f64() * 1000.0,
+                        dict.english_words.len(),
+                        dict.symbols.len()
+                    );
+                    let en = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
+                    let sym = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
+                    return AuxManagerCache {
+                        source_path: Some(path),
+                        mtime,
+                        managers: (en, sym),
+                    };
+                }
+                Err(e) => {
+                    warn!("  - 读取辅助词库文件 {:?} 失败: {}", path, e);
                 }
             }
+        }
+    }
 
-            info!("  - 未检测到外部辅助词库文件，使用系统内置单例保底英文与符号表情库。");
-            (
-                EnglishSuggestionManager::default_global(),
-                SymbolSuggestionManager::default_global(),
-            )
-        })
-        .clone()
+    info!("  - 未检测到外部辅助词库文件，使用系统内置单例保底英文与符号表情库。");
+    AuxManagerCache {
+        source_path: None,
+        mtime: None,
+        managers: (
+            EnglishSuggestionManager::default_global(),
+            SymbolSuggestionManager::default_global(),
+        ),
+    }
+}
+
+/// 按照多级搜索策略加载辅助与混输词库管理器（带文件时间戳感知的单例缓存，未变动时零拷贝复用，变动时自动热更新）
+pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
+    let cache_mutex = CACHED_AUX_MANAGERS.get_or_init(|| Mutex::new(build_auxiliary_managers()));
+
+    let (active_path, active_mtime) = probe_active_aux_dict_meta();
+    if let Ok(mut guard) = cache_mutex.lock() {
+        if guard.source_path == active_path && guard.mtime == active_mtime {
+            return guard.managers.clone();
+        }
+        let fresh = build_auxiliary_managers();
+        let out = fresh.managers.clone();
+        *guard = fresh;
+        return out;
+    }
+
+    build_auxiliary_managers().managers
 }
 
 /// 按照多级搜索策略加载简繁转换两级词库（复用 OpenCcDict 全局单例缓存，供单元测试使用）
@@ -136,7 +175,7 @@ pub fn load_opencc_dict() -> std::sync::Arc<OpenCcDict> {
     OpenCcDict::global()
 }
 
-/// 统一会话配置包（收敛 V1 与 V2 热重载与初始化的重复配置逻辑）
+/// 统一会话配置包（收敛 V1、V2 与 IBus 热重载与初始化的重复配置逻辑）
 pub struct SessionConfigBundle {
     pub algo_config: AlgoConfig,
     pub theme: UiTheme,
@@ -145,7 +184,7 @@ pub struct SessionConfigBundle {
     pub punct_processor: PunctuationProcessor,
     pub page_keys: PageKeyConfig,
     pub custom_phrases: CustomPhraseManager,
-    pub user_dict_path: std::path::PathBuf,
+    pub user_dict_path: PathBuf,
     pub english_suggester: Arc<EnglishSuggestionManager>,
     pub symbol_suggester: Arc<SymbolSuggestionManager>,
 }
@@ -201,18 +240,17 @@ impl SessionConfigBundle {
         }
     }
 
-    /// 将配置包原子应用到输入引擎与候选框表面管理器中
-    pub fn apply_to_session_core(
+    /// 将配置包原子应用到算法引擎与按键/标点状态机中（完整保留标点上下文与未变更的按键跟踪状态）
+    pub fn apply_to_engine_and_input(
         self,
         engine: &mut waylan_algo::AlgoEngine,
-        surface_manager: &mut CandidateSurfaceManager,
+        shift_sm: &mut ShiftToggleStateMachine,
         punct_processor: &mut PunctuationProcessor,
         page_keys: &mut PageKeyConfig,
     ) {
         engine.config = self.algo_config;
-        surface_manager.renderer.theme = self.theme;
-        surface_manager.renderer.font_size = self.font_size;
-        *punct_processor = self.punct_processor;
+        shift_sm.set_toggle_key(self.shift_mode);
+        punct_processor.apply_options_from(&self.punct_processor);
         *page_keys = self.page_keys;
         engine.custom_phrases = self.custom_phrases;
         if self.user_dict_path.exists() {
@@ -221,7 +259,7 @@ impl SessionConfigBundle {
                     info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
                     engine.user_model = UserAdaptiveModel::new();
                     engine.set_user_dict_path(&self.user_dict_path);
-                } else if engine.user_dict_path.as_deref() != Some(&self.user_dict_path) {
+                } else if !engine.user_model.is_same_wal_file(&self.user_dict_path) {
                     engine.set_user_dict_path(&self.user_dict_path);
                 }
             }
@@ -238,10 +276,11 @@ impl SessionConfigBundle {
 /// 执行 V2 会话的配置与词库热重载
 pub fn apply_reload_v2(s: &mut WaylanV2Session) {
     let b = SessionConfigBundle::load_current();
-    s.shift_state = ShiftToggleStateMachine::with_toggle_key(b.shift_mode);
-    b.apply_to_session_core(
+    s.surface_manager.renderer.theme = b.theme.clone();
+    s.surface_manager.renderer.font_size = b.font_size;
+    b.apply_to_engine_and_input(
         &mut s.engine,
-        &mut s.surface_manager,
+        &mut s.shift_state,
         &mut s.punctuation_processor,
         &mut s.page_keys,
     );
@@ -253,10 +292,11 @@ pub fn apply_reload_v2(s: &mut WaylanV2Session) {
 /// 执行 V1 会话的配置与词库热重载
 pub fn apply_reload_v1(s: &mut WaylanV1Session) {
     let b = SessionConfigBundle::load_current();
-    s.shift_sm = ShiftToggleStateMachine::with_toggle_key(b.shift_mode);
-    b.apply_to_session_core(
+    s.surface_manager.renderer.theme = b.theme.clone();
+    s.surface_manager.renderer.font_size = b.font_size;
+    b.apply_to_engine_and_input(
         &mut s.engine,
-        &mut s.surface_manager,
+        &mut s.shift_sm,
         &mut s.punctuation_processor,
         &mut s.page_keys,
     );
@@ -315,5 +355,27 @@ mod tests {
 
         let opencc = load_opencc_dict();
         assert!(!opencc.chars.is_empty(), "简繁词库应包含基础字符映射");
+    }
+
+    #[test]
+    fn test_reload_preserves_punctuation_context() {
+        let mut engine = waylan_algo::AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut shift_sm = ShiftToggleStateMachine::with_toggle_key(ToggleKeyMode::Shift);
+        let mut punct = PunctuationProcessor::with_options(true, true, false);
+        let mut page_keys = PageKeyConfig::MinusEqual;
+
+        // 模拟已输入左双引号与上下文网址前缀
+        punct.record_commit("“https://example.com");
+        assert!(punct.double_quote_open);
+        assert_eq!(punct.recent_context, "“https://example.com");
+
+        let mut bundle = SessionConfigBundle::load_current();
+        bundle.punct_processor = PunctuationProcessor::with_options(false, true, false);
+        bundle.apply_to_engine_and_input(&mut engine, &mut shift_sm, &mut punct, &mut page_keys);
+
+        // 验证热重载更新了配置开关，同时完整保留了引号开闭状态与最近输入上下文
+        assert!(!punct.slash_to_dunhao);
+        assert!(punct.double_quote_open);
+        assert_eq!(punct.recent_context, "“https://example.com");
     }
 }

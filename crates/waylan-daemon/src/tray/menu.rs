@@ -90,7 +90,7 @@ impl SubprocessManager {
             // 收到退出信号后，主动清理所有存活子进程并收割状态
             if let Ok(mut lock) = children_clone.lock() {
                 for tracked in lock.iter_mut() {
-                    log::info!(
+                    info!(
                         "[系统托盘] 正在终止被纳管的外部子进程 [{}]...",
                         tracked.name
                     );
@@ -124,6 +124,94 @@ impl SubprocessManager {
                 running_guard,
                 name,
             });
+        }
+    }
+
+    /// 唤起偏好设置图形界面进程
+    pub(crate) fn launch_settings(&self, settings_running: &Arc<AtomicBool>) {
+        if settings_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            info!("[系统托盘] 偏好设置窗口已在运行中，忽略重复唤起请求。");
+            return;
+        }
+        info!("[系统托盘] 唤起微澜偏好设置界面...");
+        let current_exe = std::env::current_exe().ok();
+        let sibling_settings = current_exe
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.join("waylan-settings"))
+            .filter(|p| p.is_file());
+
+        let mut cmd = if let Some(ref path) = sibling_settings {
+            Command::new(path)
+        } else {
+            Command::new("waylan-settings")
+        };
+        #[cfg(unix)]
+        cmd.process_group(0);
+
+        for var in [
+            "WAYLAND_DISPLAY",
+            "DISPLAY",
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_CURRENT_DESKTOP",
+        ] {
+            if let Ok(val) = std::env::var(var) {
+                cmd.env(var, &val);
+            }
+        }
+
+        match cmd.spawn() {
+            Ok(child) => {
+                self.track(child, Some(Arc::clone(settings_running)), "偏好设置界面");
+            }
+            Err(e) => {
+                log::warn!(
+                    "[系统托盘] 无法启动图形偏好设置二进制 waylan-settings ({})，回退使用文本编辑器打开配置文件。",
+                    e
+                );
+                settings_running.store(false, Ordering::Release);
+                self.launch_config_file_fallback();
+            }
+        }
+    }
+
+    /// 备选回退方案：调用默认文本编辑器打开配置文件
+    pub(crate) fn launch_config_file_fallback(&self) {
+        if let Some(path) = AppConfig::config_path() {
+            let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .copied()
+                .unwrap_or("xdg-open");
+            let mut xdg_cmd = Command::new(xdg_bin);
+            xdg_cmd.arg(path);
+            #[cfg(unix)]
+            xdg_cmd.process_group(0);
+            if let Ok(child) = xdg_cmd.spawn() {
+                self.track(child, None, "配置文件文本编辑器");
+            }
+        }
+    }
+
+    /// 打开系统运行日志文件
+    pub(crate) fn launch_view_log(&self) {
+        let log_path = log_file_path();
+        info!("[系统托盘] 查看运行日志: {:?}", log_path);
+        let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .copied()
+            .unwrap_or("xdg-open");
+        let mut log_cmd = Command::new(xdg_bin);
+        log_cmd.arg(log_path);
+        #[cfg(unix)]
+        log_cmd.process_group(0);
+        if let Ok(child) = log_cmd.spawn() {
+            self.track(child, None, "运行日志查看器");
         }
     }
 }
@@ -169,105 +257,13 @@ impl DBusMenu {
         }
     }
 
-    /// 唤起偏好设置图形界面进程
     fn launch_settings(&self) {
-        if self
-            .settings_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            info!("[系统托盘] 偏好设置窗口已在运行中，忽略重复唤起请求。");
-            return;
-        }
-        info!("[系统托盘] 唤起微澜偏好设置界面...");
-        let current_exe = std::env::current_exe().ok();
-        let sibling_settings = current_exe
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|d| d.join("waylan-settings"))
-            .filter(|p| p.is_file());
-
-        let mut cmd1 = if let Some(ref path) = sibling_settings {
-            Command::new(path)
-        } else {
-            Command::new("waylan-settings")
-        };
-        #[cfg(unix)]
-        cmd1.process_group(0);
-
-        let mut cmd2 = if let Some(ref path) = current_exe {
-            Command::new(path)
-        } else {
-            Command::new("waylan")
-        };
-        cmd2.arg("settings");
-        #[cfg(unix)]
-        cmd2.process_group(0);
-
-        for var in [
-            "WAYLAND_DISPLAY",
-            "DISPLAY",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-            "XDG_CURRENT_DESKTOP",
-        ] {
-            if let Ok(val) = std::env::var(var) {
-                cmd1.env(var, &val);
-                cmd2.env(var, &val);
-            }
-        }
-
-        let spawned = cmd1.spawn().or_else(|_| cmd2.spawn());
-        match spawned {
-            Ok(child) => {
-                self.subprocess_manager.track(
-                    child,
-                    Some(Arc::clone(&self.settings_running)),
-                    "偏好设置界面",
-                );
-            }
-            Err(_) => {
-                self.settings_running.store(false, Ordering::Release);
-                self.launch_config_file_fallback();
-            }
-        }
+        self.subprocess_manager
+            .launch_settings(&self.settings_running);
     }
 
-    /// 备选回退方案：调用默认文本编辑器打开配置文件
-    fn launch_config_file_fallback(&self) {
-        if let Some(path) = AppConfig::config_path() {
-            let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
-                .iter()
-                .find(|p| std::path::Path::new(p).exists())
-                .copied()
-                .unwrap_or("xdg-open");
-            let mut xdg_cmd = Command::new(xdg_bin);
-            xdg_cmd.arg(path);
-            #[cfg(unix)]
-            xdg_cmd.process_group(0);
-            if let Ok(child) = xdg_cmd.spawn() {
-                self.subprocess_manager
-                    .track(child, None, "配置文件文本编辑器");
-            }
-        }
-    }
-
-    /// 打开系统运行日志文件
     fn launch_view_log(&self) {
-        let log_path = log_file_path();
-        info!("[系统托盘] 查看运行日志: {:?}", log_path);
-        let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
-            .iter()
-            .find(|p| std::path::Path::new(p).exists())
-            .copied()
-            .unwrap_or("xdg-open");
-        let mut log_cmd = Command::new(xdg_bin);
-        log_cmd.arg(log_path);
-        #[cfg(unix)]
-        log_cmd.process_group(0);
-        if let Ok(child) = log_cmd.spawn() {
-            self.subprocess_manager.track(child, None, "运行日志查看器");
-        }
+        self.subprocess_manager.launch_view_log();
     }
 }
 
@@ -301,8 +297,8 @@ impl DBusMenu {
 
         let menu_items = vec![
             make_menu_item(1, mode_text),
-            make_menu_item(2, "重新加载词库与配置"),
-            make_menu_item(3, "偏好设置..."),
+            make_menu_item(2, "重载词库与配置"),
+            make_menu_item(3, "偏好设置"),
             make_menu_item(4, &log_label),
             make_menu_item(5, "退出微澜输入法"),
         ];
@@ -403,7 +399,7 @@ mod tests {
         manager.track(child, Some(Arc::clone(&running)), "测试短进程");
 
         // 等待轮询周期收割子进程
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        thread::sleep(std::time::Duration::from_millis(500));
         assert!(
             !running.load(Ordering::Acquire),
             "子进程退出后 running_guard 应被自动收割置为 false"

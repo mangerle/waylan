@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod ibus;
 mod logger;
 mod session_bundle;
 mod tray;
@@ -21,9 +22,13 @@ use waylan_wayland::session_v1::PageKeyConfig;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
-    // 0. 处理版本查询参数
+    // 0. 处理版本查询参数与 IBus XML 引擎描述查询（需在日志输出至 stdout 前完成）
     if args.len() >= 2 && (args[1] == "--version" || args[1] == "-V" || args[1] == "-v") {
         println!("waylan {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.len() >= 2 && (args[1] == "--xml" || args[1] == "--ibus-xml") {
+        ibus::print_ibus_engines_xml();
         return Ok(());
     }
 
@@ -92,8 +97,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return cli::handle_dict_subcommand(&args[2..]);
     }
 
+    let is_ibus_arg = args.len() >= 2 && (args[1] == "--ibus" || args[1] == "ibus");
+
     // 处理自检参数或未知参数检查（排除合法的无参启动或合法选项）
-    if args.len() >= 2 && args[1] != "--check" {
+    if args.len() >= 2 && args[1] != "--check" && !is_ibus_arg {
         eprintln!("错误: 未知的命令行参数 '{}'", args[1]);
         cli::print_main_usage();
         std::process::exit(2);
@@ -226,9 +233,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 8. 启动事件循环跨线程唤醒通道与系统任务栏托盘常驻服务 (StatusNotifierItem)
+    // 8. 启动事件循环跨线程唤醒通道
     let loop_wakeup = waylan_wayland::LoopWakeup::new().ok();
-    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now), loop_wakeup.clone());
+    let use_ibus_backend = is_ibus_arg || (!caps.has_input_method_v2 && !caps.has_input_method_v1);
 
     info!("------------------------------------------------------------");
     info!("[微澜守护进程] 核心服务启动就绪，正在准备建立 Wayland 输入法会话。");
@@ -246,7 +253,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_map(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()))
         .max();
 
-    // 9. 构造并驱动 Wayland 输入法会话事件循环（优先协商 V2 协议，不支持时自动回退 V1 协议）
+    // 9. 构造并驱动输入法会话事件循环（GNOME / Mutter 环境自动合并至 IBus 原生状态栏，不额外创建独立托盘图标）
+    if use_ibus_backend {
+        info!(
+            "[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话（已合并至系统原生 IBus 状态栏菜单）。"
+        );
+        let reload_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ibus_res = ibus::run_ibus_session(ibus::IbusSessionOptions {
+            engine,
+            is_ibus_child_mode: is_ibus_arg,
+            watched_paths,
+            initial_mtime,
+            shared_is_chinese: None,
+            mode_notify_tx: None,
+            reload_requested: Some(reload_flag),
+            exit_requested: std::sync::Arc::clone(&term_now),
+            loop_wakeup,
+        });
+        return match ibus_res {
+            Ok(_) => {
+                info!("[微澜守护进程] IBus 输入法事件循环已正常退出，所有资源已安全释放。");
+                Ok(())
+            }
+            Err(_) if term_now.load(std::sync::atomic::Ordering::Relaxed) => {
+                info!("[微澜守护进程] 收到退出信号，IBus 服务安全退场。");
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("[微澜守护进程 错误] IBus 输入法会话异常退出: {}", e);
+                Err(e)
+            }
+        };
+    }
+
+    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now), loop_wakeup.clone());
+
     let loop_result = if caps.has_input_method_v2 && caps.has_seat {
         info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
         let mut session_v2 = waylan_wayland::session_v2::WaylanV2Session::new(engine);

@@ -5366,6 +5366,7 @@ dependencies = [
  "chrono",
  "fern",
  "log",
+ "rustix 0.38.44",
  "serde",
  "signal-hook",
  "tempfile",
