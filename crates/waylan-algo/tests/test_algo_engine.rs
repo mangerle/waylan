@@ -215,17 +215,15 @@ fn test_engine_spatial_typo_tolerance_nihso() {
     // 验证 1：原始击键字母绝对保真（绝不篡改底层输入缓冲区）
     assert_eq!(engine.raw_input(), "nihso");
 
-    // 验证 2：预编辑格式化文本绝不被改写为 nihao
+    // 验证 2：预编辑格式化文本绝不被改写为 nihao，且按容错跨度切分为 ni'hso
     assert_ne!(engine.formatted_preedit(), "ni'hao");
+    assert_eq!(engine.formatted_preedit(), "ni'hso");
 
     let candidates = engine.candidates();
-    assert!(
-        candidates.len() >= 2,
-        "应至少包含保真降级候选与次位容错备选"
-    );
+    assert!(!candidates.is_empty(), "应包含智能纠错置顶候选与降级备选");
 
-    // 验证 3：第 2 位（次位）提供带有 [纠错] 标识的邻键候选词“你好”
-    let typo_cand = &candidates[1];
+    // 验证 3：拼写断流态下，首位直接置顶带有 [纠错] 标识的邻键候选词“你好”
+    let typo_cand = &candidates[0];
     assert_eq!(typo_cand.text, "你好");
     assert_eq!(typo_cand.tier, CandidateTier::TypoCorrection);
     assert!(
@@ -237,8 +235,8 @@ fn test_engine_spatial_typo_tolerance_nihso() {
         "注释应包含纠错提示"
     );
 
-    // 验证 4：选中次位容错候选上屏，完全消费掉全部 5 个误触字符并清空输入
-    let (committed, remaining) = engine.select_candidate(1, 1_700_000_000).expect("选容错词");
+    // 验证 4：选中首位容错候选上屏，完全消费掉全部 5 个误触字符并清空输入
+    let (committed, remaining) = engine.select_candidate(0, 1_700_000_000).expect("选容错词");
     assert_eq!(committed, "你好");
     assert_eq!(remaining, 0, "选中纠错候选应完全清空输入缓冲区");
     assert_eq!(engine.raw_input(), "");
@@ -257,13 +255,35 @@ fn test_engine_typo_adjacent_transpose_cehng() {
 
     let candidates = engine.candidates();
     assert!(!candidates.is_empty(), "候选列表不应为空");
-    // 验证包含 cheng 纠错的候选
-    assert!(candidates.iter().any(|c| {
-        c.tier == CandidateTier::TypoCorrection
-            && c.comment
-                .as_ref()
-                .is_some_and(|comm| comm.contains("[纠错: cheng]"))
-    }));
+    assert_eq!(candidates[0].text, "成");
+    assert_eq!(candidates[0].tier, CandidateTier::TypoCorrection);
+}
+
+#[test]
+fn test_engine_typo_transpose_yingxaing_top_ranked() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table.insert("ying'xiang", "影响", 50_000);
+    engine.table.insert("ying'xiang", "影像", 40_000);
+    engine.table.insert("ying", "应", 30_000);
+    engine.table.insert("xian", "先", 30_000);
+    engine.table.insert("ai", "爱", 30_000);
+    engine.table.insert("neng'gou", "能够", 35_000);
+    engine.table.insert("na'ge", "那个", 34_000);
+
+    for ch in "yingxaing".chars() {
+        engine.push_char(ch);
+    }
+
+    // 预编辑文本应按两音节跨度格式化为 ying'xaing，而非碎切为 ying'x'ai'n'g
+    assert_eq!(engine.formatted_preedit(), "ying'xaing");
+
+    let candidates = engine.candidates();
+    assert!(candidates.len() >= 2);
+    // 前两位必须直接置顶纠错成词“影响”、“影像”
+    assert_eq!(candidates[0].text, "影响");
+    assert_eq!(candidates[1].text, "影像");
+    // 绝不允许出现由碎切路径捏造出的“应先爱能够”、“应先爱那个”
+    assert!(!candidates.iter().any(|c| c.text.starts_with("应先爱")));
 }
 
 #[test]

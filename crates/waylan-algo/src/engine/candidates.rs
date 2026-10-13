@@ -50,7 +50,17 @@ impl AlgoEngine {
         );
         self.cached_preedit = paths
             .first()
-            .map(|p| p.to_key_string())
+            .map(|p| {
+                if p.is_broken_typo_fallback(&self.config.fuzzy) {
+                    paths
+                        .iter()
+                        .find(|tp| tp.is_typo && tp.remaining.is_empty())
+                        .and_then(|tp| tp.format_raw_with_spans(raw_input))
+                        .unwrap_or_else(|| p.to_key_string())
+                } else {
+                    p.to_key_string()
+                }
+            })
             .unwrap_or_else(|| raw_input.to_string());
 
         let mut best_units: Vec<String> = Vec::new();
@@ -165,6 +175,12 @@ impl AlgoEngine {
         let Some(best_path) = paths.first() else {
             return results;
         };
+
+        // 若最优非容错路径属于拼写误触导致的断流碎切路径（如 ying'x'ai'n'g），
+        // 禁止在该残破路径上运行 Viterbi 拼句与跨词前缀合成，避免产出“应先爱能够”等生造词挤占纠错候选
+        if best_path.is_broken_typo_fallback(&self.config.fuzzy) {
+            return results;
+        }
 
         let min_units = if self.last_commit_context.is_some() {
             1

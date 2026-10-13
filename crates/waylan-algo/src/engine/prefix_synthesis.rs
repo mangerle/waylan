@@ -18,21 +18,37 @@ impl AlgoEngine {
     ) {
         // 1. 状态机感知与容错门禁控制：
         // 若当前输入处于正常的合法前缀打字态（已成功检索出 ExactWord 级别的完整成词或受保护专名），
-        // 免受激进物理空间容错打扰；仅在无任何合法成词命中时（如输入 nihso, cehng），才激活次位容错。
+        // 免受激进物理空间容错打扰；仅在无任何合法成词命中时（如输入 yingxaing, nihso, cehng），激活拼写纠错。
         let has_exact_or_prefix_words = candidates.iter().any(|c| {
             c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity
         });
+        let is_broken_typo = paths
+            .first()
+            .is_some_and(|p| p.is_broken_typo_fallback(&self.config.fuzzy));
 
         if !has_exact_or_prefix_words {
-            let typo_cands = SpatialTypoCorrector::generate_candidates(raw_input, &self.table);
-            for (i, mut typo_cand) in typo_cands.into_iter().take(2).enumerate() {
+            let mut merged_typos: Vec<AlgoCandidate> = candidates
+                .iter()
+                .filter(|c| c.tier == CandidateTier::TypoCorrection)
+                .take(2)
+                .cloned()
+                .collect();
+            for mut spatial_cand in
+                SpatialTypoCorrector::generate_candidates(raw_input, &self.table)
+            {
                 if self.config.traditional_chinese {
-                    typo_cand.text = self.opencc_dict.convert_text(&typo_cand.text);
+                    spatial_cand.text = self.opencc_dict.convert_text(&spatial_cand.text);
                 }
+                if !merged_typos.iter().any(|c| c.text == spatial_cand.text) {
+                    merged_typos.push(spatial_cand);
+                }
+            }
+
+            for (i, mut typo_cand) in merged_typos.into_iter().take(2).enumerate() {
                 typo_cand.consumed_len = Some(raw_input.len());
                 candidates.retain(|c| c.text != typo_cand.text);
-                let target_pos = if candidates.is_empty() {
-                    0
+                let target_pos = if is_broken_typo || candidates.is_empty() {
+                    i.min(candidates.len())
                 } else {
                     (1 + i).min(candidates.len())
                 };
@@ -40,9 +56,11 @@ impl AlgoEngine {
             }
         }
 
-        // 2. 前缀高频短词混排注入（支持长句分段确认 Partial Commit，先于扩展项编排避免偏移错乱）
+        // 2. 前缀高频短词混排注入（支持长句分段确认 Partial Commit，仅在正常切分路径上启用）
         if let Some(best_path) = paths.first() {
-            self.inject_prefix_segment_candidates(best_path, candidates);
+            if !is_broken_typo {
+                self.inject_prefix_segment_candidates(best_path, candidates);
+            }
         }
 
         // 3. 收集扩展项（用户自定义短语、动态日期时间、英文单词联想、符号表情）
@@ -235,7 +253,7 @@ impl AlgoEngine {
 
         while split_idx > 0 {
             let prev_syl = &syllables[split_idx - 1];
-            if !is_valid_syllable(prev_syl) {
+            if !is_valid_syllable(prev_syl) || matches!(prev_syl.as_str(), "n" | "ng" | "m") {
                 initial_chain.insert(0, prev_syl.clone());
                 split_idx -= 1;
             } else {
@@ -245,6 +263,13 @@ impl AlgoEngine {
 
         let k = initial_chain.len();
         let head_syls = &syllables[..split_idx];
+
+        // 校验前驱段必须全部由合法的完整全拼音节组成（不含夹在中间的孤立单字母辅音声母或单鼻音）
+        if !head_syls.iter().all(|s| {
+            is_valid_syllable(s) && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e"))
+        }) {
+            return Vec::new();
+        }
 
         // 2. 尾部展开候选词集合 (tail_cands)
         let tail_cands: Vec<AlgoCandidate> = if k == 1 {
