@@ -143,7 +143,7 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
 }
 
 /// 确保微澜组件已写入用户级 IBus 目录并同步至 GNOME 输入源列表
-pub fn ensure_ibus_and_gnome_integration(exe_path: &str) {
+pub fn ensure_ibus_and_gnome_integration(exe_path: &str, exclusive: bool) {
     let Some(home) = env_var_non_empty("HOME") else {
         return;
     };
@@ -172,7 +172,7 @@ pub fn ensure_ibus_and_gnome_integration(exe_path: &str) {
     }
 
     ensure_environment_d_config(&home_path, &comp_dir);
-    ensure_gnome_input_source_registered();
+    ensure_gnome_input_source_registered(exclusive);
 }
 
 /// 调用 `ibus write-cache` 将用户级组件编译进 `~/.cache/ibus/bus/registry`
@@ -218,9 +218,29 @@ fn ensure_environment_d_config(home_path: &Path, comp_dir: &Path) {
 }
 
 /// 检查并在 GNOME `org.gnome.desktop.input-sources` 中将 `('ibus', 'waylan')` 注册并置顶为首选输入源
-pub fn ensure_gnome_input_source_registered() {
-    update_gsettings_source_key("sources");
-    update_gsettings_source_key("mru-sources");
+/// 若 `exclusive` 为 true，则将微澜设为系统唯一独占输入源，以使 GNOME 原生顶栏指示器自动隐藏
+pub fn ensure_gnome_input_source_registered(exclusive: bool) {
+    if exclusive {
+        set_waylan_as_exclusive_input_source();
+    } else {
+        update_gsettings_source_key("sources");
+        update_gsettings_source_key("mru-sources");
+    }
+}
+
+/// 将微澜设为 GNOME 独占单一输入源以促使原生输入源指示器自动折叠隐藏
+pub fn set_waylan_as_exclusive_input_source() {
+    for key in ["sources", "mru-sources"] {
+        let _ = Command::new("gsettings")
+            .args([
+                "set",
+                "org.gnome.desktop.input-sources",
+                key,
+                "[('ibus', 'waylan')]",
+            ])
+            .output();
+    }
+    info!("[微澜 IBus] 已将微澜设为 GNOME 独占单一输入源 [('ibus', 'waylan')]");
 }
 
 /// 读取并更新指定的 GSettings 输入源键（将微澜置顶）

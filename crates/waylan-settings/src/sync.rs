@@ -138,6 +138,8 @@ pub fn extract_config_from_window(window: &SettingsWindow) -> AppConfig {
         tray_icon_theme_path: None,
         tray_icon_zh: None,
         tray_icon_en: None,
+        enable_tray: None,
+        exclusive_input_source: false,
     };
     cfg.sanitize();
     cfg

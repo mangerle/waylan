@@ -59,6 +59,10 @@ pub struct AppConfig {
     pub tray_icon_zh: Option<String>,
     /// 自定义英文状态托盘图标名称或路径
     pub tray_icon_en: Option<String>,
+    /// 独立系统托盘显示模式（None=自动按桌面环境判定，Some(true)=强制启用专属彩色托盘，Some(false)=强制关闭独立托盘）
+    pub enable_tray: Option<bool>,
+    /// 是否将微澜设为系统唯一独占输入源（用于单输入源自动隐藏 GNOME 原生顶栏指示器）
+    pub exclusive_input_source: bool,
 }
 
 impl Default for AppConfig {
@@ -88,6 +92,8 @@ impl Default for AppConfig {
             tray_icon_theme_path: None,
             tray_icon_zh: None,
             tray_icon_en: None,
+            enable_tray: None,
+            exclusive_input_source: false,
         }
     }
 }
@@ -193,7 +199,7 @@ impl AppConfig {
 
     /// 辅助根据执行文件所在目录向多级父路径推入候选词库位置（适应开发、测试与各类宿主子进程环境）
     fn push_exe_relative_candidates(paths: &mut Vec<PathBuf>, rel_subpath: &str) {
-        if let Ok(exe) = std::env::current_exe() {
+        if let Ok(exe) = env::current_exe() {
             if let Some(parent) = exe.parent() {
                 paths.push(parent.join(rel_subpath));
                 paths.push(parent.join("..").join(rel_subpath));
@@ -453,9 +459,9 @@ mod tests {
             env_var_non_empty("THIS_VARIABLE_SHOULD_NOT_EXIST_XYZ"),
             None
         );
-        std::env::set_var("WAYLAN_TEST_EMPTY_VAR", "   ");
+        env::set_var("WAYLAN_TEST_EMPTY_VAR", "   ");
         assert_eq!(env_var_non_empty("WAYLAN_TEST_EMPTY_VAR"), None);
-        std::env::set_var("WAYLAN_TEST_VAL_VAR", "  valid_value  ");
+        env::set_var("WAYLAN_TEST_VAL_VAR", "  valid_value  ");
         assert_eq!(
             env_var_non_empty("WAYLAN_TEST_VAL_VAR"),
             Some("valid_value".to_string())

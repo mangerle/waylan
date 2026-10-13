@@ -70,6 +70,10 @@ pub struct IbusSessionOptions {
     pub exit_requested: Arc<AtomicBool>,
     /// 跨线程 poll 唤醒句柄
     pub loop_wakeup: Option<LoopWakeup>,
+    /// 是否静默原生 IBus 属性上报（在独立托盘开启时置为 true 以实现原生顶栏白字指示器自动隐藏）
+    pub suppress_properties: bool,
+    /// 是否将微澜设为 GNOME 独占单一输入源
+    pub exclusive_input_source: bool,
 }
 
 /// 探测当前用户会话中的活跃 IBus D-Bus 总线地址
@@ -204,6 +208,8 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
         reload_requested,
         exit_requested,
         loop_wakeup,
+        suppress_properties,
+        exclusive_input_source,
     } = opts;
 
     let mut session_core = IbusSessionCore::new(engine);
@@ -219,10 +225,12 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
         loop_wakeup: loop_wakeup.clone(),
         subprocess_manager: Arc::new(SubprocessManager::new(Arc::clone(&exit_requested))),
         settings_running: Arc::new(AtomicBool::new(false)),
+        suppress_properties,
     };
     let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv_obj)?;
 
-    let prev_engine = register_or_activate_ibus_engine(&conn, is_ibus_child_mode)?;
+    let prev_engine =
+        register_or_activate_ibus_engine(&conn, is_ibus_child_mode, exclusive_input_source)?;
 
     let mut inotify_watcher: Option<InotifyWatcher> = None;
     init_session_inotify_watcher(&watched_paths, &mut inotify_watcher, "IBus");
@@ -307,12 +315,13 @@ fn query_current_global_engine(conn: &Connection) -> Option<String> {
 fn register_or_activate_ibus_engine(
     conn: &Connection,
     is_ibus_child_mode: bool,
+    exclusive: bool,
 ) -> Result<Option<String>, Box<dyn Error>> {
     let exe_path = env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "waylan".to_string());
-    ensure_ibus_and_gnome_integration(&exe_path);
+    ensure_ibus_and_gnome_integration(&exe_path, exclusive);
 
     if is_ibus_child_mode {
         conn.request_name("org.freedesktop.IBus.Waylan")?;

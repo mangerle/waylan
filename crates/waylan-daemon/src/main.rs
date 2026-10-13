@@ -253,16 +253,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max();
 
     // 9. 智能判定是否需要拉起独立的 StatusNotifierItem 托盘：
-    // 在 GNOME 桌面环境的 IBus 会话中，GNOME Shell 顶栏已原生集成输入源指示器与菜单（形态 A）。
-    // 若同时拉起独立托盘，会导致顶栏出现两个指示器（托盘图标与原生指示器并存）。
-    // 因此在 GNOME / IBus 下默认不拉起独立托盘，仅使用原生形态 A；
-    // 非 GNOME 环境（如 Sway/Hyprland/Waybar）或用户显式配置 WAYLAN_ENABLE_TRAY=1 时才拉起独立托盘。
+    // 在 GNOME 桌面环境的 IBus 会话中：
+    // - 默认情况下（形态 A），GNOME Shell 顶栏原生集成输入源指示器，不拉起独立托盘，顶栏保持单一原生指示；
+    // - 当用户开启专属彩色托盘（enable_tray=true 或 WAYLAN_ENABLE_TRAY=1，形态 B）时：
+    //   拉起展示微澜青底白字矢量图标的专属托盘，同时对 IBus 引擎静默原生属性上报并置为独占输入源，
+    //   促使 GNOME Shell 自动隐藏其原生白色指示器，实现顶栏“仅保留微澜专属彩色图标”。
     let is_gnome = env::var("XDG_CURRENT_DESKTOP")
         .map(|d| d.to_uppercase().contains("GNOME"))
         .unwrap_or(false);
-    let force_tray = env::var("WAYLAN_ENABLE_TRAY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let force_tray = cfg.enable_tray.unwrap_or_else(|| {
+        env::var("WAYLAN_ENABLE_TRAY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    });
+    let exclusive_source = cfg.exclusive_input_source
+        || env::var("WAYLAN_EXCLUSIVE_INPUT_SOURCE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
     let should_spawn_tray = force_tray || (!use_ibus_backend && !is_gnome);
 
     let tray = if should_spawn_tray {
@@ -275,7 +282,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if use_ibus_backend {
-        info!("[微澜守护进程] 启用 IBus / D-Bus 原生顶栏输入法引擎会话 (形态 A)。");
+        let suppress_properties = should_spawn_tray;
+        info!(
+            "[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话 (展示形态: {}, 原生指示器静默: {})。",
+            if should_spawn_tray {
+                "形态 B 专属彩色托盘"
+            } else {
+                "形态 A 原生顶栏"
+            },
+            suppress_properties
+        );
         let ibus_res = ibus::run_ibus_session(ibus::IbusSessionOptions {
             engine,
             is_ibus_child_mode: is_ibus_arg,
@@ -287,6 +303,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             reload_requested: tray.as_ref().map(|t| t.reload_flag()),
             exit_requested: std::sync::Arc::clone(&term_now),
             loop_wakeup,
+            suppress_properties,
+            exclusive_input_source: exclusive_source || should_spawn_tray,
         });
         return match ibus_res {
             Ok(_) => {

@@ -126,6 +126,7 @@ pub struct IbusEngineService {
     pub(crate) loop_wakeup: Option<LoopWakeup>,
     pub(crate) subprocess_manager: Arc<SubprocessManager>,
     pub(crate) settings_running: Arc<AtomicBool>,
+    pub(crate) suppress_properties: bool,
 }
 
 impl IbusEngineService {
@@ -157,6 +158,7 @@ impl IbusEngineService {
 
     /// 在锁作用域之外统一派发 `IbusKeyOutcome` 包含的所有 D-Bus 信号
     async fn dispatch_outcome(
+        &self,
         ctxt: &SignalContext<'_>,
         outcome: IbusKeyOutcome,
         snap: Option<UiSnapshot>,
@@ -184,9 +186,11 @@ impl IbusEngineService {
             Self::emit_ui_snapshot(ctxt, s).await;
         }
 
-        if let Some(new_mode) = outcome.mode_changed {
-            if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps_locked) {
-                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+        if !self.suppress_properties {
+            if let Some(new_mode) = outcome.mode_changed {
+                if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps_locked) {
+                    let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+                }
             }
         }
     }
@@ -228,7 +232,8 @@ impl IbusEngineService {
         };
 
         let consumed = outcome.consumed;
-        Self::dispatch_outcome(&ctxt, outcome, snap, is_caps_locked).await;
+        self.dispatch_outcome(&ctxt, outcome, snap, is_caps_locked)
+            .await;
         consumed
     }
 
@@ -270,8 +275,10 @@ impl IbusEngineService {
                     }
                     (next, guard.is_caps_locked)
                 };
-                if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
-                    let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
+                if !self.suppress_properties {
+                    if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
+                        let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
+                    }
                 }
             }
             "ReloadConfig" => {
@@ -334,7 +341,8 @@ impl IbusEngineService {
             let snap = UiSnapshot::capture(&guard);
             (out, Some(snap), guard.is_caps_locked)
         };
-        Self::dispatch_outcome(&ctxt, outcome, snap, is_caps_locked).await;
+        self.dispatch_outcome(&ctxt, outcome, snap, is_caps_locked)
+            .await;
     }
 
     /// 焦点进入输入上下文
@@ -350,8 +358,10 @@ impl IbusEngineService {
                 UiSnapshot::capture(&guard),
             )
         };
-        if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps) {
-            let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
+        if !self.suppress_properties {
+            if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps) {
+                let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
+            }
         }
         Self::emit_ui_snapshot(&ctxt, &snap).await;
     }
