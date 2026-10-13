@@ -308,6 +308,12 @@ fn register_or_activate_ibus_engine(
     conn: &Connection,
     is_ibus_child_mode: bool,
 ) -> Result<Option<String>, Box<dyn Error>> {
+    let exe_path = env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "waylan".to_string());
+    ensure_ibus_and_gnome_integration(&exe_path);
+
     if is_ibus_child_mode {
         conn.request_name("org.freedesktop.IBus.Waylan")?;
         info!("[微澜 IBus] 已在子进程模式下成功注册总线名称 org.freedesktop.IBus.Waylan");
@@ -315,11 +321,6 @@ fn register_or_activate_ibus_engine(
     }
 
     let prev_engine = query_current_global_engine(conn);
-    let exe_path = env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "waylan".to_string());
-    ensure_ibus_and_gnome_integration(&exe_path);
 
     let exec_cmd = format!("{} --ibus", exe_path);
     let setup_cmd = format!("{} settings", exe_path);
@@ -399,9 +400,9 @@ fn run_ibus_monitor_loop(
         let mode_changed = shared_core
             .lock()
             .ok()
-            .and_then(|mut g| g.sync_shared_mode());
-        if let Some(new_mode) = mode_changed {
-            if let Ok(prop_val) = build_input_mode_property(new_mode) {
+            .and_then(|mut g| g.sync_shared_mode().map(|m| (m, g.is_caps_locked)));
+        if let Some((new_mode, is_caps)) = mode_changed {
+            if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
                 let _ = conn.emit_signal(
                     Option::<&str>::None,
                     WAYLAN_ENGINE_OBJECT_PATH,

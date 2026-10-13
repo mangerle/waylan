@@ -13,7 +13,7 @@ use zbus::zvariant::OwnedObjectPath;
 type ToolTipData = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 
 /// 自动探测微澜默认矢量图标资源目录并验证关键图标文件是否存在
-fn detect_default_assets_path() -> Option<String> {
+pub(crate) fn detect_default_assets_path() -> Option<String> {
     let mut candidates: Vec<PathBuf> = Vec::with_capacity(6);
 
     candidates.push(PathBuf::from("assets"));
@@ -47,6 +47,38 @@ fn detect_default_assets_path() -> Option<String> {
     }
 
     None
+}
+
+/// 解析图标目标：若在指定目录存在该名称对应文件（或附带 .svg/.png），则优先返回规范绝对路径以保证系统各托盘直接加载；否则回退为图标名
+pub(crate) fn resolve_icon_path_or_name(theme_dir: &str, base_name: &str) -> String {
+    if !theme_dir.is_empty() {
+        let dir = Path::new(theme_dir);
+        let direct = dir.join(base_name);
+        if direct.is_file() {
+            return direct
+                .canonicalize()
+                .unwrap_or(direct)
+                .to_string_lossy()
+                .into_owned();
+        }
+        let svg = dir.join(format!("{}.svg", base_name));
+        if svg.is_file() {
+            return svg
+                .canonicalize()
+                .unwrap_or(svg)
+                .to_string_lossy()
+                .into_owned();
+        }
+        let png = dir.join(format!("{}.png", base_name));
+        if png.is_file() {
+            return png
+                .canonicalize()
+                .unwrap_or(png)
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
+    base_name.to_string()
 }
 
 /// 系统托盘状态项实现 (StatusNotifierItem)
@@ -104,9 +136,10 @@ impl StatusNotifierItem {
 
         let icon_zh = env_zh
             .or_else(|| config.tray_icon_zh.clone())
+            .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
             .unwrap_or_else(|| {
                 if has_custom_theme {
-                    "tray-zh".to_string()
+                    resolve_icon_path_or_name(&icon_theme_path, "tray-zh")
                 } else {
                     "input-keyboard".to_string()
                 }
@@ -114,21 +147,24 @@ impl StatusNotifierItem {
 
         let icon_en = env_en
             .or_else(|| config.tray_icon_en.clone())
+            .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
             .unwrap_or_else(|| {
                 if has_custom_theme {
-                    "tray-en".to_string()
+                    resolve_icon_path_or_name(&icon_theme_path, "tray-en")
                 } else {
                     "input-latin".to_string()
                 }
             });
 
-        let icon_en_caps = env_en_caps.unwrap_or_else(|| {
-            if has_custom_theme {
-                "tray-en-caps".to_string()
-            } else {
-                "input-latin".to_string()
-            }
-        });
+        let icon_en_caps = env_en_caps
+            .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
+            .unwrap_or_else(|| {
+                if has_custom_theme {
+                    resolve_icon_path_or_name(&icon_theme_path, "tray-en-caps")
+                } else {
+                    "input-latin".to_string()
+                }
+            });
 
         Self {
             is_chinese,
@@ -296,12 +332,17 @@ mod tests {
         );
 
         assert!(item.icon_theme_path().ends_with("assets"));
-        assert_eq!(item.icon_name(), "tray-zh");
+        assert!(
+            item.icon_name().ends_with("tray-zh.svg") || item.icon_name() == "tray-zh",
+            "应优先返回规范绝对路径以确保各桌面托盘直接加载"
+        );
 
         is_chinese.store(false, Ordering::Release);
-        assert_eq!(item.icon_name(), "tray-en");
+        assert!(item.icon_name().ends_with("tray-en.svg") || item.icon_name() == "tray-en");
 
         is_caps_locked.store(true, Ordering::Release);
-        assert_eq!(item.icon_name(), "tray-en-caps");
+        assert!(
+            item.icon_name().ends_with("tray-en-caps.svg") || item.icon_name() == "tray-en-caps"
+        );
     }
 }

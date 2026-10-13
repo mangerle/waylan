@@ -160,6 +160,7 @@ impl IbusEngineService {
         ctxt: &SignalContext<'_>,
         outcome: IbusKeyOutcome,
         snap: Option<UiSnapshot>,
+        is_caps_locked: bool,
     ) {
         if let Some(ref text) = outcome.commit_text {
             if let Ok(text_val) = build_ibus_text(text) {
@@ -184,7 +185,7 @@ impl IbusEngineService {
         }
 
         if let Some(new_mode) = outcome.mode_changed {
-            if let Ok(prop_val) = build_input_mode_property(new_mode) {
+            if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps_locked) {
                 let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
             }
         }
@@ -213,7 +214,7 @@ impl IbusEngineService {
         keycode: u32,
         state: u32,
     ) -> bool {
-        let (outcome, snap) = {
+        let (outcome, snap, is_caps_locked) = {
             let Ok(mut guard) = self.core.lock() else {
                 return false;
             };
@@ -223,11 +224,11 @@ impl IbusEngineService {
             } else {
                 None
             };
-            (out, snap)
+            (out, snap, guard.is_caps_locked)
         };
 
         let consumed = outcome.consumed;
-        Self::dispatch_outcome(&ctxt, outcome, snap).await;
+        Self::dispatch_outcome(&ctxt, outcome, snap, is_caps_locked).await;
         consumed
     }
 
@@ -252,7 +253,7 @@ impl IbusEngineService {
     ) {
         match name {
             "InputMode" => {
-                let new_mode = {
+                let (new_mode, is_caps) = {
                     let Ok(mut guard) = self.core.lock() else {
                         return;
                     };
@@ -267,9 +268,9 @@ impl IbusEngineService {
                     if let Some(ref tx) = guard.mode_notify_tx {
                         let _ = tx.try_send(());
                     }
-                    next
+                    (next, guard.is_caps_locked)
                 };
-                if let Ok(prop_val) = build_input_mode_property(new_mode) {
+                if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
                     let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
                 }
             }
@@ -305,7 +306,7 @@ impl IbusEngineService {
         _button: u32,
         _state: u32,
     ) {
-        let (outcome, snap) = {
+        let (outcome, snap, is_caps_locked) = {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
@@ -331,21 +332,25 @@ impl IbusEngineService {
                 out.commit_text = Some(committed);
             }
             let snap = UiSnapshot::capture(&guard);
-            (out, Some(snap))
+            (out, Some(snap), guard.is_caps_locked)
         };
-        Self::dispatch_outcome(&ctxt, outcome, snap).await;
+        Self::dispatch_outcome(&ctxt, outcome, snap, is_caps_locked).await;
     }
 
     /// 焦点进入输入上下文
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
-        let (mode, snap) = {
+        let (mode, is_caps, snap) = {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
             let _ = guard.sync_shared_mode();
-            (guard.mode, UiSnapshot::capture(&guard))
+            (
+                guard.mode,
+                guard.is_caps_locked,
+                UiSnapshot::capture(&guard),
+            )
         };
-        if let Ok(prop_list) = build_ibus_prop_list(mode) {
+        if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps) {
             let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
         }
         Self::emit_ui_snapshot(&ctxt, &snap).await;

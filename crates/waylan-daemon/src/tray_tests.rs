@@ -94,18 +94,14 @@ fn test_status_notifier_item_activate_sends_icon_update() {
         None,
     );
 
-    let expected_zh = if sni.icon_theme_path().is_empty() {
-        "input-keyboard"
+    if sni.icon_theme_path().is_empty() {
+        assert_eq!(sni.icon_name(), "input-keyboard");
+        sni.activate(0, 0);
+        assert_eq!(sni.icon_name(), "input-latin");
     } else {
-        "tray-zh"
-    };
-    let expected_en = if sni.icon_theme_path().is_empty() {
-        "input-latin"
-    } else {
-        "tray-en"
-    };
-    assert_eq!(sni.icon_name(), expected_zh);
-    sni.activate(0, 0);
-    assert_eq!(sni.icon_name(), expected_en);
+        assert!(sni.icon_name().ends_with("tray-zh.svg") || sni.icon_name() == "tray-zh");
+        sni.activate(0, 0);
+        assert!(sni.icon_name().ends_with("tray-en.svg") || sni.icon_name() == "tray-en");
+    }
     assert!(icon_update_rx.try_recv().is_ok());
 }

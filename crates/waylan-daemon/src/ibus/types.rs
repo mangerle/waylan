@@ -146,6 +146,31 @@ pub fn build_ibus_lookup_table(
     OwnedValue::try_from(Value::from(s))
 }
 
+/// 解析输入模式对应的微澜矢量图标（优先规范绝对路径以确保 GNOME 原生面板直接加载）
+pub fn resolve_mode_icon(mode: InputMode, is_caps_locked: bool) -> String {
+    let base_name = if is_caps_locked {
+        "tray-en-caps"
+    } else if matches!(mode, InputMode::Chinese | InputMode::VMode) {
+        "tray-zh"
+    } else {
+        "tray-en"
+    };
+    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
+        crate::tray::item::resolve_icon_path_or_name(&assets, base_name)
+    } else {
+        base_name.to_string()
+    }
+}
+
+/// 解析微澜引擎主图标（优先规范绝对路径）
+pub fn resolve_engine_icon() -> String {
+    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
+        crate::tray::item::resolve_icon_path_or_name(&assets, "waylan")
+    } else {
+        "waylan".to_string()
+    }
+}
+
 /// 构造单个通用 `IBusProperty` 菜单项变体对象，签名 `(sa{sv}suvsvbbuvv)`
 ///
 /// # Errors
@@ -153,6 +178,7 @@ pub fn build_ibus_lookup_table(
 pub fn build_action_property(
     key: &str,
     label: &str,
+    icon: &str,
     tooltip: &str,
     symbol: &str,
 ) -> Result<OwnedValue, zbus::zvariant::Error> {
@@ -169,7 +195,7 @@ pub fn build_action_property(
         .add_field(key.to_string())
         .add_field(IBUS_PROP_TYPE_NORMAL)
         .add_field(build_ibus_text(label)?)
-        .add_field("input-keyboard")
+        .add_field(icon)
         .add_field(build_ibus_text(tooltip)?)
         .add_field(true)
         .add_field(true)
@@ -184,17 +210,30 @@ pub fn build_action_property(
 ///
 /// # Errors
 /// 当属性结构体序列化失败时返回错误。
-pub fn build_input_mode_property(mode: InputMode) -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_input_mode_property(
+    mode: InputMode,
+    is_caps_locked: bool,
+) -> Result<OwnedValue, zbus::zvariant::Error> {
     let is_zh = matches!(mode, InputMode::Chinese | InputMode::VMode);
-    let symbol_str = if is_zh { "中" } else { "英" };
-    let label_str = if is_zh {
-        "当前输入: 中文拼音 (点击切换)"
+    let symbol_str = if is_caps_locked {
+        "A"
+    } else if is_zh {
+        "中"
     } else {
-        "当前输入: 英文模式 (点击切换)"
+        "英"
     };
+    let label_str = if is_caps_locked {
+        "当前输入: 英文大写"
+    } else if is_zh {
+        "当前输入: 中文拼音"
+    } else {
+        "当前输入: 英文模式"
+    };
+    let icon_path = resolve_mode_icon(mode, is_caps_locked);
     build_action_property(
         "InputMode",
         label_str,
+        &icon_path,
         "点击或按切换键更改中英文输入状态",
         symbol_str,
     )
@@ -204,19 +243,30 @@ pub fn build_input_mode_property(mode: InputMode) -> Result<OwnedValue, zbus::zv
 ///
 /// # Errors
 /// 当属性列表序列化失败时返回错误。
-pub fn build_ibus_prop_list(mode: InputMode) -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_ibus_prop_list(
+    mode: InputMode,
+    is_caps_locked: bool,
+) -> Result<OwnedValue, zbus::zvariant::Error> {
     let props = vec![
-        build_input_mode_property(mode)?,
+        build_input_mode_property(mode, is_caps_locked)?,
         build_action_property(
             "ReloadConfig",
-            "重新加载词库与配置",
+            "重载词库与配置",
+            "view-refresh",
             "立即热重载微澜配置文件与用户词库",
             "",
         )?,
-        build_action_property("Setup", "偏好设置...", "打开微澜图形化偏好设置中心", "")?,
+        build_action_property(
+            "Setup",
+            "偏好设置",
+            "preferences-system",
+            "打开微澜图形化偏好设置中心",
+            "",
+        )?,
         build_action_property(
             "ViewLog",
             "查看运行日志",
+            "text-x-generic",
             "使用系统默认程序打开微澜运行日志",
             "",
         )?,
@@ -238,6 +288,7 @@ pub fn build_waylan_ibus_component(
     setup_cmd: &str,
 ) -> Result<OwnedValue, zbus::zvariant::Error> {
     let version = env!("CARGO_PKG_VERSION");
+    let engine_icon = resolve_engine_icon();
     let engine_desc = StructureBuilder::new()
         .add_field("IBusEngineDesc")
         .add_field(empty_attachments())
@@ -247,7 +298,7 @@ pub fn build_waylan_ibus_component(
         .add_field("zh_CN")
         .add_field("MIT OR Apache-2.0")
         .add_field("WayLan Contributors")
-        .add_field("input-keyboard")
+        .add_field(engine_icon.as_str())
         .add_field("us")
         .add_field(99u32)
         .add_field("")
@@ -336,10 +387,12 @@ mod tests {
 
     #[test]
     fn test_ibus_prop_and_component_signature() {
-        let prop = build_input_mode_property(InputMode::Chinese).expect("序列化 IBusProperty 失败");
+        let prop =
+            build_input_mode_property(InputMode::Chinese, false).expect("序列化 IBusProperty 失败");
         assert_eq!(prop.value_signature().as_str(), "(sa{sv}suvsvbbuvv)");
 
-        let prop_list = build_ibus_prop_list(InputMode::Chinese).expect("序列化 IBusPropList 失败");
+        let prop_list =
+            build_ibus_prop_list(InputMode::Chinese, false).expect("序列化 IBusPropList 失败");
         assert_eq!(prop_list.value_signature().as_str(), "(sa{sv}av)");
 
         let comp =

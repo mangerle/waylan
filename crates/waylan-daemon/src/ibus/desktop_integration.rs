@@ -19,8 +19,64 @@ use log::{debug, info, warn};
 
 use crate::config::env_var_non_empty;
 
+/// 解析微澜 IBus 引擎注册所使用的图标路径（优先绝对路径以确保 GNOME 原生顶栏准确渲染）
+fn resolve_engine_icon_path() -> String {
+    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
+        crate::tray::item::resolve_icon_path_or_name(&assets, "waylan")
+    } else {
+        "waylan".to_string()
+    }
+}
+
+/// 自动将微澜矢量图标同步注册至用户级 XDG 图标目录 `~/.local/share/icons/hicolor/scalable/apps/`
+fn ensure_user_icons_registered(home_path: &Path) {
+    let Some(assets_path) = crate::tray::item::detect_default_assets_path() else {
+        return;
+    };
+    let assets_dir = Path::new(&assets_path);
+    let target_dir = home_path.join(".local/share/icons/hicolor/scalable/apps");
+    if fs::create_dir_all(&target_dir).is_err() {
+        return;
+    }
+
+    let icons = [
+        "waylan.svg",
+        "tray-zh.svg",
+        "tray-en.svg",
+        "tray-en-caps.svg",
+    ];
+    let mut updated = false;
+    for icon_name in icons {
+        let src = assets_dir.join(icon_name);
+        let dst = target_dir.join(icon_name);
+        if src.is_file() {
+            let needs_copy = match (fs::metadata(&src), fs::metadata(&dst)) {
+                (Ok(s_meta), Ok(d_meta)) => s_meta.len() != d_meta.len(),
+                (Ok(_), Err(_)) => true,
+                _ => false,
+            };
+            if needs_copy && fs::copy(&src, &dst).is_ok() {
+                updated = true;
+            }
+        }
+    }
+
+    if updated {
+        info!(
+            "[微澜 IBus] 已自动同步微澜矢量图标至用户图标目录: {:?}",
+            target_dir
+        );
+        let _ = Command::new("gtk-update-icon-cache")
+            .arg("-f")
+            .arg("-t")
+            .arg(home_path.join(".local/share/icons/hicolor"))
+            .output();
+    }
+}
+
 /// 生成完整的 IBus `<component>` XML 文本
 pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
+    let icon_path = resolve_engine_icon_path();
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <component>
@@ -40,7 +96,7 @@ pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
             <language>zh_CN</language>
             <license>MIT OR Apache-2.0</license>
             <author>WayLan Contributors</author>
-            <icon>input-keyboard</icon>
+            <icon>{icon}</icon>
             <layout>us</layout>
             <rank>99</rank>
             <symbol>&#x6F9C;</symbol>
@@ -53,12 +109,14 @@ pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
 </component>
 "#,
         exe = exe_path,
-        ver = version
+        ver = version,
+        icon = icon_path,
     )
 }
 
 /// 生成符合 IBus `<engines>` 规范的 XML 描述文本（响应 `waylan --xml`）
 pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
+    let icon_path = resolve_engine_icon_path();
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <engines>
@@ -69,7 +127,7 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
         <language>zh_CN</language>
         <license>MIT OR Apache-2.0</license>
         <author>WayLan Contributors</author>
-        <icon>input-keyboard</icon>
+        <icon>{}</icon>
         <layout>us</layout>
         <rank>99</rank>
         <symbol>&#x6F9C;</symbol>
@@ -80,7 +138,7 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
     </engine>
 </engines>
 "#,
-        exe_path, version
+        icon_path, exe_path, version
     )
 }
 
@@ -90,6 +148,8 @@ pub fn ensure_ibus_and_gnome_integration(exe_path: &str) {
         return;
     };
     let home_path = PathBuf::from(&home);
+    ensure_user_icons_registered(&home_path);
+
     let comp_dir = home_path.join(".local/share/ibus/component");
     if let Err(e) = fs::create_dir_all(&comp_dir) {
         warn!("[微澜 IBus] 创建用户组件目录 {:?} 失败: {}", comp_dir, e);
