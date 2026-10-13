@@ -14,21 +14,50 @@ DEB_DIR_NAME="${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}"
 BUILD_ROOT="${PROJECT_ROOT}/target/debian/${DEB_DIR_NAME}"
 OUTPUT_DEB="${PROJECT_ROOT}/target/debian/${DEB_DIR_NAME}.deb"
 
-echo "[微澜打包] 步骤 1/3: 编译 Release 优化版本二进制程序 (waylan & waylan-settings)..."
+DO_INSTALL=false
+for arg in "$@"; do
+    case "$arg" in
+        -i|--install)
+            DO_INSTALL=true
+            ;;
+        -h|--help)
+            echo "微澜 (WayLan) Debian 软件包构建工具"
+            echo "用法: $0 [选项]"
+            echo ""
+            echo "选项:"
+            echo "  -i, --install   打包完成后自动调用 sudo dpkg -i 安装"
+            echo "  -h, --help      显示帮助信息"
+            exit 0
+            ;;
+    esac
+done
+
+echo "[微澜打包] 步骤 1/4: 检查维护者安装脚本权限规范..."
+chmod +x "${PROJECT_ROOT}/debian/postinst" "${PROJECT_ROOT}/debian/prerm"
+
+echo "[微澜打包] 步骤 2/4: 编译 Release 优化版本二进制程序 (waylan & waylan-settings)..."
 cd "${PROJECT_ROOT}"
 cargo build --release --bin waylan --bin waylan-settings
 
-echo "[微澜打包] 步骤 2/3: 检查 cargo-deb 打包工具..."
+echo "[微澜打包] 步骤 3/4: 检查 cargo-deb 打包工具..."
 if ! command -v cargo-deb >/dev/null 2>&1; then
     echo "未检测到 cargo-deb，正在通过 cargo 自动安装..."
     cargo install cargo-deb
 fi
 
-echo "[微澜打包] 步骤 3/3: 调用 cargo-deb 构建原生 Debian 软件包..."
+echo "[微澜打包] 步骤 4/4: 调用 cargo-deb 构建原生 Debian 软件包..."
 cargo deb -p waylan-daemon --no-build
+
+LATEST_DEB="$(ls -t "${PROJECT_ROOT}/target/debian/"*.deb 2>/dev/null | head -n1 || true)"
+DEB_SIZE="$(du -h "${LATEST_DEB}" 2>/dev/null | cut -f1 || echo "未知")"
 
 echo "============================================================"
 echo "[打包完成] 成功构建 Debian 软件包:"
-echo "  生成目录: ${PROJECT_ROOT}/target/debian/"
-echo "  安装命令: sudo dpkg -i ${PROJECT_ROOT}/target/debian/waylan_*.deb"
+echo "  软件包路径: ${LATEST_DEB} (体积: ${DEB_SIZE})"
+echo "  手动安装:   sudo dpkg -i ${LATEST_DEB}"
 echo "============================================================"
+
+if [ "${DO_INSTALL}" = true ]; then
+    echo "[自动安装] 正在执行 sudo dpkg -i ${LATEST_DEB}..."
+    sudo dpkg -i "${LATEST_DEB}"
+fi

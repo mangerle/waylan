@@ -3,37 +3,53 @@ set -e
 
 if [ "$1" = "configure" ]; then
     # 1. 刷新图标缓存
-    if which gtk-update-icon-cache >/dev/null 2>&1; then
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
     fi
 
     # 2. 刷新桌面数据库
-    if which update-desktop-database >/dev/null 2>&1; then
+    if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
     fi
 
-    # 3. 建立 systemd 图形会话默认启用软链接
+    # 3. 建立 systemd 图形会话默认启用软链接 (适用于 Sway/Hyprland/KDE 等环境)
     mkdir -p /usr/lib/systemd/user/graphical-session.target.wants
     ln -sf ../waylan.service /usr/lib/systemd/user/graphical-session.target.wants/waylan.service
 
-    # 4. 自动探测当前所有活跃登录用户的图形桌面会话，立即重载配置并拉起/平滑重启后台服务（开箱即用，无需用户手动敲命令）
+    # 4. 刷新系统级 IBus 引擎注册缓存 (GNOME 及 IBus 环境启动即识别)
+    if command -v ibus >/dev/null 2>&1; then
+        ibus write-cache --system >/dev/null 2>&1 || true
+    fi
+
+    # 5. 自动探测当前所有活跃登录用户的图形桌面会话，立即重载配置并拉起/热激活后台服务
     for user_dir in /run/user/*; do
         if [ -d "$user_dir" ]; then
             uid="$(basename "$user_dir")"
             case "$uid" in
                 ''|*[!0-9]*) continue ;;
             esac
+
+            # 5.1 针对 systemd 用户级服务纳管的桌面会话进行重载与平滑重启
             if command -v systemctl >/dev/null 2>&1; then
                 systemctl --user -M "${uid}@" daemon-reload >/dev/null 2>&1 || true
                 systemctl --user -M "${uid}@" restart waylan.service >/dev/null 2>&1 || true
             fi
+
+            # 5.2 针对 GNOME / IBus 桌面会话：即时通过用户总线唤醒微澜引擎，彻底消除按需调度的启动时差
+            user="$(id -nu "$uid" 2>/dev/null || true)"
+            user_home="$(getent passwd "$uid" 2>/dev/null | cut -d: -f6 || true)"
+            if [ -n "$user" ] && [ -n "$user_home" ] && command -v ibus >/dev/null 2>&1; then
+                ibus_bus_file="$(ls -t "${user_home}/.config/ibus/bus/"* 2>/dev/null | head -n1 || true)"
+                if [ -n "$ibus_bus_file" ] && [ -f "$ibus_bus_file" ]; then
+                    ibus_addr="$(grep -m1 '^IBUS_ADDRESS=' "$ibus_bus_file" 2>/dev/null | cut -d'=' -f2- || true)"
+                    if [ -n "$ibus_addr" ]; then
+                        runuser -l "$user" -c "env IBUS_ADDRESS='$ibus_addr' ibus write-cache >/dev/null 2>&1 || true" || true
+                        runuser -l "$user" -c "env IBUS_ADDRESS='$ibus_addr' ibus engine waylan >/dev/null 2>&1 || true" || true
+                    fi
+                fi
+            fi
         fi
     done
-
-    # 5. 刷新 IBus 引擎组件注册缓存（开箱即用，GNOME 启动即识别）
-    if which ibus >/dev/null 2>&1; then
-        ibus write-cache >/dev/null 2>&1 || true
-    fi
 
     echo "============================================================"
     echo "  微澜 (WayLan) 中文输入法已成功安装并自动就绪！"
