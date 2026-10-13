@@ -24,6 +24,13 @@ export component PinyinTab inherits VerticalLayout {
     in-out property <bool> typo_v_u: true;
     in-out property <bool> typo_on_ong: true;
 
+    // 高级拼音与候选处理
+    in-out property <bool> enable_u_mode: true;
+    in-out property <bool> enable_i_mode: true;
+    in-out property <bool> filter_uncommon_charset: false;
+    in-out property <bool> show_pinyin_comment: true;
+    in-out property <bool> auto_dedup: true;
+
     SettingCard {
         title: "拼音匹配模式";
         subtitle: "选择音节检索与切分方式";
@@ -132,6 +139,32 @@ export component PinyinTab inherits VerticalLayout {
                     enabled: root.typo_enable;
                 }
             }
+        }
+    }
+
+    SettingCard {
+        title: "高级模式与候选特性";
+        subtitle: "配置特殊引导模式、生僻字过滤与候选提示细节";
+
+        CheckBox {
+            text: "启用 U 模式（拆字与笔画反查，输入 u 引导部件或横竖撇捺折）";
+            checked <=> root.enable_u_mode;
+        }
+        CheckBox {
+            text: "启用 I 模式（特殊符号与数字序号，输入 i 引导序号与单位符号）";
+            checked <=> root.enable_i_mode;
+        }
+        CheckBox {
+            text: "过滤超规范生僻汉字（隐藏罕见字，优先常用规范汉字）";
+            checked <=> root.filter_uncommon_charset;
+        }
+        CheckBox {
+            text: "候选词显示拼音标注（在候选词旁展示拼音与注释提示）";
+            checked <=> root.show_pinyin_comment;
+        }
+        CheckBox {
+            text: "多路候选自动去重（合并不同检索来源的重复候选词）";
+            checked <=> root.auto_dedup;
         }
     }
 }

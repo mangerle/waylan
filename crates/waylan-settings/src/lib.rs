@@ -15,7 +15,7 @@ pub mod sync;
 use crate::importer::{
     import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file,
 };
-use crate::sync::{extract_config_from_window, sync_config_to_window};
+use crate::sync::{extract_config_from_window, sync_config_to_window, update_config_from_window};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::error::Error;
 use std::fs;
@@ -35,6 +35,7 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
     // 1. 加载持久化配置并同步到界面
     let config = AppConfig::load_or_create();
     sync_config_to_window(&window, &config);
+    let loaded_config = Rc::new(std::cell::RefCell::new(config));
 
     // 2. 统计信息装载
     let phrase_path = CustomPhraseManager::default_path();
@@ -79,14 +80,16 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
         user_model_count
     )));
 
-    // 3. 注册保存设置回调
+    // 3. 注册保存设置回调（增量打补丁保存，保留自定义托盘图标等高级配置项）
     let window_weak = window.as_weak();
+    let current_cfg_cell = loaded_config.clone();
     window.on_save_settings(move || {
         if let Some(win) = window_weak.upgrade() {
-            let mut cfg = extract_config_from_window(&win);
-            cfg.sanitize();
-            match cfg.save_default() {
+            let mut base_cfg = current_cfg_cell.borrow().clone();
+            update_config_from_window(&win, &mut base_cfg);
+            match base_cfg.save_default() {
                 Ok(()) => {
+                    *current_cfg_cell.borrow_mut() = base_cfg;
                     win.set_global_status(SharedString::from("配置已成功保存并同步！"));
                 }
                 Err(e) => {
@@ -278,11 +281,16 @@ mod tests {
             },
             traditional_chinese: false,
             auto_pangu_spacing: true,
-            tray_icon_theme_path: None,
-            tray_icon_zh: None,
-            tray_icon_en: None,
-            enable_tray: None,
-            exclusive_input_source: false,
+            enable_tray: Some(true),
+            exclusive_input_source: true,
+            enable_u_mode: true,
+            enable_i_mode: true,
+            filter_uncommon_charset: true,
+            show_pinyin_comment: false,
+            auto_dedup: true,
+            tray_icon_theme_path: Some("/custom/icons".into()),
+            tray_icon_zh: Some("custom-zh".into()),
+            tray_icon_en: Some("custom-en".into()),
         };
         cfg.sanitize();
 
@@ -302,5 +310,15 @@ mod tests {
         assert!(cfg.fuzzy_rules.g_k);
         assert!(cfg.typo_rules.gn_ng);
         assert!(cfg.auto_pangu_spacing);
+        assert_eq!(cfg.enable_tray, Some(true));
+        assert!(cfg.exclusive_input_source);
+        assert!(cfg.enable_u_mode);
+        assert!(cfg.enable_i_mode);
+        assert!(cfg.filter_uncommon_charset);
+        assert!(!cfg.show_pinyin_comment);
+        assert!(cfg.auto_dedup);
+        assert_eq!(cfg.tray_icon_theme_path.as_deref(), Some("/custom/icons"));
+        assert_eq!(cfg.tray_icon_zh.as_deref(), Some("custom-zh"));
+        assert_eq!(cfg.tray_icon_en.as_deref(), Some("custom-en"));
     }
 }

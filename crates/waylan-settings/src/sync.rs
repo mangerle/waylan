@@ -75,72 +75,97 @@ pub fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_fuzzy_f_h(cfg.fuzzy_rules.f_h);
     window.set_fuzzy_r_l(cfg.fuzzy_rules.r_l);
     window.set_fuzzy_g_k(cfg.fuzzy_rules.g_k);
+
+    // 系统托盘与指示器
+    window.set_enable_tray_index(match cfg.enable_tray {
+        None => 0,
+        Some(true) => 1,
+        Some(false) => 2,
+    });
+    window.set_exclusive_input_source(cfg.exclusive_input_source);
+
+    // 高级模式与候选特性
+    window.set_enable_u_mode(cfg.enable_u_mode);
+    window.set_enable_i_mode(cfg.enable_i_mode);
+    window.set_filter_uncommon_charset(cfg.filter_uncommon_charset);
+    window.set_show_pinyin_comment(cfg.show_pinyin_comment);
+    window.set_auto_dedup(cfg.auto_dedup);
+}
+
+/// 基于 Slint 界面属性增量更新已有的 AppConfig（保留未在界面中展示的高级配置项，防误清空）
+pub fn update_config_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
+    cfg.init_chinese = window.get_init_lang_index() == 0;
+    cfg.full_width_char = window.get_init_char_width_index() == 1;
+    cfg.full_width_punct = window.get_init_punct_width_index() == 0;
+    cfg.traditional_chinese = window.get_init_simp_trad_index() == 1;
+    cfg.switch_key = match window.get_switch_key_index() {
+        1 => SwitchKey::Ctrl,
+        _ => SwitchKey::Shift,
+    };
+    cfg.page_keys = PageKeys {
+        minus_equal: window.get_page_keys_minus_equal(),
+        bracket: window.get_page_keys_bracket(),
+        comma_period: window.get_page_keys_comma_period(),
+    };
+    cfg.page_size = window.get_page_size_val().round() as usize;
+    cfg.font_size = window.get_font_size_val().round();
+    cfg.theme = match window.get_theme_index() {
+        1 => ThemeMode::Dark,
+        _ => ThemeMode::Light,
+    };
+    cfg.candidate_orientation = match window.get_orientation_index() {
+        1 => CandidateOrientation::Vertical,
+        _ => CandidateOrientation::Horizontal,
+    };
+    cfg.dynamic_adjust_freq = window.get_dynamic_adjust_freq();
+    cfg.enable_acronym = window.get_enable_acronym();
+    cfg.shift_select_second = window.get_shift_select_second();
+    cfg.slash_to_dunhao = window.get_slash_to_dunhao();
+    cfg.protect_digits_punctuation = window.get_protect_digits_punctuation();
+    cfg.auto_complete_pairs = window.get_auto_complete_pairs();
+    cfg.v_mode = window.get_v_mode();
+    cfg.fuzzy_pinyin = window.get_fuzzy_pinyin();
+    cfg.fuzzy_rules = FuzzyPinyinRules {
+        c_ch: window.get_fuzzy_c_ch(),
+        z_zh: window.get_fuzzy_z_zh(),
+        s_sh: window.get_fuzzy_s_sh(),
+        an_ang: window.get_fuzzy_an_ang(),
+        en_eng: window.get_fuzzy_en_eng(),
+        in_ing: window.get_fuzzy_in_ing(),
+        l_n: window.get_fuzzy_l_n(),
+        f_h: window.get_fuzzy_f_h(),
+        r_l: window.get_fuzzy_r_l(),
+        g_k: window.get_fuzzy_g_k(),
+    };
+    cfg.typo_rules = TypoCorrectionRules {
+        enable: window.get_typo_enable(),
+        gn_ng: window.get_typo_gn_ng(),
+        mg_ng: window.get_typo_mg_ng(),
+        iou_iu: window.get_typo_iou_iu(),
+        uei_ui: window.get_typo_uei_ui(),
+        uen_un: window.get_typo_uen_un(),
+        ue_ve: window.get_typo_ue_ve(),
+        v_u: window.get_typo_v_u(),
+        on_ong: window.get_typo_on_ong(),
+    };
+    cfg.auto_pangu_spacing = window.get_auto_pangu_spacing();
+    cfg.enable_tray = match window.get_enable_tray_index() {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    };
+    cfg.exclusive_input_source = window.get_exclusive_input_source();
+    cfg.enable_u_mode = window.get_enable_u_mode();
+    cfg.enable_i_mode = window.get_enable_i_mode();
+    cfg.filter_uncommon_charset = window.get_filter_uncommon_charset();
+    cfg.show_pinyin_comment = window.get_show_pinyin_comment();
+    cfg.auto_dedup = window.get_auto_dedup();
+    cfg.sanitize();
 }
 
 /// 从 Slint 界面属性读取并构造 AppConfig 数据
 pub fn extract_config_from_window(window: &SettingsWindow) -> AppConfig {
-    let mut cfg = AppConfig {
-        init_chinese: window.get_init_lang_index() == 0,
-        full_width_char: window.get_init_char_width_index() == 1,
-        full_width_punct: window.get_init_punct_width_index() == 0,
-        traditional_chinese: window.get_init_simp_trad_index() == 1,
-        switch_key: match window.get_switch_key_index() {
-            1 => SwitchKey::Ctrl,
-            _ => SwitchKey::Shift,
-        },
-        page_keys: PageKeys {
-            minus_equal: window.get_page_keys_minus_equal(),
-            bracket: window.get_page_keys_bracket(),
-            comma_period: window.get_page_keys_comma_period(),
-        },
-        page_size: window.get_page_size_val().round() as usize,
-        font_size: window.get_font_size_val().round(),
-        theme: match window.get_theme_index() {
-            1 => ThemeMode::Dark,
-            _ => ThemeMode::Light,
-        },
-        candidate_orientation: match window.get_orientation_index() {
-            1 => CandidateOrientation::Vertical,
-            _ => CandidateOrientation::Horizontal,
-        },
-        dynamic_adjust_freq: window.get_dynamic_adjust_freq(),
-        enable_acronym: window.get_enable_acronym(),
-        shift_select_second: window.get_shift_select_second(),
-        slash_to_dunhao: window.get_slash_to_dunhao(),
-        protect_digits_punctuation: window.get_protect_digits_punctuation(),
-        auto_complete_pairs: window.get_auto_complete_pairs(),
-        v_mode: window.get_v_mode(),
-        fuzzy_pinyin: window.get_fuzzy_pinyin(),
-        fuzzy_rules: FuzzyPinyinRules {
-            c_ch: window.get_fuzzy_c_ch(),
-            z_zh: window.get_fuzzy_z_zh(),
-            s_sh: window.get_fuzzy_s_sh(),
-            an_ang: window.get_fuzzy_an_ang(),
-            en_eng: window.get_fuzzy_en_eng(),
-            in_ing: window.get_fuzzy_in_ing(),
-            l_n: window.get_fuzzy_l_n(),
-            f_h: window.get_fuzzy_f_h(),
-            r_l: window.get_fuzzy_r_l(),
-            g_k: window.get_fuzzy_g_k(),
-        },
-        typo_rules: TypoCorrectionRules {
-            enable: window.get_typo_enable(),
-            gn_ng: window.get_typo_gn_ng(),
-            mg_ng: window.get_typo_mg_ng(),
-            iou_iu: window.get_typo_iou_iu(),
-            uei_ui: window.get_typo_uei_ui(),
-            uen_un: window.get_typo_uen_un(),
-            ue_ve: window.get_typo_ue_ve(),
-            v_u: window.get_typo_v_u(),
-            on_ong: window.get_typo_on_ong(),
-        },
-        auto_pangu_spacing: window.get_auto_pangu_spacing(),
-        tray_icon_theme_path: None,
-        tray_icon_zh: None,
-        tray_icon_en: None,
-        enable_tray: None,
-        exclusive_input_source: false,
-    };
-    cfg.sanitize();
+    let mut cfg = AppConfig::load_or_create();
+    update_config_from_window(window, &mut cfg);
     cfg
 }

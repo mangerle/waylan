@@ -234,7 +234,12 @@ impl SessionConfigBundle {
         let algo_config = AlgoConfig {
             page_size: new_cfg.page_size,
             enable_v_mode: new_cfg.v_mode,
+            enable_u_mode: new_cfg.enable_u_mode,
+            enable_i_mode: new_cfg.enable_i_mode,
             traditional_chinese: new_cfg.traditional_chinese,
+            filter_uncommon_charset: new_cfg.filter_uncommon_charset,
+            show_pinyin_comment: new_cfg.show_pinyin_comment,
+            auto_dedup: new_cfg.auto_dedup,
             fuzzy: if new_cfg.fuzzy_pinyin {
                 FuzzyConfig {
                     z_zh: new_cfg.fuzzy_rules.z_zh,
@@ -252,7 +257,6 @@ impl SessionConfigBundle {
                 FuzzyConfig::default()
             },
             auto_pangu_spacing: new_cfg.auto_pangu_spacing,
-            ..Default::default()
         };
         let theme = match new_cfg.theme {
             ThemeMode::Light => UiTheme::light(),

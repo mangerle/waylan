@@ -37,6 +37,8 @@ export component SettingsWindow inherits Window {
     in-out property <bool> slash_to_dunhao: true;
     in-out property <bool> protect_digits_punctuation: true;
     in-out property <bool> auto_complete_pairs: true;
+    in-out property <int> enable_tray_index: 0;
+    in-out property <bool> exclusive_input_source: false;
 
     // 拼音模式属性
     in-out property <bool> enable_acronym: true;
@@ -52,6 +54,11 @@ export component SettingsWindow inherits Window {
     in-out property <bool> typo_ue_ve: true;
     in-out property <bool> typo_v_u: true;
     in-out property <bool> typo_on_ong: true;
+    in-out property <bool> enable_u_mode: true;
+    in-out property <bool> enable_i_mode: true;
+    in-out property <bool> filter_uncommon_charset: false;
+    in-out property <bool> show_pinyin_comment: true;
+    in-out property <bool> auto_dedup: true;
 
     // 模糊音属性
     in-out property <bool> fuzzy_pinyin: false;
@@ -245,6 +252,8 @@ export component SettingsWindow inherits Window {
                         slash_to_dunhao <=> root.slash_to_dunhao;
                         protect_digits_punctuation <=> root.protect_digits_punctuation;
                         auto_complete_pairs <=> root.auto_complete_pairs;
+                        enable_tray_index <=> root.enable_tray_index;
+                        exclusive_input_source <=> root.exclusive_input_source;
                     }
 
                     if root.active_tab == 1: PinyinTab {
@@ -261,6 +270,11 @@ export component SettingsWindow inherits Window {
                         typo_ue_ve <=> root.typo_ue_ve;
                         typo_v_u <=> root.typo_v_u;
                         typo_on_ong <=> root.typo_on_ong;
+                        enable_u_mode <=> root.enable_u_mode;
+                        enable_i_mode <=> root.enable_i_mode;
+                        filter_uncommon_charset <=> root.filter_uncommon_charset;
+                        show_pinyin_comment <=> root.show_pinyin_comment;
+                        auto_dedup <=> root.auto_dedup;
                     }
 
                     if root.active_tab == 2: FuzzyTab {

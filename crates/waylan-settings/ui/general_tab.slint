@@ -28,6 +28,10 @@ export component GeneralTab inherits VerticalLayout {
     in-out property <bool> protect_digits_punctuation: true;
     in-out property <bool> auto_complete_pairs: true;
 
+    // 系统托盘与指示器
+    in-out property <int> enable_tray_index: 0;         // 0: 自动检测, 1: 强制启用彩色托盘, 2: 强制关闭独立托盘
+    in-out property <bool> exclusive_input_source: false;
+
     SettingCard {
         title: "初始输入状态";
         subtitle: "配置输入法启动时的默认语言、字符全半角与简繁体模式";
@@ -177,6 +181,26 @@ export component GeneralTab inherits VerticalLayout {
         CheckBox {
             text: "成对符号自动补全（输入括号或引号时自动补齐闭合符号并左移光标）";
             checked <=> root.auto_complete_pairs;
+        }
+    }
+
+    SettingCard {
+        title: "系统托盘与指示器";
+        subtitle: "配置桌面系统托盘图标显示形态与 GNOME 顶栏指示器行为";
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            Text { text: "托盘模式:"; vertical-alignment: center; width: 80px; }
+            ComboBox {
+                model: ["自动检测 (推荐)", "强制启用彩色托盘", "强制关闭独立托盘"];
+                current-index <=> root.enable_tray_index;
+                width: 180px;
+            }
+        }
+        CheckBox {
+            text: "GNOME 单输入源独占模式（自动隐藏系统顶栏原生白色指示器）";
+            checked <=> root.exclusive_input_source;
         }
     }
 }
