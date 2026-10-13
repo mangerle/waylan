@@ -255,11 +255,7 @@ fn sync_gnome_indicator_mode(exclusive: bool) {
         return;
     }
 
-    let sources = if exclusive {
-        "[('ibus', 'waylan')]"
-    } else {
-        "[('ibus', 'waylan'), ('xkb', 'us')]"
-    };
+    let sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
 
     for key in ["sources", "mru-sources"] {
         let _ = std::process::Command::new("gsettings")

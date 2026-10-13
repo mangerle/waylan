@@ -371,12 +371,12 @@ pub fn ensure_gnome_input_source_registered(exclusive: bool) {
     let _ = Command::new("ibus").args(["engine", "waylan"]).output();
 }
 
-/// 将微澜设为 GNOME 独占优先输入源并保留底层必须的 XKB 键盘布局
+/// 将微澜设为 GNOME 首选输入源并保留底层必须的 XKB 键盘布局
 ///
-/// GNOME 规范严格要求必须存在至少一项底层 XKB 键盘布局以处理基础硬件映射。
-/// 独占优先模式将微澜设为首位，并仅保留单个兜底英文 XKB，促使 GNOME 原生顶栏折叠并确保引擎稳定激活。
+/// GNOME 规范严格要求必须存在至少一项底层 XKB 键盘布局以处理基础硬件按键映射。
+/// 独占托盘模式将微澜设为首位并保留兜底英文 XKB，原生白色指示器则交由微澜 GNOME 扩展彻底隐藏。
 pub fn set_waylan_as_exclusive_input_source() {
-    let exclusive_sources = "[('ibus', 'waylan')]";
+    let exclusive_sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
 
     for key in ["sources", "mru-sources"] {
         let _ = Command::new("gsettings")
@@ -393,7 +393,7 @@ pub fn set_waylan_as_exclusive_input_source() {
         .output();
     let _ = Command::new("ibus").args(["engine", "waylan"]).output();
     info!(
-        "[微澜 IBus] 已将微澜设为 GNOME 独占单一输入源以自动折叠隐藏原生顶栏指示器: {}",
+        "[微澜 IBus] 已将微澜设为 GNOME 首选输入源并保留 XKB 硬件按键基础映射: {}",
         exclusive_sources
     );
 }

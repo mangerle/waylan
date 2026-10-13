@@ -349,10 +349,18 @@ fn run_ibus_monitor_loop(
     inotify_watcher: &mut Option<InotifyWatcher>,
     mut params: IbusMonitorParams,
 ) {
+    // 启动初期自愈轮次（前 8 秒持续保活，解决开机时 GNOME 与 IBus 启动竞争回退到英文布局的问题）
+    let mut startup_healing_rounds: u32 = 8;
+
     loop {
         if params.exit_requested.load(Ordering::Acquire) {
             info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
             break;
+        }
+
+        if startup_healing_rounds > 0 {
+            startup_healing_rounds -= 1;
+            ensure_global_engine_active(conn);
         }
 
         poll_wakeup_and_inotify(inotify_watcher.as_ref(), params.loop_wakeup.as_ref(), 1000);
@@ -416,6 +424,37 @@ fn run_ibus_monitor_loop(
                 );
                 debug!("[微澜 IBus] 已同步托盘模式切换并发射 UpdateProperty 信号");
             }
+        }
+    }
+}
+
+/// 确保微澜为当前活跃的全局输入法引擎（用于开机启动与桌面服务时差自愈）
+fn ensure_global_engine_active(conn: &Connection) {
+    let is_waylan = conn
+        .call_method(
+            Some("org.freedesktop.IBus"),
+            "/org/freedesktop/IBus",
+            Some("org.freedesktop.IBus"),
+            "GetGlobalEngine",
+            &(),
+        )
+        .map(|reply| format!("{:?}", reply).contains("\"waylan\""))
+        .unwrap_or(false);
+
+    if !is_waylan {
+        if let Err(e) = conn.call_method(
+            Some("org.freedesktop.IBus"),
+            "/org/freedesktop/IBus",
+            Some("org.freedesktop.IBus"),
+            "SetGlobalEngine",
+            &("waylan",),
+        ) {
+            debug!("[微澜 IBus] 自愈激活全局引擎 waylan 重试提示: {}", e);
+        } else {
+            info!("[微澜 IBus] 开机自愈完成：成功将全局引擎激活为 waylan (微澜)");
+            let _ = std::process::Command::new("gsettings")
+                .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
+                .output();
         }
     }
 }
