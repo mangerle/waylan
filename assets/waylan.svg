@@ -6,7 +6,6 @@
     </linearGradient>
   </defs>
   <rect width="32" height="32" rx="8" fill="url(#waylanGrad)"/>
-  <!-- 微澜双重流线波纹（融合 Wayland 首字母 W 与起伏涟漪） -->
-  <path d="M6 13.5 C9 9.5 12 17.5 16 13.5 C20 9.5 23 17.5 26 13.5" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round"/>
-  <path d="M7 19 C10 15 13 23 16 19 C19 15 22 23 25 19" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-opacity="0.85"/>
+  <!-- 微澜中文字符图标 -->
+  <text x="16" y="15" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, 'Noto Sans CJK SC', 'Source Han Sans CN', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="22" font-weight="800" text-anchor="middle" dominant-baseline="central">澜</text>
 </svg>
