@@ -1,91 +1,75 @@
-import { Button, CheckBox, ComboBox, LineEdit, Slider, ScrollView } from "std-widgets.slint";
+import { Button, ScrollView } from "std-widgets.slint";
+import { PhraseItem, NavItem } from "common.slint";
+import { GeneralTab } from "general_tab.slint";
+import { PinyinTab } from "pinyin_tab.slint";
+import { FuzzyTab } from "fuzzy_tab.slint";
+import { DictTab } from "dict_tab.slint";
+import { UserDataTab } from "user_data_tab.slint";
+import { ShortcutsTab } from "shortcuts_tab.slint";
+import { AboutTab } from "about_tab.slint";
 
-export struct PhraseItem {
-    code: string,
-    text: string,
-}
-
-component NavItem inherits Rectangle {
-    in property <string> title;
-    in property <bool> active: false;
-    callback clicked();
-
-    height: 42px;
-    border-radius: 8px;
-    background: active ? #3b82f6 : (touch.has-hover ? #e2e8f0 : transparent);
-
-    touch := TouchArea {
-        clicked => { root.clicked(); }
-    }
-
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        alignment: start;
-        Text {
-            text: root.title;
-            color: root.active ? #ffffff : (touch.has-hover ? #0f172a : #334155);
-            font-size: 14px;
-            font-weight: root.active ? 600 : 400;
-            vertical-alignment: center;
-        }
-    }
-}
-
-component SettingCard inherits Rectangle {
-    in property <string> title;
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: #e2e8f0;
-    background: #ffffff;
-
-    VerticalLayout {
-        padding: 16px;
-        spacing: 12px;
-
-        if root.title != "": Text {
-            text: root.title;
-            font-size: 15px;
-            font-weight: 700;
-            color: #1e293b;
-        }
-
-        @children
-    }
-}
+export { PhraseItem }
 
 export component SettingsWindow inherits Window {
-    title: "微澜输入法 · 偏好设置中心";
-    min-width: 780px;
-    min-height: 560px;
-    preferred-width: 860px;
-    preferred-height: 640px;
+    title: "WayLan Settings";
+    min-width: 820px;
+    min-height: 600px;
+    preferred-width: 900px;
+    preferred-height: 680px;
     background: #f8fafc;
 
-    // 导航状态 (0: 常规, 1: 拼音词库, 2: 中英混输, 3: 符号表情, 4: 自定义短语)
+    // 导航项索引 (0: 常规, 1: 拼音模式, 2: 模糊音, 3: 词典, 4: 用户数据, 5: 快捷键, 6: 关于)
     in-out property <int> active_tab: 0;
 
     // 常规设置属性
+    in-out property <int> init_lang_index: 0;
+    in-out property <int> init_char_width_index: 0;
+    in-out property <int> init_punct_width_index: 0;
+    in-out property <int> init_simp_trad_index: 0;
     in-out property <float> page_size_val: 7;
     in-out property <float> font_size_val: 15;
-    in-out property <int> switch_key_index: 0;
-    in-out property <int> page_keys_index: 0;
+    in-out property <int> orientation_index: 0;
     in-out property <int> theme_index: 0;
+    in-out property <bool> dynamic_adjust_freq: true;
+    in-out property <bool> shift_select_second: false;
+    in-out property <bool> auto_pangu_spacing: false;
+    in-out property <bool> v_mode: true;
     in-out property <bool> slash_to_dunhao: true;
     in-out property <bool> protect_digits_punctuation: true;
     in-out property <bool> auto_complete_pairs: true;
-    in-out property <bool> v_mode: true;
-    in-out property <bool> fuzzy_pinyin: false;
-    in-out property <bool> traditional_chinese: false;
-    in-out property <bool> auto_pangu_spacing: false;
 
-    // 词库与状态统计
+    // 拼音模式属性
+    in-out property <bool> enable_acronym: true;
+    in-out property <bool> page_keys_minus_equal: true;
+    in-out property <bool> page_keys_bracket: false;
+    in-out property <bool> page_keys_comma_period: false;
+    in-out property <bool> typo_enable: false;
+    in-out property <bool> typo_gn_ng: true;
+    in-out property <bool> typo_mg_ng: true;
+    in-out property <bool> typo_iou_iu: true;
+    in-out property <bool> typo_uei_ui: true;
+    in-out property <bool> typo_uen_un: true;
+    in-out property <bool> typo_ue_ve: true;
+    in-out property <bool> typo_v_u: true;
+    in-out property <bool> typo_on_ong: true;
+
+    // 模糊音属性
+    in-out property <bool> fuzzy_pinyin: false;
+    in-out property <bool> fuzzy_c_ch: false;
+    in-out property <bool> fuzzy_z_zh: false;
+    in-out property <bool> fuzzy_s_sh: false;
+    in-out property <bool> fuzzy_an_ang: false;
+    in-out property <bool> fuzzy_en_eng: false;
+    in-out property <bool> fuzzy_in_ing: false;
+    in-out property <bool> fuzzy_l_n: false;
+    in-out property <bool> fuzzy_f_h: false;
+    in-out property <bool> fuzzy_r_l: false;
+    in-out property <bool> fuzzy_g_k: false;
+
+    // 词典与状态统计属性
     in property <string> base_dict_info: "系统预编译词库: base.dict.bin (约 45.7 万组词条已就绪)";
     in property <string> english_dict_info: "已就绪常用英文单词: 0 词";
     in property <string> symbols_dict_info: "已收录语义符号与表情: 0 项";
-    in property <string> user_model_info: "自适应个性化历史词模型: 0 条记忆";
-
-    // 词库导入路径与状态反馈
     in-out property <string> pinyin_import_path: "";
     in property <string> pinyin_import_status: "";
     in-out property <string> english_import_path: "";
@@ -93,11 +77,15 @@ export component SettingsWindow inherits Window {
     in-out property <string> symbols_import_path: "";
     in property <string> symbols_import_status: "";
 
-    // 自定义短语与历史词
+    // 用户数据属性
+    in property <string> user_model_info: "自适应个性化历史词模型: 0 条记忆";
     in-out property <string> new_phrase_code: "";
     in-out property <string> new_phrase_text: "";
     in property <[PhraseItem]> phrase_list: [];
     in property <string> phrase_status: "";
+
+    // 快捷键属性
+    in-out property <int> switch_key_index: 0;
 
     // 全局操作反馈
     in property <string> global_status: "";
@@ -115,12 +103,12 @@ export component SettingsWindow inherits Window {
     HorizontalLayout {
         // ---------------- 左侧菜单侧边栏 ----------------
         Rectangle {
-            width: 220px;
+            width: 200px;
             background: #f1f5f9;
 
             VerticalLayout {
                 padding: 16px;
-                spacing: 8px;
+                spacing: 6px;
 
                 // 侧边栏顶部品牌标题
                 VerticalLayout {
@@ -144,36 +132,46 @@ export component SettingsWindow inherits Window {
                     background: #e2e8f0;
                 }
 
-                // 侧边栏导航菜单项
+                // 侧边栏 7 项导航菜单
                 NavItem {
-                    title: "常规设置";
+                    title: "常规";
                     active: root.active_tab == 0;
                     clicked => { root.active_tab = 0; }
                 }
                 NavItem {
-                    title: "拼音与字库";
+                    title: "拼音模式";
                     active: root.active_tab == 1;
                     clicked => { root.active_tab = 1; }
                 }
                 NavItem {
-                    title: "中英混输";
+                    title: "模糊音";
                     active: root.active_tab == 2;
                     clicked => { root.active_tab = 2; }
                 }
                 NavItem {
-                    title: "符号与表情";
+                    title: "词典";
                     active: root.active_tab == 3;
                     clicked => { root.active_tab = 3; }
                 }
                 NavItem {
-                    title: "自定义短语";
+                    title: "用户数据";
                     active: root.active_tab == 4;
                     clicked => { root.active_tab = 4; }
                 }
+                NavItem {
+                    title: "快捷键";
+                    active: root.active_tab == 5;
+                    clicked => { root.active_tab = 5; }
+                }
+                NavItem {
+                    title: "关于";
+                    active: root.active_tab == 6;
+                    clicked => { root.active_tab = 6; }
+                }
 
-                Rectangle { } // 弹簧占位
+                Rectangle { } // 弹性占位
 
-                // 侧边栏底部版本号
+                // 侧边栏底部版本
                 Text {
                     text: "WayLan v0.1.0";
                     font-size: 11px;
@@ -198,19 +196,23 @@ export component SettingsWindow inherits Window {
             VerticalLayout {
                 spacing: 4px;
                 Text {
-                    text: root.active_tab == 0 ? "常规设置" :
-                          root.active_tab == 1 ? "拼音与字库" :
-                          root.active_tab == 2 ? "中英混输" :
-                          root.active_tab == 3 ? "符号与表情" : "自定义短语与词库";
+                    text: root.active_tab == 0 ? "常规" :
+                          root.active_tab == 1 ? "拼音模式" :
+                          root.active_tab == 2 ? "模糊音" :
+                          root.active_tab == 3 ? "词典" :
+                          root.active_tab == 4 ? "用户数据" :
+                          root.active_tab == 5 ? "快捷键" : "关于";
                     font-size: 20px;
                     font-weight: 700;
                     color: #0f172a;
                 }
                 Text {
-                    text: root.active_tab == 0 ? "配置候选框外观尺寸、按键切换习惯与标点补全特性" :
-                          root.active_tab == 1 ? "查看系统汉字拼音词库状态、繁简与模糊音，导入外部词库" :
-                          root.active_tab == 2 ? "配置中文输入模式下的英文单词联想及外部英文词库导入" :
-                          root.active_tab == 3 ? "符号与表情拼音语义联想映射，导入自定义特殊符号" : "管理用户快捷短语展开规则与历史自造词模型";
+                    text: root.active_tab == 0 ? "配置初始语言、全半角、候选框外观尺寸与标点补全特性" :
+                          root.active_tab == 1 ? "配置拼音检索模式、翻页键及拼音纠错选项" :
+                          root.active_tab == 2 ? "配置平翘舌、前后鼻音与易混淆音节模糊匹配规则" :
+                          root.active_tab == 3 ? "查看系统词库状态，导入外部拼音、英文与符号词库" :
+                          root.active_tab == 4 ? "管理用户快捷短语展开规则与自适应历史自造词记忆" :
+                          root.active_tab == 5 ? "配置中英切换键，查看输入法预设快捷键映射指南" : "微澜输入法版本信息、技术架构与开源许可声明";
                     font-size: 12px;
                     color: #64748b;
                 }
@@ -221,284 +223,94 @@ export component SettingsWindow inherits Window {
                 background: #e2e8f0;
             }
 
-            // 右侧核心滚动内容卡片区
+            // 右侧核心滚动内容区
             ScrollView {
-                // Tab 0: 常规设置
-                if root.active_tab == 0: VerticalLayout {
-                    spacing: 16px;
-                    padding_right: 8px;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 0px;
 
-                    SettingCard {
-                        title: "候选框外观与排版";
-                        HorizontalLayout {
-                            alignment: start;
-                            spacing: 16px;
-                            Text { text: "单页候选词数 (" + Math.round(root.page_size_val) + " 词):"; vertical-alignment: center; }
-                            Slider {
-                                minimum: 5;
-                                maximum: 9;
-                                value <=> root.page_size_val;
-                                width: 220px;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            alignment: start;
-                            spacing: 16px;
-                            Text { text: "候选文字字号 (" + Math.round(root.font_size_val) + " px):"; vertical-alignment: center; }
-                            Slider {
-                                minimum: 12;
-                                maximum: 24;
-                                value <=> root.font_size_val;
-                                width: 220px;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            alignment: start;
-                            spacing: 16px;
-                            Text { text: "界面外观主题:"; vertical-alignment: center; }
-                            ComboBox {
-                                model: ["浅色 (Light)", "深色 (Dark)"];
-                                current-index <=> root.theme_index;
-                                width: 160px;
-                            }
-                        }
+                    if root.active_tab == 0: GeneralTab {
+                        init_lang_index <=> root.init_lang_index;
+                        init_char_width_index <=> root.init_char_width_index;
+                        init_punct_width_index <=> root.init_punct_width_index;
+                        init_simp_trad_index <=> root.init_simp_trad_index;
+                        page_size_val <=> root.page_size_val;
+                        font_size_val <=> root.font_size_val;
+                        orientation_index <=> root.orientation_index;
+                        theme_index <=> root.theme_index;
+                        dynamic_adjust_freq <=> root.dynamic_adjust_freq;
+                        shift_select_second <=> root.shift_select_second;
+                        auto_pangu_spacing <=> root.auto_pangu_spacing;
+                        v_mode <=> root.v_mode;
+                        slash_to_dunhao <=> root.slash_to_dunhao;
+                        protect_digits_punctuation <=> root.protect_digits_punctuation;
+                        auto_complete_pairs <=> root.auto_complete_pairs;
                     }
 
-                    SettingCard {
-                        title: "按键习惯与快捷键";
-                        HorizontalLayout {
-                            alignment: start;
-                            spacing: 16px;
-                            Text { text: "中英文切换键:"; vertical-alignment: center; }
-                            ComboBox {
-                                model: ["Shift", "Ctrl"];
-                                current-index <=> root.switch_key_index;
-                                width: 140px;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            alignment: start;
-                            spacing: 16px;
-                            Text { text: "候选翻页快捷键:"; vertical-alignment: center; }
-                            ComboBox {
-                                model: ["减号/等号 (- / =)", "中括号 ([ / ])", "逗号/句号 (, / .)"];
-                                current-index <=> root.page_keys_index;
-                                width: 200px;
-                            }
-                        }
+                    if root.active_tab == 1: PinyinTab {
+                        enable_acronym <=> root.enable_acronym;
+                        page_keys_minus_equal <=> root.page_keys_minus_equal;
+                        page_keys_bracket <=> root.page_keys_bracket;
+                        page_keys_comma_period <=> root.page_keys_comma_period;
+                        typo_enable <=> root.typo_enable;
+                        typo_gn_ng <=> root.typo_gn_ng;
+                        typo_mg_ng <=> root.typo_mg_ng;
+                        typo_iou_iu <=> root.typo_iou_iu;
+                        typo_uei_ui <=> root.typo_uei_ui;
+                        typo_uen_un <=> root.typo_uen_un;
+                        typo_ue_ve <=> root.typo_ue_ve;
+                        typo_v_u <=> root.typo_v_u;
+                        typo_on_ong <=> root.typo_on_ong;
                     }
 
-                    SettingCard {
-                        title: "标点与输入特性";
-                        CheckBox {
-                            text: "斜杠转顿号（敲击 /? 键直接输入顿号 、）";
-                            checked <=> root.slash_to_dunhao;
-                        }
-                        CheckBox {
-                            text: "数字间英文标点保护（如 12:00、3.14 保持半角英文符号）";
-                            checked <=> root.protect_digits_punctuation;
-                        }
-                        CheckBox {
-                            text: "成对符号自动补全（输入括号或引号时自动补齐闭合符号并左移光标）";
-                            checked <=> root.auto_complete_pairs;
-                        }
-                        CheckBox {
-                            text: "中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）";
-                            checked <=> root.auto_pangu_spacing;
-                        }
-                        CheckBox {
-                            text: "启用 V 模式（支持快速四则计算器与快捷符号转换）";
-                            checked <=> root.v_mode;
-                        }
-                    }
-                }
-
-                // Tab 1: 拼音与字库
-                if root.active_tab == 1: VerticalLayout {
-                    spacing: 16px;
-                    padding_right: 8px;
-
-                    SettingCard {
-                        title: "字库运行状态";
-                        Text { text: root.base_dict_info; font-size: 13px; color: #334155; }
-                        Text {
-                            text: "涵盖通用规范汉字表、现代汉语核心高频词汇与计算机专业词汇。";
-                            font-size: 12px;
-                            color: #64748b;
-                        }
+                    if root.active_tab == 2: FuzzyTab {
+                        fuzzy_pinyin <=> root.fuzzy_pinyin;
+                        fuzzy_c_ch <=> root.fuzzy_c_ch;
+                        fuzzy_z_zh <=> root.fuzzy_z_zh;
+                        fuzzy_s_sh <=> root.fuzzy_s_sh;
+                        fuzzy_an_ang <=> root.fuzzy_an_ang;
+                        fuzzy_en_eng <=> root.fuzzy_en_eng;
+                        fuzzy_in_ing <=> root.fuzzy_in_ing;
+                        fuzzy_l_n <=> root.fuzzy_l_n;
+                        fuzzy_f_h <=> root.fuzzy_f_h;
+                        fuzzy_r_l <=> root.fuzzy_r_l;
+                        fuzzy_g_k <=> root.fuzzy_g_k;
                     }
 
-                    SettingCard {
-                        title: "汉字与拼音特性";
-                        CheckBox {
-                            text: "输出繁体中文（基于 OpenCC 简繁消歧转换引擎）";
-                            checked <=> root.traditional_chinese;
-                        }
-                        CheckBox {
-                            text: "启用模糊拼音（自动兼容平翘舌 z/zh、c/ch、s/sh 与前后鼻音 in/ing、en/eng）";
-                            checked <=> root.fuzzy_pinyin;
-                        }
+                    if root.active_tab == 3: DictTab {
+                        base_dict_info: root.base_dict_info;
+                        english_dict_info: root.english_dict_info;
+                        symbols_dict_info: root.symbols_dict_info;
+                        pinyin_import_path <=> root.pinyin_import_path;
+                        pinyin_import_status: root.pinyin_import_status;
+                        english_import_path <=> root.english_import_path;
+                        english_import_status: root.english_import_status;
+                        symbols_import_path <=> root.symbols_import_path;
+                        symbols_import_status: root.symbols_import_status;
+                        import_pinyin_dict(path) => { root.import_pinyin_dict(path); }
+                        import_english_dict(path) => { root.import_english_dict(path); }
+                        import_symbols_dict(path) => { root.import_symbols_dict(path); }
                     }
 
-                    SettingCard {
-                        title: "导入外部拼音词库 (.txt / .dict.yaml)";
-                        HorizontalLayout {
-                            spacing: 8px;
-                            LineEdit {
-                                placeholder-text: "词库文件绝对路径，每行格式: 词条 [拼音] [词频]";
-                                text <=> root.pinyin_import_path;
-                            }
-                            Button {
-                                text: "开始导入";
-                                clicked => { root.import_pinyin_dict(root.pinyin_import_path); }
-                            }
-                        }
-                        if root.pinyin_import_status != "": Text {
-                            text: root.pinyin_import_status;
-                            font-size: 12px;
-                            color: #059669;
-                        }
-                    }
-                }
-
-                // Tab 2: 中英混输
-                if root.active_tab == 2: VerticalLayout {
-                    spacing: 16px;
-                    padding_right: 8px;
-
-                    SettingCard {
-                        title: "中英混输特性说明";
-                        Text {
-                            text: "在中文输入状态下直接键入常用英文单词，候选栏首位或次位自动呈现英文原词，按空格即可直接上屏。";
-                            font-size: 13px;
-                            color: #334155;
-                        }
-                        Text { text: root.english_dict_info; font-size: 13px; font-weight: 600; color: #2563eb; }
+                    if root.active_tab == 4: UserDataTab {
+                        user_model_info: root.user_model_info;
+                        new_phrase_code <=> root.new_phrase_code;
+                        new_phrase_text <=> root.new_phrase_text;
+                        phrase_list: root.phrase_list;
+                        phrase_status: root.phrase_status;
+                        clear_user_model => { root.clear_user_model(); }
+                        add_custom_phrase(code, text) => { root.add_custom_phrase(code, text); }
+                        delete_custom_phrase(idx) => { root.delete_custom_phrase(idx); }
                     }
 
-                    SettingCard {
-                        title: "导入外部英文词库 (.txt / .dict.yaml)";
-                        HorizontalLayout {
-                            spacing: 8px;
-                            LineEdit {
-                                placeholder-text: "英文词库文件绝对路径，每行格式: 单词 [词频]";
-                                text <=> root.english_import_path;
-                            }
-                            Button {
-                                text: "导入英文词库";
-                                clicked => { root.import_english_dict(root.english_import_path); }
-                            }
-                        }
-                        if root.english_import_status != "": Text {
-                            text: root.english_import_status;
-                            font-size: 12px;
-                            color: #059669;
-                        }
-                    }
-                }
-
-                // Tab 3: 符号与表情
-                if root.active_tab == 3: VerticalLayout {
-                    spacing: 16px;
-                    padding_right: 8px;
-
-                    SettingCard {
-                        title: "符号语义联想";
-                        Text {
-                            text: "输入常见语义拼音（如 dianzan、daxiao、shengri、jia）在候选栏呈现对应特殊符号。所有符号遵守无 Emoji 规范，采用标准 Unicode 标量值分发。";
-                            font-size: 13px;
-                            color: #334155;
-                        }
-                        Text { text: root.symbols_dict_info; font-size: 13px; font-weight: 600; color: #2563eb; }
+                    if root.active_tab == 5: ShortcutsTab {
+                        switch_key_index <=> root.switch_key_index;
+                        page_keys_minus_equal <=> root.page_keys_minus_equal;
+                        page_keys_bracket <=> root.page_keys_bracket;
+                        page_keys_comma_period <=> root.page_keys_comma_period;
                     }
 
-                    SettingCard {
-                        title: "导入自定义特殊符号库";
-                        HorizontalLayout {
-                            spacing: 8px;
-                            LineEdit {
-                                placeholder-text: "符号词库文件绝对路径，每行格式: 符号 拼音 语义说明";
-                                text <=> root.symbols_import_path;
-                            }
-                            Button {
-                                text: "导入符号库";
-                                clicked => { root.import_symbols_dict(root.symbols_import_path); }
-                            }
-                        }
-                        if root.symbols_import_status != "": Text {
-                            text: root.symbols_import_status;
-                            font-size: 12px;
-                            color: #059669;
-                        }
-                    }
-                }
-
-                // Tab 4: 自定义短语与历史词
-                if root.active_tab == 4: VerticalLayout {
-                    spacing: 16px;
-                    padding_right: 8px;
-
-                    SettingCard {
-                        title: "新增快捷自定义短语";
-                        HorizontalLayout {
-                            spacing: 8px;
-                            LineEdit {
-                                width: 140px;
-                                placeholder-text: "快捷代码 (如 mymail)";
-                                text <=> root.new_phrase_code;
-                            }
-                            LineEdit {
-                                placeholder-text: "展开文本 (如 user@domain.com)";
-                                text <=> root.new_phrase_text;
-                            }
-                            Button {
-                                text: "添加短语";
-                                clicked => {
-                                    root.add_custom_phrase(root.new_phrase_code, root.new_phrase_text);
-                                }
-                            }
-                        }
-                        if root.phrase_status != "": Text {
-                            text: root.phrase_status;
-                            font-size: 12px;
-                            color: #059669;
-                        }
-                    }
-
-                    SettingCard {
-                        title: "已配置自定义短语列表";
-                        if root.phrase_list.length == 0: Text {
-                            text: "暂无自定义短语，可在上方添加。";
-                            font-size: 13px;
-                            color: #94a3b8;
-                        }
-                        for item[idx] in root.phrase_list: HorizontalLayout {
-                            spacing: 12px;
-                            alignment: start;
-                            Text { text: item.code; font-weight: 700; width: 100px; vertical-alignment: center; }
-                            Text { text: "->"; color: #94a3b8; vertical-alignment: center; }
-                            Text { text: item.text; vertical-alignment: center; }
-                            Rectangle { } // 占位
-                            Button {
-                                text: "删除";
-                                clicked => { root.delete_custom_phrase(idx); }
-                            }
-                        }
-                    }
-
-                    SettingCard {
-                        title: "自适应个性化历史词模型";
-                        Text { text: root.user_model_info; font-size: 13px; color: #334155; }
-                        HorizontalLayout {
-                            alignment: start;
-                            Button {
-                                text: "清空自造词历史记录";
-                                clicked => { root.clear_user_model(); }
-                            }
-                        }
+                    if root.active_tab == 6: AboutTab {
                     }
                 }
             }

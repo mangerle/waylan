@@ -12,7 +12,7 @@ use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMe
 use crate::session_v1::{
     handle_composition_key_with_params, keycode_to_ascii_digit_char,
     keycode_to_punctuation_with_shift, CompositionKeyParams, KeyProcessAction, WaylanV1Session,
-    KEY_BACKSPACE, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
+    KEY_BACKSPACE, KEY_CAPSLOCK, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
 };
 
 impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
@@ -60,6 +60,29 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                 let is_press = matches!(key_state, WEnum::Value(KeyState::Pressed));
 
                 state.update_modifier_by_key(key, is_press);
+
+                // CapsLock 键处理：若当前存在未上屏拼音，直接上屏原始字母并重置候选；键事件原生透传
+                if key == KEY_CAPSLOCK {
+                    if is_press {
+                        if !state.engine.raw_input().is_empty() {
+                            let raw = state.engine.raw_input().to_string();
+                            state.engine.reset();
+                            state.hide_candidate_surface();
+                            context.commit_string(state.commit_serial, raw);
+                            context.preedit_string(
+                                state.commit_serial,
+                                String::new(),
+                                String::new(),
+                            );
+                        }
+                        state.consumed_keys.record_press(key, false);
+                        context.key(serial, time, key, 1);
+                    } else {
+                        state.consumed_keys.take_release(key);
+                        context.key(serial, time, key, 0);
+                    }
+                    return;
+                }
 
                 // 1. 优先送入 Shift/Ctrl 防误触状态机
                 let toggled_mode = state.shift_sm.on_key_event(key, is_press, state.mode);
@@ -117,7 +140,18 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                 mods_locked,
                 group,
             } => {
+                let prev_caps = state.is_caps_locked();
                 state.mods_depressed = mods_depressed;
+                state.mods_locked = mods_locked;
+                let curr_caps = state.is_caps_locked();
+                if prev_caps != curr_caps {
+                    if let Some(ref caps_flag) = state.shared_is_caps_locked {
+                        caps_flag.store(curr_caps, Ordering::Release);
+                    }
+                    if let Some(ref notify_tx) = state.mode_notify_tx {
+                        let _ = notify_tx.try_send(());
+                    }
+                }
                 // 原样透传修饰键状态给当前文本应用
                 context.modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
             }
@@ -134,8 +168,8 @@ fn handle_v1_key_press(
     key: u32,
 ) -> bool {
     let serial = state.current_serial;
-    // 2. 如果当前处于英文模式，或按下了 Ctrl/Alt/Super 快捷键（如 Ctrl+C/V），直接转发原始按键给应用
-    if state.mode == InputMode::English || state.has_ctrl_or_alt() {
+    // 2. 如果当前处于英文模式、大写锁定状态，或按下了 Ctrl/Alt/Super 快捷键（如 Ctrl+C/V），直接转发原始按键给应用
+    if state.mode == InputMode::English || state.is_caps_locked() || state.has_ctrl_or_alt() {
         return false;
     }
 

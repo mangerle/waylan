@@ -10,6 +10,7 @@ pub const KEY_BACKSPACE: u32 = 14;
 pub const KEY_TAB: u32 = 15;
 pub const KEY_ENTER: u32 = 28;
 pub const KEY_SPACE: u32 = 57;
+pub const KEY_CAPSLOCK: u32 = 58;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_RIGHTSHIFT: u32 = 54;
 pub const KEY_UP: u32 = 103;
@@ -66,6 +67,7 @@ pub const KEY_KPEQUAL: u32 = 117;
 
 /// 标准 XKB 修饰键位掩码常量
 pub const MOD_SHIFT: u32 = 1;
+pub const MOD_CAPS: u32 = 2;
 pub const MOD_CTRL: u32 = 4;
 pub const MOD_ALT: u32 = 8;
 pub const MOD_SUPER: u32 = 64;

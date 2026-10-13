@@ -3,6 +3,7 @@ use log::{debug, info, trace};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsFd;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_ui::CandidateHitTarget;
 use wayland_client::protocol::wl_keyboard::KeyState;
@@ -177,6 +178,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                 mods_locked,
                 group,
             } => {
+                let prev_caps = state.is_caps_locked();
                 state.mods_depressed = mods_depressed;
                 state.mods_latched = mods_latched;
                 state.mods_locked = mods_locked;
@@ -185,6 +187,23 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                     if let Some(ref vk) = state.virtual_keyboard {
                         vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
                     }
+                }
+                let curr_caps = state.is_caps_locked();
+                if prev_caps != curr_caps {
+                    if let Some(ref caps_flag) = state.shared_is_caps_locked {
+                        caps_flag.store(curr_caps, Ordering::Release);
+                    }
+                    if let Some(ref notify_tx) = state.mode_notify_tx {
+                        let _ = notify_tx.try_send(());
+                    }
+                    debug!(
+                        "[Wayland v2] CapsLock 大写锁定状态变更: {}",
+                        if curr_caps {
+                            "开启大写"
+                        } else {
+                            "解除大写"
+                        }
+                    );
                 }
                 debug!(
                     "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}, latched={}, locked={}, group={}",

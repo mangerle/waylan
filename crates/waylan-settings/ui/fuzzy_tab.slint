@@ -1,0 +1,99 @@
+import { CheckBox } from "std-widgets.slint";
+import { SettingCard } from "common.slint";
+
+export component FuzzyTab inherits VerticalLayout {
+    spacing: 16px;
+    padding-right: 8px;
+
+    // 模糊音主开关
+    in-out property <bool> fuzzy_pinyin: false;
+
+    // 10项细分规则
+    in-out property <bool> fuzzy_c_ch: false;
+    in-out property <bool> fuzzy_z_zh: false;
+    in-out property <bool> fuzzy_s_sh: false;
+    in-out property <bool> fuzzy_an_ang: false;
+    in-out property <bool> fuzzy_en_eng: false;
+    in-out property <bool> fuzzy_in_ing: false;
+    in-out property <bool> fuzzy_l_n: false;
+    in-out property <bool> fuzzy_f_h: false;
+    in-out property <bool> fuzzy_r_l: false;
+    in-out property <bool> fuzzy_g_k: false;
+
+    SettingCard {
+        title: "模糊音总控";
+        subtitle: "自动混淆易混声母与前后鼻音韵母，提升方言口音输入容错率";
+
+        CheckBox {
+            text: "启用模糊音（开启后下方勾选的规则方能生效）";
+            checked <=> root.fuzzy_pinyin;
+        }
+    }
+
+    SettingCard {
+        title: "模糊音细分规则";
+        subtitle: "支持平翘舌声母、鼻音边音以及前后鼻韵母双向互通混淆";
+
+        HorizontalLayout {
+            spacing: 32px;
+
+            VerticalLayout {
+                spacing: 12px;
+                CheckBox {
+                    text: "c <=> ch (例如: ca <=> cha)";
+                    checked <=> root.fuzzy_c_ch;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "z <=> zh (例如: za <=> zha)";
+                    checked <=> root.fuzzy_z_zh;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "s <=> sh (例如: sa <=> sha)";
+                    checked <=> root.fuzzy_s_sh;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "an <=> ang (例如: pan <=> pang)";
+                    checked <=> root.fuzzy_an_ang;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "en <=> eng (例如: ben <=> beng)";
+                    checked <=> root.fuzzy_en_eng;
+                    enabled: root.fuzzy_pinyin;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 12px;
+                CheckBox {
+                    text: "in <=> ing (例如: bin <=> bing)";
+                    checked <=> root.fuzzy_in_ing;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "l <=> n (例如: la <=> na)";
+                    checked <=> root.fuzzy_l_n;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "f <=> h (例如: fa <=> ha)";
+                    checked <=> root.fuzzy_f_h;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "r <=> l (例如: ren <=> len)";
+                    checked <=> root.fuzzy_r_l;
+                    enabled: root.fuzzy_pinyin;
+                }
+                CheckBox {
+                    text: "g <=> k (例如: ge <=> ke)";
+                    checked <=> root.fuzzy_g_k;
+                    enabled: root.fuzzy_pinyin;
+                }
+            }
+        }
+    }
+}

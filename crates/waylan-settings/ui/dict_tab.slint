@@ -1,0 +1,119 @@
+import { Button, LineEdit } from "std-widgets.slint";
+import { SettingCard } from "common.slint";
+
+export component DictTab inherits VerticalLayout {
+    spacing: 16px;
+    padding-right: 8px;
+
+    in property <string> base_dict_info: "系统预编译词库: base.dict.bin (约 45.7 万组词条已就绪)";
+    in property <string> english_dict_info: "已就绪常用英文单词: 0 词";
+    in property <string> symbols_dict_info: "已收录语义符号与表情: 0 项";
+
+    in-out property <string> pinyin_import_path: "";
+    in property <string> pinyin_import_status: "";
+    in-out property <string> english_import_path: "";
+    in property <string> english_import_status: "";
+    in-out property <string> symbols_import_path: "";
+    in property <string> symbols_import_status: "";
+
+    callback import_pinyin_dict(string);
+    callback import_english_dict(string);
+    callback import_symbols_dict(string);
+
+    SettingCard {
+        title: "系统词库状态";
+        subtitle: "微澜预编译高性能拼音索引词典";
+
+        Text {
+            text: root.base_dict_info;
+            font-size: 13px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        Text {
+            text: "涵盖通用规范汉字表、现代汉语核心高频词汇与计算机专业词汇。";
+            font-size: 12px;
+            color: #64748b;
+        }
+    }
+
+    SettingCard {
+        title: "导入外部拼音词库 (.txt / .dict.yaml)";
+        subtitle: "扩展自定词汇，格式: 词条 [拼音] [词频]";
+
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit {
+                placeholder-text: "请输入词库文件绝对路径";
+                text <=> root.pinyin_import_path;
+            }
+            Button {
+                text: "开始导入";
+                clicked => { root.import_pinyin_dict(root.pinyin_import_path); }
+            }
+        }
+        if root.pinyin_import_status != "": Text {
+            text: root.pinyin_import_status;
+            font-size: 12px;
+            color: #059669;
+        }
+    }
+
+    SettingCard {
+        title: "导入外部英文词库 (.txt / .dict.yaml)";
+        subtitle: "支持中英混输联想，格式: 单词 [词频]";
+
+        Text {
+            text: root.english_dict_info;
+            font-size: 13px;
+            font-weight: 600;
+            color: #2563eb;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit {
+                placeholder-text: "请输入英文词库文件绝对路径";
+                text <=> root.english_import_path;
+            }
+            Button {
+                text: "导入英文词库";
+                clicked => { root.import_english_dict(root.english_import_path); }
+            }
+        }
+        if root.english_import_status != "": Text {
+            text: root.english_import_status;
+            font-size: 12px;
+            color: #059669;
+        }
+    }
+
+    SettingCard {
+        title: "导入自定义特殊符号库";
+        subtitle: "支持语义拼音快速联想，格式: 符号 拼音 语义说明";
+
+        Text {
+            text: root.symbols_dict_info;
+            font-size: 13px;
+            font-weight: 600;
+            color: #2563eb;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit {
+                placeholder-text: "请输入符号文件绝对路径";
+                text <=> root.symbols_import_path;
+            }
+            Button {
+                text: "导入符号库";
+                clicked => { root.import_symbols_dict(root.symbols_import_path); }
+            }
+        }
+        if root.symbols_import_status != "": Text {
+            text: root.symbols_import_status;
+            font-size: 12px;
+            color: #059669;
+        }
+    }
+}

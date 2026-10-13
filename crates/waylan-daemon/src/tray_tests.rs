@@ -8,6 +8,7 @@ fn test_tray_mode_toggle() {
     let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
     let tray = TrayService {
         is_chinese: Arc::clone(&is_chinese),
+        is_caps_locked: Arc::new(AtomicBool::new(false)),
         reload_requested,
         exit_requested,
         icon_update_tx,
@@ -83,16 +84,28 @@ fn test_tray_menu_exit_event() {
 #[test]
 fn test_status_notifier_item_activate_sends_icon_update() {
     let is_chinese = Arc::new(AtomicBool::new(true));
+    let is_caps_locked = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
     let sni = StatusNotifierItem::new(
         Arc::clone(&is_chinese),
+        is_caps_locked,
         icon_update_tx,
         &crate::config::AppConfig::default(),
         None,
     );
 
-    assert_eq!(sni.icon_name(), "input-keyboard");
+    let expected_zh = if sni.icon_theme_path().is_empty() {
+        "input-keyboard"
+    } else {
+        "tray-zh"
+    };
+    let expected_en = if sni.icon_theme_path().is_empty() {
+        "input-latin"
+    } else {
+        "tray-en"
+    };
+    assert_eq!(sni.icon_name(), expected_zh);
     sni.activate(0, 0);
-    assert_eq!(sni.icon_name(), "input-latin");
+    assert_eq!(sni.icon_name(), expected_en);
     assert!(icon_update_rx.try_recv().is_ok());
 }

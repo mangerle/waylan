@@ -41,7 +41,7 @@ fn test_rgba_to_argb8888_le_conversion() {
     }
     CandidateSurfaceManager::write_rgba_to_slot(&mut slot, &batch_rgba).expect("写入零拷贝 mmap");
     let mmap = slot.mmap.as_ref().unwrap();
-    for (idx, chunk) in mmap[..1024 * 4].chunks_exact(4).enumerate() {
+    for (idx, chunk) in mmap[..1024 * 4].as_chunks::<4>().0.iter().enumerate() {
         let i = idx as u32;
         assert_eq!(chunk[0], ((i + 2) & 0xFF) as u8); // B
         assert_eq!(chunk[1], ((i + 1) & 0xFF) as u8); // G

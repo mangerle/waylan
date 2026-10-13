@@ -1,0 +1,104 @@
+import { Button, LineEdit } from "std-widgets.slint";
+import { PhraseItem, SettingCard } from "common.slint";
+
+export component UserDataTab inherits VerticalLayout {
+    spacing: 16px;
+    padding-right: 8px;
+
+    in property <string> user_model_info: "自适应个性化历史词模型: 0 条记忆";
+    in-out property <string> new_phrase_code: "";
+    in-out property <string> new_phrase_text: "";
+    in property <[PhraseItem]> phrase_list: [];
+    in property <string> phrase_status: "";
+
+    callback clear_user_model();
+    callback add_custom_phrase(string, string);
+    callback delete_custom_phrase(int);
+
+    SettingCard {
+        title: "自造词与自适应学习记忆";
+        subtitle: "微澜根据用户输入动态学习的高频新词与组词记忆";
+
+        Text {
+            text: root.user_model_info;
+            font-size: 13px;
+            color: #334155;
+            font-weight: 500;
+        }
+
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: "清空自造词历史记录";
+                clicked => { root.clear_user_model(); }
+            }
+        }
+    }
+
+    SettingCard {
+        title: "新增快捷自定义短语";
+        subtitle: "输入简短代码自动展开为常用长句、邮箱或地址";
+
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit {
+                width: 140px;
+                placeholder-text: "快捷代码 (如 mymail)";
+                text <=> root.new_phrase_code;
+            }
+            LineEdit {
+                placeholder-text: "展开文本 (如 user@domain.com)";
+                text <=> root.new_phrase_text;
+            }
+            Button {
+                text: "添加短语";
+                clicked => {
+                    root.add_custom_phrase(root.new_phrase_code, root.new_phrase_text);
+                }
+            }
+        }
+        if root.phrase_status != "": Text {
+            text: root.phrase_status;
+            font-size: 12px;
+            color: #059669;
+        }
+    }
+
+    SettingCard {
+        title: "已配置自定义短语列表";
+        subtitle: "已生效的快捷短语映射表";
+
+        if root.phrase_list.length == 0: Text {
+            text: "暂无自定义短语，可在上方输入框添加。";
+            font-size: 13px;
+            color: #94a3b8;
+        }
+
+        for item[idx] in root.phrase_list: HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            Text {
+                text: item.code;
+                font-weight: 700;
+                width: 120px;
+                vertical-alignment: center;
+                color: #1e293b;
+            }
+            Text {
+                text: "->";
+                color: #94a3b8;
+                vertical-alignment: center;
+            }
+            Text {
+                text: item.text;
+                vertical-alignment: center;
+                color: #334155;
+            }
+            Rectangle { } // 占位弹性
+            Button {
+                text: "删除";
+                clicked => { root.delete_custom_phrase(idx); }
+            }
+        }
+    }
+}

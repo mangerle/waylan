@@ -1,7 +1,7 @@
 //! 微澜 (WayLan) 输入法偏好设置中心图形界面（Slint 实现）
 //!
 //! # 设计原理
-//! - **实现初衷**：基于轻量声明式 Slint 框架，彻底重构为“左侧菜单、右侧内容”的现代化桌面设置中心。
+//! - **实现初衷**：基于轻量声明式 Slint 框架，彻底重构为“左侧 7 项菜单、右侧内容”的现代化桌面设置中心。
 //! - **核心优势**：
 //!   1. 物理完全解耦，不依赖重型 OpenGL/Mesa 图形运行时，内存与启动开销极小；
 //!   2. 采用 Slint 响应式数据绑定与 ModelRc 列表模型，界面响应流畅、状态无缝同步；
@@ -9,239 +9,21 @@
 
 slint::include_modules!();
 
+pub mod importer;
+pub mod sync;
+
+use crate::importer::{
+    import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file,
+};
+use crate::sync::{extract_config_from_window, sync_config_to_window};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
-use std::path::Path;
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_algo::custom_phrase::CustomPhraseManager;
-use waylan_algo::dict_importer::DictImporter;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AuxiliaryDict;
-use waylan_core::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
-
-/// 外部导入文件体积最大允许上限（64 MB），防止异常大文件导致内存暴涨
-const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
-
-/// 将 AppConfig 数据应用到 Slint 界面属性
-fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
-    window.set_page_size_val(cfg.page_size as f32);
-    window.set_font_size_val(cfg.font_size);
-    window.set_switch_key_index(match cfg.switch_key {
-        SwitchKey::Shift => 0,
-        SwitchKey::Ctrl => 1,
-    });
-    window.set_page_keys_index(match cfg.page_keys {
-        PageKeys::MinusEqual => 0,
-        PageKeys::Bracket => 1,
-        PageKeys::CommaPeriod => 2,
-    });
-    window.set_theme_index(match cfg.theme {
-        ThemeMode::Light => 0,
-        ThemeMode::Dark => 1,
-    });
-    window.set_slash_to_dunhao(cfg.slash_to_dunhao);
-    window.set_protect_digits_punctuation(cfg.protect_digits_punctuation);
-    window.set_auto_complete_pairs(cfg.auto_complete_pairs);
-    window.set_v_mode(cfg.v_mode);
-    window.set_fuzzy_pinyin(cfg.fuzzy_pinyin);
-    window.set_traditional_chinese(cfg.traditional_chinese);
-    window.set_auto_pangu_spacing(cfg.auto_pangu_spacing);
-}
-
-/// 从 Slint 界面属性读取并构造 AppConfig 数据
-fn extract_config_from_window(window: &SettingsWindow) -> AppConfig {
-    let mut cfg = AppConfig {
-        page_size: window.get_page_size_val().round() as usize,
-        font_size: window.get_font_size_val().round(),
-        switch_key: match window.get_switch_key_index() {
-            1 => SwitchKey::Ctrl,
-            _ => SwitchKey::Shift,
-        },
-        page_keys: match window.get_page_keys_index() {
-            1 => PageKeys::Bracket,
-            2 => PageKeys::CommaPeriod,
-            _ => PageKeys::MinusEqual,
-        },
-        theme: match window.get_theme_index() {
-            1 => ThemeMode::Dark,
-            _ => ThemeMode::Light,
-        },
-        slash_to_dunhao: window.get_slash_to_dunhao(),
-        protect_digits_punctuation: window.get_protect_digits_punctuation(),
-        auto_complete_pairs: window.get_auto_complete_pairs(),
-        v_mode: window.get_v_mode(),
-        fuzzy_pinyin: window.get_fuzzy_pinyin(),
-        traditional_chinese: window.get_traditional_chinese(),
-        auto_pangu_spacing: window.get_auto_pangu_spacing(),
-        tray_icon_theme_path: None,
-        tray_icon_zh: None,
-        tray_icon_en: None,
-    };
-    cfg.sanitize();
-    cfg
-}
-
-/// 解析并合入外部拼音词库
-fn import_pinyin_dict_file(path_str: &str) -> Result<String, String> {
-    let path = Path::new(path_str.trim());
-    if !path.is_file() {
-        return Err("指定的词库文件不存在或路径无效，请核对后重试。".to_string());
-    }
-    if path
-        .metadata()
-        .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
-        .unwrap_or(true)
-    {
-        return Err("词库文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
-    }
-
-    let entries = DictImporter::import_file(path).map_err(|e| format!("解析词库失败: {}", e))?;
-    let count = entries.len();
-    let user_dict_path = AppConfig::user_dict_path();
-    let mut user_model = UserAdaptiveModel::load_or_replay_wal(&user_dict_path).unwrap_or_default();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(1_700_000_000);
-    for entry in &entries {
-        user_model.record_commit(&entry.text, &entry.pinyin, now);
-    }
-    user_model
-        .compact_wal(&user_dict_path)
-        .map_err(|e| format!("保存用户词库失败: {}", e))?;
-
-    Ok(format!(
-        "成功合入 {} 条词目，当前自适应词库总词量: {} 条",
-        count,
-        user_model.total_entries()
-    ))
-}
-
-/// 解析并合入外部英文单词库
-fn import_english_dict_file(
-    path_str: &str,
-    aux: &mut AuxiliaryDict,
-) -> Result<(String, usize), String> {
-    let path = Path::new(path_str.trim());
-    if !path.is_file() {
-        return Err("指定的英文词典文件不存在，请核对路径。".to_string());
-    }
-    if path
-        .metadata()
-        .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
-        .unwrap_or(true)
-    {
-        return Err("英文词库体积超过 64MB 安全上限。".to_string());
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| format!("读取文件失败: {}", e))?;
-    let mut existing: HashSet<String> = aux
-        .english_words
-        .iter()
-        .map(|(w, _)| w.to_lowercase())
-        .collect();
-    let mut added = 0;
-    let mut in_yaml_header = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            in_yaml_header = true;
-            continue;
-        }
-        if trimmed == "..." {
-            in_yaml_header = false;
-            continue;
-        }
-        if in_yaml_header || trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let word = trimmed.split('\t').next().unwrap_or("").trim();
-        if !word.is_empty()
-            && word.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
-            && existing.insert(word.to_lowercase())
-        {
-            aux.english_words.push((word.to_string(), 50_000));
-            added += 1;
-        }
-    }
-
-    let aux_path = AppConfig::user_aux_dict_path();
-    aux.save_to_file(&aux_path)
-        .map_err(|e| format!("保存用户辅助词库失败: {}", e))?;
-
-    Ok((
-        format!(
-            "成功导入 {} 个英文单词，当前单词库总数: {}",
-            added,
-            aux.english_words.len()
-        ),
-        aux.english_words.len(),
-    ))
-}
-
-/// 解析并合入外部符号映射表
-fn import_symbols_dict_file(
-    path_str: &str,
-    aux: &mut AuxiliaryDict,
-) -> Result<(String, usize), String> {
-    let path = Path::new(path_str.trim());
-    if !path.is_file() {
-        return Err("指定的符号映射文件不存在，请核对路径。".to_string());
-    }
-    if path
-        .metadata()
-        .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
-        .unwrap_or(true)
-    {
-        return Err("符号词库体积超过 64MB 安全上限。".to_string());
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| format!("读取文件失败: {}", e))?;
-    let mut existing: HashSet<(String, String)> = aux
-        .symbols
-        .iter()
-        .map(|(k, s, _)| (k.clone(), s.clone()))
-        .collect();
-    let mut added = 0;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let parts: Vec<&str> = trimmed.split('\t').collect();
-        if parts.len() >= 2 {
-            let key = parts[0].trim().to_string();
-            let sym = parts[1].trim().to_string();
-            let desc = if parts.len() >= 3 {
-                parts[2].trim().to_string()
-            } else {
-                "外部符号".to_string()
-            };
-            if existing.insert((key.clone(), sym.clone())) {
-                aux.symbols.push((key, sym, desc));
-                added += 1;
-            }
-        }
-    }
-
-    let aux_path = AppConfig::user_aux_dict_path();
-    aux.save_to_file(&aux_path)
-        .map_err(|e| format!("保存用户符号词库失败: {}", e))?;
-
-    Ok((
-        format!(
-            "成功导入 {} 组符号联想项，当前符号总数: {}",
-            added,
-            aux.symbols.len()
-        ),
-        aux.symbols.len(),
-    ))
-}
+use waylan_core::config::AppConfig;
 
 /// 运行 Slint 偏好设置中心图形界面
 ///
@@ -456,31 +238,67 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use waylan_core::config::{
+        CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TypoCorrectionRules,
+    };
 
     #[test]
     fn test_config_roundtrip_logic() {
         let mut cfg = AppConfig {
+            init_chinese: true,
+            full_width_char: false,
+            full_width_punct: true,
             page_size: 8,
             font_size: 18.0,
             switch_key: SwitchKey::Ctrl,
-            page_keys: PageKeys::Bracket,
+            page_keys: PageKeys {
+                minus_equal: false,
+                bracket: true,
+                comma_period: true,
+            },
             theme: ThemeMode::Dark,
+            candidate_orientation: CandidateOrientation::Vertical,
+            dynamic_adjust_freq: true,
+            enable_acronym: true,
+            shift_select_second: true,
+            slash_to_dunhao: true,
+            protect_digits_punctuation: true,
+            auto_complete_pairs: true,
+            v_mode: true,
+            fuzzy_pinyin: true,
+            fuzzy_rules: FuzzyPinyinRules {
+                c_ch: true,
+                g_k: true,
+                ..Default::default()
+            },
+            typo_rules: TypoCorrectionRules {
+                enable: true,
+                gn_ng: true,
+                ..Default::default()
+            },
+            traditional_chinese: false,
             auto_pangu_spacing: true,
-            ..Default::default()
+            tray_icon_theme_path: None,
+            tray_icon_zh: None,
+            tray_icon_en: None,
         };
         cfg.sanitize();
 
         assert_eq!(cfg.page_size, 8);
         assert_eq!(cfg.font_size, 18.0);
         assert_eq!(cfg.switch_key, SwitchKey::Ctrl);
-        assert_eq!(cfg.page_keys, PageKeys::Bracket);
+        assert_eq!(
+            cfg.page_keys,
+            PageKeys {
+                minus_equal: false,
+                bracket: true,
+                comma_period: true,
+            }
+        );
         assert_eq!(cfg.theme, ThemeMode::Dark);
+        assert_eq!(cfg.candidate_orientation, CandidateOrientation::Vertical);
+        assert!(cfg.fuzzy_rules.g_k);
+        assert!(cfg.typo_rules.gn_ng);
         assert!(cfg.auto_pangu_spacing);
-    }
-
-    #[test]
-    fn test_import_non_existent_dict_returns_err() {
-        let res = import_pinyin_dict_file("/path/to/never/exist/dict.txt");
-        assert!(res.is_err());
     }
 }

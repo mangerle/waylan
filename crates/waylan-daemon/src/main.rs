@@ -5,7 +5,7 @@ mod logger;
 mod session_bundle;
 mod tray;
 
-use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
+use config::{AppConfig, SwitchKey, ThemeMode};
 use log::{info, warn};
 use session_bundle::{
     apply_reload_v1, apply_reload_v2, check_wayland_capabilities, load_auxiliary_managers,
@@ -17,7 +17,6 @@ use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, T
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::AlgoEngine;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
-use waylan_wayland::session_v1::PageKeyConfig;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -253,20 +252,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_map(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()))
         .max();
 
-    // 9. 构造并驱动输入法会话事件循环（GNOME / Mutter 环境自动合并至 IBus 原生状态栏，不额外创建独立托盘图标）
+    // 9. 构造系统托盘并驱动输入法会话事件循环
+    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now), loop_wakeup.clone());
+
     if use_ibus_backend {
-        info!(
-            "[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话（已合并至系统原生 IBus 状态栏菜单）。"
-        );
-        let reload_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        info!("[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话与系统托盘指示器。");
         let ibus_res = ibus::run_ibus_session(ibus::IbusSessionOptions {
             engine,
             is_ibus_child_mode: is_ibus_arg,
             watched_paths,
             initial_mtime,
-            shared_is_chinese: None,
-            mode_notify_tx: None,
-            reload_requested: Some(reload_flag),
+            shared_is_chinese: Some(tray.mode_flag()),
+            shared_is_caps_locked: Some(tray.caps_lock_flag()),
+            mode_notify_tx: Some(tray.icon_notifier()),
+            reload_requested: Some(tray.reload_flag()),
             exit_requested: std::sync::Arc::clone(&term_now),
             loop_wakeup,
         });
@@ -286,8 +285,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     }
 
-    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now), loop_wakeup.clone());
-
     let loop_result = if caps.has_input_method_v2 && caps.has_seat {
         info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
         let mut session_v2 = waylan_wayland::session_v2::WaylanV2Session::new(engine);
@@ -303,12 +300,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.protect_digits_punctuation,
             cfg.auto_complete_pairs,
         );
-        session_v2.page_keys = match cfg.page_keys {
-            PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
-            PageKeys::Bracket => PageKeyConfig::Bracket,
-            PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
-        };
+        session_v2.page_keys = cfg.page_keys.into();
         session_v2.shared_is_chinese = Some(tray.mode_flag());
+        session_v2.shared_is_caps_locked = Some(tray.caps_lock_flag());
         session_v2.mode_notify_tx = Some(tray.icon_notifier());
         session_v2.reload_requested = Some(tray.reload_flag());
         session_v2.exit_requested = Some(tray.exit_flag());
@@ -346,6 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 session.punctuation_processor = punctuation_processor;
                 session.page_keys = page_keys;
                 session.shared_is_chinese = Some(tray.mode_flag());
+                session.shared_is_caps_locked = Some(tray.caps_lock_flag());
                 session.mode_notify_tx = Some(tray.icon_notifier());
                 session.reload_requested = Some(tray.reload_flag());
                 session.exit_requested = Some(tray.exit_flag());
@@ -368,12 +363,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.protect_digits_punctuation,
             cfg.auto_complete_pairs,
         );
-        session.page_keys = match cfg.page_keys {
-            PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
-            PageKeys::Bracket => PageKeyConfig::Bracket,
-            PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
-        };
+        session.page_keys = cfg.page_keys.into();
         session.shared_is_chinese = Some(tray.mode_flag());
+        session.shared_is_caps_locked = Some(tray.caps_lock_flag());
         session.mode_notify_tx = Some(tray.icon_notifier());
         session.reload_requested = Some(tray.reload_flag());
         session.exit_requested = Some(tray.exit_flag());

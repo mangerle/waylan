@@ -1,5 +1,9 @@
 pub mod config;
-pub use config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
+pub mod config_types;
+pub use config::{
+    AppConfig, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode,
+    TypoCorrectionRules,
+};
 
 use serde::{Deserialize, Serialize};
 

@@ -69,7 +69,9 @@ pub struct IbusSessionCore {
     pub page_keys: PageKeyConfig,
     pub mode: InputMode,
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
+    pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
     pub mode_notify_tx: Option<SyncSender<()>>,
+    pub is_caps_locked: bool,
     pub mods_depressed: u32,
     pub phys_mods: u8,
     pub consumed_keys: ConsumedKeyTracker,
@@ -87,7 +89,9 @@ impl IbusSessionCore {
             page_keys: PageKeyConfig::default(),
             mode: InputMode::Chinese,
             shared_is_chinese: None,
+            shared_is_caps_locked: None,
             mode_notify_tx: None,
+            is_caps_locked: false,
             mods_depressed: 0,
             phys_mods: 0,
             consumed_keys: ConsumedKeyTracker::new(),
@@ -143,6 +147,19 @@ impl IbusSessionCore {
         out
     }
 
+    /// 同步 CapsLock 大写锁定状态至共享标志并唤醒托盘刷新
+    fn update_caps_lock_state(&mut self, is_locked: bool) {
+        if self.is_caps_locked != is_locked {
+            self.is_caps_locked = is_locked;
+            if let Some(ref flag) = self.shared_is_caps_locked {
+                flag.store(is_locked, Ordering::Release);
+            }
+            if let Some(ref tx) = self.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+        }
+    }
+
     /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
     pub fn process_key_event(&mut self, keyval: u32, keycode: u32, state: u32) -> IbusKeyOutcome {
         let _ = self.sync_shared_mode();
@@ -182,10 +199,25 @@ impl IbusSessionCore {
                     outcome.commit_text = Some(raw);
                     outcome.update_ui = true;
                 }
+                let next_locked = !self.is_caps_locked;
+                self.update_caps_lock_state(next_locked);
+
+                // 仅当原本处于中文模式时，开启/关闭大写才需要驱动对外的中英显示模式切换；
+                // 若原本处于英文模式，则始终保持英文模式，不触发中英文切换信号以防止状态栏闪烁
+                if self.mode != InputMode::English {
+                    let effective_mode = if next_locked {
+                        InputMode::English
+                    } else {
+                        self.mode
+                    };
+                    outcome.mode_changed = Some(effective_mode);
+                }
                 self.consumed_keys.record_press(evdev_key, false);
                 return outcome;
             } else {
                 let was_consumed = self.consumed_keys.take_release(evdev_key);
+                // 在按键释放阶段仅记录消费状态，不根据滞后的硬件 state 掩码重新翻转锁定状态，
+                // 彻底杜绝松开按键时被旧状态覆盖而导致“必须按两下才能退出大写”
                 return IbusKeyOutcome {
                     consumed: was_consumed,
                     ..Default::default()
@@ -193,17 +225,44 @@ impl IbusSessionCore {
             }
         }
 
-        let toggled_mode = self.shift_sm.on_key_event(evdev_key, is_press, self.mode);
+        let is_caps_locked = (state & IBUS_LOCK_MASK) != 0;
+        let mut caps_mode_changed = None;
+        if is_caps_locked != self.is_caps_locked {
+            self.update_caps_lock_state(is_caps_locked);
+            if self.mode != InputMode::English {
+                let effective_mode = if is_caps_locked {
+                    InputMode::English
+                } else {
+                    self.mode
+                };
+                caps_mode_changed = Some(effective_mode);
+            }
+        }
+
+        // 大写锁定期间严格重置并旁路 Shift 单击中英文切换状态机，防止输入大写符号时误篡改基准中英模式
+        let toggled_mode = if self.is_caps_locked || is_caps_locked {
+            self.shift_sm.reset();
+            None
+        } else {
+            self.shift_sm.on_key_event(evdev_key, is_press, self.mode)
+        };
         if !is_press {
-            return self.handle_key_release(evdev_key, toggled_mode);
+            let mut out = self.handle_key_release(evdev_key, toggled_mode);
+            if out.mode_changed.is_none() {
+                out.mode_changed = caps_mode_changed;
+            }
+            return out;
         }
 
         let shift_active = (state & IBUS_SHIFT_MASK) != 0 || (self.mods_depressed & MOD_SHIFT) != 0;
         let ctrl_or_alt = ibus_state_has_ctrl_or_alt(state)
             || (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
-        let is_caps_locked = (state & IBUS_LOCK_MASK) != 0;
 
-        let outcome = self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, is_caps_locked);
+        let mut outcome =
+            self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, is_caps_locked);
+        if outcome.mode_changed.is_none() {
+            outcome.mode_changed = caps_mode_changed;
+        }
         self.consumed_keys.record_press(evdev_key, outcome.consumed);
         outcome
     }
@@ -303,13 +362,13 @@ impl IbusSessionCore {
 
         match action {
             KeyProcessAction::PassThrough => None,
-            KeyProcessAction::Handled
-            | KeyProcessAction::Reset
-            | KeyProcessAction::ExpandGrid => Some(IbusKeyOutcome {
-                consumed: true,
-                update_ui: true,
-                ..Default::default()
-            }),
+            KeyProcessAction::Handled | KeyProcessAction::Reset | KeyProcessAction::ExpandGrid => {
+                Some(IbusKeyOutcome {
+                    consumed: true,
+                    update_ui: true,
+                    ..Default::default()
+                })
+            }
             KeyProcessAction::Commit(committed)
             | KeyProcessAction::CommitPartial { committed, .. } => Some(IbusKeyOutcome {
                 consumed: true,
@@ -463,6 +522,7 @@ fn map_punct_or_control_keyval(keyval: u32) -> Option<u32> {
         0xffea => KEY_RIGHTALT,
         0xffeb => KEY_LEFTMETA,
         0xffec => KEY_RIGHTMETA,
+        0xffe5 | 0xffe6 => KEY_CAPSLOCK,
         0xffb0 => KEY_KP0,
         0xffb1 => KEY_KP1,
         0xffb2 => KEY_KP2,
@@ -494,6 +554,8 @@ mod tests {
         assert_eq!(ibus_keyval_to_evdev(b'Z' as u32, 0), 44);
         assert_eq!(ibus_keyval_to_evdev(0xff08, 0), KEY_BACKSPACE);
         assert_eq!(ibus_keyval_to_evdev(0xffe1, 0), KEY_LEFTSHIFT);
+        assert_eq!(ibus_keyval_to_evdev(0xffe5, 0), KEY_CAPSLOCK);
+        assert_eq!(ibus_keyval_to_evdev(0xffe6, 0), KEY_CAPSLOCK);
     }
 
     #[test]
@@ -553,5 +615,48 @@ mod tests {
         assert_eq!(num_out.commit_text, Some(expanded_cands[1].text.clone()));
         assert!(!core.engine.is_expanded);
         assert!(core.engine.raw_input().is_empty());
+    }
+
+    #[test]
+    fn test_ibus_caps_lock_passthrough() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+
+        // 1. 中文状态输入 'a', 'i'
+        for ch in ['a', 'i'] {
+            let out = core.process_key_event(ch as u32, 0, 0);
+            assert!(out.consumed);
+        }
+        assert_eq!(core.engine.raw_input(), "ai");
+
+        // 2. 按下 CapsLock 键：未完成拼音立即上屏，按键本身不被消费（透传给应用），且通知模式变更为英文
+        let caps_out = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
+        assert!(!caps_out.consumed, "CapsLock 键本身不应被消费");
+        assert_eq!(caps_out.commit_text.as_deref(), Some("ai"));
+        assert_eq!(
+            caps_out.mode_changed,
+            Some(InputMode::English),
+            "CapsLock 激活时模式应指示为英文"
+        );
+        assert!(core.engine.raw_input().is_empty());
+
+        // 3. 在 CapsLock 大写锁定状态下（state 带有 IBUS_LOCK_MASK），输入字母应原生透传
+        let a_out = core.process_key_event(b'A' as u32, 0, IBUS_LOCK_MASK);
+        assert!(!a_out.consumed, "大写锁定状态下字母键应原生透传给应用");
+
+        // 4. 再次按下并释放 CapsLock 解除锁定，模式恢复为中文拼音
+        let caps_unlock = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_LOCK_MASK);
+        let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_RELEASE_MASK);
+        assert!(!core.is_caps_locked, "解除 CapsLock 后应脱离大写锁定状态");
+        assert_eq!(
+            caps_unlock.mode_changed,
+            Some(InputMode::Chinese),
+            "解除锁定后应恢复中文模式"
+        );
+
+        // 5. 验证此时按字母恢复中文拼音输入
+        let ni_out = core.process_key_event(b'n' as u32, 0, 0);
+        assert!(ni_out.consumed, "解除大写锁定后应恢复中文拼音输入");
+        assert_eq!(core.engine.raw_input(), "n");
     }
 }

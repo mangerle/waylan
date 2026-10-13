@@ -328,6 +328,27 @@ pub fn process_key_event(
         return (false, None);
     }
 
+    // 当按下 CapsLock 键时：
+    // 若当前输入缓冲区有未完成的拼音，立即提交原始英文字母上屏并重置引擎与候选框；
+    // CapsLock 键本身必须透传给合成器，由合成器切换 XKB 大写锁定位（mods_locked）
+    if key == KEY_CAPSLOCK {
+        session.repeat_state = None;
+        return if is_press {
+            if !session.engine.raw_input().is_empty() {
+                let raw = session.engine.raw_input().to_string();
+                session.commit_text(&raw);
+                session.engine.reset();
+                session.refresh_candidate_surface();
+                session.consumed_keys.record_press(key, false);
+                return (false, Some(raw));
+            }
+            session.consumed_keys.record_press(key, false);
+            (false, None)
+        } else {
+            (session.consumed_keys.take_release(key), None)
+        };
+    }
+
     // 1. 优先经由 Shift/Ctrl 防误触状态机判定
     let toggled_mode = session
         .shift_state
@@ -389,6 +410,11 @@ pub fn process_key_event(
 pub fn process_key_press_inner(session: &mut WaylanV2Session, key: u32) -> (bool, Option<String>) {
     // 快捷键穿透：Ctrl / Alt / Super 等修饰组合键透传
     if session.has_ctrl_or_alt() {
+        return (false, None);
+    }
+
+    // 处于 CapsLock 大写锁定状态时，所有按键保持原生透传，由宿主应用原生输出大写英文字母
+    if session.is_caps_locked() {
         return (false, None);
     }
 

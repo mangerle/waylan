@@ -27,11 +27,22 @@ fn test_keycode_conversions() {
 
 #[test]
 fn test_page_key_config() {
-    let cfg = PageKeyConfig::MinusEqual;
+    let mut cfg = PageKeyConfig::default();
     assert!(cfg.is_prev_page(KEY_MINUS));
     assert!(cfg.is_next_page(KEY_EQUAL));
     assert!(cfg.is_prev_page(KEY_PAGEUP));
     assert!(cfg.is_next_page(KEY_PAGEDOWN));
+    assert!(!cfg.is_prev_page(KEY_COMMA));
+    assert!(!cfg.is_prev_page(KEY_LEFTBRACE));
+
+    // 开启逗号句号与括号多选
+    cfg.comma_period = true;
+    cfg.bracket = true;
+    assert!(cfg.is_prev_page(KEY_MINUS));
+    assert!(cfg.is_prev_page(KEY_COMMA));
+    assert!(cfg.is_next_page(KEY_DOT));
+    assert!(cfg.is_prev_page(KEY_LEFTBRACE));
+    assert!(cfg.is_next_page(KEY_RIGHTBRACE));
 }
 
 #[test]
@@ -143,7 +154,7 @@ fn test_handle_composition_key() {
     let mut engine =
         waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
     let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
-    let page_keys = PageKeyConfig::MinusEqual;
+    let page_keys = PageKeyConfig::default();
 
     // 模拟输入 "ni"
     engine.push_char('n');
@@ -197,7 +208,7 @@ fn test_v_mode_composition_keys() {
     let mut engine =
         waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
     let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
-    let page_keys = PageKeyConfig::MinusEqual;
+    let page_keys = PageKeyConfig::default();
 
     // 1. 输入 'v' 进入 V 模式
     engine.push_char('v');
@@ -239,7 +250,7 @@ fn test_smart_navigation_selection_and_overflow_to_cursor_edit() {
     let mut engine =
         waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
     let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
-    let page_keys = PageKeyConfig::MinusEqual;
+    let page_keys = PageKeyConfig::default();
 
     // 1. 输入拥有多个候选词的 "xian"（包含“西安”、“先”、“现”、“显”等）
     for ch in "xian".chars() {
@@ -293,7 +304,7 @@ fn test_smart_navigation_down_page_and_expand_grid() {
     let mut engine =
         waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
     let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
-    let page_keys = PageKeyConfig::MinusEqual;
+    let page_keys = PageKeyConfig::default();
 
     engine.push_char('n');
     engine.push_char('i');

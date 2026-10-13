@@ -13,7 +13,7 @@ fn test_v1_session_initialization() {
     assert_eq!(session.current_serial, 0);
     assert!(session.active_context.is_none());
     assert!(session.grabbed_keyboard.is_none());
-    assert_eq!(session.page_keys, PageKeyConfig::MinusEqual);
+    assert_eq!(session.page_keys, PageKeyConfig::default());
 }
 
 #[test]

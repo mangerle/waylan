@@ -1,0 +1,72 @@
+import { SettingCard } from "common.slint";
+
+export component AboutTab inherits VerticalLayout {
+    spacing: 16px;
+    padding-right: 8px;
+
+    SettingCard {
+        title: "微澜输入法 (WayLan)";
+        subtitle: "现代化纯 Rust 编写的 Linux 桌面智能拼音输入法";
+
+        VerticalLayout {
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "当前版本:"; width: 90px; color: #64748b; }
+                Text { text: "0.1.0 (Beta)"; font-weight: 700; color: #1e293b; }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "核心协议:"; width: 90px; color: #64748b; }
+                Text { text: "Wayland text-input-v3 / input-method-v2 & X11 / IBus"; color: #1e293b; }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "架构设计:"; width: 90px; color: #64748b; }
+                Text { text: "纯 Rust 实现，零重型 C/C++ 动态链接依赖，内存安全且启动极速"; color: #1e293b; }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "算法引擎:"; width: 90px; color: #64748b; }
+                Text { text: "基于二元语法 (Bigram) 语言模型、Prism 模糊拼音网络与自适应学习"; color: #1e293b; }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "界面呈现:"; width: 90px; color: #64748b; }
+                Text { text: "Slint 响应式声明式 GUI，轻量无阻塞"; color: #1e293b; }
+            }
+        }
+    }
+
+    SettingCard {
+        title: "开源与致谢";
+        subtitle: "本项目秉持自由开源精神打造";
+
+        VerticalLayout {
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "作者:"; width: 90px; color: #64748b; }
+                Text { text: "王乐"; color: #1e293b; font-weight: 600; }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "开源许可:"; width: 90px; color: #64748b; }
+                Text { text: "MIT License / Apache 2.0 License 双重许可"; color: #1e293b; }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                Text { text: "GitHub 地址:"; width: 90px; color: #64748b; }
+                Text { text: "https://github.com/mangerle/waylan"; color: #2563eb; }
+            }
+        }
+    }
+}

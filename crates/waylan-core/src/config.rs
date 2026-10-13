@@ -3,38 +3,20 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 中英切换键选项
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum SwitchKey {
-    #[default]
-    Shift,
-    Ctrl,
-}
-
-/// 主题模式选项
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ThemeMode {
-    #[default]
-    Light,
-    Dark,
-}
-
-/// 翻页快捷键配置
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum PageKeys {
-    /// 减号与等号 (- / =)
-    #[default]
-    MinusEqual,
-    /// 左右中括号 ([ / ])
-    Bracket,
-    /// 逗号与句号 (, / .)
-    CommaPeriod,
-}
+pub use crate::config_types::{
+    CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TypoCorrectionRules,
+};
 
 /// 微澜输入法全局配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    /// 初始输入语言模式是否为中文（true: 中文，false: 英文）
+    pub init_chinese: bool,
+    /// 字母/数字全角或半角状态（true: 全角，false: 半角）
+    pub full_width_char: bool,
+    /// 标点符号全角或半角状态（true: 全角中文标点，false: 半角英文标点）
+    pub full_width_punct: bool,
     /// 中英文切换按键
     pub switch_key: SwitchKey,
     /// 翻页快捷键
@@ -45,6 +27,14 @@ pub struct AppConfig {
     pub font_size: f32,
     /// 界面主题模式
     pub theme: ThemeMode,
+    /// 候选词排列方向（水平 / 垂直）
+    pub candidate_orientation: CandidateOrientation,
+    /// 是否动态调整候选词序（自适应词频学习）
+    pub dynamic_adjust_freq: bool,
+    /// 是否启用简拼（声母缩写检索）
+    pub enable_acronym: bool,
+    /// 是否允许使用 Shift 键选择次选词
+    pub shift_select_second: bool,
     /// 是否开启斜杠转顿号（将 /? 替换为 、）
     pub slash_to_dunhao: bool,
     /// 是否开启数字间英文标点保护（如 12:00、3.14）
@@ -53,8 +43,12 @@ pub struct AppConfig {
     pub auto_complete_pairs: bool,
     /// 是否启用 V 模式（计算器与快捷符号）
     pub v_mode: bool,
-    /// 是否启用模糊拼音（平翘舌、前后鼻音）
+    /// 是否启用模糊拼音主开关
     pub fuzzy_pinyin: bool,
+    /// 模糊拼音 10 项细分规则配置
+    pub fuzzy_rules: FuzzyPinyinRules,
+    /// 拼音纠错主开关与细分规则配置
+    pub typo_rules: TypoCorrectionRules,
     /// 是否默认输出繁体字
     pub traditional_chinese: bool,
     /// 是否开启中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）
@@ -70,16 +64,25 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            init_chinese: true,
+            full_width_char: false,
+            full_width_punct: true,
             switch_key: SwitchKey::Shift,
-            page_keys: PageKeys::MinusEqual,
+            page_keys: PageKeys::default(),
             page_size: 7,
             font_size: 15.0,
             theme: ThemeMode::Light,
+            candidate_orientation: CandidateOrientation::Horizontal,
+            dynamic_adjust_freq: true,
+            enable_acronym: true,
+            shift_select_second: false,
             slash_to_dunhao: true,
             protect_digits_punctuation: true,
             auto_complete_pairs: true,
             v_mode: true,
             fuzzy_pinyin: false,
+            fuzzy_rules: FuzzyPinyinRules::default(),
+            typo_rules: TypoCorrectionRules::default(),
             traditional_chinese: false,
             auto_pangu_spacing: false,
             tray_icon_theme_path: None,
@@ -399,7 +402,7 @@ mod tests {
         let deserialized: AppConfig = toml::from_str(&serialized).expect("反序列化应成功");
         assert_eq!(deserialized.page_size, 7);
         assert_eq!(deserialized.switch_key, SwitchKey::Shift);
-        assert_eq!(deserialized.page_keys, PageKeys::MinusEqual);
+        assert_eq!(deserialized.page_keys, PageKeys::default());
         assert!(!deserialized.auto_pangu_spacing);
 
         // 测试临时文件保存（使用 tempfile::tempdir() 确保多线程并发测试隔离与 RAII 自动清理）

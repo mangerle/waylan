@@ -133,6 +133,7 @@ pub fn is_shift_active_state(mods_depressed: u32, phys_mods: u8) -> bool {
     ModifierState {
         depressed: mods_depressed,
         phys_mods,
+        locked: 0,
     }
     .is_shift_active()
 }
@@ -143,8 +144,15 @@ pub fn has_ctrl_or_alt_state(mods_depressed: u32, phys_mods: u8) -> bool {
     ModifierState {
         depressed: mods_depressed,
         phys_mods,
+        locked: 0,
     }
     .has_ctrl_or_alt()
+}
+
+/// 判断给定的锁定掩码是否处于 CapsLock 大写锁定状态
+#[inline]
+pub fn is_caps_locked_state(mods_locked: u32) -> bool {
+    (mods_locked & crate::input_constants::MOD_CAPS) != 0
 }
 
 /// 提交候选框状态至 Wayland 表面并更新活跃缓冲区

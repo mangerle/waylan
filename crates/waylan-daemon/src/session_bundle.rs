@@ -19,7 +19,7 @@ use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
 use waylan_wayland::session_v2::WaylanV2Session;
 use waylan_wayland::WaylandCapabilities;
 
-use crate::config::{AppConfig, PageKeys, SwitchKey, ThemeMode};
+use crate::config::{AppConfig, SwitchKey, ThemeMode};
 
 /// 按照多级搜索策略加载字词库
 pub fn load_lexicon_table() -> LexiconTable {
@@ -197,7 +197,18 @@ impl SessionConfigBundle {
             enable_v_mode: new_cfg.v_mode,
             traditional_chinese: new_cfg.traditional_chinese,
             fuzzy: if new_cfg.fuzzy_pinyin {
-                FuzzyConfig::all_enabled()
+                FuzzyConfig {
+                    z_zh: new_cfg.fuzzy_rules.z_zh,
+                    c_ch: new_cfg.fuzzy_rules.c_ch,
+                    s_sh: new_cfg.fuzzy_rules.s_sh,
+                    an_ang: new_cfg.fuzzy_rules.an_ang,
+                    en_eng: new_cfg.fuzzy_rules.en_eng,
+                    in_ing: new_cfg.fuzzy_rules.in_ing,
+                    l_n: new_cfg.fuzzy_rules.l_n,
+                    f_h: new_cfg.fuzzy_rules.f_h,
+                    r_l: new_cfg.fuzzy_rules.r_l,
+                    g_k: new_cfg.fuzzy_rules.g_k,
+                }
             } else {
                 FuzzyConfig::default()
             },
@@ -217,11 +228,7 @@ impl SessionConfigBundle {
             new_cfg.protect_digits_punctuation,
             new_cfg.auto_complete_pairs,
         );
-        let page_keys = match new_cfg.page_keys {
-            PageKeys::MinusEqual => PageKeyConfig::MinusEqual,
-            PageKeys::Bracket => PageKeyConfig::Bracket,
-            PageKeys::CommaPeriod => PageKeyConfig::CommaPeriod,
-        };
+        let page_keys = PageKeyConfig::from(new_cfg.page_keys);
         let p_path = CustomPhraseManager::default_path();
         let custom_phrases = CustomPhraseManager::load_or_init(&p_path);
         let user_dict_path = AppConfig::user_dict_path();
@@ -362,7 +369,7 @@ mod tests {
         let mut engine = waylan_algo::AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut shift_sm = ShiftToggleStateMachine::with_toggle_key(ToggleKeyMode::Shift);
         let mut punct = PunctuationProcessor::with_options(true, true, false);
-        let mut page_keys = PageKeyConfig::MinusEqual;
+        let mut page_keys = PageKeyConfig::default();
 
         // 模拟已输入左双引号与上下文网址前缀
         punct.record_commit("“https://example.com");

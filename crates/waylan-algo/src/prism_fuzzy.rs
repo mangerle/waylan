@@ -56,6 +56,13 @@ impl PrismFuzzy {
                 init_variants.push(format!("r{}", rest));
             }
         }
+        if fuzzy.g_k {
+            if let Some(rest) = slice.strip_prefix('g') {
+                init_variants.push(format!("k{}", rest));
+            } else if let Some(rest) = slice.strip_prefix('k') {
+                init_variants.push(format!("g{}", rest));
+            }
+        }
 
         // 2. 在声母变体基础上叠加韵母等价变体（仅按需分配变体字符串，避免无谓克隆）
         let mut all_variants = Vec::with_capacity(4);

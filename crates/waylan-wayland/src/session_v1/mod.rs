@@ -46,6 +46,8 @@ pub struct WaylanV1Session {
     pub mode: InputMode,
     /// 与外部系统托盘共享的中英文状态标志
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
+    /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
+    pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
     /// 键盘切换中英文时唤醒系统托盘刷新图标的通知发送端
     pub mode_notify_tx: Option<SyncSender<()>>,
     /// 与外部系统托盘共享的配置与词库重载请求标志
@@ -78,6 +80,8 @@ pub struct WaylanV1Session {
     pub commit_serial: u32,
     /// 当前按下的修饰键位掩码（XKB mods_depressed）
     pub mods_depressed: u32,
+    /// 当前锁定的修饰键位掩码（XKB mods_locked，如 CapsLock / NumLock）
+    pub mods_locked: u32,
     /// 左右物理修饰键独立按下位掩码
     pub phys_mods: u8,
     /// 按键按下与释放对称消费跟踪器
@@ -102,6 +106,7 @@ impl Default for WaylanV1Session {
             surface_manager: CandidateSurfaceManager::new(),
             mode: InputMode::Chinese,
             shared_is_chinese: None,
+            shared_is_caps_locked: None,
             mode_notify_tx: None,
             reload_requested: None,
             reload_callback: None,
@@ -118,6 +123,7 @@ impl Default for WaylanV1Session {
             current_serial: 0,
             commit_serial: 0,
             mods_depressed: 0,
+            mods_locked: 0,
             phys_mods: 0,
             consumed_keys: ConsumedKeyTracker::new(),
             keymap_layout: KeymapLayout::default(),
@@ -161,6 +167,12 @@ impl WaylanV1Session {
     #[inline]
     pub fn has_ctrl_or_alt(&self) -> bool {
         has_ctrl_or_alt_state(self.mods_depressed, self.phys_mods)
+    }
+
+    /// 判断当前是否处于 CapsLock 大写锁定状态
+    #[inline]
+    pub fn is_caps_locked(&self) -> bool {
+        is_caps_locked_state(self.mods_locked)
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）

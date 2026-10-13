@@ -1,0 +1,64 @@
+export struct PhraseItem {
+    code: string,
+    text: string,
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> title;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 42px;
+    border-radius: 8px;
+    background: active ? #3b82f6 : (touch.has-hover ? #e2e8f0 : transparent);
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        alignment: start;
+        Text {
+            text: root.title;
+            color: root.active ? #ffffff : (touch.has-hover ? #0f172a : #334155);
+            font-size: 14px;
+            font-weight: root.active ? 600 : 400;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component SettingCard inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle: "";
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: #e2e8f0;
+    background: #ffffff;
+
+    height: card-layout.preferred-height;
+
+    card-layout := VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        if root.title != "": VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: root.title;
+                font-size: 15px;
+                font-weight: 700;
+                color: #1e293b;
+            }
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                font-size: 12px;
+                color: #64748b;
+            }
+        }
+
+        @children
+    }
+}

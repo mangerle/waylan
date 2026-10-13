@@ -23,6 +23,8 @@ pub use menu::DBusMenu;
 /// - **代价与局限**：依赖 D-Bus 用户会话总线，若当前环境无 DBus 则自动优雅降级。
 pub struct TrayService {
     is_chinese: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    is_caps_locked: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
     exit_requested: Arc<AtomicBool>,
     icon_update_tx: SyncSender<()>,
@@ -33,10 +35,12 @@ impl TrayService {
     /// 使用全局退出标志与事件循环唤醒器启动后台系统托盘常驻服务
     pub fn spawn(exit_requested: Arc<AtomicBool>, loop_wakeup: Option<LoopWakeup>) -> Self {
         let is_chinese = Arc::new(AtomicBool::new(true));
+        let is_caps_locked = Arc::new(AtomicBool::new(false));
         let reload_requested = Arc::new(AtomicBool::new(false));
         let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(8);
 
         let flag_clone = Arc::clone(&is_chinese);
+        let caps_clone = Arc::clone(&is_caps_locked);
         let reload_clone = Arc::clone(&reload_requested);
         let exit_clone = Arc::clone(&exit_requested);
         let tx_clone = icon_update_tx.clone();
@@ -44,6 +48,7 @@ impl TrayService {
         let handle = thread::spawn(move || {
             Self::run_dbus_loop(
                 flag_clone,
+                caps_clone,
                 reload_clone,
                 exit_clone,
                 tx_clone,
@@ -54,6 +59,7 @@ impl TrayService {
 
         Self {
             is_chinese,
+            is_caps_locked,
             reload_requested,
             exit_requested,
             icon_update_tx,
@@ -64,6 +70,12 @@ impl TrayService {
     /// 获取中英文模式共享原子标志句柄
     pub fn mode_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.is_chinese)
+    }
+
+    /// 获取 CapsLock 大写锁定状态共享原子标志句柄
+    #[allow(dead_code)]
+    pub fn caps_lock_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.is_caps_locked)
     }
 
     /// 获取配置与词库重载请求共享原子标志句柄
@@ -105,6 +117,7 @@ impl TrayService {
     /// 在独立线程中初始化 DBus 连接与注册 StatusNotifierItem 及 DBusMenu
     fn run_dbus_loop(
         is_chinese: Arc<AtomicBool>,
+        is_caps_locked: Arc<AtomicBool>,
         reload_requested: Arc<AtomicBool>,
         exit_requested: Arc<AtomicBool>,
         icon_update_tx: SyncSender<()>,
@@ -114,6 +127,7 @@ impl TrayService {
         let config = AppConfig::load_or_create();
         let sni = StatusNotifierItem::new(
             Arc::clone(&is_chinese),
+            is_caps_locked,
             icon_update_tx.clone(),
             &config,
             loop_wakeup.clone(),
@@ -155,20 +169,33 @@ impl TrayService {
 
         info!("[系统托盘] 成功注册 DBus 托盘与右键菜单服务对象: /StatusNotifierItem, /MenuBar");
 
-        // 尝试向系统托盘监视器注册自身
-        if let Err(e) = conn.call_method(
-            Some("org.kde.StatusNotifierWatcher"),
-            "/StatusNotifierWatcher",
-            Some("org.kde.StatusNotifierWatcher"),
-            "RegisterStatusNotifierItem",
-            &("/StatusNotifierItem",),
-        ) {
-            info!(
-                "[系统托盘 提示] 当前环境未运行 StatusNotifierWatcher ({})，托盘服务保持后台就绪。",
-                e
-            );
-        } else {
+        // 尝试向系统托盘监视器注册自身（优先传递服务名，备选传递对象路径）
+        let item_service = "org.kde.StatusNotifierItem.waylan";
+        let mut registered = conn
+            .call_method(
+                Some("org.kde.StatusNotifierWatcher"),
+                "/StatusNotifierWatcher",
+                Some("org.kde.StatusNotifierWatcher"),
+                "RegisterStatusNotifierItem",
+                &(item_service,),
+            )
+            .is_ok();
+        if !registered {
+            registered = conn
+                .call_method(
+                    Some("org.kde.StatusNotifierWatcher"),
+                    "/StatusNotifierWatcher",
+                    Some("org.kde.StatusNotifierWatcher"),
+                    "RegisterStatusNotifierItem",
+                    &("/StatusNotifierItem",),
+                )
+                .is_ok();
+        }
+
+        if registered {
             info!("[系统托盘] 已成功向系统任务栏 (Waybar/KDE/GNOME) 注册托盘图标！");
+        } else {
+            info!("[系统托盘 提示] 当前环境暂未发现活跃 StatusNotifierWatcher，托盘服务保持后台就绪。");
         }
 
         // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon、NewToolTip 与 LayoutUpdated 信号

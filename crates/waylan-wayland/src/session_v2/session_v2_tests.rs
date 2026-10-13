@@ -435,3 +435,66 @@ fn test_v2_grid_expanded_key_navigation_and_selection() {
         "单次 ESC 仅折叠大网格，不清除输入"
     );
 }
+
+#[test]
+fn test_caps_lock_toggle_and_passthrough() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let mut session = WaylanV2Session::new(engine);
+    session.is_active = true;
+    assert_eq!(session.mode, InputMode::Chinese);
+    assert!(!session.is_caps_locked());
+
+    // 1. 中文状态下输入拼音字母
+    let (c1, _) = session.process_key_event(49, true); // 'n'
+    assert!(c1);
+    let (c2, _) = session.process_key_event(23, true); // 'i'
+    assert!(c2);
+    assert_eq!(session.engine.raw_input(), "ni");
+
+    // 2. 拼音输入中途按下 CapsLock：应立即提交拼音原始字母上屏，CapsLock 本身不被消费（透传给合成器）
+    let (caps_consumed, committed) = session.process_key_event(KEY_CAPSLOCK, true);
+    assert!(!caps_consumed, "CapsLock 键本身必须透传给合成器更新锁定位");
+    assert_eq!(committed, Some("ni".to_string()), "未完成拼音应直接上屏");
+    assert!(
+        session.engine.raw_input().is_empty(),
+        "引擎拼音输入应被清空"
+    );
+
+    let (caps_up_consumed, _) = session.process_key_event(KEY_CAPSLOCK, false);
+    assert!(!caps_up_consumed);
+
+    // 3. 模拟合成器下发修饰键锁定状态（mods_locked 包含 MOD_CAPS）
+    session.mods_locked = MOD_CAPS;
+    assert!(session.is_caps_locked());
+
+    // 大写锁定期间，敲击字母键（如 A 键，扫描码 30），输入法不拦截消费，直通焦点应用
+    let (a_consumed, _) = session.process_key_event(30, true);
+    assert!(!a_consumed, "CapsLock 激活期间字母键应原生透传以输出大写");
+    assert!(session.engine.raw_input().is_empty());
+
+    // 4. 解除大写锁定（合成器更新 mods_locked = 0）
+    session.mods_locked = 0;
+    assert!(!session.is_caps_locked());
+    assert_eq!(
+        session.mode,
+        InputMode::Chinese,
+        "解除大写锁定后应恢复中文模式"
+    );
+
+    // 恢复中文模式后，再次敲击字母键应正常进入拼音引擎
+    let (n_consumed, _) = session.process_key_event(49, true);
+    assert!(n_consumed);
+    assert_eq!(session.engine.raw_input(), "n");
+
+    // 5. 若原来是英文模式：解除大写锁定后应保持英文模式
+    session.mode = InputMode::English;
+    session.mods_locked = MOD_CAPS;
+    assert!(session.is_caps_locked());
+    session.mods_locked = 0;
+    assert!(!session.is_caps_locked());
+    assert_eq!(
+        session.mode,
+        InputMode::English,
+        "原本是英文模式时解除大写锁定仍应为英文模式"
+    );
+}

@@ -25,10 +25,13 @@ pub struct FuzzyConfig {
     /// 卷舌与边音: r <=> l
     #[serde(default)]
     pub r_l: bool,
+    /// 舌根塞音: g <=> k
+    #[serde(default)]
+    pub g_k: bool,
 }
 
 impl FuzzyConfig {
-    /// 创建开启全部 9 类模糊音规则的配置
+    /// 创建开启全部 10 类模糊音规则的配置
     pub fn all_enabled() -> Self {
         Self {
             z_zh: true,
@@ -40,6 +43,7 @@ impl FuzzyConfig {
             l_n: true,
             f_h: true,
             r_l: true,
+            g_k: true,
         }
     }
 
@@ -54,6 +58,7 @@ impl FuzzyConfig {
             || self.l_n
             || self.f_h
             || self.r_l
+            || self.g_k
     }
 }
 

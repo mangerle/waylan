@@ -60,6 +60,8 @@ pub struct IbusSessionOptions {
     pub initial_mtime: Option<SystemTime>,
     /// 与系统托盘共享的中英文模式标志
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
+    /// 与系统托盘共享的 CapsLock 大写锁定标志
+    pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
     /// 唤醒系统托盘刷新图标的通知通道
     pub mode_notify_tx: Option<SyncSender<()>>,
     /// 与系统托盘共享的重载请求标志
@@ -197,6 +199,7 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
         watched_paths,
         initial_mtime,
         shared_is_chinese,
+        shared_is_caps_locked,
         mode_notify_tx,
         reload_requested,
         exit_requested,
@@ -205,6 +208,7 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
 
     let mut session_core = IbusSessionCore::new(engine);
     session_core.shared_is_chinese = shared_is_chinese;
+    session_core.shared_is_caps_locked = shared_is_caps_locked;
     session_core.mode_notify_tx = mode_notify_tx;
     apply_bundle_to_ibus_core(SessionConfigBundle::load_current(), &mut session_core);
 
