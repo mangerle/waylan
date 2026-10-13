@@ -228,8 +228,11 @@ impl DictImporter {
 
                 let word_bytes = &data[cursor..word_end];
                 let u16_chars: Vec<u16> = word_bytes
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(u16::from_le_bytes)
                     .collect();
                 let word_text = String::from_utf16_lossy(&u16_chars);
                 cursor = word_end;
@@ -286,8 +289,11 @@ impl DictImporter {
             }
 
             let u16_chars: Vec<u16> = slice[cursor..end]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
                 .collect();
             let py = String::from_utf16_lossy(&u16_chars);
             cursor = end;

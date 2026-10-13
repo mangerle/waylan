@@ -88,6 +88,8 @@ fn test_bigram_mmap_end_to_end_typing() {
         ("jintianxingqitian", "今天星期天"),
         ("xi'an", "西安"),
         ("fangan", "方案"),
+        ("tijiao", "提交"),
+        ("tian", "天"),
         ("nihso", "你好"),
         ("womendeshij", "我们的时间"),
         ("womengongtongdegj", "我们共同的感觉"),

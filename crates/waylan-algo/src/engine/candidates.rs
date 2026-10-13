@@ -122,9 +122,18 @@ impl AlgoEngine {
 
     /// 遍历 DAG 音节切分路径，收集词库精确、用户自造词及模糊音匹配候选
     fn collect_path_matches(&self, paths: &[SegmentPath], eval_ts: u64) -> Vec<AlgoCandidate> {
+        let Some(best_path) = paths.first() else {
+            return Vec::new();
+        };
+        let best_syl_count = (best_path.syllables.len() as u32).max(1);
+        let best_cost = best_path.cost;
         let mut results = Vec::new();
+
         for path in paths {
             let key = path.to_key_string();
+            let cost_penalty = path.cost.saturating_sub(best_cost).saturating_mul(100);
+            let is_suboptimal = !path.is_typo
+                && (cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count);
 
             // 词典精确及倒排检索
             let mut matches = self.table.lookup(&key);
@@ -132,6 +141,15 @@ impl AlgoEngine {
                 for m in &mut matches {
                     m.tier = CandidateTier::TypoCorrection;
                     m.comment = Some(format!("[纠错: {}]", key));
+                }
+            } else if is_suboptimal {
+                for m in &mut matches {
+                    m.score = Self::calibrate_lexicon_path_score(
+                        m.score,
+                        &m.text,
+                        best_syl_count,
+                        cost_penalty,
+                    );
                 }
             }
             results.append(&mut matches);
@@ -143,30 +161,85 @@ impl AlgoEngine {
                     m.tier = CandidateTier::TypoCorrection;
                     m.comment = Some(format!("[纠错: {}]", key));
                 }
+            } else if is_suboptimal {
+                for m in &mut user_matches {
+                    m.score = m.score.saturating_sub(cost_penalty).max(1);
+                }
             }
             results.append(&mut user_matches);
 
             // 模糊音等价查询键联合检索
             if self.config.fuzzy.has_active_rules() && !path.is_typo {
-                for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
-                    let mut fuzzy_matches = self.table.lookup(&fuzzy_key);
-                    for fm in &mut fuzzy_matches {
-                        fm.consumed_len = Some(key.len());
-                        fm.score = fm.score.saturating_sub(50);
-                    }
-                    results.append(&mut fuzzy_matches);
-
-                    let mut fuzzy_user_matches =
-                        self.user_model.lookup_user_words(&fuzzy_key, eval_ts);
-                    for fum in &mut fuzzy_user_matches {
-                        fum.consumed_len = Some(key.len());
-                        fum.score = fum.score.saturating_sub(50);
-                    }
-                    results.append(&mut fuzzy_user_matches);
-                }
+                results.append(&mut self.collect_fuzzy_path_matches(
+                    path,
+                    eval_ts,
+                    best_syl_count,
+                    cost_penalty,
+                ));
             }
         }
         results
+    }
+
+    /// 收集单条非容错切分路径在模糊音扩展下的词库与用户自造词候选
+    fn collect_fuzzy_path_matches(
+        &self,
+        path: &SegmentPath,
+        eval_ts: u64,
+        best_syl_count: u32,
+        cost_penalty: u32,
+    ) -> Vec<AlgoCandidate> {
+        let mut results = Vec::new();
+        let key_len = path.to_key_string().len();
+        let is_suboptimal = cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count;
+
+        for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
+            let mut fuzzy_matches = self.table.lookup(&fuzzy_key);
+            for fm in &mut fuzzy_matches {
+                fm.consumed_len = Some(key_len);
+                let base = if is_suboptimal {
+                    Self::calibrate_lexicon_path_score(
+                        fm.score,
+                        &fm.text,
+                        best_syl_count,
+                        cost_penalty,
+                    )
+                } else {
+                    fm.score
+                };
+                fm.score = base.saturating_sub(50);
+            }
+            results.append(&mut fuzzy_matches);
+
+            let mut fuzzy_user_matches = self.user_model.lookup_user_words(&fuzzy_key, eval_ts);
+            for fum in &mut fuzzy_user_matches {
+                fum.consumed_len = Some(key_len);
+                fum.score = fum
+                    .score
+                    .saturating_sub(cost_penalty)
+                    .saturating_sub(50)
+                    .max(1);
+            }
+            results.append(&mut fuzzy_user_matches);
+        }
+        results
+    }
+
+    /// 校准次优音节切分路径的词库候选得分：
+    /// 剥离因零声母借音碎切导致字数增加而虚增的字长加成（600,000/字），并扣除路径切分代价差值惩罚。
+    #[inline]
+    fn calibrate_lexicon_path_score(
+        score: u32,
+        text: &str,
+        best_syl_count: u32,
+        cost_penalty: u32,
+    ) -> u32 {
+        let char_len = text.chars().count() as u32;
+        let extra_boost = char_len
+            .saturating_sub(best_syl_count)
+            .saturating_mul(600_000);
+        let deduction = extra_boost.saturating_add(cost_penalty);
+        score.saturating_sub(deduction).max(1)
     }
 
     /// 求解 Viterbi 最佳长句路径并合成前缀扩展短语候选
