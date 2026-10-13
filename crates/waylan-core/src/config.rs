@@ -330,14 +330,100 @@ impl AppConfig {
         paths
     }
 
-    /// 加载配置，若不存在则自动初始化默认配置文件
+    /// 宽容解析配置文件：优先严格解析，失败时尝试提取有效字段并以默认配置补齐
+    pub fn parse_tolerant(content: &str) -> Result<Self, String> {
+        match toml::from_str::<Self>(content) {
+            Ok(mut cfg) => {
+                cfg.sanitize();
+                Ok(cfg)
+            }
+            Err(strict_err) => {
+                // 尝试作为通用 toml::Table 解析，最大限度挽救用户已有配置项
+                let Ok(table) = toml::from_str::<toml::Table>(content) else {
+                    return Err(format!("TOML 语法损坏无法解析: {}", strict_err));
+                };
+
+                let mut base_val = toml::Value::try_from(Self::default())
+                    .map_err(|e| format!("序列化默认配置失败: {}", e))?;
+
+                if let toml::Value::Table(ref mut base_table) = base_val {
+                    for (k, v) in table {
+                        if let Some(existing) = base_table.get_mut(&k) {
+                            match (existing, v) {
+                                (
+                                    toml::Value::Table(ref mut ex_tbl),
+                                    toml::Value::Table(new_tbl),
+                                ) => {
+                                    for (sub_k, sub_v) in new_tbl {
+                                        ex_tbl.insert(sub_k, sub_v);
+                                    }
+                                }
+                                (_, non_tbl_val) => {
+                                    base_table.insert(k, non_tbl_val);
+                                }
+                            }
+                        } else {
+                            base_table.insert(k, v);
+                        }
+                    }
+                }
+
+                match base_val.try_into::<Self>() {
+                    Ok(mut merged_cfg) => {
+                        merged_cfg.sanitize();
+                        log::warn!(
+                            "[配置系统] 配置文件存在格式偏差 ({})，已平滑容错合并有效配置项并补充默认字段。",
+                            strict_err
+                        );
+                        Ok(merged_cfg)
+                    }
+                    Err(merge_err) => Err(format!(
+                        "严格解析失败: {}，容错合并失败: {}",
+                        strict_err, merge_err
+                    )),
+                }
+            }
+        }
+    }
+
+    /// 尝试从同目录下的最新历史损坏备份文件恢复用户配置
+    fn try_rescue_from_broken_backups(config_path: &Path) -> Option<Self> {
+        let parent = config_path.parent()?;
+        let entries = fs::read_dir(parent).ok()?;
+        let mut broken_files = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                if file_name.starts_with("config.toml.broken.") {
+                    broken_files.push(path);
+                }
+            }
+        }
+        broken_files.sort();
+        // 取最新的一份备份尝试拯救
+        for broken_path in broken_files.into_iter().rev() {
+            if let Ok(content) = fs::read_to_string(&broken_path) {
+                if let Ok(rescued_cfg) = Self::parse_tolerant(&content) {
+                    log::info!(
+                        "[配置系统] 检测到历史备份文件 {:?}，已成功恢复用户的历史个性化设置！",
+                        broken_path
+                    );
+                    let restored_path = broken_path.with_extension("restored");
+                    let _ = fs::rename(&broken_path, &restored_path);
+                    return Some(rescued_cfg);
+                }
+            }
+        }
+        None
+    }
+
+    /// 加载配置，若不存在则自动初始化默认配置文件（具备容错合并与备份救援能力）
     pub fn load_or_create() -> Self {
         if let Some(path) = Self::config_path() {
             if path.exists() {
                 match fs::read_to_string(&path) {
-                    Ok(content) => match toml::from_str::<Self>(&content) {
-                        Ok(mut cfg) => {
-                            cfg.sanitize();
+                    Ok(content) => match Self::parse_tolerant(&content) {
+                        Ok(cfg) => {
                             return cfg;
                         }
                         Err(e) => {
@@ -348,11 +434,14 @@ impl AppConfig {
                             let broken_path = path.with_extension(format!("toml.broken.{}", ts));
                             let _ = fs::rename(&path, &broken_path);
                             log::warn!(
-                                "[配置系统] 解析配置文件 {:?} 失败 ({})，已备份损坏配置至 {:?}，将回退使用默认配置。",
-                                path,
+                                "[配置系统] 严重解析错误 ({})，已备份损坏配置至 {:?}，将尝试救援或回退默认配置。",
                                 e,
                                 broken_path
                             );
+                            if let Some(rescued) = Self::try_rescue_from_broken_backups(&path) {
+                                let _ = rescued.save_to_file(&path);
+                                return rescued;
+                            }
                         }
                     },
                     Err(e) => {
@@ -364,6 +453,14 @@ impl AppConfig {
                     }
                 }
             } else {
+                // 配置文件尚不存在，先尝试从历史备份中救援，若无历史备份则初始化默认配置
+                if let Some(rescued) = Self::try_rescue_from_broken_backups(&path) {
+                    if let Err(e) = rescued.save_to_file(&path) {
+                        log::warn!("[配置系统] 保存已救援的配置至 {:?} 失败: {}", path, e);
+                    }
+                    return rescued;
+                }
+
                 let default_cfg = Self::default();
                 if let Err(e) = default_cfg.save_to_file(&path) {
                     log::warn!("[配置系统] 初始化写入默认配置文件 {:?} 失败: {}", path, e);
@@ -518,5 +615,69 @@ mod tests {
         assert!(!aux_paths.is_empty());
         let opencc_paths = AppConfig::opencc_dict_search_paths();
         assert!(!opencc_paths.is_empty());
+    }
+
+    #[test]
+    fn test_legacy_string_page_keys_backward_compatibility() {
+        let legacy_toml = r#"
+init_chinese = true
+page_size = 8
+font_size = 16.0
+switch_key = "Shift"
+page_keys = "MinusEqual"
+fuzzy_pinyin = true
+"#;
+        let cfg = AppConfig::parse_tolerant(legacy_toml).expect("旧版字符串翻页键应兼容反序列化");
+        assert_eq!(cfg.page_size, 8);
+        assert_eq!(cfg.font_size, 16.0);
+        assert!(cfg.page_keys.minus_equal);
+        assert!(!cfg.page_keys.bracket);
+        assert!(!cfg.page_keys.comma_period);
+        assert!(cfg.fuzzy_pinyin);
+
+        // 测试中括号
+        let bracket_toml = r#"page_keys = "Bracket""#;
+        let b_cfg = AppConfig::parse_tolerant(bracket_toml).expect("中括号翻页键应兼容反序列化");
+        assert!(!b_cfg.page_keys.minus_equal);
+        assert!(b_cfg.page_keys.bracket);
+    }
+
+    #[test]
+    fn test_tolerant_merge_with_missing_and_extra_fields() {
+        let partial_toml = r#"
+page_size = 6
+font_size = 18.0
+unknown_future_field = "some_value"
+"#;
+        let cfg = AppConfig::parse_tolerant(partial_toml).expect("缺失或多余字段应平滑容错合并");
+        assert_eq!(cfg.page_size, 6);
+        assert_eq!(cfg.font_size, 18.0);
+        // 其余字段应保持默认值
+        assert_eq!(cfg.switch_key, SwitchKey::Shift);
+        assert!(cfg.v_mode);
+    }
+
+    #[test]
+    fn test_rescue_from_broken_backups() {
+        let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
+        let broken_path = temp_dir.path().join("config.toml.broken.123456789");
+        let broken_content = r#"
+page_size = 9
+font_size = 20.0
+page_keys = "MinusEqual"
+fuzzy_pinyin = true
+"#;
+        fs::write(&broken_path, broken_content).expect("写入 broken 文件失败");
+
+        let target_config = temp_dir.path().join("config.toml");
+        let rescued = AppConfig::try_rescue_from_broken_backups(&target_config)
+            .expect("应能成功从 broken 备份中恢复配置");
+        assert_eq!(rescued.page_size, 9);
+        assert_eq!(rescued.font_size, 20.0);
+        assert!(rescued.fuzzy_pinyin);
+        assert!(rescued.page_keys.minus_equal);
+        // 原 broken 文件应已被重命名为 restored
+        assert!(!broken_path.exists());
+        assert!(broken_path.with_extension("restored").exists());
     }
 }

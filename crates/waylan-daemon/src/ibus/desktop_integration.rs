@@ -142,7 +142,7 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
     )
 }
 
-/// 确保微澜组件已写入用户级 IBus 目录并同步至 GNOME 输入源列表
+/// 确保微澜组件注册就绪并同步置顶至 GNOME 输入源列表
 pub fn ensure_ibus_and_gnome_integration(exe_path: &str, exclusive: bool) {
     let Some(home) = env_var_non_empty("HOME") else {
         return;
@@ -150,28 +150,50 @@ pub fn ensure_ibus_and_gnome_integration(exe_path: &str, exclusive: bool) {
     let home_path = PathBuf::from(&home);
     ensure_user_icons_registered(&home_path);
 
+    let sys_xml = Path::new("/usr/share/ibus/component/waylan.xml");
     let comp_dir = home_path.join(".local/share/ibus/component");
-    if let Err(e) = fs::create_dir_all(&comp_dir) {
-        warn!("[微澜 IBus] 创建用户组件目录 {:?} 失败: {}", comp_dir, e);
-        return;
-    }
+    let user_xml = comp_dir.join("waylan.xml");
+    let env_conf = home_path.join(".config/environment.d/90-waylan-ibus.conf");
 
-    let xml_path = comp_dir.join("waylan.xml");
-    let xml_content = format_ibus_component_xml(exe_path, env!("CARGO_PKG_VERSION"));
-    let needs_write = fs::read_to_string(&xml_path)
-        .map(|old| old != xml_content)
-        .unwrap_or(true);
-
-    if needs_write {
-        if let Err(e) = fs::write(&xml_path, &xml_content) {
-            warn!("[微澜 IBus] 写入组件描述文件 {:?} 失败: {}", xml_path, e);
+    if sys_xml.exists() {
+        // 系统级组件已存在（deb 包安装），清理用户目录冗余文件以防 ibus 产生重复注册冲突
+        let mut cleaned = false;
+        if user_xml.exists() {
+            let _ = fs::remove_file(&user_xml);
+            cleaned = true;
+        }
+        if env_conf.exists() {
+            let _ = fs::remove_file(&env_conf);
+            cleaned = true;
+        }
+        if cleaned {
+            info!("[微澜 IBus] 系统级组件已就绪，已清理用户目录冗余描述并刷新缓存。");
+            let _ = Command::new("ibus").arg("write-cache").output();
+        }
+    } else {
+        // 系统级组件不存在（源码开发/测试环境），写入用户级组件并配置 environment.d
+        if let Err(e) = fs::create_dir_all(&comp_dir) {
+            warn!("[微澜 IBus] 创建用户组件目录 {:?} 失败: {}", comp_dir, e);
             return;
         }
-        info!("[微澜 IBus] 已更新用户级 IBus 组件描述文件: {:?}", xml_path);
-        rebuild_user_ibus_cache(&comp_dir);
+
+        let xml_content = format_ibus_component_xml(exe_path, env!("CARGO_PKG_VERSION"));
+        let needs_write = fs::read_to_string(&user_xml)
+            .map(|old| old != xml_content)
+            .unwrap_or(true);
+
+        if needs_write {
+            if let Err(e) = fs::write(&user_xml, &xml_content) {
+                warn!("[微澜 IBus] 写入组件描述文件 {:?} 失败: {}", user_xml, e);
+                return;
+            }
+            info!("[微澜 IBus] 已更新用户级 IBus 组件描述文件: {:?}", user_xml);
+            rebuild_user_ibus_cache(&comp_dir);
+        }
+
+        ensure_environment_d_config(&home_path, &comp_dir);
     }
 
-    ensure_environment_d_config(&home_path, &comp_dir);
     ensure_gnome_input_source_registered(exclusive);
 }
 
@@ -218,7 +240,7 @@ fn ensure_environment_d_config(home_path: &Path, comp_dir: &Path) {
 }
 
 /// 检查并在 GNOME `org.gnome.desktop.input-sources` 中将 `('ibus', 'waylan')` 注册并置顶为首选输入源
-/// 若 `exclusive` 为 true，则将微澜设为系统唯一独占输入源，以使 GNOME 原生顶栏指示器自动隐藏
+/// 若 `exclusive` 为 true，则将微澜设为系统独占首选输入源（保留基础 XKB 映射以符合 GNOME 规范）
 pub fn ensure_gnome_input_source_registered(exclusive: bool) {
     if exclusive {
         set_waylan_as_exclusive_input_source();
@@ -226,21 +248,61 @@ pub fn ensure_gnome_input_source_registered(exclusive: bool) {
         update_gsettings_source_key("sources");
         update_gsettings_source_key("mru-sources");
     }
+    // 同步将 GNOME 当前输入源索引切换至首项（微澜）
+    let _ = Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
+        .output();
+    // 确保 IBus 全局引擎激活为微澜
+    let _ = Command::new("ibus").args(["engine", "waylan"]).output();
 }
 
-/// 将微澜设为 GNOME 独占单一输入源以促使原生输入源指示器自动折叠隐藏
+/// 将微澜设为 GNOME 独占优先输入源并保留底层必须的 XKB 键盘布局
+///
+/// GNOME 规范严格要求必须存在至少一项底层 XKB 键盘布局以处理基础硬件映射。
+/// 独占优先模式将微澜设为首位，并仅保留单个兜底英文 XKB，促使 GNOME 原生顶栏折叠并确保引擎稳定激活。
 pub fn set_waylan_as_exclusive_input_source() {
+    let base_xkb = get_existing_first_xkb_or_default();
+    let exclusive_sources = format!("[('ibus', 'waylan'), {}]", base_xkb);
+
     for key in ["sources", "mru-sources"] {
         let _ = Command::new("gsettings")
             .args([
                 "set",
                 "org.gnome.desktop.input-sources",
                 key,
-                "[('ibus', 'waylan')]",
+                &exclusive_sources,
             ])
             .output();
     }
-    info!("[微澜 IBus] 已将微澜设为 GNOME 独占单一输入源 [('ibus', 'waylan')]");
+    let _ = Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
+        .output();
+    let _ = Command::new("ibus").args(["engine", "waylan"]).output();
+    info!(
+        "[微澜 IBus] 已将微澜设为 GNOME 独占首选输入源并挂载底层 XKB: {}",
+        exclusive_sources
+    );
+}
+
+/// 从当前 GNOME 输入源列表中提取首个合法的 XKB 布局项，若无则默认返回 "('xkb', 'us')"
+fn get_existing_first_xkb_or_default() -> String {
+    let Ok(out) = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.input-sources", "sources"])
+        .output()
+    else {
+        return "('xkb', 'us')".to_string();
+    };
+    if !out.status.success() {
+        return "('xkb', 'us')".to_string();
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    for item in parse_gsettings_source_tuples(&raw) {
+        let trimmed = item.trim();
+        if trimmed.starts_with("('xkb',") {
+            return trimmed.to_string();
+        }
+    }
+    "('xkb', 'us')".to_string()
 }
 
 /// 读取并更新指定的 GSettings 输入源键（将微澜置顶）
@@ -315,20 +377,26 @@ pub fn prioritize_waylan_in_gsettings_sources(raw: &str) -> Option<String> {
     const WAYLAN_ENTRY: &str = "('ibus', 'waylan')";
     let items = parse_gsettings_source_tuples(raw);
 
-    // 若列表首项已经是微澜，无需变更
+    let has_xkb = items.iter().any(|i| i.trim().starts_with("('xkb',"));
+
+    // 若列表首项已经是微澜且包含底层 XKB 映射，无需变更
     if let Some(first) = items.first() {
-        if first.trim() == WAYLAN_ENTRY {
+        if first.trim() == WAYLAN_ENTRY && has_xkb {
             return None;
         }
     }
 
-    let mut new_items = Vec::with_capacity(items.len().saturating_add(1));
+    let mut new_items = Vec::with_capacity(items.len().saturating_add(2));
     new_items.push(WAYLAN_ENTRY.to_string());
     for item in items {
         let trimmed = item.trim();
         if trimmed != WAYLAN_ENTRY {
             new_items.push(trimmed.to_string());
         }
+    }
+    // 确保列表内至少包含一项底层 XKB 映射（GNOME 强制要求）
+    if !has_xkb {
+        new_items.push("('xkb', 'us')".to_string());
     }
 
     Some(format!("[{}]", new_items.join(", ")))
@@ -356,17 +424,22 @@ mod tests {
             Some("[('ibus', 'waylan'), ('xkb', 'cn'), ('ibus', 'libpinyin')]")
         );
 
-        // 空列表情况
+        // 空列表情况（自动补充兜底英文 XKB）
         assert_eq!(
             prioritize_waylan_in_gsettings_sources("@a(ss) []").as_deref(),
-            Some("[('ibus', 'waylan')]")
+            Some("[('ibus', 'waylan'), ('xkb', 'us')]")
         );
 
-        // 微澜已在首位时，无需变更返回 None
+        // 微澜已在首位且包含 xkb 时，无需变更返回 None
         assert!(
             prioritize_waylan_in_gsettings_sources("[('ibus', 'waylan'), ('xkb', 'cn')]").is_none()
         );
-        assert!(prioritize_waylan_in_gsettings_sources("[('ibus', 'waylan')]").is_none());
+
+        // 若微澜在首位但缺失 xkb，应自动补充兜底英文 XKB
+        assert_eq!(
+            prioritize_waylan_in_gsettings_sources("[('ibus', 'waylan')]").as_deref(),
+            Some("[('ibus', 'waylan'), ('xkb', 'us')]")
+        );
     }
 
     #[test]

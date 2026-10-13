@@ -17,8 +17,7 @@ pub enum ThemeMode {
 }
 
 /// 候选翻页快捷键配置（支持多选同时生效）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct PageKeys {
     /// 减号与等号 (- / =)
     pub minus_equal: bool,
@@ -34,6 +33,63 @@ impl Default for PageKeys {
             minus_equal: true,
             bracket: false,
             comma_period: false,
+        }
+    }
+}
+
+/// 辅助反序列化枚举，同时支持新版结构体与旧版字符串枚举两种形态，保障版本平滑过渡
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PageKeysHelper {
+    Struct {
+        #[serde(default)]
+        minus_equal: bool,
+        #[serde(default)]
+        bracket: bool,
+        #[serde(default)]
+        comma_period: bool,
+    },
+    LegacyStr(String),
+}
+
+impl<'de> Deserialize<'de> for PageKeys {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match PageKeysHelper::deserialize(deserializer)? {
+            PageKeysHelper::Struct {
+                minus_equal,
+                bracket,
+                comma_period,
+            } => Ok(Self {
+                minus_equal,
+                bracket,
+                comma_period,
+            }),
+            PageKeysHelper::LegacyStr(s) => match s.as_str() {
+                "MinusEqual" => Ok(Self {
+                    minus_equal: true,
+                    bracket: false,
+                    comma_period: false,
+                }),
+                "Bracket" => Ok(Self {
+                    minus_equal: false,
+                    bracket: true,
+                    comma_period: false,
+                }),
+                "CommaPeriod" => Ok(Self {
+                    minus_equal: false,
+                    bracket: false,
+                    comma_period: true,
+                }),
+                "PageUpPageDown" => Ok(Self {
+                    minus_equal: false,
+                    bracket: false,
+                    comma_period: false,
+                }),
+                _ => Ok(Self::default()),
+            },
         }
     }
 }
