@@ -77,7 +77,7 @@ pub struct IbusFactoryService {
 impl IbusFactoryService {
     /// 响应 `ibus-daemon` 的引擎实例创建请求，返回预注册的微澜引擎对象路径
     fn create_engine(&self, name: &str) -> zbus::fdo::Result<OwnedObjectPath> {
-        info!("[微澜 IBus] 收到 CreateEngine 请求，引擎名: {}", name);
+        debug!("[微澜 IBus] 收到 CreateEngine 请求，引擎名: {}", name);
         if let Ok(mut guard) = self.core.lock() {
             guard.reset_context();
         }
