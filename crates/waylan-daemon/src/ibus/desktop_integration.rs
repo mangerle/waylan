@@ -84,18 +84,18 @@ pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
     <description>WayLan Chinese Input Method Component</description>
     <exec>{exe} --ibus</exec>
     <version>{ver}</version>
-    <author>WayLan Contributors</author>
-    <license>MIT OR Apache-2.0</license>
-    <homepage>https://github.com/waylan</homepage>
+    <author>wangle</author>
+    <license>Apache-2.0</license>
+    <homepage>https://github.com/mangerle/waylan</homepage>
     <textdomain>waylan</textdomain>
     <engines>
         <engine>
             <name>waylan</name>
-            <longname>微澜拼音 (WayLan)</longname>
+            <longname>微澜拼音</longname>
             <description>微澜 (WayLan) - 现代轻量纯 Rust 中文拼音输入法</description>
             <language>zh_CN</language>
-            <license>MIT OR Apache-2.0</license>
-            <author>WayLan Contributors</author>
+            <license>Apache-2.0</license>
+            <author>wangle</author>
             <icon>{icon}</icon>
             <layout>us</layout>
             <rank>99</rank>
@@ -122,7 +122,7 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
 <engines>
     <engine>
         <name>waylan</name>
-        <longname>微澜拼音 (WayLan)</longname>
+        <longname>微澜拼音</longname>
         <description>微澜 (WayLan) - 现代轻量纯 Rust 中文拼音输入法</description>
         <language>zh_CN</language>
         <license>MIT OR Apache-2.0</license>

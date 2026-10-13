@@ -21,8 +21,47 @@ use waylan_wayland::WaylandCapabilities;
 
 use crate::config::{AppConfig, SwitchKey, ThemeMode};
 
+/// 自动建立用户数据目录 (~/.local/share/waylan/) 与外部全量词库的符号链接
+pub fn ensure_user_dictionaries_linked() {
+    let Some(home) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let user_data_dir = PathBuf::from(home).join(".local/share/waylan");
+    if std::fs::create_dir_all(&user_data_dir).is_err() {
+        return;
+    }
+
+    let pairs = [
+        ("base.dict.bin", AppConfig::base_dict_search_paths()),
+        ("aux.dict.bin", AppConfig::aux_dict_search_paths()),
+        ("opencc.dict.bin", AppConfig::opencc_dict_search_paths()),
+    ];
+
+    for (file_name, candidates) in pairs {
+        let user_file = user_data_dir.join(file_name);
+        if !user_file.exists() {
+            for cand in candidates {
+                if cand.is_file() && cand != user_file {
+                    #[cfg(unix)]
+                    let link_res = std::os::unix::fs::symlink(&cand, &user_file);
+                    #[cfg(not(unix))]
+                    let link_res = std::fs::copy(&cand, &user_file).map(|_| ());
+                    if link_res.is_ok() {
+                        info!(
+                            "[字库引擎] 已自动关联词库至用户数据目录: {:?} -> {:?}",
+                            user_file, cand
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 按照多级搜索策略加载字词库
 pub fn load_lexicon_table() -> LexiconTable {
+    ensure_user_dictionaries_linked();
     info!("[字库引擎] 正在定位并加载字词库索引...");
     let search_paths = AppConfig::base_dict_search_paths();
 

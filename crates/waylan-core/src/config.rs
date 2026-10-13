@@ -191,10 +191,23 @@ impl AppConfig {
         Self::fallback_runtime_dir().join("user_dict.bin")
     }
 
+    /// 辅助根据执行文件所在目录向多级父路径推入候选词库位置（适应开发、测试与各类宿主子进程环境）
+    fn push_exe_relative_candidates(paths: &mut Vec<PathBuf>, rel_subpath: &str) {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                paths.push(parent.join(rel_subpath));
+                paths.push(parent.join("..").join(rel_subpath));
+                paths.push(parent.join("../..").join(rel_subpath));
+                paths.push(parent.join("../../..").join(rel_subpath));
+                paths.push(parent.join("../share/waylan").join(rel_subpath));
+            }
+        }
+    }
+
     /// 获取默认系统基础词库的多级查找路径（环境变量 -> 用户数据目录 -> 系统公共目录 -> 相对路径）
     #[allow(dead_code)]
     pub fn base_dict_search_paths() -> Vec<PathBuf> {
-        let mut paths = Vec::with_capacity(8);
+        let mut paths = Vec::with_capacity(16);
         if let Some(custom) = env_var_non_empty("WAYLAN_DICT_PATH") {
             paths.push(PathBuf::from(custom));
         }
@@ -218,7 +231,10 @@ impl AppConfig {
         paths.push(PathBuf::from("/usr/share/waylan/base.dict.bin"));
         paths.push(PathBuf::from("/usr/local/share/waylan/data/base.dict.bin"));
         paths.push(PathBuf::from("/usr/local/share/waylan/base.dict.bin"));
+        Self::push_exe_relative_candidates(&mut paths, "data/base.dict.bin");
+        Self::push_exe_relative_candidates(&mut paths, "base.dict.bin");
         paths.push(PathBuf::from("data/base.dict.bin"));
+        paths.push(PathBuf::from("base.dict.bin"));
         paths
     }
 
@@ -244,20 +260,23 @@ impl AppConfig {
     /// 获取辅助与混输词库（英文与符号表情）的多级查找路径
     #[allow(dead_code)]
     pub fn aux_dict_search_paths() -> Vec<PathBuf> {
-        vec![
-            Self::user_aux_dict_path(),
-            PathBuf::from("/usr/share/waylan/data/aux.dict.bin"),
-            PathBuf::from("/usr/share/waylan/aux.dict.bin"),
-            PathBuf::from("/usr/local/share/waylan/data/aux.dict.bin"),
-            PathBuf::from("/usr/local/share/waylan/aux.dict.bin"),
-            PathBuf::from("data/aux.dict.bin"),
-        ]
+        let mut paths = Vec::with_capacity(16);
+        paths.push(Self::user_aux_dict_path());
+        paths.push(PathBuf::from("/usr/share/waylan/data/aux.dict.bin"));
+        paths.push(PathBuf::from("/usr/share/waylan/aux.dict.bin"));
+        paths.push(PathBuf::from("/usr/local/share/waylan/data/aux.dict.bin"));
+        paths.push(PathBuf::from("/usr/local/share/waylan/aux.dict.bin"));
+        Self::push_exe_relative_candidates(&mut paths, "data/aux.dict.bin");
+        Self::push_exe_relative_candidates(&mut paths, "aux.dict.bin");
+        paths.push(PathBuf::from("data/aux.dict.bin"));
+        paths.push(PathBuf::from("aux.dict.bin"));
+        paths
     }
 
     /// 获取简繁转换词库（STPhrases + STCharacters）的多级查找路径
     #[allow(dead_code)]
     pub fn opencc_dict_search_paths() -> Vec<PathBuf> {
-        let mut paths = Vec::with_capacity(8);
+        let mut paths = Vec::with_capacity(16);
         if let Some(custom) = env_var_non_empty("WAYLAN_OPENCC_DICT_PATH") {
             paths.push(PathBuf::from(custom));
         }
@@ -283,7 +302,10 @@ impl AppConfig {
             "/usr/local/share/waylan/data/opencc.dict.bin",
         ));
         paths.push(PathBuf::from("/usr/local/share/waylan/opencc.dict.bin"));
+        Self::push_exe_relative_candidates(&mut paths, "data/opencc.dict.bin");
+        Self::push_exe_relative_candidates(&mut paths, "opencc.dict.bin");
         paths.push(PathBuf::from("data/opencc.dict.bin"));
+        paths.push(PathBuf::from("opencc.dict.bin"));
         paths
     }
 

@@ -252,20 +252,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_map(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()))
         .max();
 
-    // 9. 构造系统托盘并驱动输入法会话事件循环
-    let tray = tray::TrayService::spawn(std::sync::Arc::clone(&term_now), loop_wakeup.clone());
+    // 9. 智能判定是否需要拉起独立的 StatusNotifierItem 托盘：
+    // 在 GNOME 桌面环境的 IBus 会话中，GNOME Shell 顶栏已原生集成输入源指示器与菜单（形态 A）。
+    // 若同时拉起独立托盘，会导致顶栏出现两个指示器（托盘图标与原生指示器并存）。
+    // 因此在 GNOME / IBus 下默认不拉起独立托盘，仅使用原生形态 A；
+    // 非 GNOME 环境（如 Sway/Hyprland/Waybar）或用户显式配置 WAYLAN_ENABLE_TRAY=1 时才拉起独立托盘。
+    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_uppercase().contains("GNOME"))
+        .unwrap_or(false);
+    let force_tray = env::var("WAYLAN_ENABLE_TRAY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let should_spawn_tray = force_tray || (!use_ibus_backend && !is_gnome);
+
+    let tray = if should_spawn_tray {
+        Some(tray::TrayService::spawn(
+            std::sync::Arc::clone(&term_now),
+            loop_wakeup.clone(),
+        ))
+    } else {
+        None
+    };
 
     if use_ibus_backend {
-        info!("[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话与系统托盘指示器。");
+        info!("[微澜守护进程] 启用 IBus / D-Bus 原生顶栏输入法引擎会话 (形态 A)。");
         let ibus_res = ibus::run_ibus_session(ibus::IbusSessionOptions {
             engine,
             is_ibus_child_mode: is_ibus_arg,
             watched_paths,
             initial_mtime,
-            shared_is_chinese: Some(tray.mode_flag()),
-            shared_is_caps_locked: Some(tray.caps_lock_flag()),
-            mode_notify_tx: Some(tray.icon_notifier()),
-            reload_requested: Some(tray.reload_flag()),
+            shared_is_chinese: tray.as_ref().map(|t| t.mode_flag()),
+            shared_is_caps_locked: tray.as_ref().map(|t| t.caps_lock_flag()),
+            mode_notify_tx: tray.as_ref().map(|t| t.icon_notifier()),
+            reload_requested: tray.as_ref().map(|t| t.reload_flag()),
             exit_requested: std::sync::Arc::clone(&term_now),
             loop_wakeup,
         });
@@ -301,18 +320,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.auto_complete_pairs,
         );
         session_v2.page_keys = cfg.page_keys.into();
-        session_v2.shared_is_chinese = Some(tray.mode_flag());
-        session_v2.shared_is_caps_locked = Some(tray.caps_lock_flag());
-        session_v2.mode_notify_tx = Some(tray.icon_notifier());
-        session_v2.reload_requested = Some(tray.reload_flag());
-        session_v2.exit_requested = Some(tray.exit_flag());
+        session_v2.shared_is_chinese = tray.as_ref().map(|t| t.mode_flag());
+        session_v2.shared_is_caps_locked = tray.as_ref().map(|t| t.caps_lock_flag());
+        session_v2.mode_notify_tx = tray.as_ref().map(|t| t.icon_notifier());
+        session_v2.reload_requested = tray.as_ref().map(|t| t.reload_flag());
+        session_v2.exit_requested = tray.as_ref().map(|t| t.exit_flag());
         session_v2.loop_wakeup = loop_wakeup.clone();
         session_v2.reload_callback = Some(Box::new(apply_reload_v2));
         let v2_result = waylan_wayland::run_session_v2_loop_fallible(session_v2);
         match v2_result {
             Ok(()) => Ok(()),
             Err((e, returned_session)) => {
-                if tray.is_exit_requested() {
+                if tray
+                    .as_ref()
+                    .map(|t| t.is_exit_requested())
+                    .unwrap_or(false)
+                {
                     info!("[微澜守护进程] 检测到优雅退出请求，服务安全退场。");
                     return Ok(());
                 }
@@ -339,11 +362,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 session.shift_sm = shift_sm;
                 session.punctuation_processor = punctuation_processor;
                 session.page_keys = page_keys;
-                session.shared_is_chinese = Some(tray.mode_flag());
-                session.shared_is_caps_locked = Some(tray.caps_lock_flag());
-                session.mode_notify_tx = Some(tray.icon_notifier());
-                session.reload_requested = Some(tray.reload_flag());
-                session.exit_requested = Some(tray.exit_flag());
+                session.shared_is_chinese = tray.as_ref().map(|t| t.mode_flag());
+                session.shared_is_caps_locked = tray.as_ref().map(|t| t.caps_lock_flag());
+                session.mode_notify_tx = tray.as_ref().map(|t| t.icon_notifier());
+                session.reload_requested = tray.as_ref().map(|t| t.reload_flag());
+                session.exit_requested = tray.as_ref().map(|t| t.exit_flag());
                 session.loop_wakeup = loop_wakeup.clone();
                 session.reload_callback = Some(Box::new(apply_reload_v1));
                 waylan_wayland::run_session_v1_loop(session)
@@ -364,11 +387,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.auto_complete_pairs,
         );
         session.page_keys = cfg.page_keys.into();
-        session.shared_is_chinese = Some(tray.mode_flag());
-        session.shared_is_caps_locked = Some(tray.caps_lock_flag());
-        session.mode_notify_tx = Some(tray.icon_notifier());
-        session.reload_requested = Some(tray.reload_flag());
-        session.exit_requested = Some(tray.exit_flag());
+        session.shared_is_chinese = tray.as_ref().map(|t| t.mode_flag());
+        session.shared_is_caps_locked = tray.as_ref().map(|t| t.caps_lock_flag());
+        session.mode_notify_tx = tray.as_ref().map(|t| t.icon_notifier());
+        session.reload_requested = tray.as_ref().map(|t| t.reload_flag());
+        session.exit_requested = tray.as_ref().map(|t| t.exit_flag());
         session.loop_wakeup = loop_wakeup;
         session.reload_callback = Some(Box::new(apply_reload_v1));
         waylan_wayland::run_session_v1_loop(session)
@@ -379,7 +402,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("[微澜守护进程] Wayland 输入法事件循环已正常退出，所有资源已安全释放。");
         }
         Err(e) => {
-            if tray.is_exit_requested() || term_now.load(std::sync::atomic::Ordering::Relaxed) {
+            if tray
+                .as_ref()
+                .map(|t| t.is_exit_requested())
+                .unwrap_or(false)
+                || term_now.load(std::sync::atomic::Ordering::Relaxed)
+            {
                 info!("[微澜守护进程] 收到退出信号或托盘退出请求，服务安全退场。");
                 return Ok(());
             }
