@@ -186,13 +186,26 @@ impl AlgoEngine {
         (commit_text, self.composition.len())
     }
 
-    /// 切换二级扩展卡片的展开状态（仅当当前选中的项支持二级展开时有效）
+    /// 切换二级扩展卡片的展开状态（若当前选中的项不可展开但存在可展开项，则自动聚焦并展开）
     pub fn toggle_expand(&mut self, selected_candidate_index: usize) -> bool {
         if let Some(cand) = self.current_candidates.get(selected_candidate_index) {
             if cand.is_expandable && !cand.sub_candidates.is_empty() {
                 self.is_expanded = !self.is_expanded;
                 self.expanded_selected_index = 0;
                 return self.is_expanded;
+            }
+        }
+        if !self.is_expanded {
+            if let Some((idx, _)) = self
+                .current_candidates
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c.is_expandable && !c.sub_candidates.is_empty())
+            {
+                self.selected_index = idx;
+                self.is_expanded = true;
+                self.expanded_selected_index = 0;
+                return true;
             }
         }
         self.is_expanded = false;

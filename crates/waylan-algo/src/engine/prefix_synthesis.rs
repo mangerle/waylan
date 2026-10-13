@@ -118,7 +118,7 @@ impl AlgoEngine {
                 candidates.insert(0, ext);
             } else if ext.is_expandable {
                 // 动态日期/时间功能项：若已有候选项，插入到 index 1（紧随首选常规成词），否则置顶
-                candidates.retain(|c| !(c.text == ext.text && c.is_expandable));
+                candidates.retain(|c| c.text != ext.text);
                 let insert_pos = if candidates.is_empty() { 0 } else { 1 };
                 candidates.insert(insert_pos, ext);
             } else {

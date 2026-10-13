@@ -4,18 +4,19 @@ use waylan_algo::evaluator::*;
 #[test]
 fn test_date_evaluator_riqi() {
     let cand = DateTimeEvaluator::try_evaluate("riqi").expect("应匹配日期");
-    assert_eq!(cand.text, "日期");
+    assert!(cand.text.contains("年"));
     assert!(cand.is_expandable);
     assert_eq!(cand.sub_candidates.len(), 7);
-    assert!(cand.sub_candidates[0].contains("年"));
+    assert_eq!(cand.text, cand.sub_candidates[0]);
 }
 
 #[test]
 fn test_date_evaluator_shijian() {
     let cand = DateTimeEvaluator::try_evaluate("shijian").expect("应匹配时间");
-    assert_eq!(cand.text, "时间");
+    assert!(cand.text.contains(':'));
     assert!(cand.is_expandable);
     assert!(!cand.sub_candidates.is_empty());
+    assert_eq!(cand.text, cand.sub_candidates[0]);
 }
 
 #[test]

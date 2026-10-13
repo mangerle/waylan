@@ -46,6 +46,7 @@ struct UiSnapshot {
     candidates: Vec<Candidate>,
     page_size: usize,
     selected_index: usize,
+    orientation: i32,
 }
 
 impl UiSnapshot {
@@ -59,11 +60,27 @@ impl UiSnapshot {
         } else {
             core.engine.formatted_preedit()
         };
+        let is_expanded = core.engine.is_expanded;
+        let candidates = core.current_candidates();
+        let (page_size, selected_index, orientation) = if is_expanded {
+            (
+                candidates.len().max(1),
+                core.engine.expanded_selected_index,
+                super::types::IBUS_ORIENTATION_VERTICAL,
+            )
+        } else {
+            (
+                core.engine.config.page_size,
+                core.engine.selected_index,
+                super::types::IBUS_ORIENTATION_HORIZONTAL,
+            )
+        };
         Self {
             preedit,
-            candidates: core.current_candidates(),
-            page_size: core.engine.config.page_size,
-            selected_index: core.engine.selected_index,
+            candidates,
+            page_size,
+            selected_index,
+            orientation,
         }
     }
 }
@@ -128,9 +145,12 @@ impl IbusEngineService {
         }
 
         let table_visible = visible && !snap.candidates.is_empty();
-        if let Ok(table_val) =
-            build_ibus_lookup_table(&snap.candidates, snap.page_size, snap.selected_index)
-        {
+        if let Ok(table_val) = build_ibus_lookup_table(
+            &snap.candidates,
+            snap.page_size,
+            snap.selected_index,
+            snap.orientation,
+        ) {
             let _ = Self::update_lookup_table(ctxt, Value::from(table_val), table_visible).await;
         }
     }
@@ -298,7 +318,15 @@ impl IbusEngineService {
                 update_ui: true,
                 ..Default::default()
             };
-            if let Some((committed, _)) = guard.engine.select_candidate(index as usize, now) {
+            if guard.engine.is_expanded {
+                let sel = guard.engine.selected_index;
+                if let Some((committed, _)) = guard.engine.select_expanded_item(sel, index as usize)
+                {
+                    guard.punct_processor.record_commit(&committed);
+                    out.commit_text = Some(committed);
+                }
+            } else if let Some((committed, _)) = guard.engine.select_candidate(index as usize, now)
+            {
                 guard.punct_processor.record_commit(&committed);
                 out.commit_text = Some(committed);
             }
@@ -368,7 +396,9 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let _ = guard.engine.prev_page();
+            if !guard.engine.is_expanded {
+                let _ = guard.engine.prev_page();
+            }
             UiSnapshot::capture(&guard)
         };
         Self::emit_ui_snapshot(&ctxt, &snap).await;
@@ -380,7 +410,9 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let _ = guard.engine.next_page();
+            if !guard.engine.is_expanded {
+                let _ = guard.engine.next_page();
+            }
             UiSnapshot::capture(&guard)
         };
         Self::emit_ui_snapshot(&ctxt, &snap).await;
@@ -392,7 +424,12 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            guard.engine.prev_candidate();
+            if guard.engine.is_expanded {
+                let sel = guard.engine.selected_index;
+                guard.engine.prev_expanded_item(sel);
+            } else {
+                guard.engine.prev_candidate();
+            }
             UiSnapshot::capture(&guard)
         };
         Self::emit_ui_snapshot(&ctxt, &snap).await;
@@ -404,7 +441,12 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            guard.engine.next_candidate();
+            if guard.engine.is_expanded {
+                let sel = guard.engine.selected_index;
+                guard.engine.next_expanded_item(sel);
+            } else {
+                guard.engine.next_candidate();
+            }
             UiSnapshot::capture(&guard)
         };
         Self::emit_ui_snapshot(&ctxt, &snap).await;

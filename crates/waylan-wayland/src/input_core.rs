@@ -291,6 +291,15 @@ pub fn handle_composition_key_with_params(
         }
     } else if !shift_active {
         if let Some(digit) = keycode_to_digit(key) {
+            if engine.is_expanded {
+                let sel = engine.selected_index;
+                let sub_idx = digit.saturating_sub(1);
+                if let Some((committed, _)) = engine.select_expanded_item(sel, sub_idx) {
+                    punct_processor.record_commit(&committed);
+                    return Some(KeyProcessAction::Commit(committed));
+                }
+                return Some(KeyProcessAction::Handled);
+            }
             return Some(select_candidate_action(
                 engine,
                 punct_processor,
@@ -342,6 +351,11 @@ pub fn handle_composition_key_with_params(
         return Some(KeyProcessAction::Handled);
     }
     if key == KEY_ESC {
+        if engine.is_expanded {
+            engine.is_expanded = false;
+            engine.expanded_selected_index = 0;
+            return Some(KeyProcessAction::Handled);
+        }
         engine.reset();
         return Some(KeyProcessAction::Reset);
     }
@@ -461,6 +475,7 @@ impl ConsumedKeyTracker {
 pub struct ModifierState {
     pub depressed: u32,
     pub phys_mods: u8,
+    pub locked: u32,
 }
 
 impl ModifierState {
@@ -474,6 +489,11 @@ impl ModifierState {
     }
 
     #[inline]
+    pub fn is_caps_locked(&self) -> bool {
+        (self.locked & MOD_CAPS) != 0
+    }
+
+    #[inline]
     pub fn has_ctrl_or_alt(&self) -> bool {
         (self.depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
     }
@@ -482,6 +502,7 @@ impl ModifierState {
     pub fn reset(&mut self) {
         self.depressed = 0;
         self.phys_mods = 0;
+        self.locked = 0;
     }
 }
 

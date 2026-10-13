@@ -52,18 +52,13 @@ impl ModeDispatcher {
     fn eval_v_mode(expr: &str) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::new();
 
-        // 1. 若只输入了 "v"，提供快捷功能入口引导
+        // 1. 若只输入了 "v"，提供当前日期与时间快捷条目
         if expr.is_empty() {
             let now = chrono::Local::now();
             let today = now.format("%Y年%m月%d日").to_string();
             let time_str = now.format("%H:%M:%S").to_string();
             candidates.push(AlgoCandidate::new(today, "v", 99_000).with_comment("当前日期"));
             candidates.push(AlgoCandidate::new(time_str, "v", 95_000).with_comment("当前时间"));
-            candidates
-                .push(AlgoCandidate::new("输入算式 如: v20*5", "v", 90_000).with_comment("计算器"));
-            candidates.push(
-                AlgoCandidate::new("输入数字 如: v12345", "v", 85_000).with_comment("大写金额"),
-            );
             return candidates;
         }
 
@@ -156,7 +151,7 @@ impl ModeDispatcher {
         // 4. 算术表达式安全求值（如 v20*5, v100+20）
         if let Some(val) = Self::eval_math_simple(expr) {
             let effective_val = if val.abs() < 1e-9 { 0.0 } else { val };
-            let val_str = if (effective_val.fract()).abs() < 1e-9
+            let val_str = if effective_val.fract().abs() < 1e-9
                 && effective_val.abs() < 9_007_199_254_740_992.0
             {
                 let round_int = effective_val.round() as i64;
@@ -165,7 +160,7 @@ impl ModeDispatcher {
                 } else {
                     format!("{}", round_int)
                 }
-            } else if (effective_val.fract()).abs() < 1e-9 {
+            } else if effective_val.fract().abs() < 1e-9 {
                 format!("{:.0}", effective_val)
             } else {
                 format!("{:.4}", effective_val)

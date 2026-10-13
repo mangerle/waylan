@@ -71,13 +71,14 @@ fn test_engine_dynamic_date_expand_and_select() {
     let candidates = engine.candidates();
     assert!(candidates.len() >= 2);
     // 验证第 2 位为可展开的动态日期功能项
-    assert_eq!(candidates[1].text, "日期");
+    assert!(candidates[1].text.contains("年"));
     assert!(candidates[1].is_expandable);
     assert_eq!(candidates[1].sub_candidates.len(), 7);
 
-    // 验证展开控制
-    assert!(engine.toggle_expand(1));
+    // 验证展开控制（支持在 index 0 聚焦时按 Tab 自动定位并展开）
+    assert!(engine.toggle_expand(0));
     assert!(engine.is_expanded);
+    assert_eq!(engine.selected_index, 1);
 
     // 验证二级卡片选择
     let (chosen_text, remaining) = engine.select_expanded_item(1, 2).expect("选择连字符日期");

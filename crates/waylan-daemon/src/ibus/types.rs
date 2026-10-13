@@ -24,6 +24,9 @@ pub const IBUS_ENGINE_PREEDIT_CLEAR: u32 = 0;
 /// IBus 候选框排列方向：水平排列 (`IBUS_ORIENTATION_HORIZONTAL`)
 pub const IBUS_ORIENTATION_HORIZONTAL: i32 = 0;
 
+/// IBus 候选框排列方向：垂直纵向排列 (`IBUS_ORIENTATION_VERTICAL`)
+pub const IBUS_ORIENTATION_VERTICAL: i32 = 1;
+
 /// IBus 属性类型：普通按钮项 (`PROP_TYPE_NORMAL`)
 const IBUS_PROP_TYPE_NORMAL: u32 = 0;
 
@@ -111,6 +114,7 @@ pub fn build_ibus_lookup_table(
     candidates: &[Candidate],
     page_size: usize,
     selected_index: usize,
+    orientation: i32,
 ) -> Result<OwnedValue, zbus::zvariant::Error> {
     let mut cand_vec = Vec::with_capacity(candidates.len());
     let mut label_vec = Vec::with_capacity(candidates.len());
@@ -135,7 +139,7 @@ pub fn build_ibus_lookup_table(
         .add_field(cursor_pos)
         .add_field(!candidates.is_empty())
         .add_field(false)
-        .add_field(IBUS_ORIENTATION_HORIZONTAL)
+        .add_field(orientation)
         .add_field(cand_vec)
         .add_field(label_vec)
         .build();
@@ -325,7 +329,8 @@ mod tests {
                 sub_candidates: Vec::new(),
             },
         ];
-        let table = build_ibus_lookup_table(&cands, 7, 0).expect("序列化 IBusLookupTable 失败");
+        let table = build_ibus_lookup_table(&cands, 7, 0, IBUS_ORIENTATION_HORIZONTAL)
+            .expect("序列化 IBusLookupTable 失败");
         assert_eq!(table.value_signature().as_str(), "(sa{sv}uubbiavav)");
     }
 

@@ -20,36 +20,43 @@ impl DateTimeEvaluator {
             "riqi" | "rq" => {
                 let now = Local::now();
                 let subs = Self::format_date_formats(now);
+                let first_text = subs.first().cloned().unwrap_or_else(|| "日期".to_string());
                 Some(
-                    AlgoCandidate::new("日期", pinyin, 999_999)
-                        .with_comment("按Tab/下键展开")
+                    AlgoCandidate::new(first_text, pinyin, 999_999)
+                        .with_comment("当前日期 (Tab展开)")
                         .with_sub_candidates(subs),
                 )
             }
             "shijian" | "sj" => {
                 let now = Local::now();
                 let subs = Self::format_time_formats(now);
+                let first_text = subs.first().cloned().unwrap_or_else(|| "时间".to_string());
                 Some(
-                    AlgoCandidate::new("时间", pinyin, 999_999)
-                        .with_comment("按Tab/下键展开")
+                    AlgoCandidate::new(first_text, pinyin, 999_999)
+                        .with_comment("当前时间 (Tab展开)")
                         .with_sub_candidates(subs),
                 )
             }
             "riqishijian" | "rqsj" => {
                 let now = Local::now();
                 let subs = Self::format_datetime_formats(now);
+                let first_text = subs
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "日期时间".to_string());
                 Some(
-                    AlgoCandidate::new("日期时间", pinyin, 999_999)
-                        .with_comment("按Tab/下键展开")
+                    AlgoCandidate::new(first_text, pinyin, 999_999)
+                        .with_comment("日期时间 (Tab展开)")
                         .with_sub_candidates(subs),
                 )
             }
             "xingqi" | "xq" | "zhou" => {
                 let now = Local::now();
                 let subs = Self::format_weekday_formats(now);
+                let first_text = subs.first().cloned().unwrap_or_else(|| "星期".to_string());
                 Some(
-                    AlgoCandidate::new("星期", pinyin, 999_999)
-                        .with_comment("按Tab/下键展开")
+                    AlgoCandidate::new(first_text, pinyin, 999_999)
+                        .with_comment("星期 (Tab展开)")
                         .with_sub_candidates(subs),
                 )
             }

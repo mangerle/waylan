@@ -26,6 +26,8 @@ use waylan_wayland::session_common::{sync_mode_from_shared_flag, update_session_
 
 /// IBus Shift 修饰位掩码 (`IBUS_SHIFT_MASK`)
 pub const IBUS_SHIFT_MASK: u32 = 1 << 0;
+/// IBus Lock/CapsLock 修饰位掩码 (`IBUS_LOCK_MASK`)
+pub const IBUS_LOCK_MASK: u32 = 1 << 1;
 /// IBus Ctrl 修饰位掩码 (`IBUS_CONTROL_MASK`)
 pub const IBUS_CONTROL_MASK: u32 = 1 << 2;
 /// IBus Alt 修饰位掩码 (`IBUS_MOD1_MASK`)
@@ -108,8 +110,25 @@ impl IbusSessionCore {
         self.consumed_keys.clear();
     }
 
-    /// 获取当前页的候选词列表（转换为 `waylan_core::Candidate`）
+    /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
     pub fn current_candidates(&self) -> Vec<Candidate> {
+        if self.engine.is_expanded {
+            if let Some(cand) = self.engine.candidates().get(self.engine.selected_index) {
+                if cand.is_expandable && !cand.sub_candidates.is_empty() {
+                    let mut out = Vec::with_capacity(cand.sub_candidates.len());
+                    for sub in &cand.sub_candidates {
+                        out.push(Candidate {
+                            text: sub.clone(),
+                            pinyin: cand.pinyin.clone(),
+                            score: cand.score,
+                            is_expandable: false,
+                            sub_candidates: Vec::new(),
+                        });
+                    }
+                    return out;
+                }
+            }
+        }
         let cands = self.engine.candidates();
         let mut out = Vec::with_capacity(cands.len());
         for c in cands {
@@ -149,6 +168,31 @@ impl IbusSessionCore {
             return IbusKeyOutcome::default();
         }
 
+        // CapsLock 键处理：若当前存在未完成拼音，直接提交英文字符上屏并重置；按键原生透传
+        if evdev_key == KEY_CAPSLOCK {
+            self.shift_sm.reset();
+            if is_press {
+                let mut outcome = IbusKeyOutcome {
+                    consumed: false,
+                    ..Default::default()
+                };
+                if !self.engine.raw_input().is_empty() {
+                    let raw = self.engine.raw_input().to_string();
+                    self.engine.reset();
+                    outcome.commit_text = Some(raw);
+                    outcome.update_ui = true;
+                }
+                self.consumed_keys.record_press(evdev_key, false);
+                return outcome;
+            } else {
+                let was_consumed = self.consumed_keys.take_release(evdev_key);
+                return IbusKeyOutcome {
+                    consumed: was_consumed,
+                    ..Default::default()
+                };
+            }
+        }
+
         let toggled_mode = self.shift_sm.on_key_event(evdev_key, is_press, self.mode);
         if !is_press {
             return self.handle_key_release(evdev_key, toggled_mode);
@@ -157,8 +201,9 @@ impl IbusSessionCore {
         let shift_active = (state & IBUS_SHIFT_MASK) != 0 || (self.mods_depressed & MOD_SHIFT) != 0;
         let ctrl_or_alt = ibus_state_has_ctrl_or_alt(state)
             || (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
+        let is_caps_locked = (state & IBUS_LOCK_MASK) != 0;
 
-        let outcome = self.handle_key_press(evdev_key, shift_active, ctrl_or_alt);
+        let outcome = self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, is_caps_locked);
         self.consumed_keys.record_press(evdev_key, outcome.consumed);
         outcome
     }
@@ -203,8 +248,9 @@ impl IbusSessionCore {
         evdev_key: u32,
         shift_active: bool,
         ctrl_or_alt: bool,
+        is_caps_locked: bool,
     ) -> IbusKeyOutcome {
-        if ctrl_or_alt || self.mode == InputMode::English {
+        if ctrl_or_alt || is_caps_locked || self.mode == InputMode::English {
             return IbusKeyOutcome::default();
         }
 
@@ -466,5 +512,44 @@ mod tests {
         let rel = core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_RELEASE_MASK);
         assert_eq!(rel.mode_changed, Some(InputMode::English));
         assert_eq!(rel.commit_text.as_deref(), Some("xian"));
+    }
+
+    #[test]
+    fn test_ibus_date_time_tab_expansion_and_selection() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+
+        // 1. 输入拼音 "riqi"
+        for ch in ['r', 'i', 'q', 'i'] {
+            let out = core.process_key_event(ch as u32, 0, 0);
+            assert!(out.consumed);
+            assert!(out.update_ui);
+        }
+
+        // 验证候选词：第 1 位为词库词“日期”，第 2 位为动态日期且包含年份
+        let cands = core.current_candidates();
+        assert!(cands.len() >= 2);
+        assert_eq!(cands[0].text, "日期");
+        assert!(cands[1].text.contains("年"));
+        assert!(cands[1].is_expandable);
+        assert_eq!(core.engine.selected_index, 0);
+
+        // 2. 按 Tab 键触发二级展开
+        let tab_out = core.process_key_event(0xff09, KEY_TAB, 0);
+        assert!(tab_out.consumed);
+        assert!(tab_out.update_ui);
+        assert!(core.engine.is_expanded);
+
+        // 3. 展开后 current_candidates 应返回全部 7 种细分日期格式
+        let expanded_cands = core.current_candidates();
+        assert_eq!(expanded_cands.len(), 7);
+        assert!(!expanded_cands[0].is_expandable);
+
+        // 4. 按数字键 2 选取第 2 种格式上屏
+        let num_out = core.process_key_event(b'2' as u32, KEY_2, 0);
+        assert!(num_out.consumed);
+        assert_eq!(num_out.commit_text, Some(expanded_cands[1].text.clone()));
+        assert!(!core.engine.is_expanded);
+        assert!(core.engine.raw_input().is_empty());
     }
 }
