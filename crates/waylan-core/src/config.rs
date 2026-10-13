@@ -53,6 +53,16 @@ pub struct AppConfig {
     pub traditional_chinese: bool,
     /// 是否开启中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）
     pub auto_pangu_spacing: bool,
+    /// 是否启用 U 模式（拆字与笔画反查）
+    pub enable_u_mode: bool,
+    /// 是否启用 I 模式（特殊符号与序号选择）
+    pub enable_i_mode: bool,
+    /// 是否过滤超出常用规范汉字范围的生僻字符
+    pub filter_uncommon_charset: bool,
+    /// 是否在候选词旁边附加拼音/注释提示
+    pub show_pinyin_comment: bool,
+    /// 是否开启多路候选词自动去重
+    pub auto_dedup: bool,
     /// 自定义托盘图标主题目录或图标所在目录路径
     pub tray_icon_theme_path: Option<String>,
     /// 自定义中文状态托盘图标名称或路径
@@ -89,6 +99,11 @@ impl Default for AppConfig {
             typo_rules: TypoCorrectionRules::default(),
             traditional_chinese: false,
             auto_pangu_spacing: false,
+            enable_u_mode: true,
+            enable_i_mode: true,
+            filter_uncommon_charset: false,
+            show_pinyin_comment: true,
+            auto_dedup: true,
             tray_icon_theme_path: None,
             tray_icon_zh: None,
             tray_icon_en: None,
@@ -432,6 +447,11 @@ mod tests {
         assert_eq!(deserialized.switch_key, SwitchKey::Shift);
         assert_eq!(deserialized.page_keys, PageKeys::default());
         assert!(!deserialized.auto_pangu_spacing);
+        assert!(deserialized.enable_u_mode);
+        assert!(deserialized.enable_i_mode);
+        assert!(!deserialized.filter_uncommon_charset);
+        assert!(deserialized.show_pinyin_comment);
+        assert!(deserialized.auto_dedup);
 
         // 测试临时文件保存（使用 tempfile::tempdir() 确保多线程并发测试隔离与 RAII 自动清理）
         let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
