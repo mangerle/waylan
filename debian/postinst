@@ -30,6 +30,11 @@ if [ "$1" = "configure" ]; then
         fi
     done
 
+    # 5. 刷新 IBus 引擎组件注册缓存（开箱即用，GNOME 启动即识别）
+    if which ibus >/dev/null 2>&1; then
+        ibus write-cache >/dev/null 2>&1 || true
+    fi
+
     echo "============================================================"
     echo "  微澜 (WayLan) 中文输入法已成功安装并自动就绪！"
     echo "  - 后台守护进程已自动拉起并配置开机自启，可直接在输入框中打字"

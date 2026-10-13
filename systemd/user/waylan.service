@@ -3,6 +3,8 @@ Description=WayLan Input Method Daemon
 Documentation=https://github.com/waylan/waylan
 PartOf=graphical-session.target
 After=graphical-session.target
+ConditionEnvironment=!XDG_CURRENT_DESKTOP=ubuntu:GNOME
+ConditionEnvironment=!XDG_CURRENT_DESKTOP=GNOME
 
 [Service]
 Type=simple

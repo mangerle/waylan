@@ -4,6 +4,7 @@ use log::info;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -182,18 +183,7 @@ impl SubprocessManager {
     /// 备选回退方案：调用默认文本编辑器打开配置文件
     pub(crate) fn launch_config_file_fallback(&self) {
         if let Some(path) = AppConfig::config_path() {
-            let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
-                .iter()
-                .find(|p| std::path::Path::new(p).exists())
-                .copied()
-                .unwrap_or("xdg-open");
-            let mut xdg_cmd = Command::new(xdg_bin);
-            xdg_cmd.arg(path);
-            #[cfg(unix)]
-            xdg_cmd.process_group(0);
-            if let Ok(child) = xdg_cmd.spawn() {
-                self.track(child, None, "配置文件文本编辑器");
-            }
+            spawn_file_viewer(&path, self, "配置文件文本编辑器");
         }
     }
 
@@ -201,18 +191,72 @@ impl SubprocessManager {
     pub(crate) fn launch_view_log(&self) {
         let log_path = log_file_path();
         info!("[系统托盘] 查看运行日志: {:?}", log_path);
-        let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
-            .iter()
-            .find(|p| std::path::Path::new(p).exists())
-            .copied()
-            .unwrap_or("xdg-open");
-        let mut log_cmd = Command::new(xdg_bin);
-        log_cmd.arg(log_path);
-        #[cfg(unix)]
-        log_cmd.process_group(0);
-        if let Ok(child) = log_cmd.spawn() {
-            self.track(child, None, "运行日志查看器");
+        spawn_file_viewer(&log_path, self, "运行日志查看器");
+    }
+}
+
+/// 注入桌面环境关键变量并多级回退唤起外部文本编辑器或查看器
+fn spawn_file_viewer(path: &Path, tracker: &SubprocessManager, desc: &'static str) {
+    let inject_env = |cmd: &mut Command| {
+        for var in [
+            "WAYLAND_DISPLAY",
+            "DISPLAY",
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_CURRENT_DESKTOP",
+            "DESKTOP_SESSION",
+        ] {
+            if let Ok(val) = std::env::var(var) {
+                cmd.env(var, &val);
+            }
         }
+    };
+
+    // 1. 优先尝试常见的 Linux 桌面图形文本编辑器
+    let editors = [
+        "gnome-text-editor",
+        "gedit",
+        "kate",
+        "mousepad",
+        "xed",
+        "featherpad",
+    ];
+    for editor in editors {
+        let mut cmd = Command::new(editor);
+        cmd.arg(path);
+        inject_env(&mut cmd);
+        #[cfg(unix)]
+        cmd.process_group(0);
+        if let Ok(child) = cmd.spawn() {
+            tracker.track(child, None, desc);
+            return;
+        }
+    }
+
+    // 2. 回退使用 GNOME/Wayland 标准文件关联唤起命令 gio open
+    let mut gio_cmd = Command::new("gio");
+    gio_cmd.arg("open").arg(path);
+    inject_env(&mut gio_cmd);
+    #[cfg(unix)]
+    gio_cmd.process_group(0);
+    if let Ok(child) = gio_cmd.spawn() {
+        tracker.track(child, None, desc);
+        return;
+    }
+
+    // 3. 最终回退至 FreeDesktop 标准 xdg-open
+    let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
+        .iter()
+        .find(|p| Path::new(p).exists())
+        .copied()
+        .unwrap_or("xdg-open");
+    let mut xdg_cmd = Command::new(xdg_bin);
+    xdg_cmd.arg(path);
+    inject_env(&mut xdg_cmd);
+    #[cfg(unix)]
+    xdg_cmd.process_group(0);
+    if let Ok(child) = xdg_cmd.spawn() {
+        tracker.track(child, None, desc);
     }
 }
 

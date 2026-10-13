@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component>
+    <name>org.freedesktop.IBus.Waylan</name>
+    <description>WayLan Chinese Input Method Component</description>
+    <exec>/usr/bin/waylan --ibus</exec>
+    <version>0.1.0</version>
+    <author>WayLan Contributors</author>
+    <license>MIT OR Apache-2.0</license>
+    <homepage>https://github.com/waylan/waylan</homepage>
+    <textdomain>waylan</textdomain>
+    <engines>
+        <engine>
+            <name>waylan</name>
+            <longname>微澜拼音</longname>
+            <description>微澜 (WayLan) - 现代轻量纯 Rust 中文拼音输入法</description>
+            <language>zh_CN</language>
+            <license>MIT OR Apache-2.0</license>
+            <author>WayLan Contributors</author>
+            <icon>waylan</icon>
+            <layout>us</layout>
+            <rank>99</rank>
+            <symbol>&#x6F9C;</symbol>
+            <icon_prop_key>InputMode</icon_prop_key>
+            <setup>/usr/bin/waylan settings</setup>
+            <version>0.1.0</version>
+            <textdomain>waylan</textdomain>
+        </engine>
+    </engines>
+</component>

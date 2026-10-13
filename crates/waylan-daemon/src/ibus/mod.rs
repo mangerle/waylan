@@ -44,9 +44,7 @@ use engine::{
     WAYLAN_FACTORY_OBJECT_PATH,
 };
 use keys::IbusSessionCore;
-use types::{
-    build_input_mode_property, build_waylan_ibus_component, extract_text_from_ibus_variant,
-};
+use types::{build_input_mode_property, build_waylan_ibus_component};
 
 /// IBus 会话启动配置参数包
 pub struct IbusSessionOptions {
@@ -241,8 +239,7 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
     };
     let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv_obj)?;
 
-    let prev_engine =
-        register_or_activate_ibus_engine(&conn, is_ibus_child_mode, exclusive_input_source)?;
+    register_or_activate_ibus_engine(&conn, is_ibus_child_mode, exclusive_input_source)?;
 
     let mut inotify_watcher: Option<InotifyWatcher> = None;
     init_session_inotify_watcher(&watched_paths, &mut inotify_watcher, "IBus");
@@ -257,28 +254,15 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
 
     info!("[微澜 IBus] 引擎服务已就绪，进入 GNOME / IBus 输入法事件循环。");
     run_ibus_monitor_loop(&conn, &shared_core, &mut inotify_watcher, monitor_params);
-    cleanup_ibus_session(&conn, &shared_core, prev_engine.as_deref());
+    cleanup_ibus_session(&shared_core);
     Ok(())
 }
 
-/// 会话退出时恢复先前全局引擎并落盘保存用户自学习词库
-fn cleanup_ibus_session(
-    conn: &Connection,
-    shared_core: &Arc<Mutex<IbusSessionCore>>,
-    prev_engine: Option<&str>,
-) {
-    if let Some(prev) = prev_engine {
-        let _ = conn.call_method(
-            Some("org.freedesktop.IBus"),
-            "/org/freedesktop/IBus",
-            Some("org.freedesktop.IBus"),
-            "SetGlobalEngine",
-            &(prev,),
-        );
-        info!("[微澜 IBus] 已在退出前恢复原先的全局输入法引擎: {}", prev);
-    }
+/// 会话退出时平滑落盘保存用户自学习词库
+fn cleanup_ibus_session(shared_core: &Arc<Mutex<IbusSessionCore>>) {
     if let Ok(mut guard) = shared_core.lock() {
         let _ = guard.engine.persist_user_dict();
+        info!("[微澜 IBus] 已安全完成用户自适应历史词库落盘。");
     }
 }
 
@@ -307,33 +291,16 @@ fn build_ibus_connection(
     Ok(conn)
 }
 
-/// 查询当前 `ibus-daemon` 正在使用的全局输入法引擎名称
-fn query_current_global_engine(conn: &Connection) -> Option<String> {
-    let reply = conn
-        .call_method(
-            Some("org.freedesktop.IBus"),
-            "/org/freedesktop/IBus",
-            Some("org.freedesktop.DBus.Properties"),
-            "Get",
-            &("org.freedesktop.IBus", "GlobalEngine"),
-        )
-        .ok()?;
-    let body = reply.body();
-    let val: Value<'_> = body.deserialize().ok()?;
-    extract_text_from_ibus_variant(&val).filter(|name| !name.is_empty() && name != "waylan")
-}
-
 /// 根据启动模式向 `ibus-daemon` 申请总线名或动态注册并激活微澜组件
 fn register_or_activate_ibus_engine(
     conn: &Connection,
     is_ibus_child_mode: bool,
     exclusive: bool,
-) -> Result<Option<String>, Box<dyn Error>> {
+) -> Result<(), Box<dyn Error>> {
     let exe_path = env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "waylan".to_string());
-    ensure_ibus_and_gnome_integration(&exe_path, exclusive);
 
     if is_ibus_child_mode {
         conn.request_name("org.freedesktop.IBus.Waylan")?;
@@ -345,10 +312,10 @@ fn register_or_activate_ibus_engine(
             "SetGlobalEngine",
             &("waylan",),
         );
-        return Ok(None);
+        return Ok(());
     }
 
-    let prev_engine = query_current_global_engine(conn);
+    ensure_ibus_and_gnome_integration(&exe_path, exclusive);
 
     let exec_cmd = format!("{} --ibus", exe_path);
     let setup_cmd = format!("{} settings", exe_path);
@@ -388,7 +355,7 @@ fn register_or_activate_ibus_engine(
         info!("[微澜 IBus] 已成功将当前 GNOME / IBus 全局输入法引擎激活为: waylan (微澜)");
     }
 
-    Ok(prev_engine)
+    Ok(())
 }
 
 /// 驱动后台文件热重载与托盘状态同步的阻塞监控循环
