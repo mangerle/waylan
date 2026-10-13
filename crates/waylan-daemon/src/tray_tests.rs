@@ -53,7 +53,7 @@ fn test_tray_menu_layout_and_event() {
     );
 
     let (_rev, (_parent_id, _props, items)) = menu.get_layout(0, -1, vec![]);
-    assert_eq!(items.len(), 8);
+    assert_eq!(items.len(), 9);
 
     // 模拟点击菜单第1项（模式切换）
     menu.event(1, "clicked".to_string(), zbus::zvariant::Value::from(0), 0);

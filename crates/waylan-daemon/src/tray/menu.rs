@@ -373,6 +373,7 @@ impl DBusMenu {
             make_menu_item(2, "重载词库与配置"),
             make_menu_item(3, "偏好设置"),
             make_menu_item(4, "查看运行日志"),
+            make_menu_item(9, "重启微澜输入法"),
             make_menu_item(5, "退出微澜输入法"),
         ];
 
@@ -414,6 +415,23 @@ impl DBusMenu {
             }
             5 => {
                 info!("[系统托盘] 收到退出菜单指令，正在触发优雅停机与数据落盘流程...");
+                self.exit_requested.store(true, Ordering::Release);
+                let _ = self.icon_update_tx.try_send(());
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
+            }
+            9 => {
+                info!("[系统托盘] 收到重启菜单指令，正在拉起新实例并退出当前进程...");
+                if let Ok(exe) = std::env::current_exe() {
+                    let mut cmd = Command::new(exe);
+                    for arg in std::env::args().skip(1) {
+                        cmd.arg(arg);
+                    }
+                    #[cfg(unix)]
+                    cmd.process_group(0);
+                    let _ = cmd.spawn();
+                }
                 self.exit_requested.store(true, Ordering::Release);
                 let _ = self.icon_update_tx.try_send(());
                 if let Some(ref wakeup) = self.loop_wakeup {
@@ -511,7 +529,7 @@ mod tests {
             None,
         );
         let (_rev, (_root_id, _props, items)) = menu.get_layout(0, -1, Vec::new());
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 9);
 
         // 验证默认中文状态文本
         let item1_str = format!("{:?}", items[0]);

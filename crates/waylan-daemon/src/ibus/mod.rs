@@ -305,13 +305,6 @@ fn register_or_activate_ibus_engine(
     if is_ibus_child_mode {
         conn.request_name("org.freedesktop.IBus.Waylan")?;
         info!("[微澜 IBus] 已在子进程模式下成功注册总线名称 org.freedesktop.IBus.Waylan");
-        let _ = conn.call_method(
-            Some("org.freedesktop.IBus"),
-            "/org/freedesktop/IBus",
-            Some("org.freedesktop.IBus"),
-            "SetGlobalEngine",
-            &("waylan",),
-        );
         return Ok(());
     }
 
@@ -386,9 +379,11 @@ fn run_ibus_monitor_loop(
         );
         if should_reload {
             let bundle = SessionConfigBundle::load_current();
+            let hide_ext = bundle.exclusive_input_source;
             if let Ok(mut guard) = shared_core.lock() {
                 apply_bundle_to_ibus_core(bundle, &mut guard);
             }
+            desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
             info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
         }
 

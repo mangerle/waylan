@@ -239,6 +239,60 @@ pub fn build_input_mode_property(
     )
 }
 
+/// 构造简繁切换状态属性 (`TraditionalChinese`) 的 `IBusProperty` 变体对象
+pub fn build_traditional_property(
+    traditional_chinese: bool,
+) -> Result<OwnedValue, zbus::zvariant::Error> {
+    let label = if traditional_chinese {
+        "简繁切换: 繁体"
+    } else {
+        "简繁切换: 简体"
+    };
+    build_action_property(
+        "TraditionalChinese",
+        label,
+        "character-set",
+        "点击切换简体或繁体输入模式",
+        "",
+    )
+}
+
+/// 构造标点全角/半角属性 (`FullWidthPunct`) 的 `IBusProperty` 变体对象
+pub fn build_full_width_punct_property(
+    full_width_punct: bool,
+) -> Result<OwnedValue, zbus::zvariant::Error> {
+    let label = if full_width_punct {
+        "标点切换: 全角 (中文标点)"
+    } else {
+        "标点切换: 半角 (英文标点)"
+    };
+    build_action_property(
+        "FullWidthPunct",
+        label,
+        "accessories-character-map",
+        "点击切换全角或半角标点符号",
+        "",
+    )
+}
+
+/// 构造英文字符全角/半角属性 (`FullWidthChar`) 的 `IBusProperty` 变体对象
+pub fn build_full_width_char_property(
+    full_width_char: bool,
+) -> Result<OwnedValue, zbus::zvariant::Error> {
+    let label = if full_width_char {
+        "字符切换: 全角 (英文字母)"
+    } else {
+        "字符切换: 半角 (英文字母)"
+    };
+    build_action_property(
+        "FullWidthChar",
+        label,
+        "format-text-bold",
+        "点击切换全角或半角英文字母",
+        "",
+    )
+}
+
 /// 构造包含微澜状态与操作菜单的 `IBusPropList` 变体对象（用于 `RegisterProperties`），签名 `(sa{sv}av)`
 ///
 /// # Errors
@@ -246,9 +300,15 @@ pub fn build_input_mode_property(
 pub fn build_ibus_prop_list(
     mode: InputMode,
     is_caps_locked: bool,
+    traditional_chinese: bool,
+    full_width_punct: bool,
+    full_width_char: bool,
 ) -> Result<OwnedValue, zbus::zvariant::Error> {
     let props = vec![
         build_input_mode_property(mode, is_caps_locked)?,
+        build_traditional_property(traditional_chinese)?,
+        build_full_width_punct_property(full_width_punct)?,
+        build_full_width_char_property(full_width_char)?,
         build_action_property(
             "ReloadConfig",
             "重载词库与配置",
@@ -391,8 +451,8 @@ mod tests {
             build_input_mode_property(InputMode::Chinese, false).expect("序列化 IBusProperty 失败");
         assert_eq!(prop.value_signature().as_str(), "(sa{sv}suvsvbbuvv)");
 
-        let prop_list =
-            build_ibus_prop_list(InputMode::Chinese, false).expect("序列化 IBusPropList 失败");
+        let prop_list = build_ibus_prop_list(InputMode::Chinese, false, false, true, false)
+            .expect("序列化 IBusPropList 失败");
         assert_eq!(prop_list.value_signature().as_str(), "(sa{sv}av)");
 
         let comp =

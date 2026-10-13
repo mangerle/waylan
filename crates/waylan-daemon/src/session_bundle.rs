@@ -226,6 +226,7 @@ pub struct SessionConfigBundle {
     pub user_dict_path: PathBuf,
     pub english_suggester: Arc<EnglishSuggestionManager>,
     pub symbol_suggester: Arc<SymbolSuggestionManager>,
+    pub exclusive_input_source: bool,
 }
 
 impl SessionConfigBundle {
@@ -288,6 +289,7 @@ impl SessionConfigBundle {
             user_dict_path,
             english_suggester,
             symbol_suggester,
+            exclusive_input_source: new_cfg.exclusive_input_source,
         }
     }
 

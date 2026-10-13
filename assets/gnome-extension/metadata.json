@@ -1,0 +1,15 @@
+{
+  "name": "WayLan Hide Input Indicator",
+  "description": "Hide GNOME Shell native input source indicator when WayLan standalone tray is active",
+  "uuid": "waylan-hide-input-source@waylan.org",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
+  "version": 1
+}

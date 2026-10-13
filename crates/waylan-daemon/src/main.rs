@@ -286,15 +286,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if use_ibus_backend {
-        let suppress_properties = should_spawn_tray;
+        let suppress_properties = false;
         info!(
-            "[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话 (展示形态: {}, 原生指示器静默: {})。",
+            "[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话 (展示形态: {}, 原生指示器属性上报就绪)。",
             if should_spawn_tray {
                 "形态 B 专属彩色托盘"
             } else {
                 "形态 A 原生顶栏"
-            },
-            suppress_properties
+            }
         );
         let ibus_res = ibus::run_ibus_session(ibus::IbusSessionOptions {
             engine,

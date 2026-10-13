@@ -89,7 +89,17 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
             update_config_from_window(&win, &mut base_cfg);
             match base_cfg.save_default() {
                 Ok(()) => {
+                    let hide_ext = base_cfg.exclusive_input_source;
                     *current_cfg_cell.borrow_mut() = base_cfg;
+                    if std::env::var("XDG_CURRENT_DESKTOP")
+                        .map(|d| d.to_uppercase().contains("GNOME"))
+                        .unwrap_or(false)
+                    {
+                        let action = if hide_ext { "enable" } else { "disable" };
+                        let _ = std::process::Command::new("gnome-extensions")
+                            .args([action, "waylan-hide-input-source@waylan.org"])
+                            .output();
+                    }
                     win.set_global_status(SharedString::from("配置已成功保存并同步！"));
                 }
                 Err(e) => {

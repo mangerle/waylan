@@ -53,4 +53,6 @@ assets = [
     ["../../assets/waylan-settings.desktop", "usr/share/applications/waylan-settings.desktop", "644"],
     ["../../assets/waylan-autostart.desktop", "etc/xdg/autostart/waylan.desktop", "644"],
     ["../../systemd/user/waylan.service", "usr/lib/systemd/user/waylan.service", "644"],
+    ["../../assets/gnome-extension/metadata.json", "usr/share/gnome-shell/extensions/waylan-hide-input-source@waylan.org/metadata.json", "644"],
+    ["../../assets/gnome-extension/extension.js", "usr/share/gnome-shell/extensions/waylan-hide-input-source@waylan.org/extension.js", "644"],
 ]

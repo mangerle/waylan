@@ -195,6 +195,121 @@ pub fn ensure_ibus_and_gnome_integration(exe_path: &str, exclusive: bool) {
     }
 
     ensure_gnome_input_source_registered(exclusive);
+    sync_gnome_hide_indicator_extension(exclusive);
+}
+
+/// 同步 GNOME Shell 原生输入法指示器隐藏扩展的启用/禁用状态
+pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
+    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_uppercase().contains("GNOME"))
+        .unwrap_or(false);
+    if !is_gnome {
+        return;
+    }
+
+    let extension_uuid = "waylan-hide-input-source@waylan.org";
+    let sys_dir = Path::new("/usr/share/gnome-shell/extensions").join(extension_uuid);
+    let user_dir = env_var_non_empty("HOME").map(|h| {
+        PathBuf::from(h)
+            .join(".local/share/gnome-shell/extensions")
+            .join(extension_uuid)
+    });
+    let exists = sys_dir.is_dir() || user_dir.as_ref().is_some_and(|d| d.is_dir());
+
+    if !exists {
+        if let Some(assets) = crate::tray::item::detect_default_assets_path() {
+            let src_dir = Path::new(&assets)
+                .parent()
+                .unwrap_or(Path::new(&assets))
+                .join("gnome-extension");
+            if src_dir.is_dir() {
+                if let Some(ref target) = user_dir {
+                    if fs::create_dir_all(target).is_ok() {
+                        let _ =
+                            fs::copy(src_dir.join("metadata.json"), target.join("metadata.json"));
+                        let _ = fs::copy(src_dir.join("extension.js"), target.join("extension.js"));
+                        info!(
+                            "[微澜 IBus] 已自动部署 GNOME 隐藏输入法指示器扩展至用户目录: {:?}",
+                            target
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let action = if hide_native { "enable" } else { "disable" };
+    update_gsettings_enabled_extensions(extension_uuid, hide_native);
+    match Command::new("gnome-extensions")
+        .args([action, extension_uuid])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            info!(
+                "[微澜 IBus] 已成功{} GNOME 隐藏原生指示器扩展 ({})",
+                if hide_native { "启用" } else { "禁用" },
+                extension_uuid
+            );
+        }
+        Ok(out) => {
+            debug!(
+                "[微澜 IBus] gnome-extensions {} 返回状态: {:?}",
+                action,
+                out.status.code()
+            );
+        }
+        Err(e) => {
+            debug!("[微澜 IBus] 调用 gnome-extensions 失败: {}", e);
+        }
+    }
+}
+
+/// 同步更新 GNOME GSettings enabled-extensions 列表
+fn update_gsettings_enabled_extensions(uuid: &str, enable: bool) {
+    let Ok(out) = Command::new("gsettings")
+        .args(["get", "org.gnome.shell", "enabled-extensions"])
+        .output()
+    else {
+        return;
+    };
+    if !out.status.success() {
+        return;
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let mut list: Vec<String> = raw
+        .trim_matches(|c| c == '[' || c == ']' || c == ' ')
+        .split(',')
+        .map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut changed = false;
+    if enable {
+        if !list.iter().any(|item| item == uuid) {
+            list.push(uuid.to_string());
+            changed = true;
+        }
+    } else if list.iter().any(|item| item == uuid) {
+        list.retain(|item| item != uuid);
+        changed = true;
+    }
+
+    if changed {
+        let formatted = format!(
+            "[{}]",
+            list.iter()
+                .map(|s| format!("'{}'", s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.shell", "enabled-extensions", &formatted])
+            .output();
+        info!(
+            "[微澜 IBus] 已同步更新 GNOME enabled-extensions: {}",
+            formatted
+        );
+    }
 }
 
 /// 调用 `ibus write-cache` 将用户级组件编译进 `~/.cache/ibus/bus/registry`

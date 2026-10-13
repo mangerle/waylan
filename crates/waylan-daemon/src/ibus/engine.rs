@@ -23,8 +23,9 @@ use super::keys::{
     IbusKeyOutcome, IbusSessionCore, IBUS_KEYVAL_LEFT, IBUS_KEYVAL_RIGHT, IBUS_RELEASE_MASK,
 };
 use super::types::{
-    build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_prop_list, build_ibus_text,
-    build_input_mode_property, extract_text_from_ibus_variant, IBUS_ENGINE_PREEDIT_CLEAR,
+    build_full_width_char_property, build_full_width_punct_property, build_ibus_lookup_table,
+    build_ibus_preedit_text, build_ibus_prop_list, build_ibus_text, build_input_mode_property,
+    build_traditional_property, extract_text_from_ibus_variant, IBUS_ENGINE_PREEDIT_CLEAR,
 };
 use crate::tray::menu::SubprocessManager;
 
@@ -281,6 +282,87 @@ impl IbusEngineService {
                     }
                 }
             }
+            "TraditionalChinese" => {
+                let is_trad = {
+                    let Ok(mut guard) = self.core.lock() else {
+                        return;
+                    };
+                    let next = !guard.engine.config.traditional_chinese;
+                    guard.engine.config.traditional_chinese = next;
+                    if let Some(ref flag) = guard.shared_traditional_chinese {
+                        flag.store(next, Ordering::Release);
+                    }
+                    if let Some(ref tx) = guard.mode_notify_tx {
+                        let _ = tx.try_send(());
+                    }
+                    info!(
+                        "[微澜 IBus] 原生状态栏切换简繁模式为: {}",
+                        if next { "繁体" } else { "简体" }
+                    );
+                    next
+                };
+                if let Ok(prop_val) = build_traditional_property(is_trad) {
+                    let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
+                }
+            }
+            "FullWidthPunct" => {
+                let is_full = {
+                    let Ok(mut guard) = self.core.lock() else {
+                        return;
+                    };
+                    let next = !guard.punct_processor.full_width_punct;
+                    guard.punct_processor.full_width_punct = next;
+                    if let Some(ref flag) = guard.shared_full_width_punct {
+                        flag.store(next, Ordering::Release);
+                    }
+                    if let Some(ref tx) = guard.mode_notify_tx {
+                        let _ = tx.try_send(());
+                    }
+                    info!(
+                        "[微澜 IBus] 原生状态栏切换标点模式为: {}",
+                        if next {
+                            "全角 (中文标点)"
+                        } else {
+                            "半角 (英文标点)"
+                        }
+                    );
+                    next
+                };
+                if let Ok(prop_val) = build_full_width_punct_property(is_full) {
+                    let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
+                }
+            }
+            "FullWidthChar" => {
+                let is_full = {
+                    let Ok(guard) = self.core.lock() else {
+                        return;
+                    };
+                    let current = guard
+                        .shared_full_width_char
+                        .as_ref()
+                        .map(|f| f.load(Ordering::Acquire))
+                        .unwrap_or(false);
+                    let next = !current;
+                    if let Some(ref flag) = guard.shared_full_width_char {
+                        flag.store(next, Ordering::Release);
+                    }
+                    if let Some(ref tx) = guard.mode_notify_tx {
+                        let _ = tx.try_send(());
+                    }
+                    info!(
+                        "[微澜 IBus] 原生状态栏切换字符模式为: {}",
+                        if next {
+                            "全角 (英文字母)"
+                        } else {
+                            "半角 (英文字母)"
+                        }
+                    );
+                    next
+                };
+                if let Ok(prop_val) = build_full_width_char_property(is_full) {
+                    let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
+                }
+            }
             "ReloadConfig" => {
                 if let Some(ref flag) = self.reload_requested {
                     flag.store(true, Ordering::Release);
@@ -347,21 +429,26 @@ impl IbusEngineService {
 
     /// 焦点进入输入上下文
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
-        let (mode, is_caps, snap) = {
+        let (mode, is_caps, trad, punct, char_full, snap) = {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
             let _ = guard.sync_shared_mode();
+            guard.sync_shared_settings();
+            let trad = guard.engine.config.traditional_chinese;
+            let punct = guard.punct_processor.full_width_punct;
+            let char_full = guard.is_full_width_char();
             (
                 guard.mode,
                 guard.is_caps_locked,
+                trad,
+                punct,
+                char_full,
                 UiSnapshot::capture(&guard),
             )
         };
-        if !self.suppress_properties {
-            if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps) {
-                let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
-            }
+        if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps, trad, punct, char_full) {
+            let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
         }
         Self::emit_ui_snapshot(&ctxt, &snap).await;
     }
