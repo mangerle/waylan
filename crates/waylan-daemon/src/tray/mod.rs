@@ -25,6 +25,9 @@ pub struct TrayService {
     is_chinese: Arc<AtomicBool>,
     #[allow(dead_code)]
     is_caps_locked: Arc<AtomicBool>,
+    traditional_chinese: Arc<AtomicBool>,
+    full_width_punct: Arc<AtomicBool>,
+    full_width_char: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
     exit_requested: Arc<AtomicBool>,
     icon_update_tx: SyncSender<()>,
@@ -34,13 +37,20 @@ pub struct TrayService {
 impl TrayService {
     /// 使用全局退出标志与事件循环唤醒器启动后台系统托盘常驻服务
     pub fn spawn(exit_requested: Arc<AtomicBool>, loop_wakeup: Option<LoopWakeup>) -> Self {
-        let is_chinese = Arc::new(AtomicBool::new(true));
+        let config = AppConfig::load_or_create();
+        let is_chinese = Arc::new(AtomicBool::new(config.init_chinese));
         let is_caps_locked = Arc::new(AtomicBool::new(false));
+        let traditional_chinese = Arc::new(AtomicBool::new(config.traditional_chinese));
+        let full_width_punct = Arc::new(AtomicBool::new(config.full_width_punct));
+        let full_width_char = Arc::new(AtomicBool::new(config.full_width_char));
         let reload_requested = Arc::new(AtomicBool::new(false));
         let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(8);
 
         let flag_clone = Arc::clone(&is_chinese);
         let caps_clone = Arc::clone(&is_caps_locked);
+        let trad_clone = Arc::clone(&traditional_chinese);
+        let punct_clone = Arc::clone(&full_width_punct);
+        let char_clone = Arc::clone(&full_width_char);
         let reload_clone = Arc::clone(&reload_requested);
         let exit_clone = Arc::clone(&exit_requested);
         let tx_clone = icon_update_tx.clone();
@@ -49,6 +59,9 @@ impl TrayService {
             Self::run_dbus_loop(
                 flag_clone,
                 caps_clone,
+                trad_clone,
+                punct_clone,
+                char_clone,
                 reload_clone,
                 exit_clone,
                 tx_clone,
@@ -60,6 +73,9 @@ impl TrayService {
         Self {
             is_chinese,
             is_caps_locked,
+            traditional_chinese,
+            full_width_punct,
+            full_width_char,
             reload_requested,
             exit_requested,
             icon_update_tx,
@@ -76,6 +92,21 @@ impl TrayService {
     #[allow(dead_code)]
     pub fn caps_lock_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.is_caps_locked)
+    }
+
+    /// 获取简繁切换共享原子标志句柄
+    pub fn traditional_chinese_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.traditional_chinese)
+    }
+
+    /// 获取全角/半角标点共享原子标志句柄
+    pub fn full_width_punct_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.full_width_punct)
+    }
+
+    /// 获取全角/半角字符共享原子标志句柄
+    pub fn full_width_char_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.full_width_char)
     }
 
     /// 获取配置与词库重载请求共享原子标志句柄
@@ -115,9 +146,13 @@ impl TrayService {
     }
 
     /// 在独立线程中初始化 DBus 连接与注册 StatusNotifierItem 及 DBusMenu
+    #[allow(clippy::too_many_arguments)]
     fn run_dbus_loop(
         is_chinese: Arc<AtomicBool>,
         is_caps_locked: Arc<AtomicBool>,
+        traditional_chinese: Arc<AtomicBool>,
+        full_width_punct: Arc<AtomicBool>,
+        full_width_char: Arc<AtomicBool>,
         reload_requested: Arc<AtomicBool>,
         exit_requested: Arc<AtomicBool>,
         icon_update_tx: SyncSender<()>,
@@ -135,6 +170,9 @@ impl TrayService {
         let menu = DBusMenu::new(
             is_chinese,
             is_caps_locked,
+            traditional_chinese,
+            full_width_punct,
+            full_width_char,
             reload_requested,
             Arc::clone(&exit_requested),
             Arc::new(AtomicBool::new(false)),

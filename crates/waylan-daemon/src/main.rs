@@ -299,6 +299,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             initial_mtime,
             shared_is_chinese: tray.as_ref().map(|t| t.mode_flag()),
             shared_is_caps_locked: tray.as_ref().map(|t| t.caps_lock_flag()),
+            shared_traditional_chinese: tray.as_ref().map(|t| t.traditional_chinese_flag()),
+            shared_full_width_punct: tray.as_ref().map(|t| t.full_width_punct_flag()),
+            shared_full_width_char: tray.as_ref().map(|t| t.full_width_char_flag()),
             mode_notify_tx: tray.as_ref().map(|t| t.icon_notifier()),
             reload_requested: tray.as_ref().map(|t| t.reload_flag()),
             exit_requested: std::sync::Arc::clone(&term_now),
@@ -332,11 +335,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             SwitchKey::Shift => ToggleKeyMode::Shift,
             SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
         });
-        session_v2.punctuation_processor = PunctuationProcessor::with_options(
+        let mut session_v2_punct = PunctuationProcessor::with_options(
             cfg.slash_to_dunhao,
             cfg.protect_digits_punctuation,
             cfg.auto_complete_pairs,
         );
+        session_v2_punct.full_width_punct = cfg.full_width_punct;
+        session_v2.punctuation_processor = session_v2_punct;
         session_v2.page_keys = cfg.page_keys.into();
         session_v2.shared_is_chinese = tray.as_ref().map(|t| t.mode_flag());
         session_v2.shared_is_caps_locked = tray.as_ref().map(|t| t.caps_lock_flag());

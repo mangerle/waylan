@@ -66,6 +66,12 @@ pub struct IbusSessionOptions {
     pub mode_notify_tx: Option<SyncSender<()>>,
     /// 与系统托盘共享的重载请求标志
     pub reload_requested: Option<Arc<AtomicBool>>,
+    /// 与系统托盘共享的简繁模式标志
+    pub shared_traditional_chinese: Option<Arc<AtomicBool>>,
+    /// 与系统托盘共享的全角/半角标点标志
+    pub shared_full_width_punct: Option<Arc<AtomicBool>>,
+    /// 与系统托盘共享的全角/半角字符标志
+    pub shared_full_width_char: Option<Arc<AtomicBool>>,
     /// 全局平滑退出标志
     pub exit_requested: Arc<AtomicBool>,
     /// 跨线程 poll 唤醒句柄
@@ -204,6 +210,9 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
         initial_mtime,
         shared_is_chinese,
         shared_is_caps_locked,
+        shared_traditional_chinese,
+        shared_full_width_punct,
+        shared_full_width_char,
         mode_notify_tx,
         reload_requested,
         exit_requested,
@@ -215,6 +224,9 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
     let mut session_core = IbusSessionCore::new(engine);
     session_core.shared_is_chinese = shared_is_chinese;
     session_core.shared_is_caps_locked = shared_is_caps_locked;
+    session_core.shared_traditional_chinese = shared_traditional_chinese;
+    session_core.shared_full_width_punct = shared_full_width_punct;
+    session_core.shared_full_width_char = shared_full_width_char;
     session_core.mode_notify_tx = mode_notify_tx;
     apply_bundle_to_ibus_core(SessionConfigBundle::load_current(), &mut session_core);
 
@@ -326,6 +338,13 @@ fn register_or_activate_ibus_engine(
     if is_ibus_child_mode {
         conn.request_name("org.freedesktop.IBus.Waylan")?;
         info!("[微澜 IBus] 已在子进程模式下成功注册总线名称 org.freedesktop.IBus.Waylan");
+        let _ = conn.call_method(
+            Some("org.freedesktop.IBus"),
+            "/org/freedesktop/IBus",
+            Some("org.freedesktop.IBus"),
+            "SetGlobalEngine",
+            &("waylan",),
+        );
         return Ok(None);
     }
 

@@ -289,3 +289,31 @@ fn test_url_and_email_context_punctuation() {
         Some(vec![TextAction::Commit(".".to_string())])
     );
 }
+
+#[test]
+fn test_half_width_punct_mode() {
+    let mut pp = PunctuationProcessor::new();
+    pp.full_width_punct = false;
+
+    // 半角模式下所有标点直接提交半角字符
+    assert_eq!(
+        pp.process_punctuation(','),
+        Some(vec![TextAction::Commit(",".to_string())])
+    );
+    assert_eq!(
+        pp.process_punctuation('.'),
+        Some(vec![TextAction::Commit(".".to_string())])
+    );
+    assert_eq!(
+        pp.process_punctuation('/'),
+        Some(vec![TextAction::Commit("/".to_string())])
+    );
+    assert_eq!(
+        pp.process_punctuation('('),
+        Some(vec![TextAction::Commit("(".to_string())])
+    );
+    assert_eq!(
+        pp.process_punctuation('"'),
+        Some(vec![TextAction::Commit("\"".to_string())])
+    );
+}

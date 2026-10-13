@@ -229,6 +229,9 @@ impl Drop for SubprocessManager {
 pub struct DBusMenu {
     pub(crate) is_chinese: Arc<AtomicBool>,
     pub(crate) is_caps_locked: Arc<AtomicBool>,
+    pub(crate) traditional_chinese: Arc<AtomicBool>,
+    pub(crate) full_width_punct: Arc<AtomicBool>,
+    pub(crate) full_width_char: Arc<AtomicBool>,
     pub(crate) reload_requested: Arc<AtomicBool>,
     pub(crate) exit_requested: Arc<AtomicBool>,
     pub(crate) settings_running: Arc<AtomicBool>,
@@ -238,9 +241,13 @@ pub struct DBusMenu {
 }
 
 impl DBusMenu {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         is_chinese: Arc<AtomicBool>,
         is_caps_locked: Arc<AtomicBool>,
+        traditional_chinese: Arc<AtomicBool>,
+        full_width_punct: Arc<AtomicBool>,
+        full_width_char: Arc<AtomicBool>,
         reload_requested: Arc<AtomicBool>,
         exit_requested: Arc<AtomicBool>,
         settings_running: Arc<AtomicBool>,
@@ -251,6 +258,9 @@ impl DBusMenu {
         Self {
             is_chinese,
             is_caps_locked,
+            traditional_chinese,
+            full_width_punct,
+            full_width_char,
             reload_requested,
             exit_requested,
             settings_running,
@@ -296,8 +306,26 @@ impl DBusMenu {
         } else {
             "当前输入: 英文模式"
         };
+        let trad_text = if self.traditional_chinese.load(Ordering::Acquire) {
+            "简繁切换: 繁体"
+        } else {
+            "简繁切换: 简体"
+        };
+        let punct_text = if self.full_width_punct.load(Ordering::Acquire) {
+            "标点切换: 全角 (中文标点)"
+        } else {
+            "标点切换: 半角 (英文标点)"
+        };
+        let char_text = if self.full_width_char.load(Ordering::Acquire) {
+            "字符切换: 全角 (英文字母)"
+        } else {
+            "字符切换: 半角 (英文字母)"
+        };
         let menu_items = vec![
             make_menu_item(1, mode_text),
+            make_menu_item(6, trad_text),
+            make_menu_item(7, punct_text),
+            make_menu_item(8, char_text),
             make_menu_item(2, "重载词库与配置"),
             make_menu_item(3, "偏好设置"),
             make_menu_item(4, "查看运行日志"),
@@ -348,6 +376,53 @@ impl DBusMenu {
                     wakeup.wake();
                 }
             }
+            6 => {
+                let current = self.traditional_chinese.load(Ordering::Acquire);
+                let next = !current;
+                self.traditional_chinese.store(next, Ordering::Release);
+                let _ = self.icon_update_tx.try_send(());
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
+                info!(
+                    "[系统托盘] 右键菜单切换简繁模式为: {}",
+                    if next { "繁体" } else { "简体" }
+                );
+            }
+            7 => {
+                let current = self.full_width_punct.load(Ordering::Acquire);
+                let next = !current;
+                self.full_width_punct.store(next, Ordering::Release);
+                let _ = self.icon_update_tx.try_send(());
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
+                info!(
+                    "[系统托盘] 右键菜单切换标点模式为: {}",
+                    if next {
+                        "全角 (中文标点)"
+                    } else {
+                        "半角 (英文标点)"
+                    }
+                );
+            }
+            8 => {
+                let current = self.full_width_char.load(Ordering::Acquire);
+                let next = !current;
+                self.full_width_char.store(next, Ordering::Release);
+                let _ = self.icon_update_tx.try_send(());
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
+                info!(
+                    "[系统托盘] 右键菜单切换字符全半角为: {}",
+                    if next {
+                        "全角 (英文字母)"
+                    } else {
+                        "半角 (英文字母)"
+                    }
+                );
+            }
             _ => {}
         }
     }
@@ -375,9 +450,16 @@ mod tests {
         let settings = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = mpsc::sync_channel(1);
 
+        let is_trad = Arc::new(AtomicBool::new(false));
+        let is_full_punct = Arc::new(AtomicBool::new(true));
+        let is_full_char = Arc::new(AtomicBool::new(false));
+
         let menu = DBusMenu::new(
             is_chinese.clone(),
             is_caps.clone(),
+            is_trad.clone(),
+            is_full_punct.clone(),
+            is_full_char.clone(),
             reload,
             exit,
             settings,
@@ -385,11 +467,25 @@ mod tests {
             None,
         );
         let (_rev, (_root_id, _props, items)) = menu.get_layout(0, -1, Vec::new());
-        assert_eq!(items.len(), 5);
+        assert_eq!(items.len(), 8);
 
         // 验证默认中文状态文本
         let item1_str = format!("{:?}", items[0]);
         assert!(item1_str.contains("当前输入: 中文拼音"));
+
+        // 验证新添加的 3 个菜单项
+        let item2_str = format!("{:?}", items[1]);
+        assert!(item2_str.contains("简繁切换: 简体"));
+        let item3_str = format!("{:?}", items[2]);
+        assert!(item3_str.contains("标点切换: 全角 (中文标点)"));
+        let item4_str = format!("{:?}", items[3]);
+        assert!(item4_str.contains("字符切换: 半角 (英文字母)"));
+
+        // 测试点击切换简繁
+        menu.event(6, "clicked".to_string(), Value::from(0), 0);
+        assert!(is_trad.load(Ordering::Acquire));
+        let (_rev, (_root_id, _props, items_updated)) = menu.get_layout(0, -1, Vec::new());
+        assert!(format!("{:?}", items_updated[1]).contains("简繁切换: 繁体"));
 
         // 开启大写锁定，验证菜单第1项文本正确变为英文大写
         is_caps.store(true, Ordering::Release);
@@ -399,9 +495,9 @@ mod tests {
 
         let expected_label = "查看运行日志";
 
-        // 验证菜单项包含真实的日志文件路径
-        let item4 = &items[3];
-        let serialized = format!("{:?}", item4);
+        // 验证第7项菜单（查看运行日志）包含真实文本
+        let item7 = &items[6];
+        let serialized = format!("{:?}", item7);
         assert!(
             serialized.contains(expected_label),
             "菜单项中应包含实际日志绝对路径"

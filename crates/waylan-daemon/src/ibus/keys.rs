@@ -70,6 +70,9 @@ pub struct IbusSessionCore {
     pub mode: InputMode,
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
     pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
+    pub shared_traditional_chinese: Option<Arc<AtomicBool>>,
+    pub shared_full_width_punct: Option<Arc<AtomicBool>>,
+    pub shared_full_width_char: Option<Arc<AtomicBool>>,
     pub mode_notify_tx: Option<SyncSender<()>>,
     pub is_caps_locked: bool,
     pub mods_depressed: u32,
@@ -90,6 +93,9 @@ impl IbusSessionCore {
             mode: InputMode::Chinese,
             shared_is_chinese: None,
             shared_is_caps_locked: None,
+            shared_traditional_chinese: None,
+            shared_full_width_punct: None,
+            shared_full_width_char: None,
             mode_notify_tx: None,
             is_caps_locked: false,
             mods_depressed: 0,
@@ -103,6 +109,29 @@ impl IbusSessionCore {
     /// 同步来自系统托盘的共享中英文状态标志
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
         sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.mode)
+    }
+
+    /// 同步来自托盘与全局状态的简繁与标点/字符全半角配置
+    pub fn sync_shared_settings(&mut self) {
+        if let Some(ref trad) = self.shared_traditional_chinese {
+            let val = trad.load(Ordering::Acquire);
+            if self.engine.config.traditional_chinese != val {
+                self.engine.config.traditional_chinese = val;
+            }
+        }
+        if let Some(ref punct) = self.shared_full_width_punct {
+            let val = punct.load(Ordering::Acquire);
+            if self.punct_processor.full_width_punct != val {
+                self.punct_processor.full_width_punct = val;
+            }
+        }
+    }
+
+    /// 判定当前是否开启了全角字符/字母模式
+    pub fn is_full_width_char(&self) -> bool {
+        self.shared_full_width_char
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Acquire))
     }
 
     /// 重置当前预编辑与修饰键跟踪状态（用于失焦 `FocusOut` 或 `Reset`）
@@ -163,6 +192,7 @@ impl IbusSessionCore {
     /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
     pub fn process_key_event(&mut self, keyval: u32, keycode: u32, state: u32) -> IbusKeyOutcome {
         let _ = self.sync_shared_mode();
+        self.sync_shared_settings();
         let is_press = (state & IBUS_RELEASE_MASK) == 0;
         let evdev_key = ibus_keyval_to_evdev(keyval, keycode);
         update_session_modifiers(
@@ -188,7 +218,7 @@ impl IbusSessionCore {
         // CapsLock 键处理：若当前存在未完成拼音，直接提交英文字符上屏并重置；按键原生透传
         if evdev_key == KEY_CAPSLOCK {
             self.shift_sm.reset();
-            if is_press {
+            return if is_press {
                 let mut outcome = IbusKeyOutcome {
                     consumed: false,
                     ..Default::default()
@@ -213,16 +243,16 @@ impl IbusSessionCore {
                     outcome.mode_changed = Some(effective_mode);
                 }
                 self.consumed_keys.record_press(evdev_key, false);
-                return outcome;
+                outcome
             } else {
                 let was_consumed = self.consumed_keys.take_release(evdev_key);
                 // 在按键释放阶段仅记录消费状态，不根据滞后的硬件 state 掩码重新翻转锁定状态，
                 // 彻底杜绝松开按键时被旧状态覆盖而导致“必须按两下才能退出大写”
-                return IbusKeyOutcome {
+                IbusKeyOutcome {
                     consumed: was_consumed,
                     ..Default::default()
-                };
-            }
+                }
+            };
         }
 
         // 硬件修饰符校准：
@@ -249,8 +279,13 @@ impl IbusSessionCore {
         let ctrl_or_alt = ibus_state_has_ctrl_or_alt(state)
             || (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
 
-        let outcome =
+        let mut outcome =
             self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, self.is_caps_locked);
+        if self.is_full_width_char() {
+            if let Some(ref text) = outcome.commit_text {
+                outcome.commit_text = Some(waylan_core::to_full_width_string(text));
+            }
+        }
         self.consumed_keys.record_press(evdev_key, outcome.consumed);
         outcome
     }
@@ -297,7 +332,22 @@ impl IbusSessionCore {
         ctrl_or_alt: bool,
         is_caps_locked: bool,
     ) -> IbusKeyOutcome {
-        if ctrl_or_alt || is_caps_locked || self.mode == InputMode::English {
+        if ctrl_or_alt || is_caps_locked {
+            return IbusKeyOutcome::default();
+        }
+
+        // 若处于英文模式但开启了全角字符，直通字母转换为全角字符输出
+        if self.mode == InputMode::English {
+            if self.is_full_width_char() && !shift_active {
+                if let Some(ch) = keycode_to_char(evdev_key) {
+                    let full = waylan_core::to_full_width_char(ch);
+                    return IbusKeyOutcome {
+                        consumed: true,
+                        commit_text: Some(full.to_string()),
+                        ..Default::default()
+                    };
+                }
+            }
             return IbusKeyOutcome::default();
         }
 
@@ -745,5 +795,50 @@ mod tests {
             "退出大写锁定后丝滑保持中文模式"
         );
         assert!(zh_flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_ibus_shared_settings_sync_and_full_width() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        let trad_flag = Arc::new(AtomicBool::new(false));
+        let punct_flag = Arc::new(AtomicBool::new(true));
+        let char_flag = Arc::new(AtomicBool::new(false));
+
+        core.shared_traditional_chinese = Some(trad_flag.clone());
+        core.shared_full_width_punct = Some(punct_flag.clone());
+        core.shared_full_width_char = Some(char_flag.clone());
+
+        // 默认状态：简体、全角标点、半角字母
+        assert!(!core.engine.config.traditional_chinese);
+        assert!(core.punct_processor.full_width_punct);
+        assert!(!core.is_full_width_char());
+
+        // 1. 托盘触发切换为繁体
+        trad_flag.store(true, Ordering::Release);
+        let _ = core.process_key_event(0, 0, 0);
+        assert!(
+            core.engine.config.traditional_chinese,
+            "引擎应自动同步繁体设置"
+        );
+
+        // 2. 托盘触发切换为半角标点
+        punct_flag.store(false, Ordering::Release);
+        let outcome = core.process_key_event(b',' as u32, 51, 0);
+        assert_eq!(
+            outcome.commit_text,
+            Some(",".to_string()),
+            "半角标点模式下应输出半角逗号"
+        );
+
+        // 3. 托盘触发切换为全角字符，并在英文模式下敲击字母
+        char_flag.store(true, Ordering::Release);
+        core.mode = InputMode::English;
+        let letter_outcome = core.process_key_event(b'a' as u32, 30, 0);
+        assert_eq!(
+            letter_outcome.commit_text,
+            Some("ａ".to_string()),
+            "全角字符模式下英文应输出全角字母"
+        );
     }
 }

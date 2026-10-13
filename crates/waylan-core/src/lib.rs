@@ -189,6 +189,30 @@ pub trait ImeEngine: Send {
     fn reset(&mut self);
 }
 
+/// 将半角 ASCII 字符转换为全角字符
+///
+/// # 设计原理
+/// - **实现初衷**：满足输入法“全角/半角字符”切换功能，将标准 ASCII 英文字母、数字和符号转换为全角字符。
+/// - **核心优势**：纯栈内定长运算，无堆分配，遵循 Unicode 全角与半角字符标准映射。
+#[inline]
+pub fn to_full_width_char(c: char) -> char {
+    match c {
+        ' ' => '\u{3000}', // 全角空格
+        '!'..='~' => {
+            // 半角 ASCII 0x21..=0x7E 对应全角 0xFF01..=0xFF5E，偏移量为 0xFEE0
+            let code = c as u32 + 0xfee0;
+            char::from_u32(code).unwrap_or(c)
+        }
+        _ => c,
+    }
+}
+
+/// 将包含半角 ASCII 的字符串批量转换为全角字符串
+#[inline]
+pub fn to_full_width_string(s: &str) -> String {
+    s.chars().map(to_full_width_char).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +271,18 @@ mod tests {
     #[test]
     fn test_input_mode_default() {
         assert_eq!(InputMode::default(), InputMode::Chinese);
+    }
+
+    #[test]
+    fn test_to_full_width_conversion() {
+        assert_eq!(to_full_width_char('a'), 'ａ');
+        assert_eq!(to_full_width_char('A'), 'Ａ');
+        assert_eq!(to_full_width_char('1'), '１');
+        assert_eq!(to_full_width_char(' '), '\u{3000}');
+        assert_eq!(to_full_width_char('中'), '中');
+        assert_eq!(
+            to_full_width_string("hello 123!"),
+            "ｈｅｌｌｏ\u{3000}１２３！"
+        );
     }
 }

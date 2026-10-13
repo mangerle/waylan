@@ -210,7 +210,7 @@ pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSu
 
 /// 按照多级搜索策略加载简繁转换两级词库（复用 OpenCcDict 全局单例缓存，供单元测试使用）
 #[cfg(test)]
-pub fn load_opencc_dict() -> std::sync::Arc<OpenCcDict> {
+pub fn load_opencc_dict() -> Arc<OpenCcDict> {
     OpenCcDict::global()
 }
 
@@ -262,11 +262,12 @@ impl SessionConfigBundle {
             SwitchKey::Shift => ToggleKeyMode::Shift,
             SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
         };
-        let punct_processor = PunctuationProcessor::with_options(
+        let mut punct_processor = PunctuationProcessor::with_options(
             new_cfg.slash_to_dunhao,
             new_cfg.protect_digits_punctuation,
             new_cfg.auto_complete_pairs,
         );
+        punct_processor.full_width_punct = new_cfg.full_width_punct;
         let page_keys = PageKeyConfig::from(new_cfg.page_keys);
         let p_path = CustomPhraseManager::default_path();
         let custom_phrases = CustomPhraseManager::load_or_init(&p_path);
@@ -371,7 +372,7 @@ pub fn check_wayland_capabilities() -> WaylandCapabilities {
                 "[系统环境 警告] 无法直接连接默认 Wayland 会话 ({})，请确保 WAYLAND_DISPLAY 环境变量已设置。",
                 e
             );
-            waylan_wayland::WaylandCapabilities::default()
+            WaylandCapabilities::default()
         }
     }
 }

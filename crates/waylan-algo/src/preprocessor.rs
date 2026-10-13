@@ -124,6 +124,8 @@ pub struct PunctuationProcessor {
     pub protect_digits_punctuation: bool,
     /// 是否开启成对括号与引号自动补全并回退光标
     pub auto_complete_pairs: bool,
+    /// 是否开启全角标点映射（true 为全角中文标点，false 为半角英文标点）
+    pub full_width_punct: bool,
     /// 最近提交或输入的上下文文本缓存（用于无外部应用上下文时感知网址与邮箱模式）
     pub recent_context: String,
 }
@@ -137,6 +139,7 @@ impl Default for PunctuationProcessor {
             slash_to_dunhao: true,
             protect_digits_punctuation: true,
             auto_complete_pairs: true,
+            full_width_punct: true,
             recent_context: String::with_capacity(128),
         }
     }
@@ -160,6 +163,7 @@ impl PunctuationProcessor {
             slash_to_dunhao,
             protect_digits_punctuation,
             auto_complete_pairs,
+            full_width_punct: true,
             recent_context: String::with_capacity(128),
         }
     }
@@ -169,6 +173,7 @@ impl PunctuationProcessor {
         self.slash_to_dunhao = other.slash_to_dunhao;
         self.protect_digits_punctuation = other.protect_digits_punctuation;
         self.auto_complete_pairs = other.auto_complete_pairs;
+        self.full_width_punct = other.full_width_punct;
     }
 
     /// 重置成对引号的开闭记忆状态
@@ -283,6 +288,12 @@ impl PunctuationProcessor {
         ch: char,
         buffer: &str,
     ) -> Option<Vec<TextAction>> {
+        // 0. 半角标点模式：直接提交原始半角英文字符，不触发中文全角映射与成对符号转换
+        if !self.full_width_punct {
+            self.last_char_was_digit = false;
+            return Some(vec![TextAction::Commit(ch.to_string())]);
+        }
+
         // 1. 网址与邮箱模式感知：当前缓冲区末尾为 URL 或 Email 时，常见网络标点强制保持半角 ASCII
         if Self::is_url_or_email_mode(buffer) && ".:/_?#&=@~-+".contains(ch) {
             self.last_char_was_digit = false;
