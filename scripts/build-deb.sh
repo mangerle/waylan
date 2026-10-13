@@ -29,7 +29,8 @@ mkdir -p "${BUILD_ROOT}/usr/share/waylan/data"
 mkdir -p "${BUILD_ROOT}/usr/share/waylan/assets"
 mkdir -p "${BUILD_ROOT}/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "${BUILD_ROOT}/usr/share/applications"
-mkdir -p "${BUILD_ROOT}/usr/lib/systemd/user"
+mkdir -p "${BUILD_ROOT}/etc/xdg/autostart"
+mkdir -p "${BUILD_ROOT}/usr/lib/systemd/user/graphical-session.target.wants"
 
 # 1. 安装二进制可执行文件
 cp "${PROJECT_ROOT}/target/release/waylan" "${BUILD_ROOT}/usr/bin/waylan"
@@ -64,14 +65,17 @@ chmod 644 "${BUILD_ROOT}/usr/share/waylan/assets/"*.svg
 cp "${PROJECT_ROOT}/assets/waylan.svg" "${BUILD_ROOT}/usr/share/icons/hicolor/scalable/apps/waylan.svg"
 chmod 644 "${BUILD_ROOT}/usr/share/icons/hicolor/scalable/apps/waylan.svg"
 
-# 4. 安装桌面入口规范文件 (.desktop)
+# 4. 安装桌面入口规范文件 (.desktop) 与 XDG 自动启动项
 cp "${PROJECT_ROOT}/assets/waylan.desktop" "${BUILD_ROOT}/usr/share/applications/waylan.desktop"
 cp "${PROJECT_ROOT}/assets/waylan-settings.desktop" "${BUILD_ROOT}/usr/share/applications/waylan-settings.desktop"
 chmod 644 "${BUILD_ROOT}/usr/share/applications/"*.desktop
+cp "${PROJECT_ROOT}/assets/waylan.desktop" "${BUILD_ROOT}/etc/xdg/autostart/waylan.desktop"
+chmod 644 "${BUILD_ROOT}/etc/xdg/autostart/waylan.desktop"
 
-# 5. 安装 systemd 用户服务单元
+# 5. 安装 systemd 用户服务单元并建立图形会话全局默认启动软链接
 cp "${PROJECT_ROOT}/systemd/user/waylan.service" "${BUILD_ROOT}/usr/lib/systemd/user/waylan.service"
 chmod 644 "${BUILD_ROOT}/usr/lib/systemd/user/waylan.service"
+ln -sf ../waylan.service "${BUILD_ROOT}/usr/lib/systemd/user/graphical-session.target.wants/waylan.service"
 
 echo "[微澜打包] 步骤 3/4: 生成 DEBIAN 包控制元数据与安装触发钩子..."
 
@@ -90,40 +94,54 @@ Description: 专为 Wayland 打造的现代轻量纯 Rust 中文输入法
  日期时间二级展开和图形化偏好设置中心。
 EOF
 
-# 写入 DEBIAN/postinst (安装后钩子)
+# 写入 DEBIAN/postinst (安装后钩子：自动刷新系统缓存并即刻拉起/重启当前桌面服务)
 cat << 'EOF' > "${BUILD_ROOT}/DEBIAN/postinst"
 #!/bin/sh
 set -e
 
 if [ "$1" = "configure" ]; then
-    # 刷新图标缓存
+    # 1. 刷新图标缓存
     if which gtk-update-icon-cache >/dev/null 2>&1; then
         gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
     fi
 
-    # 刷新桌面数据库
+    # 2. 刷新桌面数据库
     if which update-desktop-database >/dev/null 2>&1; then
         update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
     fi
 
+    # 3. 自动探测当前所有活跃登录用户的图形桌面会话，立即重载配置并拉起/平滑重启后台服务（开箱即用，无需用户手动敲命令）
+    for user_dir in /run/user/*; do
+        if [ -d "$user_dir" ]; then
+            uid="$(basename "$user_dir")"
+            case "$uid" in
+                ''|*[!0-9]*) continue ;;
+            esac
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl --user -M "${uid}@" daemon-reload >/dev/null 2>&1 || true
+                systemctl --user -M "${uid}@" restart waylan.service >/dev/null 2>&1 || true
+            fi
+        fi
+    done
+
     echo "============================================================"
-    echo "  微澜 (WayLan) 中文输入法已成功安装！"
-    echo "  - 启动输入法守护进程: systemctl --user enable --now waylan.service"
-    echo "  - 打开偏好设置窗口:   waylan-settings"
+    echo "  微澜 (WayLan) 中文输入法已成功安装并自动就绪！"
+    echo "  - 后台守护进程已自动拉起并配置开机自启，可直接在输入框中打字"
+    echo "  - 打开偏好设置窗口: waylan-settings"
     echo "============================================================"
 fi
 exit 0
 EOF
 chmod 755 "${BUILD_ROOT}/DEBIAN/postinst"
 
-# 写入 DEBIAN/prerm (卸载前钩子)
+# 写入 DEBIAN/prerm (卸载与升级前钩子：安全停止在途事务与释放文件占用)
 cat << 'EOF' > "${BUILD_ROOT}/DEBIAN/prerm"
 #!/bin/sh
 set -e
 
 case "$1" in
-    remove|deconfigure|upgrade)
-        # 1. 遍历当前所有活跃登录用户的 runtime 会话，停止并禁用 waylan.service
+    remove|deconfigure)
+        # 卸载时：遍历所有活跃用户会话，停止并禁用服务
         for user_dir in /run/user/*; do
             if [ -d "$user_dir" ]; then
                 uid="$(basename "$user_dir")"
@@ -137,16 +155,27 @@ case "$1" in
             fi
         done
 
-        # 2. 兼容当前已在用户上下文中的调用场景
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl --user stop waylan.service >/dev/null 2>&1 || true
-            systemctl --user disable waylan.service >/dev/null 2>&1 || true
-        fi
-
-        # 3. 兜底向运行中的微澜守护进程与设置窗口发送终止信号
         if command -v pkill >/dev/null 2>&1; then
             pkill -TERM -x waylan >/dev/null 2>&1 || true
             pkill -TERM -x waylan-settings >/dev/null 2>&1 || true
+        fi
+        ;;
+    upgrade)
+        # 升级时：仅平滑停止旧版本守护进程以释放二进制文件占用（新版本将在 postinst 中自动重启）
+        for user_dir in /run/user/*; do
+            if [ -d "$user_dir" ]; then
+                uid="$(basename "$user_dir")"
+                case "$uid" in
+                    ''|*[!0-9]*) continue ;;
+                esac
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --user -M "${uid}@" stop waylan.service >/dev/null 2>&1 || true
+                fi
+            fi
+        done
+
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -TERM -x waylan >/dev/null 2>&1 || true
         fi
         ;;
     failed-upgrade)
