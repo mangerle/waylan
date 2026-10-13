@@ -51,6 +51,6 @@ assets = [
     ["../../assets/*.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["../../assets/waylan.desktop", "usr/share/applications/waylan.desktop", "644"],
     ["../../assets/waylan-settings.desktop", "usr/share/applications/waylan-settings.desktop", "644"],
-    ["../../assets/waylan.desktop", "etc/xdg/autostart/waylan.desktop", "644"],
+    ["../../assets/waylan-autostart.desktop", "etc/xdg/autostart/waylan.desktop", "644"],
     ["../../systemd/user/waylan.service", "usr/lib/systemd/user/waylan.service", "644"],
 ]
