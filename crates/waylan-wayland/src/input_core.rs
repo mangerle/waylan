@@ -191,6 +191,8 @@ pub enum KeyProcessAction {
     },
     /// 清空预编辑并重置状态（如 ESC）
     Reset,
+    /// 唤出大网格候选面板
+    ExpandGrid,
 }
 
 /// 拼音组词状态按键决策输入参数
@@ -202,8 +204,8 @@ pub struct CompositionKeyParams {
     pub now: u64,
 }
 
-/// 处理二级展开卡片导航或常规上下候选词高亮切换
-fn handle_expanded_or_arrow_key(
+/// 处理二级展开卡片导航（Tab 键展开）
+fn handle_expanded_tab_key(
     engine: &mut AlgoEngine,
     punct_processor: &mut PunctuationProcessor,
     key: u32,
@@ -231,18 +233,77 @@ fn handle_expanded_or_arrow_key(
                 punct_processor.record_commit(&committed);
                 return Some(KeyProcessAction::Commit(committed));
             }
-        }
-    } else {
-        if key == KEY_DOWN {
-            engine.next_candidate();
-            return Some(KeyProcessAction::Handled);
-        }
-        if key == KEY_UP {
-            engine.prev_candidate();
             return Some(KeyProcessAction::Handled);
         }
     }
     None
+}
+
+/// 处理智能上下文流转方向键导航（以微信输入法为代表的现代输入流转模型）
+///
+/// # 设计原理
+/// - **实现初衷**：在横排候选框视觉直觉（左右选词、上下翻页）与拼音字母长句纠错（左右移动光标）之间实现无缝自适应流转。
+/// - **选词模式（光标在末尾）**：
+///   - `KEY_RIGHT`：向右移动候选词高亮，到达页末时自动翻下一页；
+///   - `KEY_LEFT`：向左移动候选词高亮；若已在第 1 页第 1 候选词，再次按左键触发边缘溢出，进入拼音光标编辑模式；
+///     若在非第 1 页第 1 候选词，则翻回上一页末尾；
+///   - `KEY_DOWN`：翻下一页；若已在末页或无法翻页，唤出大网格候选面板；
+///   - `KEY_UP`：翻上一页；
+/// - **拼音光标编辑模式（光标在拼音内部）**：
+///   - `KEY_LEFT`：光标向左移动一个字符；
+///   - `KEY_RIGHT`：光标向右移动一个字符，移到末尾时自动恢复为选词模式；
+///   - `KEY_DOWN`：翻下一页；末页时展开大网格；
+///   - `KEY_UP`：翻上一页。
+fn handle_smart_navigation_key(engine: &mut AlgoEngine, key: u32) -> Option<KeyProcessAction> {
+    let is_cursor_at_end = engine.cursor() >= engine.raw_input().len();
+
+    match key {
+        KEY_RIGHT => {
+            if is_cursor_at_end {
+                let cand_len = engine.candidates().len();
+                if cand_len > 0 {
+                    if engine.selected_index + 1 < cand_len {
+                        engine.selected_index += 1;
+                    } else if engine.can_next_page() {
+                        engine.next_page();
+                    }
+                }
+            } else {
+                engine.move_cursor_right();
+            }
+            Some(KeyProcessAction::Handled)
+        }
+        KEY_LEFT => {
+            if is_cursor_at_end {
+                if engine.selected_index > 0 {
+                    engine.selected_index -= 1;
+                } else if engine.can_prev_page() {
+                    engine.prev_page();
+                    engine.selected_index = engine.candidates().len().saturating_sub(1);
+                } else {
+                    engine.move_cursor_left();
+                }
+            } else {
+                engine.move_cursor_left();
+            }
+            Some(KeyProcessAction::Handled)
+        }
+        KEY_DOWN => {
+            if engine.can_next_page() {
+                engine.next_page();
+                Some(KeyProcessAction::Handled)
+            } else {
+                Some(KeyProcessAction::ExpandGrid)
+            }
+        }
+        KEY_UP => {
+            if engine.can_prev_page() {
+                engine.prev_page();
+            }
+            Some(KeyProcessAction::Handled)
+        }
+        _ => None,
+    }
 }
 
 /// 选取指定索引候选词并转换为协议决策枚举
@@ -280,8 +341,14 @@ pub fn handle_composition_key_with_params(
         now,
     } = params;
 
-    if let Some(act) = handle_expanded_or_arrow_key(engine, punct_processor, key) {
+    if let Some(act) = handle_expanded_tab_key(engine, punct_processor, key) {
         return Some(act);
+    }
+
+    if !engine.is_expanded {
+        if let Some(act) = handle_smart_navigation_key(engine, key) {
+            return Some(act);
+        }
     }
 
     if engine.raw_input().starts_with('v') {
@@ -310,6 +377,10 @@ pub fn handle_composition_key_with_params(
     }
 
     if key == KEY_SPACE {
+        if engine.cursor() < engine.raw_input().len() {
+            engine.move_cursor_to_end();
+            return Some(KeyProcessAction::Handled);
+        }
         let sel = engine.selected_index;
         return Some(select_candidate_action(engine, punct_processor, sel, now));
     }
@@ -339,14 +410,6 @@ pub fn handle_composition_key_with_params(
             engine.prev_page();
         } else {
             engine.next_page();
-        }
-        return Some(KeyProcessAction::Handled);
-    }
-    if key == KEY_LEFT || key == KEY_RIGHT {
-        if key == KEY_LEFT {
-            engine.move_cursor_left();
-        } else {
-            engine.move_cursor_right();
         }
         return Some(KeyProcessAction::Handled);
     }

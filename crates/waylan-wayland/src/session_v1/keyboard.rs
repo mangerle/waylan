@@ -159,7 +159,7 @@ fn handle_v1_key_press(
         ) {
             match action {
                 KeyProcessAction::PassThrough => {}
-                KeyProcessAction::Handled => {
+                KeyProcessAction::Handled | KeyProcessAction::ExpandGrid => {
                     let preedit = state.engine.formatted_preedit();
                     let cursor = state.engine.formatted_cursor_byte_offset() as i32;
                     state.refresh_candidate_surface();

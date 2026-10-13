@@ -303,7 +303,9 @@ impl IbusSessionCore {
 
         match action {
             KeyProcessAction::PassThrough => None,
-            KeyProcessAction::Handled | KeyProcessAction::Reset => Some(IbusKeyOutcome {
+            KeyProcessAction::Handled
+            | KeyProcessAction::Reset
+            | KeyProcessAction::ExpandGrid => Some(IbusKeyOutcome {
                 consumed: true,
                 update_ui: true,
                 ..Default::default()

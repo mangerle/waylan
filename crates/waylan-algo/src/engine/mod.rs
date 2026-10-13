@@ -270,6 +270,34 @@ impl AlgoEngine {
         &self.current_candidates
     }
 
+    /// 检查是否能够向后（下一页）翻页
+    pub fn can_next_page(&self) -> bool {
+        let page_size = self.config.page_size.max(1);
+        let max_page = self.all_candidates_cache.len().saturating_sub(1) / page_size;
+        self.page_index < max_page
+    }
+
+    /// 检查是否能够向前（上一页）翻页
+    pub fn can_prev_page(&self) -> bool {
+        self.page_index > 0
+    }
+
+    /// 获取当前展示页码（从 0 开始）
+    pub fn page_index(&self) -> usize {
+        self.page_index
+    }
+
+    /// 将拼音编辑光标重置回末尾并刷新候选列表（恢复选词模式）
+    pub fn move_cursor_to_end(&mut self) -> &[AlgoCandidate] {
+        if self.composition.move_to_end() {
+            self.page_index = 0;
+            self.selected_index = 0;
+            self.is_expanded = false;
+            self.recompute_candidates();
+        }
+        &self.current_candidates
+    }
+
     /// 根据当前页码与页面大小从全量候选缓存池中截取当前展示页切片
     pub(crate) fn update_page_candidates(&mut self) {
         let page_size = self.config.page_size.max(1);

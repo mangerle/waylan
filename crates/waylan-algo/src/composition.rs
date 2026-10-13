@@ -97,6 +97,16 @@ impl Composition {
         true
     }
 
+    /// 将插入光标直接移动至缓冲区末尾，返回光标是否发生有效位移
+    pub fn move_to_end(&mut self) -> bool {
+        if self.cursor_position < self.raw_buffer.len() {
+            self.cursor_position = self.raw_buffer.len();
+            true
+        } else {
+            false
+        }
+    }
+
     /// 设置光标到指定位置
     ///
     /// # Errors
@@ -223,5 +233,16 @@ mod tests {
         let comp = Composition::with_buffer("nihao");
         assert_eq!(comp.as_str(), "nihao");
         assert_eq!(comp.cursor(), 5);
+    }
+
+    #[test]
+    fn test_move_to_end() {
+        let mut comp = Composition::with_buffer("nihao");
+        comp.move_cursor_left();
+        comp.move_cursor_left();
+        assert_eq!(comp.cursor(), 3);
+        assert!(comp.move_to_end());
+        assert_eq!(comp.cursor(), 5);
+        assert!(!comp.move_to_end());
     }
 }

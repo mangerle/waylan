@@ -227,6 +227,12 @@ pub fn process_composition_key(
             session.update_preedit(&preedit);
             Some((true, None))
         }
+        KeyProcessAction::ExpandGrid => {
+            session.is_grid_expanded = true;
+            session.grid_selected_index = session.engine.selected_index;
+            session.refresh_candidate_surface();
+            Some((true, None))
+        }
         KeyProcessAction::Commit(committed) => {
             session.commit_text(&committed);
             Some((true, Some(committed)))

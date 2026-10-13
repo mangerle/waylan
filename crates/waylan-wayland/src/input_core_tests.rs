@@ -233,3 +233,84 @@ fn test_v_mode_composition_keys() {
     assert_eq!(act, Some(KeyProcessAction::Commit("100".to_string())));
     assert!(engine.raw_input().is_empty());
 }
+
+#[test]
+fn test_smart_navigation_selection_and_overflow_to_cursor_edit() {
+    let mut engine =
+        waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
+    let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
+    let page_keys = PageKeyConfig::MinusEqual;
+
+    // 1. 输入拥有多个候选词的 "xian"（包含“西安”、“先”、“现”、“显”等）
+    for ch in "xian".chars() {
+        engine.push_char(ch);
+    }
+    assert_eq!(engine.cursor(), 4);
+    assert_eq!(engine.selected_index, 0);
+    assert!(engine.candidates().len() >= 2);
+
+    // 2. 选词模式下按 Right：移动候选词高亮
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.selected_index, 1);
+    assert_eq!(engine.cursor(), 4);
+
+    // 3. 按 Left：退回高亮至第 1 候选词
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.selected_index, 0);
+    assert_eq!(engine.cursor(), 4);
+
+    // 4. 在第 1 页第 1 候选词再次按 Left：边缘溢出切入拼音光标编辑模式
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.cursor(), 3);
+
+    // 5. 拼音光标编辑模式下按 Left：光标继续左移
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.cursor(), 2);
+
+    // 6. 拼音光标编辑模式下按 Right：光标向右移动
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.cursor(), 3);
+
+    // 7. 拼音光标编辑模式下按空格：光标移回末尾并恢复选词模式
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::Handled));
+    assert_eq!(engine.cursor(), 4);
+    assert_eq!(engine.selected_index, 0);
+
+    // 8. 选词模式下再次按空格：确认候选词上屏
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
+    assert!(matches!(act, Some(KeyProcessAction::Commit(_))));
+    assert!(engine.raw_input().is_empty());
+}
+
+#[test]
+fn test_smart_navigation_down_page_and_expand_grid() {
+    let mut engine =
+        waylan_algo::AlgoEngine::with_sample_data(waylan_algo::types::AlgoConfig::default());
+    let mut punct = waylan_algo::preprocessor::PunctuationProcessor::new();
+    let page_keys = PageKeyConfig::MinusEqual;
+
+    engine.push_char('n');
+    engine.push_char('i');
+
+    // 连续按 Down 翻页，直到最后一页触发 ExpandGrid
+    while engine.can_next_page() {
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_DOWN, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+    }
+
+    // 已经处于末页，再次按 Down 唤出大网格候选面板
+    let act = handle_composition_key(&mut engine, &mut punct, KEY_DOWN, false, page_keys, 0);
+    assert_eq!(act, Some(KeyProcessAction::ExpandGrid));
+
+    // 按 Up 翻回上一页
+    if engine.can_prev_page() {
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_UP, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+    }
+}
