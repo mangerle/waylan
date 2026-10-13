@@ -1,0 +1,51 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        # 卸载时：遍历所有活跃用户会话，停止并禁用服务
+        for user_dir in /run/user/*; do
+            if [ -d "$user_dir" ]; then
+                uid="$(basename "$user_dir")"
+                case "$uid" in
+                    ''|*[!0-9]*) continue ;;
+                esac
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --user -M "${uid}@" stop waylan.service >/dev/null 2>&1 || true
+                    systemctl --user -M "${uid}@" disable waylan.service >/dev/null 2>&1 || true
+                fi
+            fi
+        done
+
+        rm -f /usr/lib/systemd/user/graphical-session.target.wants/waylan.service
+
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -TERM -x waylan >/dev/null 2>&1 || true
+            pkill -TERM -x waylan-settings >/dev/null 2>&1 || true
+        fi
+        ;;
+    upgrade)
+        # 升级时：仅平滑停止旧版本守护进程以释放二进制文件占用（新版本将在 postinst 中自动重启）
+        for user_dir in /run/user/*; do
+            if [ -d "$user_dir" ]; then
+                uid="$(basename "$user_dir")"
+                case "$uid" in
+                    ''|*[!0-9]*) continue ;;
+                esac
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --user -M "${uid}@" stop waylan.service >/dev/null 2>&1 || true
+                fi
+            fi
+        done
+
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -TERM -x waylan >/dev/null 2>&1 || true
+        fi
+        ;;
+    failed-upgrade)
+        ;;
+    *)
+        ;;
+esac
+
+exit 0

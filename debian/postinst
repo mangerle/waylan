@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    # 1. 刷新图标缓存
+    if which gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    fi
+
+    # 2. 刷新桌面数据库
+    if which update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+    fi
+
+    # 3. 建立 systemd 图形会话默认启用软链接
+    mkdir -p /usr/lib/systemd/user/graphical-session.target.wants
+    ln -sf ../waylan.service /usr/lib/systemd/user/graphical-session.target.wants/waylan.service
+
+    # 4. 自动探测当前所有活跃登录用户的图形桌面会话，立即重载配置并拉起/平滑重启后台服务（开箱即用，无需用户手动敲命令）
+    for user_dir in /run/user/*; do
+        if [ -d "$user_dir" ]; then
+            uid="$(basename "$user_dir")"
+            case "$uid" in
+                ''|*[!0-9]*) continue ;;
+            esac
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl --user -M "${uid}@" daemon-reload >/dev/null 2>&1 || true
+                systemctl --user -M "${uid}@" restart waylan.service >/dev/null 2>&1 || true
+            fi
+        fi
+    done
+
+    echo "============================================================"
+    echo "  微澜 (WayLan) 中文输入法已成功安装并自动就绪！"
+    echo "  - 后台守护进程已自动拉起并配置开机自启，可直接在输入框中打字"
+    echo "  - 打开偏好设置窗口: waylan-settings"
+    echo "============================================================"
+fi
+exit 0

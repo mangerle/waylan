@@ -24,3 +24,31 @@ zbus.workspace = true
 signal-hook.workspace = true
 tempfile.workspace = true
 rustix.workspace = true
+
+[package.metadata.deb]
+name = "waylan"
+maintainer = "WayLan Contributors <waylan@localhost>"
+copyright = "2026, WayLan Contributors"
+extended-description = """
+微澜 (WayLan) 是一款面向现代 Linux Wayland 合成器（Hyprland、Sway、KDE、GNOME）
+设计的轻量级中文拼音输入法守护进程。具备智能算法、首字母简拼、剪贴板联动、
+日期时间二级展开和图形化偏好设置中心。
+"""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+maintainer-scripts = "../../debian"
+assets = [
+    ["target/release/waylan", "usr/bin/waylan", "755"],
+    ["target/release/waylan-settings", "usr/bin/waylan-settings", "755"],
+    ["../../data/base.dict.bin", "usr/share/waylan/data/base.dict.bin", "644"],
+    ["../../data/aux.dict.bin", "usr/share/waylan/data/aux.dict.bin", "644"],
+    ["../../data/bigram.table.bin", "usr/share/waylan/data/bigram.table.bin", "644"],
+    ["../../data/opencc.dict.bin", "usr/share/waylan/data/opencc.dict.bin", "644"],
+    ["../../data/dicts/**/*", "usr/share/waylan/dicts/", "644"],
+    ["../../assets/waylan.svg", "usr/share/icons/hicolor/scalable/apps/waylan.svg", "644"],
+    ["../../assets/waylan.desktop", "usr/share/applications/waylan.desktop", "644"],
+    ["../../assets/waylan-settings.desktop", "usr/share/applications/waylan-settings.desktop", "644"],
+    ["../../assets/waylan.desktop", "etc/xdg/autostart/waylan.desktop", "644"],
+    ["../../systemd/user/waylan.service", "usr/lib/systemd/user/waylan.service", "644"],
+]
