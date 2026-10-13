@@ -157,10 +157,16 @@ fn ensure_environment_d_config(home_path: &Path, comp_dir: &Path) {
     }
 }
 
-/// 检查并在 GNOME `org.gnome.desktop.input-sources` 中注册并激活 `('ibus', 'waylan')`
+/// 检查并在 GNOME `org.gnome.desktop.input-sources` 中将 `('ibus', 'waylan')` 注册并置顶为首选输入源
 pub fn ensure_gnome_input_source_registered() {
+    update_gsettings_source_key("sources");
+    update_gsettings_source_key("mru-sources");
+}
+
+/// 读取并更新指定的 GSettings 输入源键（将微澜置顶）
+fn update_gsettings_source_key(key: &str) {
     let Ok(out) = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.input-sources", "sources"])
+        .args(["get", "org.gnome.desktop.input-sources", key])
         .output()
     else {
         return;
@@ -170,43 +176,82 @@ pub fn ensure_gnome_input_source_registered() {
     }
 
     let current = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if let Some(updated) = append_waylan_to_gsettings_sources(&current) {
+    if let Some(updated) = prioritize_waylan_in_gsettings_sources(&current) {
         if let Ok(st) = Command::new("gsettings")
-            .args([
-                "set",
-                "org.gnome.desktop.input-sources",
-                "sources",
-                &updated,
-            ])
+            .args(["set", "org.gnome.desktop.input-sources", key, &updated])
             .status()
         {
             if st.success() {
                 info!(
-                    "[微澜 IBus] 已将 ('ibus', 'waylan') 合并至 GNOME 系统输入源列表: {}",
-                    updated
+                    "[微澜 IBus] 已将 ('ibus', 'waylan') 置顶同步至 GNOME 系统 {} 列表: {}",
+                    key, updated
                 );
             }
         }
     }
 }
 
-/// 在 `gsettings` 输入源列表字符串中追加 `('ibus', 'waylan')`（若已存在则返回 `None`）
-pub fn append_waylan_to_gsettings_sources(raw: &str) -> Option<String> {
+/// 从 GVariant 元组数组字符串中解析提取所有的输入源项 `('type', 'id')`
+fn parse_gsettings_source_tuples(raw: &str) -> Vec<String> {
     let trimmed = raw.trim();
-    if trimmed.contains("('ibus', 'waylan')") {
-        return None;
-    }
-    if trimmed == "@a(ss) []" || trimmed == "[]" {
-        return Some("[('ibus', 'waylan')]".to_string());
-    }
-    if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        let inner = trimmed[1..trimmed.len() - 1].trim();
-        if inner.is_empty() {
-            return Some("[('ibus', 'waylan')]".to_string());
+    let bracket_content = if let (Some(start), Some(end)) = (trimmed.find('['), trimmed.rfind(']'))
+    {
+        if start < end {
+            &trimmed[start + 1..end]
+        } else {
+            ""
         }
-        return Some(format!("[{}, ('ibus', 'waylan')]", inner));
+    } else {
+        ""
+    };
+
+    let mut items = Vec::new();
+    let mut in_tuple = false;
+    let mut current = String::new();
+    for ch in bracket_content.chars() {
+        if ch == '(' {
+            in_tuple = true;
+            current.clear();
+            current.push(ch);
+        } else if ch == ')' {
+            if in_tuple {
+                current.push(ch);
+                items.push(current.clone());
+                current.clear();
+                in_tuple = false;
+            }
+        } else if in_tuple {
+            current.push(ch);
+        }
     }
-    None
+    items
+}
+
+/// 在 `gsettings` 输入源列表字符串中将 `('ibus', 'waylan')` 置顶为首选输入源
+///
+/// 若微澜已在首位，返回 `None`；
+/// 若微澜不在首位（或不在列表中），返回重新排序后的新字符串，将微澜置于首位并保持其余项的原有顺序。
+pub fn prioritize_waylan_in_gsettings_sources(raw: &str) -> Option<String> {
+    const WAYLAN_ENTRY: &str = "('ibus', 'waylan')";
+    let items = parse_gsettings_source_tuples(raw);
+
+    // 若列表首项已经是微澜，无需变更
+    if let Some(first) = items.first() {
+        if first.trim() == WAYLAN_ENTRY {
+            return None;
+        }
+    }
+
+    let mut new_items = Vec::with_capacity(items.len().saturating_add(1));
+    new_items.push(WAYLAN_ENTRY.to_string());
+    for item in items {
+        let trimmed = item.trim();
+        if trimmed != WAYLAN_ENTRY {
+            new_items.push(trimmed.to_string());
+        }
+    }
+
+    Some(format!("[{}]", new_items.join(", ")))
 }
 
 #[cfg(test)]
@@ -214,18 +259,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_append_waylan_to_gsettings_sources() {
+    fn test_prioritize_waylan_in_gsettings_sources() {
+        // 微澜在末尾时，应被提升至首位
         assert_eq!(
-            append_waylan_to_gsettings_sources("[('xkb', 'cn'), ('ibus', 'libpinyin')]").as_deref(),
-            Some("[('xkb', 'cn'), ('ibus', 'libpinyin'), ('ibus', 'waylan')]")
+            prioritize_waylan_in_gsettings_sources(
+                "[('xkb', 'cn'), ('ibus', 'libpinyin'), ('ibus', 'waylan')]"
+            )
+            .as_deref(),
+            Some("[('ibus', 'waylan'), ('xkb', 'cn'), ('ibus', 'libpinyin')]")
         );
+
+        // 微澜不在列表中时，应插入至首位
         assert_eq!(
-            append_waylan_to_gsettings_sources("@a(ss) []").as_deref(),
+            prioritize_waylan_in_gsettings_sources("[('xkb', 'cn'), ('ibus', 'libpinyin')]")
+                .as_deref(),
+            Some("[('ibus', 'waylan'), ('xkb', 'cn'), ('ibus', 'libpinyin')]")
+        );
+
+        // 空列表情况
+        assert_eq!(
+            prioritize_waylan_in_gsettings_sources("@a(ss) []").as_deref(),
             Some("[('ibus', 'waylan')]")
         );
+
+        // 微澜已在首位时，无需变更返回 None
         assert!(
-            append_waylan_to_gsettings_sources("[('xkb', 'cn'), ('ibus', 'waylan')]").is_none()
+            prioritize_waylan_in_gsettings_sources("[('ibus', 'waylan'), ('xkb', 'cn')]").is_none()
         );
+        assert!(prioritize_waylan_in_gsettings_sources("[('ibus', 'waylan')]").is_none());
     }
 
     #[test]

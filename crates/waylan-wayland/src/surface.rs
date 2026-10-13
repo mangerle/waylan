@@ -443,9 +443,9 @@ impl CandidateSurfaceManager {
         let len = rgba.len();
         if let Some(ref mut mmap) = slot.mmap {
             if mmap.len() >= len {
-                let src_chunks = rgba.chunks_exact(4);
-                let dst_chunks = mmap[..len].chunks_exact_mut(4);
-                for (src, dst) in src_chunks.zip(dst_chunks) {
+                let src_chunks = rgba.as_chunks::<4>().0;
+                let dst_chunks = mmap[..len].as_chunks_mut::<4>().0;
+                for (src, dst) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
                     dst[0] = src[2]; // B
                     dst[1] = src[1]; // G
                     dst[2] = src[0]; // R
@@ -460,7 +460,7 @@ impl CandidateSurfaceManager {
             return None;
         }
         let mut buf = Vec::with_capacity(len);
-        for src in rgba.chunks_exact(4) {
+        for src in rgba.as_chunks::<4>().0 {
             buf.push(src[2]);
             buf.push(src[1]);
             buf.push(src[0]);
