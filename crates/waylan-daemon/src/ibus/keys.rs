@@ -659,4 +659,67 @@ mod tests {
         assert!(ni_out.consumed, "解除大写锁定后应恢复中文拼音输入");
         assert_eq!(core.engine.raw_input(), "n");
     }
+
+    #[test]
+    fn test_ibus_caps_lock_with_shift_interaction() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+
+        // 1. 中文模式下开启 CapsLock
+        let caps_on = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
+        assert_eq!(caps_on.mode_changed, Some(InputMode::English));
+        assert!(core.is_caps_locked);
+
+        // 2. 大写锁定期间，敲击 Shift 键（单按或误触），状态机不应破坏基准中文模式
+        let shift_down = core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK);
+        assert_eq!(shift_down.mode_changed, None);
+        let shift_up =
+            core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK | IBUS_RELEASE_MASK);
+        assert_eq!(shift_up.mode_changed, None);
+        assert_eq!(
+            core.mode,
+            InputMode::Chinese,
+            "大写锁定时敲击 Shift 不得篡改基准中文模式"
+        );
+
+        // 3. 敲击 CapsLock 解除锁定：必须一次性成功回到中文模式，无需按两下
+        let caps_off_press = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_LOCK_MASK);
+        assert_eq!(
+            caps_off_press.mode_changed,
+            Some(InputMode::Chinese),
+            "仅按一次 CapsLock 必须立即切回中文"
+        );
+        let caps_off_rel = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_RELEASE_MASK);
+        assert_eq!(caps_off_rel.mode_changed, None);
+        assert!(!core.is_caps_locked);
+
+        // 4. 后续输入正常进入拼音输入
+        let letter = core.process_key_event(b'h' as u32, 0, 0);
+        assert!(letter.consumed);
+        assert_eq!(core.engine.raw_input(), "h");
+    }
+
+    #[test]
+    fn test_ibus_caps_lock_in_english_mode_no_flicker() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        core.mode = InputMode::English;
+
+        // 1. 在纯英文模式下开启 CapsLock：不触发任何 mode_changed 信号
+        let caps_on = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
+        assert_eq!(
+            caps_on.mode_changed, None,
+            "英文模式下开启 CapsLock 不应派发任何模式变更信号"
+        );
+        assert!(core.is_caps_locked);
+
+        // 2. 在纯英文模式下关闭 CapsLock：不触发任何 mode_changed 信号，防止状态栏闪烁中文
+        let caps_off = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_LOCK_MASK);
+        assert_eq!(
+            caps_off.mode_changed, None,
+            "英文模式下关闭 CapsLock 绝不应闪现中文模式"
+        );
+        assert!(!core.is_caps_locked);
+        assert_eq!(core.mode, InputMode::English, "始终保持纯英文模式");
+    }
 }
