@@ -29,11 +29,13 @@ fn test_tray_mode_toggle() {
 #[test]
 fn test_tray_menu_layout_and_event() {
     let is_chinese = Arc::new(AtomicBool::new(true));
+    let is_caps_locked = Arc::new(AtomicBool::new(false));
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
     let menu = DBusMenu::new(
         Arc::clone(&is_chinese),
+        Arc::clone(&is_caps_locked),
         Arc::clone(&reload_requested),
         exit_requested,
         Arc::new(AtomicBool::new(false)),
@@ -63,11 +65,13 @@ fn test_tray_menu_layout_and_event() {
 #[test]
 fn test_tray_menu_exit_event() {
     let is_chinese = Arc::new(AtomicBool::new(true));
+    let is_caps_locked = Arc::new(AtomicBool::new(false));
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, _icon_update_rx) = std::sync::mpsc::sync_channel::<()>(8);
     let menu = DBusMenu::new(
         is_chinese,
+        is_caps_locked,
         reload_requested,
         Arc::clone(&exit_requested),
         Arc::new(AtomicBool::new(false)),

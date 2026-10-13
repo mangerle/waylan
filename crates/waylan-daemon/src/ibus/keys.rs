@@ -225,44 +225,32 @@ impl IbusSessionCore {
             }
         }
 
-        let is_caps_locked = (state & IBUS_LOCK_MASK) != 0;
-        let mut caps_mode_changed = None;
-        if is_caps_locked != self.is_caps_locked {
-            self.update_caps_lock_state(is_caps_locked);
-            if self.mode != InputMode::English {
-                let effective_mode = if is_caps_locked {
-                    InputMode::English
-                } else {
-                    self.mode
-                };
-                caps_mode_changed = Some(effective_mode);
-            }
+        // 硬件修饰符校准：
+        // 若客户端传入的 state 明确带有 IBUS_LOCK_MASK，则确保大写锁定置为激活；
+        // 若 state 没有携带 IBUS_LOCK_MASK，绝不能直接盲目推断为“大写已关闭”，
+        // 因为众多 Wayland/XWayland 客户端并不会在每个字符按键上传递 Lock 掩码，
+        // 唯有当 evdev_key == KEY_CAPSLOCK 时由按键事件本身权威翻转锁定状态。
+        if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked {
+            self.update_caps_lock_state(true);
         }
 
         // 大写锁定期间严格重置并旁路 Shift 单击中英文切换状态机，防止输入大写符号时误篡改基准中英模式
-        let toggled_mode = if self.is_caps_locked || is_caps_locked {
+        let toggled_mode = if self.is_caps_locked {
             self.shift_sm.reset();
             None
         } else {
             self.shift_sm.on_key_event(evdev_key, is_press, self.mode)
         };
         if !is_press {
-            let mut out = self.handle_key_release(evdev_key, toggled_mode);
-            if out.mode_changed.is_none() {
-                out.mode_changed = caps_mode_changed;
-            }
-            return out;
+            return self.handle_key_release(evdev_key, toggled_mode);
         }
 
         let shift_active = (state & IBUS_SHIFT_MASK) != 0 || (self.mods_depressed & MOD_SHIFT) != 0;
         let ctrl_or_alt = ibus_state_has_ctrl_or_alt(state)
             || (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
 
-        let mut outcome =
-            self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, is_caps_locked);
-        if outcome.mode_changed.is_none() {
-            outcome.mode_changed = caps_mode_changed;
-        }
+        let outcome =
+            self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, self.is_caps_locked);
         self.consumed_keys.record_press(evdev_key, outcome.consumed);
         outcome
     }
@@ -721,5 +709,41 @@ mod tests {
         );
         assert!(!core.is_caps_locked);
         assert_eq!(core.mode, InputMode::English, "始终保持纯英文模式");
+    }
+
+    #[test]
+    fn test_ibus_caps_lock_tray_flags_and_subsequent_keys() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        let zh_flag = Arc::new(AtomicBool::new(true));
+        let caps_flag = Arc::new(AtomicBool::new(false));
+        core.shared_is_chinese = Some(zh_flag.clone());
+        core.shared_is_caps_locked = Some(caps_flag.clone());
+
+        // 1. 中文状态下按下 CapsLock：大写标志权威置为 true（托盘读取该标志直接展现 A 大写图标与大写菜单项）
+        let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
+        assert!(core.is_caps_locked);
+        assert!(caps_flag.load(Ordering::Acquire));
+        assert_eq!(core.mode, InputMode::Chinese, "基准中文模式状态不受篡改");
+
+        // 2. 随后的普通字符按键（即使客户端 state 未附带 IBUS_LOCK_MASK），大写状态绝不可被误冲刷
+        let letter = core.process_key_event(b'A' as u32, 0, 0);
+        assert!(!letter.consumed, "大写锁定下普通字母按键应原生透传");
+        assert!(
+            core.is_caps_locked,
+            "后续未带Lock掩码的按键绝不能冲刷掉大写状态"
+        );
+        assert!(caps_flag.load(Ordering::Acquire));
+
+        // 3. 再次按下 CapsLock 退出大写：大写标志关闭，无缝回到中文模式
+        let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_LOCK_MASK);
+        assert!(!core.is_caps_locked);
+        assert!(!caps_flag.load(Ordering::Acquire));
+        assert_eq!(
+            core.mode,
+            InputMode::Chinese,
+            "退出大写锁定后丝滑保持中文模式"
+        );
+        assert!(zh_flag.load(Ordering::Acquire));
     }
 }

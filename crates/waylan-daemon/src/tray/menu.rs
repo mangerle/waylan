@@ -228,6 +228,7 @@ impl Drop for SubprocessManager {
 /// 标准 FreeDesktop DBusMenu 菜单实现
 pub struct DBusMenu {
     pub(crate) is_chinese: Arc<AtomicBool>,
+    pub(crate) is_caps_locked: Arc<AtomicBool>,
     pub(crate) reload_requested: Arc<AtomicBool>,
     pub(crate) exit_requested: Arc<AtomicBool>,
     pub(crate) settings_running: Arc<AtomicBool>,
@@ -239,6 +240,7 @@ pub struct DBusMenu {
 impl DBusMenu {
     pub(crate) fn new(
         is_chinese: Arc<AtomicBool>,
+        is_caps_locked: Arc<AtomicBool>,
         reload_requested: Arc<AtomicBool>,
         exit_requested: Arc<AtomicBool>,
         settings_running: Arc<AtomicBool>,
@@ -248,6 +250,7 @@ impl DBusMenu {
         let subprocess_manager = Arc::new(SubprocessManager::new(Arc::clone(&exit_requested)));
         Self {
             is_chinese,
+            is_caps_locked,
             reload_requested,
             exit_requested,
             settings_running,
@@ -286,20 +289,18 @@ impl DBusMenu {
         _recursion_depth: i32,
         _property_names: Vec<String>,
     ) -> DbusMenuLayout {
-        let mode_text = if self.is_chinese.load(Ordering::Acquire) {
-            "当前输入: 中文拼音 (点击切换)"
+        let mode_text = if self.is_caps_locked.load(Ordering::Acquire) {
+            "当前输入: 英文大写"
+        } else if self.is_chinese.load(Ordering::Acquire) {
+            "当前输入: 中文拼音"
         } else {
-            "当前输入: 英文模式 (点击切换)"
+            "当前输入: 英文模式"
         };
-
-        let log_path = log_file_path();
-        let log_label = format!("查看运行日志 ({})", log_path.display());
-
         let menu_items = vec![
             make_menu_item(1, mode_text),
             make_menu_item(2, "重载词库与配置"),
             make_menu_item(3, "偏好设置"),
-            make_menu_item(4, &log_label),
+            make_menu_item(4, "查看运行日志"),
             make_menu_item(5, "退出微澜输入法"),
         ];
 
@@ -368,23 +369,41 @@ mod tests {
     #[test]
     fn test_menu_layout_contains_dynamic_log_path() {
         let is_chinese = Arc::new(AtomicBool::new(true));
+        let is_caps = Arc::new(AtomicBool::new(false));
         let reload = Arc::new(AtomicBool::new(false));
         let exit = Arc::new(AtomicBool::new(false));
         let settings = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = mpsc::sync_channel(1);
 
-        let menu = DBusMenu::new(is_chinese, reload, exit, settings, tx, None);
+        let menu = DBusMenu::new(
+            is_chinese.clone(),
+            is_caps.clone(),
+            reload,
+            exit,
+            settings,
+            tx,
+            None,
+        );
         let (_rev, (_root_id, _props, items)) = menu.get_layout(0, -1, Vec::new());
         assert_eq!(items.len(), 5);
 
-        let log_path = log_file_path();
-        let expected_label = format!("查看运行日志 ({})", log_path.display());
+        // 验证默认中文状态文本
+        let item1_str = format!("{:?}", items[0]);
+        assert!(item1_str.contains("当前输入: 中文拼音"));
+
+        // 开启大写锁定，验证菜单第1项文本正确变为英文大写
+        is_caps.store(true, Ordering::Release);
+        let (_rev, (_root_id, _props, items_caps)) = menu.get_layout(0, -1, Vec::new());
+        let item1_caps_str = format!("{:?}", items_caps[0]);
+        assert!(item1_caps_str.contains("当前输入: 英文大写"));
+
+        let expected_label = "查看运行日志";
 
         // 验证菜单项包含真实的日志文件路径
         let item4 = &items[3];
         let serialized = format!("{:?}", item4);
         assert!(
-            serialized.contains(&expected_label),
+            serialized.contains(expected_label),
             "菜单项中应包含实际日志绝对路径"
         );
     }

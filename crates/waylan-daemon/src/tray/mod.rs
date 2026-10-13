@@ -127,13 +127,14 @@ impl TrayService {
         let config = AppConfig::load_or_create();
         let sni = StatusNotifierItem::new(
             Arc::clone(&is_chinese),
-            is_caps_locked,
+            Arc::clone(&is_caps_locked),
             icon_update_tx.clone(),
             &config,
             loop_wakeup.clone(),
         );
         let menu = DBusMenu::new(
             is_chinese,
+            is_caps_locked,
             reload_requested,
             Arc::clone(&exit_requested),
             Arc::new(AtomicBool::new(false)),
