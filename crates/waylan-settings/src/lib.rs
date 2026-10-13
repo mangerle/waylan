@@ -15,7 +15,7 @@ pub mod sync;
 use crate::importer::{
     import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file,
 };
-use crate::sync::{extract_config_from_window, sync_config_to_window, update_config_from_window};
+use crate::sync::{sync_config_to_window, update_config_from_window};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::error::Error;
 use std::fs;

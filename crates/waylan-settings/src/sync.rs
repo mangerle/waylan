@@ -169,3 +169,55 @@ pub fn extract_config_from_window(window: &SettingsWindow) -> AppConfig {
     update_config_from_window(window, &mut cfg);
     cfg
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_and_update_preserves_custom_icons() {
+        let window = SettingsWindow::new().expect("创建窗口对象应成功");
+        let initial_cfg = AppConfig {
+            tray_icon_theme_path: Some("/opt/my-theme".to_string()),
+            tray_icon_zh: Some("custom-zh.svg".to_string()),
+            tray_icon_en: Some("custom-en.svg".to_string()),
+            enable_tray: Some(true),
+            exclusive_input_source: true,
+            enable_u_mode: false,
+            enable_i_mode: false,
+            filter_uncommon_charset: true,
+            show_pinyin_comment: false,
+            auto_dedup: false,
+            ..Default::default()
+        };
+
+        sync_config_to_window(&window, &initial_cfg);
+
+        // 验证界面读取与同步状态
+        assert_eq!(window.get_enable_tray_index(), 1);
+        assert!(window.get_exclusive_input_source());
+        assert!(!window.get_enable_u_mode());
+        assert!(!window.get_enable_i_mode());
+        assert!(window.get_filter_uncommon_charset());
+        assert!(!window.get_show_pinyin_comment());
+        assert!(!window.get_auto_dedup());
+
+        // 模拟用户在界面修改某项（如切回浅色、修改候选数）
+        window.set_page_size_val(8.0);
+        window.set_enable_tray_index(2); // 强制关闭
+
+        let mut updated_cfg = initial_cfg.clone();
+        update_config_from_window(&window, &mut updated_cfg);
+
+        // 验证修改生效
+        assert_eq!(updated_cfg.page_size, 8);
+        assert_eq!(updated_cfg.enable_tray, Some(false));
+        // 关键：未在界面展示的高级图标配置绝对不可被清空
+        assert_eq!(
+            updated_cfg.tray_icon_theme_path.as_deref(),
+            Some("/opt/my-theme")
+        );
+        assert_eq!(updated_cfg.tray_icon_zh.as_deref(), Some("custom-zh.svg"));
+        assert_eq!(updated_cfg.tray_icon_en.as_deref(), Some("custom-en.svg"));
+    }
+}
