@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 微澜 (WayLan) 原生 Debian (.deb) 软件包构建脚本
-# 本脚本遵循 Debian 打包标准规范，输出开箱即用的 waylan_1.0.0_amd64.deb 包。
+# 本脚本遵循 Debian 打包标准规范，输出开箱即用的 waylan_<版本>_<架构>.deb 原生软件包。
 
 set -euo pipefail
 
@@ -39,10 +39,13 @@ echo "[微澜打包] 步骤 2/4: 编译 Release 优化版本二进制程序 (way
 cd "${PROJECT_ROOT}"
 cargo build --release --bin waylan --bin waylan-settings
 
-echo "[微澜打包] 步骤 3/4: 检查 cargo-deb 打包工具..."
+echo "[微澜打包] 步骤 3/4: 检查 cargo-deb 打包工具与组件元数据版本同步..."
 if ! command -v cargo-deb >/dev/null 2>&1; then
     echo "未检测到 cargo-deb，正在通过 cargo 自动安装..."
     cargo install cargo-deb
+fi
+if [ -f "${PROJECT_ROOT}/assets/waylan.xml" ]; then
+    sed -i -E "s|<version>[^<]+</version>|<version>${PKG_VERSION}</version>|g" "${PROJECT_ROOT}/assets/waylan.xml"
 fi
 
 echo "[微澜打包] 步骤 4/4: 调用 cargo-deb 构建原生 Debian 软件包..."

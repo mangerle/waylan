@@ -21,6 +21,9 @@ export component SettingsWindow inherits Window {
     // 导航项索引 (0: 常规, 1: 拼音模式, 2: 模糊音, 3: 词典, 4: 用户数据, 5: 快捷键, 6: 关于)
     in-out property <int> active_tab: 0;
 
+    // 应用程序版本（由 Rust 在启动时通过 env!("CARGO_PKG_VERSION") 动态注入）
+    in-out property <string> app_version: "1.0.0";
+
     // 常规设置属性
     in-out property <int> init_lang_index: 0;
     in-out property <int> init_char_width_index: 0;
@@ -181,7 +184,7 @@ export component SettingsWindow inherits Window {
 
                 // 侧边栏底部版本
                 Text {
-                    text: "WayLan v1.0.0";
+                    text: "WayLan v" + root.app_version;
                     font-size: 11px;
                     color: #94a3b8;
                     horizontal-alignment: center;
@@ -327,6 +330,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     if root.active_tab == 6: AboutTab {
+                        app_version: root.app_version;
                     }
                 }
             }

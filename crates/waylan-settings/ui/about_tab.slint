@@ -1,6 +1,7 @@
 import { SettingCard } from "common.slint";
 
 export component AboutTab inherits VerticalLayout {
+    in property <string> app_version: "1.0.0";
     spacing: 16px;
     padding-right: 8px;
 
@@ -14,7 +15,7 @@ export component AboutTab inherits VerticalLayout {
             HorizontalLayout {
                 spacing: 12px;
                 Text { text: "当前版本:"; width: 90px; color: #64748b; }
-                Text { text: "1.0.0"; font-weight: 700; color: #1e293b; }
+                Text { text: root.app_version; font-weight: 700; color: #1e293b; }
             }
 
             HorizontalLayout {

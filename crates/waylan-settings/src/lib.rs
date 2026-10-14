@@ -31,6 +31,7 @@ use waylan_core::config::AppConfig;
 /// 当窗口初始化或事件循环运行失败时返回错误。
 pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
     let window = SettingsWindow::new()?;
+    window.set_app_version(SharedString::from(env!("CARGO_PKG_VERSION")));
 
     // 1. 加载持久化配置并同步到界面
     let config = AppConfig::load_or_create();
