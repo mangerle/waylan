@@ -79,6 +79,7 @@ pub struct IbusSessionCore {
     pub phys_mods: u8,
     pub consumed_keys: ConsumedKeyTracker,
     pub is_password_context: bool,
+    pub is_screen_locked: bool,
     pub surrounding_text: Option<(String, u32, u32)>,
     pub candidate_index_style: CandidateIndexStyle,
     pub candidate_orientation: CandidateOrientation,
@@ -104,6 +105,7 @@ impl IbusSessionCore {
             phys_mods: 0,
             consumed_keys: ConsumedKeyTracker::new(),
             is_password_context: false,
+            is_screen_locked: false,
             surrounding_text: None,
             candidate_index_style: CandidateIndexStyle::default(),
             candidate_orientation: CandidateOrientation::default(),
@@ -208,7 +210,9 @@ impl IbusSessionCore {
             is_press,
         );
 
-        if self.is_password_context {
+        // 密码框或系统锁屏状态防线：当处于密码输入框或屏幕锁定时，强制所有硬件按键 100% 直通操作系统，
+        // 绝对不拦截按键、不生成预编辑拼音，杜绝锁屏密码框跳出拼音候选框泄露或阻碍密码输入。
+        if self.is_screen_locked || self.is_password_context {
             self.shift_sm.reset();
             if !is_press {
                 let was_consumed = self.consumed_keys.take_release(evdev_key);
@@ -876,5 +880,32 @@ mod tests {
             "退出密码框后输入法应完全恢复可用并消费按键"
         );
         assert_eq!(core.engine.raw_input(), "n");
+    }
+
+    #[test]
+    fn test_ibus_screen_lock_passthrough_and_recovery() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+
+        // 1. 模拟进入锁屏状态
+        core.is_screen_locked = true;
+        let outcome = core.process_key_event(b'a' as u32, 30, 0);
+        assert!(
+            !outcome.consumed,
+            "系统锁屏状态下所有硬件按键必须完全直通放行，绝不消费"
+        );
+        assert!(
+            core.engine.raw_input().is_empty(),
+            "锁屏状态下严禁将按键录入算法引擎"
+        );
+
+        // 2. 模拟解锁屏幕回到桌面
+        core.is_screen_locked = false;
+        let outcome2 = core.process_key_event(b'a' as u32, 30, 0);
+        assert!(
+            outcome2.consumed,
+            "解锁屏幕后应立即恢复拼音拦截与候选词处理"
+        );
+        assert_eq!(core.engine.raw_input(), "a");
     }
 }

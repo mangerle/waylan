@@ -239,6 +239,7 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
         subprocess_manager: Arc::new(SubprocessManager::new(Arc::clone(&exit_requested))),
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties,
+        is_password: Arc::new(AtomicBool::new(false)),
     };
     let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv_obj)?;
 
@@ -357,6 +358,23 @@ fn register_or_activate_ibus_engine(
     Ok(())
 }
 
+/// 查询 GNOME / FreeDesktop 屏幕保护与锁屏当前激活状态
+fn query_screen_saver_active(session_conn: Option<&Connection>) -> bool {
+    let Some(conn) = session_conn else {
+        return false;
+    };
+    conn.call_method(
+        Some("org.gnome.ScreenSaver"),
+        "/org/gnome/ScreenSaver",
+        Some("org.gnome.ScreenSaver"),
+        "GetActive",
+        &(),
+    )
+    .ok()
+    .and_then(|reply| reply.body().deserialize::<bool>().ok())
+    .unwrap_or(false)
+}
+
 /// 驱动后台文件热重载与托盘状态同步的阻塞监控循环
 fn run_ibus_monitor_loop(
     conn: &Connection,
@@ -364,9 +382,19 @@ fn run_ibus_monitor_loop(
     inotify_watcher: &mut Option<InotifyWatcher>,
     mut params: IbusMonitorParams,
 ) {
-    // 开机/启动初期的时差自愈轮数（前 8 轮，每秒 1 次）；正常运行阶段绝不定时重复调用 SetGlobalEngine，
-    // 避免打断用户当前打字状态或触发 IBus 重置上下文导致输入中的拼音与候选框瞬间闪退清空。
-    let mut startup_healing_rounds: u32 = 8;
+    // 开机/启动初期的时差自愈轮数（前 25 轮，每秒 1 次）；放宽至 25 秒彻底包容桌面组件异步加载完成时差；
+    // 正常运行阶段绝不定时重复调用 SetGlobalEngine，避免打断用户当前打字状态或触发上下文重置闪退。
+    let mut startup_healing_rounds: u32 = 25;
+
+    // 建立用户 D-Bus 会话总线连接以感知桌面锁屏（ScreenSaver）事件
+    let session_conn = Connection::session().ok();
+    let mut last_screen_locked = query_screen_saver_active(session_conn.as_ref());
+    if last_screen_locked {
+        if let Ok(mut guard) = shared_core.lock() {
+            guard.is_screen_locked = true;
+        }
+        info!("[微澜 IBus] 启动时检测到系统处于锁屏状态，已进入密码直通保护模式。");
+    }
 
     loop {
         if params.exit_requested.load(Ordering::Acquire) {
@@ -377,6 +405,28 @@ fn run_ibus_monitor_loop(
         if startup_healing_rounds > 0 {
             startup_healing_rounds = startup_healing_rounds.saturating_sub(1);
             ensure_global_engine_active(conn);
+        }
+
+        // 动态感知锁屏状态变迁：锁屏时直通按键防密码泄露，解锁瞬间自动纠偏切回微澜
+        let current_screen_locked = query_screen_saver_active(session_conn.as_ref());
+        if current_screen_locked != last_screen_locked {
+            if current_screen_locked {
+                info!("[微澜 IBus] 检测到系统进入锁屏状态，进入硬件按键直通与密码保护模式。");
+                if let Ok(mut guard) = shared_core.lock() {
+                    guard.is_screen_locked = true;
+                    guard.reset_context();
+                }
+            } else {
+                info!("[微澜 IBus] 检测到系统屏幕已解锁，正在自动校准并切回微澜输入法。");
+                if let Ok(mut guard) = shared_core.lock() {
+                    guard.is_screen_locked = false;
+                }
+                ensure_global_engine_active(conn);
+                let _ = std::process::Command::new("gsettings")
+                    .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
+                    .output();
+            }
+            last_screen_locked = current_screen_locked;
         }
 
         poll_wakeup_and_inotify(inotify_watcher.as_ref(), params.loop_wakeup.as_ref(), 1000);

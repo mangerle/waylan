@@ -118,7 +118,8 @@ impl IbusFactoryService {
 
         if let Ok(slot) = self.conn_slot.lock() {
             if let Some(ref conn) = *slot {
-                let srv = self.engine_template.clone();
+                let mut srv = self.engine_template.clone();
+                srv.is_password = Arc::new(AtomicBool::new(false));
                 let gen = IbusGenericService {
                     core: Arc::clone(&self.core),
                 };
@@ -169,6 +170,7 @@ pub struct IbusEngineService {
     pub(crate) subprocess_manager: Arc<SubprocessManager>,
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) suppress_properties: bool,
+    pub(crate) is_password: Arc<AtomicBool>,
 }
 
 impl IbusEngineService {
@@ -261,6 +263,9 @@ impl IbusEngineService {
     ) -> bool {
         let (outcome, snap, is_caps_locked) = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            if self.is_password.load(Ordering::Acquire) {
+                guard.is_password_context = true;
+            }
             let out = guard.process_key_event(keyval, keycode, state);
             let snap = if out.update_ui {
                 Some(UiSnapshot::capture(&guard))
@@ -286,7 +291,17 @@ impl IbusEngineService {
     fn cancel_hand_writing(&self, _n_strokes: u32) {}
 
     /// 设置客户端支持的输入法能力位掩码
-    fn set_capabilities(&self, _caps: u32) {}
+    fn set_capabilities(&self, caps: u32) {
+        const IBUS_CAP_PASSWORD: u32 = 1 << 4;
+        if (caps & IBUS_CAP_PASSWORD) != 0 {
+            self.is_password.store(true, Ordering::Release);
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            guard.is_password_context = true;
+            if !guard.engine.raw_input().is_empty() {
+                guard.reset_context();
+            }
+        }
+    }
 
     /// 响应 GNOME / IBus 原生状态栏菜单项激活事件
     async fn property_activate(
@@ -467,8 +482,9 @@ impl IbusEngineService {
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let (mode, is_caps, trad, punct, char_full, snap) = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            // 焦点进入新输入上下文时重置密码框状态，防止旧窗口密码框标记残留导致普通窗口无法输出
-            guard.is_password_context = false;
+            // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
+            // 既杜绝旧普通窗口残留密码标记，又防止因先触发 SetContentType 后触发 FocusIn 导致密码标记被误冲刷
+            guard.is_password_context = self.is_password.load(Ordering::Acquire);
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
             let trad = guard.engine.config.traditional_chinese;
@@ -605,6 +621,7 @@ impl IbusEngineService {
     fn set_content_type(&self, content_type: (u32, u32)) {
         let (purpose, _hints) = content_type;
         let is_pwd = purpose == IBUS_INPUT_PURPOSE_PASSWORD || purpose == IBUS_INPUT_PURPOSE_PIN;
+        self.is_password.store(is_pwd, Ordering::Release);
         let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_password_context = is_pwd;
         if is_pwd && !guard.engine.raw_input().is_empty() {
