@@ -7,7 +7,7 @@
 //!   严格杜绝跨 `.await` 持有互斥锁，保证高并发按键流下的极低延迟。
 //! - **代价与局限**：依赖 `ibus-daemon` 转发键盘与候选面板事件。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +15,7 @@ use log::{debug, info, warn};
 use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
 use waylan_wayland::input_constants::{KEY_LEFT, KEY_RIGHT};
 use waylan_wayland::LoopWakeup;
+use zbus::blocking::Connection;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::{OwnedObjectPath, Value};
@@ -95,18 +96,52 @@ impl UiSnapshot {
 /// `org.freedesktop.IBus.Factory` 接口实现
 pub struct IbusFactoryService {
     pub(crate) core: Arc<Mutex<IbusSessionCore>>,
+    pub(crate) conn_slot: Arc<Mutex<Option<Connection>>>,
+    pub(crate) engine_template: IbusEngineService,
+    pub(crate) next_engine_id: Arc<AtomicU32>,
 }
 
 #[interface(name = "org.freedesktop.IBus.Factory")]
 impl IbusFactoryService {
-    /// 响应 `ibus-daemon` 的引擎实例创建请求，返回预注册的微澜引擎对象路径
+    /// 响应 `ibus-daemon` 的引擎实例创建请求，返回动态创建并注册的微澜引擎对象路径
     fn create_engine(&self, name: &str) -> zbus::fdo::Result<OwnedObjectPath> {
         debug!("[微澜 IBus] 收到 CreateEngine 请求，引擎名: {}", name);
-        if let Ok(mut guard) = self.core.lock() {
+        {
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             guard.reset_context();
         }
-        OwnedObjectPath::try_from(WAYLAN_ENGINE_OBJECT_PATH)
-            .map_err(|e| zbus::fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))
+
+        let id = self.next_engine_id.fetch_add(1, Ordering::SeqCst);
+        let path_str = format!("/org/freedesktop/IBus/Engine/{}", id);
+        let obj_path = OwnedObjectPath::try_from(path_str.as_str())
+            .map_err(|e| zbus::fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
+
+        if let Ok(slot) = self.conn_slot.lock() {
+            if let Some(ref conn) = *slot {
+                let srv = self.engine_template.clone();
+                let gen = IbusGenericService {
+                    core: Arc::clone(&self.core),
+                };
+                if let Err(e) = conn.object_server().at(&obj_path, srv) {
+                    warn!(
+                        "[微澜 IBus] 为动态路径 {} 注册 Engine 接口失败: {}",
+                        path_str, e
+                    );
+                }
+                if let Err(e) = conn.object_server().at(&obj_path, gen) {
+                    warn!(
+                        "[微澜 IBus] 为动态路径 {} 注册 Service 接口失败: {}",
+                        path_str, e
+                    );
+                }
+                info!(
+                    "[微澜 IBus] 成功为新应用输入上下文动态注册 Engine 实例: {}",
+                    path_str
+                );
+            }
+        }
+
+        Ok(obj_path)
     }
 }
 
@@ -120,13 +155,13 @@ impl IbusGenericService {
     /// 响应服务对象销毁请求，安全重置内部预编辑与按键状态
     fn destroy(&self) {
         debug!("[微澜 IBus] 收到 Service.Destroy 请求，重置当前输入法上下文。");
-        if let Ok(mut guard) = self.core.lock() {
-            guard.reset_context();
-        }
+        let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+        guard.reset_context();
     }
 }
 
 /// `org.freedesktop.IBus.Engine` 核心接口实现
+#[derive(Clone)]
 pub struct IbusEngineService {
     pub(crate) core: Arc<Mutex<IbusSessionCore>>,
     pub(crate) reload_requested: Option<Arc<AtomicBool>>,
@@ -206,9 +241,7 @@ impl IbusEngineService {
     /// 重置会话并向 `ibus-daemon` 发送隐藏预编辑与候选面板信号
     async fn reset_and_hide_ui(&self, ctxt: &SignalContext<'_>) {
         let snap = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             guard.reset_context();
             UiSnapshot::capture(&guard)
         };
@@ -227,9 +260,7 @@ impl IbusEngineService {
         state: u32,
     ) -> bool {
         let (outcome, snap, is_caps_locked) = {
-            let Ok(mut guard) = self.core.lock() else {
-                return false;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             let out = guard.process_key_event(keyval, keycode, state);
             let snap = if out.update_ui {
                 Some(UiSnapshot::capture(&guard))
@@ -403,9 +434,7 @@ impl IbusEngineService {
         _state: u32,
     ) {
         let (outcome, snap, is_caps_locked) = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -437,9 +466,9 @@ impl IbusEngineService {
     /// 焦点进入输入上下文
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let (mode, is_caps, trad, punct, char_full, snap) = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            // 焦点进入新输入上下文时重置密码框状态，防止旧窗口密码框标记残留导致普通窗口无法输出
+            guard.is_password_context = false;
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
             let trad = guard.engine.config.traditional_chinese;
@@ -502,9 +531,7 @@ impl IbusEngineService {
     /// 响应候选框上一页按钮事件
     async fn page_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             if !guard.engine.is_expanded {
                 let _ = guard.engine.prev_page();
             }
@@ -516,9 +543,7 @@ impl IbusEngineService {
     /// 响应候选框下一页按钮事件
     async fn page_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             if !guard.engine.is_expanded {
                 let _ = guard.engine.next_page();
             }
@@ -530,9 +555,7 @@ impl IbusEngineService {
     /// 响应候选框光标上移事件
     async fn cursor_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             if guard.engine.is_expanded {
                 let sel = guard.engine.selected_index;
                 guard.engine.prev_expanded_item(sel);
@@ -547,9 +570,7 @@ impl IbusEngineService {
     /// 响应候选框光标下移事件
     async fn cursor_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             if guard.engine.is_expanded {
                 let sel = guard.engine.selected_index;
                 guard.engine.next_expanded_item(sel);
@@ -564,9 +585,8 @@ impl IbusEngineService {
     /// 接收客户端同步的光标周围文本
     fn set_surrounding_text(&self, text: Value<'_>, cursor_pos: u32, anchor_pos: u32) {
         if let Some(parsed) = extract_text_from_ibus_variant(&text) {
-            if let Ok(mut guard) = self.core.lock() {
-                guard.surrounding_text = Some((parsed, cursor_pos, anchor_pos));
-            }
+            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            guard.surrounding_text = Some((parsed, cursor_pos, anchor_pos));
         }
     }
 
@@ -585,13 +605,10 @@ impl IbusEngineService {
     fn set_content_type(&self, content_type: (u32, u32)) {
         let (purpose, _hints) = content_type;
         let is_pwd = purpose == IBUS_INPUT_PURPOSE_PASSWORD || purpose == IBUS_INPUT_PURPOSE_PIN;
-        if let Ok(mut guard) = self.core.lock() {
-            guard.is_password_context = is_pwd;
-            if is_pwd && !guard.engine.raw_input().is_empty() {
-                guard.reset_context();
-            }
-        } else {
-            warn!("[微澜 IBus] 更新输入框 ContentType 属性时获取会话锁失败");
+        let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+        guard.is_password_context = is_pwd;
+        if is_pwd && !guard.engine.raw_input().is_empty() {
+            guard.reset_context();
         }
     }
 

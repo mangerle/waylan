@@ -44,7 +44,7 @@ impl TrayService {
         let full_width_punct = Arc::new(AtomicBool::new(config.full_width_punct));
         let full_width_char = Arc::new(AtomicBool::new(config.full_width_char));
         let reload_requested = Arc::new(AtomicBool::new(false));
-        let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(8);
+        let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(64);
 
         let flag_clone = Arc::clone(&is_chinese);
         let caps_clone = Arc::clone(&is_caps_locked);
@@ -168,8 +168,8 @@ impl TrayService {
             loop_wakeup.clone(),
         );
         let menu = DBusMenu::new(
-            is_chinese,
-            is_caps_locked,
+            Arc::clone(&is_chinese),
+            Arc::clone(&is_caps_locked),
             traditional_chinese,
             full_width_punct,
             full_width_char,
@@ -187,7 +187,7 @@ impl TrayService {
         let conn = match Builder::session() {
             Ok(builder) => match builder
                 .name(item_service.as_str())
-                .and_then(|b| b.serve_at("/StatusNotifierItem", sni))
+                .and_then(|b| b.serve_at("/StatusNotifierItem", sni.clone()))
                 .and_then(|b| b.serve_at("/MenuBar", menu))
                 .and_then(|b| b.build())
             {
@@ -247,46 +247,88 @@ impl TrayService {
             info!("[系统托盘 提示] 当前环境暂未发现活跃 StatusNotifierWatcher，托盘服务保持后台就绪。");
         }
 
-        // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon、NewToolTip 与 LayoutUpdated 信号
+        // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon、PropertiesChanged、NewToolTip 与 LayoutUpdated 信号
         let mut menu_revision: u32 = 1;
-        while let Ok(()) = icon_update_rx.recv() {
+        let mut last_emitted_is_chinese = is_chinese.load(Ordering::Acquire);
+        let mut last_emitted_is_caps = is_caps_locked.load(Ordering::Acquire);
+
+        loop {
             if exit_requested.load(Ordering::Acquire) {
                 break;
             }
-            if let Err(e) = conn.emit_signal(
-                Option::<&str>::None,
-                "/StatusNotifierItem",
-                "org.kde.StatusNotifierItem",
-                "NewIcon",
-                &(),
-            ) {
-                warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
-            } else {
-                debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
+
+            // 使用带超时的阻塞接收：在收到通道通知时即时响应，若无事件则每 500ms 检查一次原子标志以提供自愈兜底
+            let received = icon_update_rx.recv_timeout(std::time::Duration::from_millis(500));
+            if exit_requested.load(Ordering::Acquire) {
+                break;
             }
 
-            let _ = conn.emit_signal(
-                Option::<&str>::None,
-                "/StatusNotifierItem",
-                "org.kde.StatusNotifierItem",
-                "NewToolTip",
-                &(),
-            );
+            // 无论是由通道唤醒还是超时触发，排空通道内积压的多余唤醒通知，防止重复无效发射
+            while icon_update_rx.try_recv().is_ok() {}
 
-            menu_revision = menu_revision.wrapping_add(1);
-            if let Err(e) = conn.emit_signal(
-                Option::<&str>::None,
-                "/MenuBar",
-                "com.canonical.dbusmenu",
-                "LayoutUpdated",
-                &(menu_revision, 0i32),
-            ) {
-                warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
-            } else {
-                debug!(
-                    "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
-                    menu_revision
+            let current_is_chinese = is_chinese.load(Ordering::Acquire);
+            let current_is_caps = is_caps_locked.load(Ordering::Acquire);
+
+            let should_emit = received.is_ok()
+                || current_is_chinese != last_emitted_is_chinese
+                || current_is_caps != last_emitted_is_caps;
+
+            if should_emit {
+                last_emitted_is_chinese = current_is_chinese;
+                last_emitted_is_caps = current_is_caps;
+                let current_icon = sni.icon_name();
+
+                if let Err(e) = conn.emit_signal(
+                    Option::<&str>::None,
+                    "/StatusNotifierItem",
+                    "org.kde.StatusNotifierItem",
+                    "NewIcon",
+                    &(),
+                ) {
+                    warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
+                } else {
+                    debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
+                }
+
+                let _ = conn.emit_signal(
+                    Option::<&str>::None,
+                    "/StatusNotifierItem",
+                    "org.kde.StatusNotifierItem",
+                    "NewToolTip",
+                    &(),
                 );
+
+                // 发射标准 D-Bus PropertiesChanged 信号，强制让 GNOME AppIndicator 扩展刷新本地属性缓存
+                let mut changed_props = std::collections::HashMap::with_capacity(1);
+                changed_props.insert("IconName", zbus::zvariant::Value::from(current_icon));
+                let invalidated_props: Vec<&str> = Vec::new();
+                let _ = conn.emit_signal(
+                    Option::<&str>::None,
+                    "/StatusNotifierItem",
+                    "org.freedesktop.DBus.Properties",
+                    "PropertiesChanged",
+                    &(
+                        "org.kde.StatusNotifierItem",
+                        changed_props,
+                        invalidated_props,
+                    ),
+                );
+
+                menu_revision = menu_revision.wrapping_add(1);
+                if let Err(e) = conn.emit_signal(
+                    Option::<&str>::None,
+                    "/MenuBar",
+                    "com.canonical.dbusmenu",
+                    "LayoutUpdated",
+                    &(menu_revision, 0i32),
+                ) {
+                    warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
+                } else {
+                    debug!(
+                        "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
+                        menu_revision
+                    );
+                }
             }
         }
     }

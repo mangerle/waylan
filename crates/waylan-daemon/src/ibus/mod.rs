@@ -274,8 +274,14 @@ fn build_ibus_connection(
     shared_core: &Arc<Mutex<IbusSessionCore>>,
     engine: IbusEngineService,
 ) -> Result<Connection, Box<dyn Error>> {
+    let factory_next_id = Arc::new(std::sync::atomic::AtomicU32::new(2));
+    let factory_conn_slot = Arc::new(Mutex::new(None::<Connection>));
+
     let factory = IbusFactoryService {
         core: Arc::clone(shared_core),
+        conn_slot: Arc::clone(&factory_conn_slot),
+        engine_template: engine.clone(),
+        next_engine_id: factory_next_id,
     };
     let factory_srv = IbusGenericService {
         core: Arc::clone(shared_core),
@@ -290,6 +296,11 @@ fn build_ibus_connection(
         .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine)?
         .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine_srv)?
         .build()?;
+
+    if let Ok(mut slot) = factory_conn_slot.lock() {
+        *slot = Some(conn.clone());
+    }
+
     Ok(conn)
 }
 
@@ -351,7 +362,8 @@ fn run_ibus_monitor_loop(
     inotify_watcher: &mut Option<InotifyWatcher>,
     mut params: IbusMonitorParams,
 ) {
-    // 启动初期自愈轮次（前 8 秒持续保活，解决开机时 GNOME 与 IBus 启动竞争回退到英文布局的问题）
+    // 开机/启动初期的时差自愈轮数（前 8 轮，每秒 1 次）；正常运行阶段绝不定时重复调用 SetGlobalEngine，
+    // 避免打断用户当前打字状态或触发 IBus 重置上下文导致输入中的拼音与候选框瞬间闪退清空。
     let mut startup_healing_rounds: u32 = 8;
 
     loop {
@@ -361,7 +373,7 @@ fn run_ibus_monitor_loop(
         }
 
         if startup_healing_rounds > 0 {
-            startup_healing_rounds -= 1;
+            startup_healing_rounds = startup_healing_rounds.saturating_sub(1);
             ensure_global_engine_active(conn);
         }
 
@@ -430,9 +442,29 @@ fn run_ibus_monitor_loop(
     }
 }
 
+/// 从 IBus `GetGlobalEngine` 返回的 `IBusEngineDesc` D-Bus 结构体/变体中提取引擎名称
+///
+/// IBus 中 `IBusEngineDesc` 的 D-Bus 签名通常为 `(sa{sv}ssssssssussssssss)`，
+/// 其中索引 0 为类名 `"IBusEngineDesc"`，索引 2 为引擎唯一名称（如 `"waylan"`）。
+fn extract_engine_name_from_desc_variant(val: &Value<'_>) -> Option<String> {
+    let mut current = val;
+    while let Value::Value(inner) = current {
+        current = inner;
+    }
+    if let Value::Structure(st) = current {
+        let fields = st.fields();
+        if fields.len() >= 3 {
+            if let Value::Str(s) = &fields[2] {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// 确保微澜为当前活跃的全局输入法引擎（用于开机启动与桌面服务时差自愈）
 fn ensure_global_engine_active(conn: &Connection) {
-    let is_waylan = conn
+    let current_engine = conn
         .call_method(
             Some("org.freedesktop.IBus"),
             "/org/freedesktop/IBus",
@@ -440,8 +472,14 @@ fn ensure_global_engine_active(conn: &Connection) {
             "GetGlobalEngine",
             &(),
         )
-        .map(|reply| format!("{:?}", reply).contains("\"waylan\""))
-        .unwrap_or(false);
+        .ok()
+        .and_then(|reply| {
+            let body = reply.body();
+            let val = body.deserialize::<Value<'_>>().ok()?;
+            extract_engine_name_from_desc_variant(&val)
+        });
+
+    let is_waylan = current_engine.as_deref() == Some("waylan");
 
     if !is_waylan {
         if let Err(e) = conn.call_method(
@@ -527,5 +565,20 @@ mod tests {
         assert!(!is_ibus_socket_reachable(
             "unix:path=/nonexistent/waylan_ibus_test_socket,guid=12345"
         ));
+    }
+
+    #[test]
+    fn test_extract_engine_name_from_desc_variant() {
+        use zbus::zvariant::StructureBuilder;
+        let mut builder = StructureBuilder::new();
+        builder.push_value(Value::from("IBusEngineDesc"));
+        builder.push_value(Value::from(
+            std::collections::HashMap::<String, Value>::new(),
+        ));
+        builder.push_value(Value::from("waylan"));
+        let st = builder.build();
+        let val = Value::Structure(st);
+        let extracted = extract_engine_name_from_desc_variant(&val);
+        assert_eq!(extracted.as_deref(), Some("waylan"));
     }
 }

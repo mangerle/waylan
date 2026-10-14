@@ -145,6 +145,8 @@ impl IbusSessionCore {
         self.mods_depressed = 0;
         self.phys_mods = 0;
         self.consumed_keys.clear();
+        self.is_password_context = false;
+        self.surrounding_text = None;
     }
 
     /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
@@ -844,5 +846,35 @@ mod tests {
             Some("ａ".to_string()),
             "全角字符模式下英文应输出全角字母"
         );
+    }
+
+    #[test]
+    fn test_ibus_password_context_reset_and_recovery() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+
+        // 1. 模拟进入密码输入框
+        core.is_password_context = true;
+        let outcome = core.process_key_event(b'n' as u32, 49, 0);
+        assert!(
+            !outcome.consumed,
+            "密码输入框中按键应直通放行，不被输入法消费"
+        );
+        assert!(core.engine.raw_input().is_empty());
+
+        // 2. 模拟切换窗口或失焦触发重置
+        core.reset_context();
+        assert!(
+            !core.is_password_context,
+            "reset_context 必须彻底重置密码框上下文标志"
+        );
+
+        // 3. 再次在普通窗口输入，应恢复拼音消费与候选生成
+        let outcome2 = core.process_key_event(b'n' as u32, 49, 0);
+        assert!(
+            outcome2.consumed,
+            "退出密码框后输入法应完全恢复可用并消费按键"
+        );
+        assert_eq!(core.engine.raw_input(), "n");
     }
 }

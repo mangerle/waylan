@@ -82,6 +82,7 @@ pub(crate) fn resolve_icon_path_or_name(theme_dir: &str, base_name: &str) -> Str
 }
 
 /// 系统托盘状态项实现 (StatusNotifierItem)
+#[derive(Clone)]
 pub struct StatusNotifierItem {
     /// 当前是否处于中文模式
     pub(crate) is_chinese: Arc<AtomicBool>,
