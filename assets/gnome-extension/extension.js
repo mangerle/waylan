@@ -1,5 +1,7 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
+import Clutter from 'gi://Clutter';
 
 export default class WaylanHideInputExtension extends Extension {
     enable() {
@@ -43,6 +45,42 @@ export default class WaylanHideInputExtension extends Extension {
             this._sourcesChangedId = this._manager.connect('sources-changed', () => {
                 this._activateWaylanIfAvailable();
             });
+        }
+
+        // 探测并纳管 GNOME 原生候选框组件：彻底根治纯英文（如 women）与 Emoji 悬空浮动问题
+        try {
+            const ibusManager = IBusManager.getIBusManager();
+            if (ibusManager && ibusManager._candidatePopup) {
+                const area = ibusManager._candidatePopup._candidateArea;
+                if (area && area._candidateBoxes) {
+                    this._candidateArea = area;
+                    this._origSetCandidates = area.setCandidates;
+
+                    // 统一锁定所有条目与其内部文本的纵向对齐策略为 FILL（填满高度），杜绝垂直居中浮动
+                    const enforceAlignment = () => {
+                        for (let i = 0; i < area._candidateBoxes.length; i++) {
+                            const b = area._candidateBoxes[i];
+                            b.y_align = Clutter.ActorAlign.FILL;
+                            if (b._candidateLabel) {
+                                b._candidateLabel.y_align = Clutter.ActorAlign.FILL;
+                                if (b._candidateLabel.clutter_text) {
+                                    b._candidateLabel.clutter_text.y_align = Clutter.ActorAlign.FILL;
+                                }
+                            }
+                        }
+                    };
+
+                    enforceAlignment();
+
+                    const self = this;
+                    area.setCandidates = function(indexes, candidates, cursorPosition, cursorVisible) {
+                        self._origSetCandidates.call(this, indexes, candidates, cursorPosition, cursorVisible);
+                        enforceAlignment();
+                    };
+                }
+            }
+        } catch (e) {
+            console.error('[WaylanExtension] 纳管候选框对齐策略失败:', e);
         }
     }
 
@@ -96,6 +134,12 @@ export default class WaylanHideInputExtension extends Extension {
         if (this._origContainerShow && this._indicator.container) {
             this._indicator.container.show = this._origContainerShow;
             this._origContainerShow = null;
+        }
+
+        if (this._candidateArea && this._origSetCandidates) {
+            this._candidateArea.setCandidates = this._origSetCandidates;
+            this._origSetCandidates = null;
+            this._candidateArea = null;
         }
 
         this._indicator.visible = true;

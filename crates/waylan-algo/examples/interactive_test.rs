@@ -56,7 +56,7 @@ fn main() {
     println!("  2. 中英混输测试：输入 rust、linux、readme、cargo");
     println!("  3. 符号表情测试：输入 yazi、dianzan、bianfu");
     println!("  4. 颜文字测试：  输入 vv");
-    println!("  5. 微信键盘特性：输入 riqi、shijian、v1+2*3");
+    println!("  5. 动态扩展特性：输入 riqi、shijian、v1+2*3");
     println!("  6. 退出测试：    输入 q 或 exit");
     println!("============================================================\n");
 

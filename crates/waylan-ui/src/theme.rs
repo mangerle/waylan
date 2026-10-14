@@ -56,7 +56,7 @@ impl UiTheme {
             background: Color::from_hex(0xFFFFFF, 0.98),
             border: Color::from_hex(0xE2E8F0, 1.0),
             preedit_text: Color::from_hex(0x0F172A, 1.0),
-            highlight_badge: Color::from_hex(0x07C160, 1.0), // 微信输入法同款翡翠绿
+            highlight_badge: Color::from_hex(0x07C160, 1.0), // 翡翠绿
             highlight_text: Color::from_hex(0xFFFFFF, 1.0),
             candidate_text: Color::from_hex(0x1E293B, 1.0),
             index_text: Color::from_hex(0x94A3B8, 1.0),

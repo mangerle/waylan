@@ -9,8 +9,8 @@
 
 use crate::SettingsWindow;
 use waylan_core::config::{
-    AppConfig, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode,
-    TypoCorrectionRules,
+    AppConfig, CandidateIndexStyle, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey,
+    ThemeMode, TypoCorrectionRules,
 };
 
 /// 将 AppConfig 数据应用到 Slint 界面属性
@@ -31,6 +31,15 @@ pub fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_theme_index(match cfg.theme {
         ThemeMode::Light => 0,
         ThemeMode::Dark => 1,
+    });
+    window.set_index_style_index(match cfg.candidate_index_style {
+        CandidateIndexStyle::ModernSpace => 0,
+        CandidateIndexStyle::ClassicDot => 1,
+        CandidateIndexStyle::Circled => 2,
+        CandidateIndexStyle::SquareBracket => 3,
+        CandidateIndexStyle::Parenthesis => 4,
+        CandidateIndexStyle::MinimalFirstDot => 5,
+        CandidateIndexStyle::None => 6,
     });
 
     // 按键习惯
@@ -115,6 +124,15 @@ pub fn update_config_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     cfg.candidate_orientation = match window.get_orientation_index() {
         1 => CandidateOrientation::Vertical,
         _ => CandidateOrientation::Horizontal,
+    };
+    cfg.candidate_index_style = match window.get_index_style_index() {
+        1 => CandidateIndexStyle::ClassicDot,
+        2 => CandidateIndexStyle::Circled,
+        3 => CandidateIndexStyle::SquareBracket,
+        4 => CandidateIndexStyle::Parenthesis,
+        5 => CandidateIndexStyle::MinimalFirstDot,
+        6 => CandidateIndexStyle::None,
+        _ => CandidateIndexStyle::ModernSpace,
     };
     cfg.dynamic_adjust_freq = window.get_dynamic_adjust_freq();
     cfg.enable_acronym = window.get_enable_acronym();
@@ -211,15 +229,21 @@ mod tests {
         assert!(!window.get_show_pinyin_comment());
         assert!(!window.get_auto_dedup());
 
-        // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标）
+        // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标，索引 2: 圆圈序号）
+        assert_eq!(window.get_index_style_index(), 0);
         window.set_page_size_val(8.0);
         window.set_enable_tray_index(1);
+        window.set_index_style_index(2);
 
         let mut updated_cfg = initial_cfg.clone();
         update_config_from_window(&window, &mut updated_cfg);
 
         // 验证修改生效
         assert_eq!(updated_cfg.page_size, 8);
+        assert_eq!(
+            updated_cfg.candidate_index_style,
+            CandidateIndexStyle::Circled
+        );
         assert_eq!(updated_cfg.enable_tray, Some(false));
         assert!(!updated_cfg.exclusive_input_source);
         // 关键：未在界面展示的高级图标配置绝对不可被清空

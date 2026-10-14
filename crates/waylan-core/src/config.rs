@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::config_types::{
-    CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TypoCorrectionRules,
+    CandidateIndexStyle, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode,
+    TypoCorrectionRules,
 };
 
 /// 微澜输入法全局配置
@@ -21,7 +22,7 @@ pub struct AppConfig {
     pub switch_key: SwitchKey,
     /// 翻页快捷键
     pub page_keys: PageKeys,
-    /// 单页候选词数量（默认 7）
+    /// 单页候选词数量（默认 5）
     pub page_size: usize,
     /// 候选文字大小（像素）
     pub font_size: f32,
@@ -29,6 +30,8 @@ pub struct AppConfig {
     pub theme: ThemeMode,
     /// 候选词排列方向（水平 / 垂直）
     pub candidate_orientation: CandidateOrientation,
+    /// 候选词序号展示风格（默认现代空白风）
+    pub candidate_index_style: CandidateIndexStyle,
     /// 是否动态调整候选词序（自适应词频学习）
     pub dynamic_adjust_freq: bool,
     /// 是否启用简拼（声母缩写检索）
@@ -83,10 +86,11 @@ impl Default for AppConfig {
             full_width_punct: true,
             switch_key: SwitchKey::Shift,
             page_keys: PageKeys::default(),
-            page_size: 7,
+            page_size: 5,
             font_size: 15.0,
             theme: ThemeMode::Light,
             candidate_orientation: CandidateOrientation::Horizontal,
+            candidate_index_style: CandidateIndexStyle::ModernSpace,
             dynamic_adjust_freq: true,
             enable_acronym: true,
             shift_select_second: false,
@@ -540,7 +544,11 @@ mod tests {
         assert!(serialized.contains("font_size = 15.0"));
 
         let deserialized: AppConfig = toml::from_str(&serialized).expect("反序列化应成功");
-        assert_eq!(deserialized.page_size, 7);
+        assert_eq!(deserialized.page_size, 5);
+        assert_eq!(
+            deserialized.candidate_index_style,
+            CandidateIndexStyle::ModernSpace
+        );
         assert_eq!(deserialized.switch_key, SwitchKey::Shift);
         assert_eq!(deserialized.page_keys, PageKeys::default());
         assert!(!deserialized.auto_pangu_spacing);

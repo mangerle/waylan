@@ -1,6 +1,6 @@
 //! 二级展开浮层卡片几何布局与渲染绘制模块
 //!
-//! 负责微信键盘风格二级展开多候选词面板的背景、高亮项、序号及文字渲染。
+//! 负责二级展开多候选词面板的背景、高亮项、序号及文字渲染。
 
 use super::draw::{
     draw_card_background_at, draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
@@ -24,7 +24,7 @@ pub struct ExpandedCardRenderParams<'a> {
     pub scale: f32,
 }
 
-/// 绘制微信键盘风格二级展开浮层卡片背景与子候选条目，并注册子项鼠标点击区域
+/// 绘制二级展开浮层卡片背景与子候选条目，并注册子项鼠标点击区域
 pub fn render_expanded_popup_card(
     renderer: &CandidateBoxRenderer,
     pixmap: &mut Pixmap,

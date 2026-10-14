@@ -175,6 +175,8 @@ fn is_ibus_socket_reachable(address: &str) -> bool {
 
 /// 将 `SessionConfigBundle` 应用到 `IbusSessionCore` 中（初始化与热重载共用）
 fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSessionCore) {
+    core.candidate_index_style = bundle.candidate_index_style;
+    core.candidate_orientation = bundle.candidate_orientation;
     bundle.apply_to_engine_and_input(
         &mut core.engine,
         &mut core.shift_sm,

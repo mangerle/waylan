@@ -188,7 +188,7 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 渲染单行胶囊候选栏及微信键盘风格二级展开浮层卡片
+    /// 渲染单行胶囊候选栏及二级展开浮层卡片
     pub fn render(&self, state: &CandidateBoxState) -> Option<Pixmap> {
         if state.candidates.is_empty() {
             return None;

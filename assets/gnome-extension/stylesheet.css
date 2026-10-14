@@ -1,0 +1,51 @@
+/* 微澜拼音输入法 GNOME Shell 候选框紧凑化与同基线排版样式 */
+
+/* 候选框外层弹窗容器：压缩上下内边距，统一设置中文字体族保证 Metrics 一致 */
+.candidate-popup-content {
+    font-family: "Noto Sans CJK SC", "Source Han Sans CN", "PingFang SC", sans-serif !important;
+    padding: 3px 6px !important;
+    border-radius: 8px !important;
+    spacing: 4px !important;
+}
+
+/* 单个候选条目盒模型：紧凑化间距与内边距，统一高度确保所有条目物理高度一致 */
+.candidate-box {
+    font-family: "Noto Sans CJK SC", "Source Han Sans CN", "PingFang SC", sans-serif !important;
+    padding: 3px 8px !important;
+    margin: 1px 3px !important;
+    border-radius: 6px !important;
+    height: 26px !important;
+}
+
+/* 选中高亮胶囊：精致紧凑圆角，消除厚重臃肿感 */
+.candidate-box:selected {
+    border-radius: 6px !important;
+}
+
+/* 彻底隐藏原生多余的 index 序号标签（类名 .candidate-index），杜绝重复数字 */
+.candidate-box .candidate-index {
+    width: 0px !important;
+    min-width: 0px !important;
+    margin: 0px !important;
+    padding: 0px !important;
+    font-size: 0px !important;
+    opacity: 0 !important;
+}
+
+/* 候选词标签：统一中文字体，保证纯英文（如 women）与汉字条目基于同一度量排版 */
+.candidate-box .candidate-label {
+    font-family: "Noto Sans CJK SC", "Source Han Sans CN", "PingFang SC", sans-serif !important;
+    margin-right: 0px !important;
+    padding-right: 0px !important;
+}
+
+/* 翻页按钮区域紧凑化 */
+.candidate-page-button-box {
+    padding: 1px 4px !important;
+}
+
+.candidate-page-button {
+    padding: 2px 4px !important;
+    margin: 1px !important;
+    border-radius: 4px !important;
+}

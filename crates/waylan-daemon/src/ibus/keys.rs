@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
-use waylan_core::{Candidate, InputMode, TextAction};
+use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode, TextAction};
 use waylan_wayland::input_constants::*;
 use waylan_wayland::input_core::{
     handle_composition_key_with_params, keycode_to_ascii_digit_char, keycode_to_char,
@@ -80,6 +80,8 @@ pub struct IbusSessionCore {
     pub consumed_keys: ConsumedKeyTracker,
     pub is_password_context: bool,
     pub surrounding_text: Option<(String, u32, u32)>,
+    pub candidate_index_style: CandidateIndexStyle,
+    pub candidate_orientation: CandidateOrientation,
 }
 
 impl IbusSessionCore {
@@ -103,6 +105,8 @@ impl IbusSessionCore {
             consumed_keys: ConsumedKeyTracker::new(),
             is_password_context: false,
             surrounding_text: None,
+            candidate_index_style: CandidateIndexStyle::default(),
+            candidate_orientation: CandidateOrientation::default(),
         }
     }
 

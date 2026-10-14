@@ -19,7 +19,7 @@ use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
 use waylan_wayland::session_v2::WaylanV2Session;
 use waylan_wayland::WaylandCapabilities;
 
-use crate::config::{AppConfig, SwitchKey, ThemeMode};
+use crate::config::{AppConfig, CandidateIndexStyle, CandidateOrientation, SwitchKey, ThemeMode};
 
 /// 自动建立用户数据目录 (~/.local/share/waylan/) 与外部全量词库的符号链接
 pub fn ensure_user_dictionaries_linked() {
@@ -227,6 +227,8 @@ pub struct SessionConfigBundle {
     pub english_suggester: Arc<EnglishSuggestionManager>,
     pub symbol_suggester: Arc<SymbolSuggestionManager>,
     pub exclusive_input_source: bool,
+    pub candidate_index_style: CandidateIndexStyle,
+    pub candidate_orientation: CandidateOrientation,
 }
 
 impl SessionConfigBundle {
@@ -290,6 +292,8 @@ impl SessionConfigBundle {
             english_suggester,
             symbol_suggester,
             exclusive_input_source: new_cfg.exclusive_input_source,
+            candidate_index_style: new_cfg.candidate_index_style,
+            candidate_orientation: new_cfg.candidate_orientation,
         }
     }
 

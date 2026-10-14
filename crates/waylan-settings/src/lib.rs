@@ -280,7 +280,8 @@ fn sync_gnome_indicator_mode(exclusive: bool) {
 mod tests {
     use super::*;
     use waylan_core::config::{
-        CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TypoCorrectionRules,
+        CandidateIndexStyle, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey,
+        ThemeMode, TypoCorrectionRules,
     };
 
     #[test]
@@ -299,6 +300,7 @@ mod tests {
             },
             theme: ThemeMode::Dark,
             candidate_orientation: CandidateOrientation::Vertical,
+            candidate_index_style: CandidateIndexStyle::Circled,
             dynamic_adjust_freq: true,
             enable_acronym: true,
             shift_select_second: true,
@@ -345,6 +347,7 @@ mod tests {
         );
         assert_eq!(cfg.theme, ThemeMode::Dark);
         assert_eq!(cfg.candidate_orientation, CandidateOrientation::Vertical);
+        assert_eq!(cfg.candidate_index_style, CandidateIndexStyle::Circled);
         assert!(cfg.fuzzy_rules.g_k);
         assert!(cfg.typo_rules.gn_ng);
         assert!(cfg.auto_pangu_spacing);

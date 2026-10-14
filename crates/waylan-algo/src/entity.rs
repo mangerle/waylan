@@ -76,7 +76,6 @@ impl EntityProtectionManager {
             "kde",
             // 中文专有品牌与项目
             "微澜输入法",
-            "微信键盘",
             "清华大学",
             "北京大学",
         ];

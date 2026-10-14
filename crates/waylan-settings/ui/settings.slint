@@ -26,10 +26,11 @@ export component SettingsWindow inherits Window {
     in-out property <int> init_char_width_index: 0;
     in-out property <int> init_punct_width_index: 0;
     in-out property <int> init_simp_trad_index: 0;
-    in-out property <float> page_size_val: 7;
+    in-out property <float> page_size_val: 5;
     in-out property <float> font_size_val: 15;
     in-out property <int> orientation_index: 0;
     in-out property <int> theme_index: 0;
+    in-out property <int> index_style_index: 0;
     in-out property <bool> dynamic_adjust_freq: true;
     in-out property <bool> shift_select_second: false;
     in-out property <bool> auto_pangu_spacing: false;
@@ -245,6 +246,7 @@ export component SettingsWindow inherits Window {
                         font_size_val <=> root.font_size_val;
                         orientation_index <=> root.orientation_index;
                         theme_index <=> root.theme_index;
+                        index_style_index <=> root.index_style_index;
                         dynamic_adjust_freq <=> root.dynamic_adjust_freq;
                         shift_select_second <=> root.shift_select_second;
                         auto_pangu_spacing <=> root.auto_pangu_spacing;

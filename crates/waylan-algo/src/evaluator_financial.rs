@@ -3,7 +3,7 @@ use crate::types::AlgoCandidate;
 /// 财务大写金额与规范数字评估器 (Financial Evaluator)
 ///
 /// # 设计原理
-/// - **实现初衷**：纯 Rust 高性能实现，无外部复杂依赖，提供对标微信键盘、搜狗拼音的 V 模式大写金额扩展。
+/// - **实现初衷**：纯 Rust 高性能实现，无外部复杂依赖，提供便捷高效的 V 模式大写金额扩展。
 /// - **核心优势**：支持人民币大写（元角分整）、规范中文大写数字与财务千分位格式；纯数值与字符串运算，零内存额外开销。
 #[derive(Debug, Default)]
 pub struct FinancialEvaluator;

@@ -4,7 +4,7 @@ use chrono::{Datelike, Local, Timelike};
 /// 动态时间与日期评估器 (DateTime Evaluator)
 ///
 /// # 设计原理
-/// - **实现初衷**：1:1 对标微信键盘的动态时间、日期与扩展卡片格式能力。
+/// - **实现初衷**：提供丰富的动态时间、日期与扩展卡片格式能力。
 /// - **核心优势**：零复杂外部库依赖，内置标准中文大写转换、干支纪年与农历算法；
 ///   流式生成 7 种以上细分格式，提供二级展开卡片支持。
 #[derive(Debug, Default)]
@@ -64,7 +64,7 @@ impl DateTimeEvaluator {
         }
     }
 
-    /// 格式化全量日期格式列表（对标微信键盘图3）
+    /// 格式化全量日期格式列表
     pub fn format_date_formats(now: chrono::DateTime<Local>) -> Vec<String> {
         let year = now.year();
         let month = now.month();
@@ -124,7 +124,7 @@ impl DateTimeEvaluator {
         ]
     }
 
-    /// 格式化完整日期时间戳列表（对标微信键盘图4）
+    /// 格式化完整日期时间戳列表
     pub fn format_datetime_formats(now: chrono::DateTime<Local>) -> Vec<String> {
         let year = now.year();
         let month = now.month();

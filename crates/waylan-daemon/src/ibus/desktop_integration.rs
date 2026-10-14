@@ -208,30 +208,34 @@ pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
     }
 
     let extension_uuid = "waylan-hide-input-source@waylan.org";
-    let sys_dir = Path::new("/usr/share/gnome-shell/extensions").join(extension_uuid);
     let user_dir = env_var_non_empty("HOME").map(|h| {
         PathBuf::from(h)
             .join(".local/share/gnome-shell/extensions")
             .join(extension_uuid)
     });
-    let exists = sys_dir.is_dir() || user_dir.as_ref().is_some_and(|d| d.is_dir());
 
-    if !exists {
-        if let Some(assets) = crate::tray::item::detect_default_assets_path() {
-            let src_dir = Path::new(&assets)
-                .parent()
-                .unwrap_or(Path::new(&assets))
-                .join("gnome-extension");
-            if src_dir.is_dir() {
-                if let Some(ref target) = user_dir {
-                    if fs::create_dir_all(target).is_ok() {
-                        let _ =
-                            fs::copy(src_dir.join("metadata.json"), target.join("metadata.json"));
-                        let _ = fs::copy(src_dir.join("extension.js"), target.join("extension.js"));
-                        info!(
-                            "[微澜 IBus] 已自动部署 GNOME 隐藏输入法指示器扩展至用户目录: {:?}",
-                            target
-                        );
+    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
+        let src_dir = Path::new(&assets)
+            .parent()
+            .unwrap_or(Path::new(&assets))
+            .join("gnome-extension");
+        if src_dir.is_dir() {
+            if let Some(ref target) = user_dir {
+                if fs::create_dir_all(target).is_ok() {
+                    for file_name in ["metadata.json", "extension.js", "stylesheet.css"] {
+                        let src_file = src_dir.join(file_name);
+                        let dst_file = target.join(file_name);
+                        if src_file.is_file() {
+                            let needs_copy =
+                                match (fs::metadata(&src_file), fs::metadata(&dst_file)) {
+                                    (Ok(s_meta), Ok(d_meta)) => s_meta.len() != d_meta.len(),
+                                    (Ok(_), Err(_)) => true,
+                                    _ => false,
+                                };
+                            if needs_copy {
+                                let _ = fs::copy(&src_file, &dst_file);
+                            }
+                        }
                     }
                 }
             }

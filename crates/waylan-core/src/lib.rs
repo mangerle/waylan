@@ -1,8 +1,10 @@
+pub mod candidate_format;
 pub mod config;
 pub mod config_types;
+pub use candidate_format::{format_candidate_display, CIRCLED_NUMBERS};
 pub use config::{
-    AppConfig, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode,
-    TypoCorrectionRules,
+    AppConfig, CandidateIndexStyle, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey,
+    ThemeMode, TypoCorrectionRules,
 };
 
 use serde::{Deserialize, Serialize};

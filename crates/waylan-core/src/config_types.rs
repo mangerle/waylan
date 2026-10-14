@@ -104,6 +104,26 @@ pub enum CandidateOrientation {
     Vertical,
 }
 
+/// 候选词序号展示风格
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CandidateIndexStyle {
+    /// 现代空白风：1 候选词（纯数字 + 半角空格，最干净利落，消除点号噪点）
+    #[default]
+    ModernSpace,
+    /// 经典点号风：1. 候选词（传统输入法习惯）
+    ClassicDot,
+    /// 圆圈序号风：① 候选词（优雅紧凑，非常适合中文字形）
+    Circled,
+    /// 括号提示风：[1] 候选词
+    SquareBracket,
+    /// 圆括号提示风：(1) 候选词
+    Parenthesis,
+    /// 全极简无序号：仅在首选词加小圆点标记，后续词纯文本
+    MinimalFirstDot,
+    /// 纯文本完全无序号（适合纯空格选词的盲打用户）
+    None,
+}
+
 /// 模糊音细分规则配置（对应模糊音设置页面 10 项开关）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

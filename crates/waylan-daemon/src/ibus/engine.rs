@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{debug, info, warn};
-use waylan_core::{Candidate, InputMode};
+use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
 use waylan_wayland::input_constants::{KEY_LEFT, KEY_RIGHT};
 use waylan_wayland::LoopWakeup;
 use zbus::interface;
@@ -48,6 +48,7 @@ struct UiSnapshot {
     page_size: usize,
     selected_index: usize,
     orientation: i32,
+    index_style: CandidateIndexStyle,
 }
 
 impl UiSnapshot {
@@ -70,10 +71,14 @@ impl UiSnapshot {
                 super::types::IBUS_ORIENTATION_VERTICAL,
             )
         } else {
+            let orientation = match core.candidate_orientation {
+                CandidateOrientation::Horizontal => super::types::IBUS_ORIENTATION_HORIZONTAL,
+                CandidateOrientation::Vertical => super::types::IBUS_ORIENTATION_VERTICAL,
+            };
             (
                 core.engine.config.page_size,
                 core.engine.selected_index,
-                super::types::IBUS_ORIENTATION_HORIZONTAL,
+                orientation,
             )
         };
         Self {
@@ -82,6 +87,7 @@ impl UiSnapshot {
             page_size,
             selected_index,
             orientation,
+            index_style: core.candidate_index_style,
         }
     }
 }
@@ -152,6 +158,7 @@ impl IbusEngineService {
             snap.page_size,
             snap.selected_index,
             snap.orientation,
+            snap.index_style,
         ) {
             let _ = Self::update_lookup_table(ctxt, Value::from(table_val), table_visible).await;
         }

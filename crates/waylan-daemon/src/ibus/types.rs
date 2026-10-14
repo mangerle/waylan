@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use waylan_core::{Candidate, InputMode};
+use waylan_core::{format_candidate_display, Candidate, CandidateIndexStyle, InputMode};
 use zbus::zvariant::{OwnedValue, StructureBuilder, Value};
 
 /// IBus 文本属性类型：下划线 (`IBUS_ATTR_TYPE_UNDERLINE`)
@@ -115,14 +115,16 @@ pub fn build_ibus_lookup_table(
     page_size: usize,
     selected_index: usize,
     orientation: i32,
+    index_style: CandidateIndexStyle,
 ) -> Result<OwnedValue, zbus::zvariant::Error> {
     let mut cand_vec = Vec::with_capacity(candidates.len());
     let mut label_vec = Vec::with_capacity(candidates.len());
 
     for (idx, cand) in candidates.iter().enumerate() {
-        cand_vec.push(build_ibus_text(&cand.text)?);
-        let label_num = (idx + 1) % 10;
-        label_vec.push(build_ibus_text(&format!("{}.", label_num))?);
+        let display_text = format_candidate_display(index_style, idx, &cand.text, None);
+        cand_vec.push(build_ibus_text(&display_text)?);
+        // 使用零宽空格 (\u{200B}) 填充原生 label，既阻断 GNOME Shell 内部对空串回退默认数字标签，又不占用任何视觉空间
+        label_vec.push(build_ibus_text("\u{200B}")?);
     }
 
     let clamped_page_size = page_size.clamp(1, 10) as u32;
@@ -440,8 +442,14 @@ mod tests {
                 sub_candidates: Vec::new(),
             },
         ];
-        let table = build_ibus_lookup_table(&cands, 7, 0, IBUS_ORIENTATION_HORIZONTAL)
-            .expect("序列化 IBusLookupTable 失败");
+        let table = build_ibus_lookup_table(
+            &cands,
+            5,
+            0,
+            IBUS_ORIENTATION_HORIZONTAL,
+            CandidateIndexStyle::ModernSpace,
+        )
+        .expect("序列化 IBusLookupTable 失败");
         assert_eq!(table.value_signature().as_str(), "(sa{sv}uubbiavav)");
     }
 
