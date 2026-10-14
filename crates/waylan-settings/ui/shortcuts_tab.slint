@@ -1,5 +1,5 @@
-import { CheckBox, ComboBox } from "std-widgets.slint";
-import { SettingCard } from "common.slint";
+import { ComboBox } from "std-widgets.slint";
+import { SettingCard, Keycap, AppCheckBox } from "common.slint";
 
 export component ShortcutsTab inherits VerticalLayout {
     spacing: 16px;
@@ -10,104 +10,160 @@ export component ShortcutsTab inherits VerticalLayout {
     in-out property <bool> page_keys_bracket: false;
     in-out property <bool> page_keys_comma_period: false;
 
+    in-out property <int> traditional_shortcut_index: 0;
+    in-out property <int> full_width_char_shortcut_index: 0;
+    in-out property <int> full_width_punct_shortcut_index: 0;
+
     SettingCard {
-        title: "基础按键切换";
-        subtitle: "配置常用中英文状态切换与翻页键";
+        title: "常用按键与翻页配置";
+        subtitle: "自定义中英文状态切换与候选列表翻页控制键";
+
+        VerticalLayout {
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "中英文状态切换按键"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text { text: "单次敲击指定按键在中文输入与英文输入之间即时切换"; font-size: 12px; color: #64748b; }
+                }
+                ComboBox {
+                    model: ["Shift 键", "Ctrl 键"];
+                    current-index <=> root.switch_key_index;
+                    width: 160px;
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            VerticalLayout {
+                spacing: 10px;
+                Text { text: "候选翻页按键"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                HorizontalLayout {
+                    spacing: 20px;
+                    alignment: start;
+                    AppCheckBox {
+                        text: "减号 / 等号 (- / =)";
+                        checked <=> root.page_keys_minus_equal;
+                    }
+                    AppCheckBox {
+                        text: "中括号 ([ / ])";
+                        checked <=> root.page_keys_bracket;
+                    }
+                    AppCheckBox {
+                        text: "逗号 / 句号 (, / .)";
+                        checked <=> root.page_keys_comma_period;
+                    }
+                }
+                Text {
+                    text: "注: 键盘物理 PageUp / PageDown 键始终支持快速翻页。";
+                    font-size: 12px;
+                    color: #94a3b8;
+                }
+            }
+        }
+    }
+
+    SettingCard {
+        title: "模式即时切换快捷键";
+        subtitle: "配置简繁体、字符全半角与标点符号状态的全局切换组合键（即时生效）";
 
         VerticalLayout {
             spacing: 14px;
 
-            HorizontalLayout {
-                spacing: 12px;
-                alignment: start;
-                Text { text: "中英切换按键:"; vertical-alignment: center; width: 110px; }
-                ComboBox {
-                    model: ["Shift 键", "Ctrl 键"];
-                    current-index <=> root.switch_key_index;
-                    width: 140px;
-                }
-            }
-
+            // 简繁切换
             HorizontalLayout {
                 spacing: 16px;
-                alignment: start;
-                Text { text: "候选翻页快捷键:"; vertical-alignment: center; width: 110px; }
-                CheckBox {
-                    text: "减号/等号 (- / =)";
-                    checked <=> root.page_keys_minus_equal;
+                alignment: space-between;
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "简繁体即时切换"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text { text: "在简体中文与繁体中文输出模式之间无缝转换"; font-size: 12px; color: #64748b; }
                 }
-                CheckBox {
-                    text: "中括号 ([ / ])";
-                    checked <=> root.page_keys_bracket;
-                }
-                CheckBox {
-                    text: "逗号/句号 (, / .)";
-                    checked <=> root.page_keys_comma_period;
+                ComboBox {
+                    model: ["Ctrl + Shift + F", "Ctrl + Alt + F", "Ctrl + Shift + T", "已禁用"];
+                    current-index <=> root.traditional_shortcut_index;
+                    width: 180px;
                 }
             }
 
-            Text {
-                text: "注: 键盘 PageUp / PageDown 键始终支持翻页。";
-                font-size: 12px;
-                color: #94a3b8;
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 字符全半角切换
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "字符全角 / 半角切换"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text { text: "切换字母与数字的半角宽度或全角宽度形态"; font-size: 12px; color: #64748b; }
+                }
+                ComboBox {
+                    model: ["Shift + Space", "Ctrl + Shift + Space", "已禁用"];
+                    current-index <=> root.full_width_char_shortcut_index;
+                    width: 180px;
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 标点全半角切换
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "标点全角 / 半角切换"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text { text: "切换中文全角标点符号与英文半角标点符号"; font-size: 12px; color: #64748b; }
+                }
+                ComboBox {
+                    model: ["Ctrl + . (句点)", "Alt + . (句点)", "已禁用"];
+                    current-index <=> root.full_width_punct_shortcut_index;
+                    width: 180px;
+                }
             }
         }
     }
 
     SettingCard {
-        title: "输入法常用快捷键一览";
-        subtitle: "系统预设的标准快捷键操作指南";
+        title: "基础选词快捷说明";
+        subtitle: "输入法核心标准选词按键定义";
 
-        VerticalLayout {
-            spacing: 10px;
+        HorizontalLayout {
+            spacing: 24px;
+            alignment: start;
 
             HorizontalLayout {
-                spacing: 16px;
-                Text { text: "中英文状态切换"; width: 160px; color: #1e293b; font-weight: 600; }
-                Text { text: "Shift 键 或 Ctrl 键（可在上方配置）"; color: #475569; }
+                spacing: 8px;
+                alignment: start;
+                Text { text: "首选词确认:"; font-size: 13px; color: #64748b; vertical-alignment: center; }
+                Keycap { text: "Space (空格)"; }
             }
-            Rectangle { height: 1px; background: #f1f5f9; }
 
             HorizontalLayout {
-                spacing: 16px;
-                Text { text: "首选词上屏"; width: 160px; color: #1e293b; font-weight: 600; }
-                Text { text: "空格键 (Space)"; color: #475569; }
+                spacing: 8px;
+                alignment: start;
+                Text { text: "数字选词:"; font-size: 13px; color: #64748b; vertical-alignment: center; }
+                Keycap { text: "1"; }
+                Text { text: "-"; font-size: 12px; color: #94a3b8; vertical-alignment: center; }
+                Keycap { text: "9"; }
             }
-            Rectangle { height: 1px; background: #f1f5f9; }
 
             HorizontalLayout {
-                spacing: 16px;
-                Text { text: "数字选词"; width: 160px; color: #1e293b; font-weight: 600; }
-                Text { text: "主键盘数字键 1 - 9"; color: #475569; }
-            }
-            Rectangle { height: 1px; background: #f1f5f9; }
-
-            HorizontalLayout {
-                spacing: 16px;
-                Text { text: "简繁体临时切换"; width: 160px; color: #1e293b; font-weight: 600; }
-                Text { text: "Ctrl + Shift + F"; color: #475569; }
-            }
-            Rectangle { height: 1px; background: #f1f5f9; }
-
-            HorizontalLayout {
-                spacing: 16px;
-                Text { text: "全半角字符切换"; width: 160px; color: #1e293b; font-weight: 600; }
-                Text { text: "Shift + Space"; color: #475569; }
-            }
-            Rectangle { height: 1px; background: #f1f5f9; }
-
-            HorizontalLayout {
-                spacing: 16px;
-                Text { text: "标点全半角切换"; width: 160px; color: #1e293b; font-weight: 600; }
-                Text { text: "Ctrl + ."; color: #475569; }
-            }
-            Rectangle { height: 1px; background: #f1f5f9; }
-
-            HorizontalLayout {
-                spacing: 16px;
-                Text { text: "快捷四则计算与符号"; width: 160px; color: #1e293b; font-weight: 600; }
-                Text { text: "输入 v 后键入算式（如 v1+2*3）或日期（如 vrq）"; color: #475569; }
+                spacing: 8px;
+                alignment: start;
+                Text { text: "特殊扩展:"; font-size: 13px; color: #64748b; vertical-alignment: center; }
+                Keycap { text: "v"; }
+                Text { text: "计算/日期"; font-size: 12px; color: #64748b; vertical-alignment: center; }
             }
         }
     }
 }
+
+

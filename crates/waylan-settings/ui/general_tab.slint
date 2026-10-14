@@ -1,5 +1,5 @@
-import { CheckBox, ComboBox, Slider } from "std-widgets.slint";
-import { SettingCard } from "common.slint";
+import { ComboBox } from "std-widgets.slint";
+import { SettingCard, AppCheckBox, AppSlider } from "common.slint";
 
 export component GeneralTab inherits VerticalLayout {
     spacing: 16px;
@@ -15,7 +15,6 @@ export component GeneralTab inherits VerticalLayout {
     in-out property <float> page_size_val: 5;
     in-out property <float> font_size_val: 15;
     in-out property <int> orientation_index: 0;     // 0: 水平横排, 1: 垂直竖排
-    in-out property <int> theme_index: 0;           // 0: 浅色, 1: 深色
     in-out property <int> index_style_index: 0;     // 0: 现代风, 1: 经典点号, 2: 圆圈序号, 3: 方括号, 4: 圆括号, 5: 极简标点, 6: 纯文本
 
     // 候选词与打字行为
@@ -38,27 +37,27 @@ export component GeneralTab inherits VerticalLayout {
         subtitle: "配置输入法启动时的默认语言、字符全半角与简繁体模式";
 
         HorizontalLayout {
-            spacing: 24px;
+            spacing: 28px;
             VerticalLayout {
                 spacing: 12px;
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "输入语言:"; vertical-alignment: center; width: 80px; }
+                    Text { text: "输入语言:"; vertical-alignment: center; width: 80px; font-size: 13px; color: #334155; }
                     ComboBox {
                         model: ["中文 (默认)", "英文"];
                         current-index <=> root.init_lang_index;
-                        width: 140px;
+                        width: 150px;
                     }
                 }
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "字符宽度:"; vertical-alignment: center; width: 80px; }
+                    Text { text: "字符宽度:"; vertical-alignment: center; width: 80px; font-size: 13px; color: #334155; }
                     ComboBox {
                         model: ["半角字符", "全角字符"];
                         current-index <=> root.init_char_width_index;
-                        width: 140px;
+                        width: 150px;
                     }
                 }
             }
@@ -67,7 +66,7 @@ export component GeneralTab inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "标点符号:"; vertical-alignment: center; width: 80px; }
+                    Text { text: "标点符号:"; vertical-alignment: center; width: 80px; font-size: 13px; color: #334155; }
                     ComboBox {
                         model: ["全角 (中文标点)", "半角 (英文标点)"];
                         current-index <=> root.init_punct_width_index;
@@ -77,7 +76,7 @@ export component GeneralTab inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "简繁模式:"; vertical-alignment: center; width: 80px; }
+                    Text { text: "简繁模式:"; vertical-alignment: center; width: 80px; font-size: 13px; color: #334155; }
                     ComboBox {
                         model: ["简体中文", "繁体中文"];
                         current-index <=> root.init_simp_trad_index;
@@ -93,13 +92,13 @@ export component GeneralTab inherits VerticalLayout {
         subtitle: "定制候选框排列方向、字体大小、候选容量与主题色彩";
 
         HorizontalLayout {
-            spacing: 24px;
+            spacing: 28px;
             VerticalLayout {
                 spacing: 12px;
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "排列方向:"; vertical-alignment: center; width: 80px; }
+                    Text { text: "排列方向:"; vertical-alignment: center; width: 80px; font-size: 13px; color: #334155; }
                     ComboBox {
                         model: ["水平横向排列", "垂直纵向排列"];
                         current-index <=> root.orientation_index;
@@ -109,17 +108,7 @@ export component GeneralTab inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "界面主题:"; vertical-alignment: center; width: 80px; }
-                    ComboBox {
-                        model: ["浅色模式", "深色模式"];
-                        current-index <=> root.theme_index;
-                        width: 150px;
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 12px;
-                    alignment: start;
-                    Text { text: "序号样式:"; vertical-alignment: center; width: 80px; }
+                    Text { text: "序号样式:"; vertical-alignment: center; width: 80px; font-size: 13px; color: #334155; }
                     ComboBox {
                         model: ["现代 (1 词)", "经典点号 (1. 词)", "圆圈序号 (① 词)", "方括号 ([1] 词)", "圆括号 ((1) 词)", "极简标点 (• 词)", "纯文本 (无序号)"];
                         current-index <=> root.index_style_index;
@@ -132,8 +121,8 @@ export component GeneralTab inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "候选词数 (" + Math.round(root.page_size_val) + "):"; vertical-alignment: center; width: 100px; }
-                    Slider {
+                    Text { text: "候选词数 (" + Math.round(root.page_size_val) + "):"; vertical-alignment: center; width: 105px; font-size: 13px; color: #334155; }
+                    AppSlider {
                         minimum: 5;
                         maximum: 9;
                         value <=> root.page_size_val;
@@ -143,8 +132,8 @@ export component GeneralTab inherits VerticalLayout {
                 HorizontalLayout {
                     spacing: 12px;
                     alignment: start;
-                    Text { text: "候选字号 (" + Math.round(root.font_size_val) + "px):"; vertical-alignment: center; width: 100px; }
-                    Slider {
+                    Text { text: "候选字号 (" + Math.round(root.font_size_val) + "px):"; vertical-alignment: center; width: 105px; font-size: 13px; color: #334155; }
+                    AppSlider {
                         minimum: 12;
                         maximum: 24;
                         value <=> root.font_size_val;
@@ -159,19 +148,19 @@ export component GeneralTab inherits VerticalLayout {
         title: "候选词与输入行为";
         subtitle: "根据个人击键习惯优化选词效率与排版细节";
 
-        CheckBox {
+        AppCheckBox {
             text: "动态调整候选词词频（基于用户击键自适应学习）";
             checked <=> root.dynamic_adjust_freq;
         }
-        CheckBox {
+        AppCheckBox {
             text: "使用 Shift 键选择第二候选词";
             checked <=> root.shift_select_second;
         }
-        CheckBox {
+        AppCheckBox {
             text: "中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）";
             checked <=> root.auto_pangu_spacing;
         }
-        CheckBox {
+        AppCheckBox {
             text: "启用 V 模式（支持快速四则运算计算器与快捷符号转换）";
             checked <=> root.v_mode;
         }
@@ -181,15 +170,15 @@ export component GeneralTab inherits VerticalLayout {
         title: "标点特性与保护";
         subtitle: "提供智能标点转换与格式防错保护";
 
-        CheckBox {
+        AppCheckBox {
             text: "斜杠转顿号（敲击 /? 键直接输入顿号 、）";
             checked <=> root.slash_to_dunhao;
         }
-        CheckBox {
+        AppCheckBox {
             text: "数字间英文标点保护（如 12:00、3.14 自动保持半角英文符号）";
             checked <=> root.protect_digits_punctuation;
         }
-        CheckBox {
+        AppCheckBox {
             text: "成对符号自动补全（输入括号或引号时自动补齐闭合符号并左移光标）";
             checked <=> root.auto_complete_pairs;
         }

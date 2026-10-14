@@ -15,8 +15,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
-use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode, TextAction};
+use waylan_core::{
+    Candidate, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
+    FullWidthPunctShortcut, InputMode, TextAction, TraditionalShortcut,
+};
 use waylan_wayland::input_constants::*;
+
+/// 字母 F 的 evdev 扫描码 (33)
+pub const KEY_F: u32 = 33;
+/// 字母 T 的 evdev 扫描码 (20)
+pub const KEY_T: u32 = 20;
 use waylan_wayland::input_core::{
     handle_composition_key_with_params, keycode_to_ascii_digit_char, keycode_to_char,
     keycode_to_punctuation_with_shift, CompositionKeyParams, ConsumedKeyTracker, KeyProcessAction,
@@ -83,6 +91,9 @@ pub struct IbusSessionCore {
     pub surrounding_text: Option<(String, u32, u32)>,
     pub candidate_index_style: CandidateIndexStyle,
     pub candidate_orientation: CandidateOrientation,
+    pub traditional_shortcut: TraditionalShortcut,
+    pub full_width_char_shortcut: FullWidthCharShortcut,
+    pub full_width_punct_shortcut: FullWidthPunctShortcut,
 }
 
 impl IbusSessionCore {
@@ -109,6 +120,9 @@ impl IbusSessionCore {
             surrounding_text: None,
             candidate_index_style: CandidateIndexStyle::default(),
             candidate_orientation: CandidateOrientation::default(),
+            traditional_shortcut: TraditionalShortcut::default(),
+            full_width_char_shortcut: FullWidthCharShortcut::default(),
+            full_width_punct_shortcut: FullWidthPunctShortcut::default(),
         }
     }
 
@@ -286,8 +300,17 @@ impl IbusSessionCore {
         }
 
         let shift_active = (state & IBUS_SHIFT_MASK) != 0 || (self.mods_depressed & MOD_SHIFT) != 0;
+        let ctrl_active = (state & IBUS_CONTROL_MASK) != 0 || (self.mods_depressed & MOD_CTRL) != 0;
+        let alt_active = (state & IBUS_MOD1_MASK) != 0 || (self.mods_depressed & MOD_ALT) != 0;
         let ctrl_or_alt = ibus_state_has_ctrl_or_alt(state)
             || (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
+
+        if let Some(shortcut_outcome) =
+            self.handle_global_shortcuts(evdev_key, shift_active, ctrl_active, alt_active)
+        {
+            self.consumed_keys.record_press(evdev_key, true);
+            return shortcut_outcome;
+        }
 
         let mut outcome =
             self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, self.is_caps_locked);
@@ -298,6 +321,95 @@ impl IbusSessionCore {
         }
         self.consumed_keys.record_press(evdev_key, outcome.consumed);
         outcome
+    }
+
+    /// 匹配并执行用户配置的全局模式切换快捷键（简繁切换、字符全半角、标点全半角）
+    fn handle_global_shortcuts(
+        &mut self,
+        evdev_key: u32,
+        shift_active: bool,
+        ctrl_active: bool,
+        alt_active: bool,
+    ) -> Option<IbusKeyOutcome> {
+        // 1. 简繁切换快捷键匹配
+        let trad_match = match self.traditional_shortcut {
+            TraditionalShortcut::CtrlShiftF => {
+                ctrl_active && shift_active && !alt_active && evdev_key == KEY_F
+            }
+            TraditionalShortcut::CtrlAltF => {
+                ctrl_active && alt_active && !shift_active && evdev_key == KEY_F
+            }
+            TraditionalShortcut::CtrlShiftT => {
+                ctrl_active && shift_active && !alt_active && evdev_key == KEY_T
+            }
+            TraditionalShortcut::Disabled => false,
+        };
+        if trad_match {
+            let next_val = !self.engine.config.traditional_chinese;
+            self.engine.config.traditional_chinese = next_val;
+            if let Some(ref flag) = self.shared_traditional_chinese {
+                flag.store(next_val, Ordering::Release);
+            }
+            if let Some(ref tx) = self.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                update_ui: !self.engine.raw_input().is_empty(),
+                ..Default::default()
+            });
+        }
+
+        // 2. 字符全半角切换快捷键匹配
+        let char_match = match self.full_width_char_shortcut {
+            FullWidthCharShortcut::ShiftSpace => {
+                shift_active && !ctrl_active && !alt_active && evdev_key == KEY_SPACE
+            }
+            FullWidthCharShortcut::CtrlShiftSpace => {
+                ctrl_active && shift_active && !alt_active && evdev_key == KEY_SPACE
+            }
+            FullWidthCharShortcut::Disabled => false,
+        };
+        if char_match {
+            let next_val = !self.is_full_width_char();
+            if let Some(ref flag) = self.shared_full_width_char {
+                flag.store(next_val, Ordering::Release);
+            }
+            if let Some(ref tx) = self.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                ..Default::default()
+            });
+        }
+
+        // 3. 标点全半角切换快捷键匹配
+        let punct_match = match self.full_width_punct_shortcut {
+            FullWidthPunctShortcut::CtrlPeriod => {
+                ctrl_active && !shift_active && !alt_active && evdev_key == KEY_DOT
+            }
+            FullWidthPunctShortcut::AltPeriod => {
+                alt_active && !ctrl_active && !shift_active && evdev_key == KEY_DOT
+            }
+            FullWidthPunctShortcut::Disabled => false,
+        };
+        if punct_match {
+            let next_val = !self.punct_processor.full_width_punct;
+            self.punct_processor.full_width_punct = next_val;
+            if let Some(ref flag) = self.shared_full_width_punct {
+                flag.store(next_val, Ordering::Release);
+            }
+            if let Some(ref tx) = self.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                ..Default::default()
+            });
+        }
+
+        None
     }
 
     /// 处理按键释放阶段（含 Shift/Ctrl 防误触中英文切换判定）
@@ -907,5 +1019,81 @@ mod tests {
             "解锁屏幕后应立即恢复拼音拦截与候选词处理"
         );
         assert_eq!(core.engine.raw_input(), "a");
+    }
+
+    #[test]
+    fn test_ibus_global_shortcuts_toggle() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        let trad_flag = Arc::new(AtomicBool::new(false));
+        let punct_flag = Arc::new(AtomicBool::new(true));
+        let char_flag = Arc::new(AtomicBool::new(false));
+
+        core.shared_traditional_chinese = Some(trad_flag.clone());
+        core.shared_full_width_punct = Some(punct_flag.clone());
+        core.shared_full_width_char = Some(char_flag.clone());
+
+        // 默认快捷键：Ctrl+Shift+F (简繁), Shift+Space (字符全半角), Ctrl+. (标点全半角)
+        assert_eq!(core.traditional_shortcut, TraditionalShortcut::CtrlShiftF);
+        assert_eq!(
+            core.full_width_char_shortcut,
+            FullWidthCharShortcut::ShiftSpace
+        );
+        assert_eq!(
+            core.full_width_punct_shortcut,
+            FullWidthPunctShortcut::CtrlPeriod
+        );
+
+        // 1. 测试简繁切换快捷键 (Ctrl + Shift + F)
+        let state_ctrl_shift = IBUS_CONTROL_MASK | IBUS_SHIFT_MASK;
+        let res_trad = core.process_key_event(b'f' as u32, KEY_F, state_ctrl_shift);
+        assert!(res_trad.consumed, "简繁快捷键必须被输入法消费");
+        assert!(
+            core.engine.config.traditional_chinese,
+            "简繁状态应切换为繁体"
+        );
+        assert!(
+            trad_flag.load(Ordering::Acquire),
+            "共享托盘标志应同步为繁体"
+        );
+
+        // 再次按下切回简体
+        let res_trad2 = core.process_key_event(b'f' as u32, KEY_F, state_ctrl_shift);
+        assert!(res_trad2.consumed);
+        assert!(
+            !core.engine.config.traditional_chinese,
+            "简繁状态应切回简体"
+        );
+        assert!(!trad_flag.load(Ordering::Acquire));
+
+        // 2. 测试字符全半角切换快捷键 (Shift + Space)
+        let res_char = core.process_key_event(0x20, KEY_SPACE, IBUS_SHIFT_MASK);
+        assert!(res_char.consumed, "字符全半角快捷键必须被消费");
+        assert!(core.is_full_width_char(), "字符全半角状态应切换为全角");
+        assert!(char_flag.load(Ordering::Acquire));
+
+        // 再次按下切回半角
+        let res_char2 = core.process_key_event(0x20, KEY_SPACE, IBUS_SHIFT_MASK);
+        assert!(res_char2.consumed);
+        assert!(!core.is_full_width_char(), "字符全半角状态应切回半角");
+        assert!(!char_flag.load(Ordering::Acquire));
+
+        // 3. 测试标点全半角切换快捷键 (Ctrl + .)
+        let res_punct = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
+        assert!(res_punct.consumed, "标点全半角快捷键必须被消费");
+        assert!(
+            !core.punct_processor.full_width_punct,
+            "标点状态应由全角切换为半角"
+        );
+        assert!(!punct_flag.load(Ordering::Acquire));
+
+        // 再次按下切回全角
+        let res_punct2 = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
+        assert!(res_punct2.consumed);
+        assert!(
+            core.punct_processor.full_width_punct,
+            "标点状态应切回全角中文标点"
+        );
+        assert!(punct_flag.load(Ordering::Acquire));
     }
 }

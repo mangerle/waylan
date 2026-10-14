@@ -179,6 +179,9 @@ fn is_ibus_socket_reachable(address: &str) -> bool {
 fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSessionCore) {
     core.candidate_index_style = bundle.candidate_index_style;
     core.candidate_orientation = bundle.candidate_orientation;
+    core.traditional_shortcut = bundle.traditional_shortcut;
+    core.full_width_char_shortcut = bundle.full_width_char_shortcut;
+    core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
     bundle.apply_to_engine_and_input(
         &mut core.engine,
         &mut core.shift_sm,

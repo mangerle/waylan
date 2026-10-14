@@ -9,4 +9,5 @@ Terminal=false
 Type=Application
 Categories=Settings;DesktopSettings;Utility;
 StartupNotify=true
+StartupWMClass=waylan-settings
 Keywords=input;pinyin;waylan;settings;输入法;拼音;设置;

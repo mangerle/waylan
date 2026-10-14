@@ -206,3 +206,31 @@ impl Default for TypoCorrectionRules {
         }
     }
 }
+
+/// 简繁体即时切换快捷键选项
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TraditionalShortcut {
+    #[default]
+    CtrlShiftF,
+    CtrlAltF,
+    CtrlShiftT,
+    Disabled,
+}
+
+/// 字符全角/半角切换快捷键选项
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FullWidthCharShortcut {
+    #[default]
+    ShiftSpace,
+    CtrlShiftSpace,
+    Disabled,
+}
+
+/// 标点全角/半角切换快捷键选项
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FullWidthPunctShortcut {
+    #[default]
+    CtrlPeriod,
+    AltPeriod,
+    Disabled,
+}

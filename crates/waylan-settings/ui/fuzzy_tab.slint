@@ -1,5 +1,4 @@
-import { CheckBox } from "std-widgets.slint";
-import { SettingCard } from "common.slint";
+import { SettingCard, AppCheckBox } from "common.slint";
 
 export component FuzzyTab inherits VerticalLayout {
     spacing: 16px;
@@ -24,7 +23,7 @@ export component FuzzyTab inherits VerticalLayout {
         title: "模糊音总控";
         subtitle: "自动混淆易混声母与前后鼻音韵母，提升方言口音输入容错率";
 
-        CheckBox {
+        AppCheckBox {
             text: "启用模糊音（开启后下方勾选的规则方能生效）";
             checked <=> root.fuzzy_pinyin;
         }
@@ -39,27 +38,27 @@ export component FuzzyTab inherits VerticalLayout {
 
             VerticalLayout {
                 spacing: 12px;
-                CheckBox {
+                AppCheckBox {
                     text: "c <=> ch (例如: ca <=> cha)";
                     checked <=> root.fuzzy_c_ch;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "z <=> zh (例如: za <=> zha)";
                     checked <=> root.fuzzy_z_zh;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "s <=> sh (例如: sa <=> sha)";
                     checked <=> root.fuzzy_s_sh;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "an <=> ang (例如: pan <=> pang)";
                     checked <=> root.fuzzy_an_ang;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "en <=> eng (例如: ben <=> beng)";
                     checked <=> root.fuzzy_en_eng;
                     enabled: root.fuzzy_pinyin;
@@ -68,27 +67,27 @@ export component FuzzyTab inherits VerticalLayout {
 
             VerticalLayout {
                 spacing: 12px;
-                CheckBox {
+                AppCheckBox {
                     text: "in <=> ing (例如: bin <=> bing)";
                     checked <=> root.fuzzy_in_ing;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "l <=> n (例如: la <=> na)";
                     checked <=> root.fuzzy_l_n;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "f <=> h (例如: fa <=> ha)";
                     checked <=> root.fuzzy_f_h;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "r <=> l (例如: ren <=> len)";
                     checked <=> root.fuzzy_r_l;
                     enabled: root.fuzzy_pinyin;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "g <=> k (例如: ge <=> ke)";
                     checked <=> root.fuzzy_g_k;
                     enabled: root.fuzzy_pinyin;

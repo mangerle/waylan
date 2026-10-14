@@ -1,5 +1,5 @@
 import { Button, LineEdit } from "std-widgets.slint";
-import { PhraseItem, SettingCard } from "common.slint";
+import { PhraseItem, SettingCard, PrimaryButton } from "common.slint";
 
 export component UserDataTab inherits VerticalLayout {
     spacing: 16px;
@@ -17,17 +17,28 @@ export component UserDataTab inherits VerticalLayout {
 
     SettingCard {
         title: "自造词与自适应学习记忆";
-        subtitle: "微澜根据用户输入动态学习的高频新词与组词记忆";
-
-        Text {
-            text: root.user_model_info;
-            font-size: 13px;
-            color: #334155;
-            font-weight: 500;
-        }
+        subtitle: "微澜根据用户日常输入自动学习的高频新词与组词记忆模型";
 
         HorizontalLayout {
-            alignment: start;
+            spacing: 16px;
+            alignment: space-between;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: root.user_model_info;
+                    font-size: 13px;
+                    color: #0f172a;
+                    font-weight: 600;
+                }
+                Text {
+                    text: "输入法会根据个人习惯动态提升高频常用词排序权重";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+            }
+
             Button {
                 text: "清空自造词历史记录";
                 clicked => { root.clear_user_model(); }
@@ -37,68 +48,158 @@ export component UserDataTab inherits VerticalLayout {
 
     SettingCard {
         title: "新增快捷自定义短语";
-        subtitle: "输入简短代码自动展开为常用长句、邮箱或地址";
+        subtitle: "输入简短代码自动展开为常用长句、邮箱或地址（例如输入 sfz 候选身份证号）";
 
-        HorizontalLayout {
-            spacing: 8px;
-            LineEdit {
-                width: 140px;
-                placeholder-text: "快捷代码 (如 mymail)";
-                text <=> root.new_phrase_code;
-            }
-            LineEdit {
-                placeholder-text: "展开文本 (如 user@domain.com)";
-                text <=> root.new_phrase_text;
-            }
-            Button {
-                text: "添加短语";
-                clicked => {
-                    root.add_custom_phrase(root.new_phrase_code, root.new_phrase_text);
+        VerticalLayout {
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "触发缩写代码:"; font-size: 12px; color: #475569; font-weight: 500; }
+                    LineEdit {
+                        width: 150px;
+                        placeholder-text: "如 sfz、sjh、email";
+                        text <=> root.new_phrase_code;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "自动展开文本内容:"; font-size: 12px; color: #475569; font-weight: 500; }
+                    LineEdit {
+                        width: 320px;
+                        placeholder-text: "如 身份证号、手机号、常用短语或地址";
+                        text <=> root.new_phrase_text;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    alignment: end;
+                    Text { text: " "; font-size: 12px; } // 占位保持对齐
+                    PrimaryButton {
+                        text: "添加短语";
+                        clicked => {
+                            root.add_custom_phrase(root.new_phrase_code, root.new_phrase_text);
+                        }
+                    }
                 }
             }
-        }
-        if root.phrase_status != "": Text {
-            text: root.phrase_status;
-            font-size: 12px;
-            color: #059669;
+
+            if root.phrase_status != "": Text {
+                text: root.phrase_status;
+                font-size: 12px;
+                color: #059669;
+                font-weight: 500;
+            }
         }
     }
 
     SettingCard {
         title: "已配置自定义短语列表";
-        subtitle: "已生效的快捷短语映射表";
+        subtitle: "已生效的快捷短语映射表（按缩写输入时立即提示展开）";
 
-        if root.phrase_list.length == 0: Text {
-            text: "暂无自定义短语，可在上方输入框添加。";
-            font-size: 13px;
-            color: #94a3b8;
-        }
+        VerticalLayout {
+            spacing: 8px;
 
-        for item[idx] in root.phrase_list: HorizontalLayout {
-            spacing: 12px;
-            alignment: start;
-            Text {
-                text: item.code;
-                font-weight: 700;
-                width: 120px;
-                vertical-alignment: center;
-                color: #1e293b;
+            // 表头
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 16px;
+                Text { text: "触发缩写代码"; width: 130px; font-size: 12px; font-weight: 700; color: #64748b; }
+                Text { text: "对应展开内容"; font-size: 12px; font-weight: 700; color: #64748b; }
+                Rectangle { } // 弹性占位
+                Text { text: "操作"; width: 64px; font-size: 12px; font-weight: 700; color: #64748b; horizontal-alignment: center; }
             }
-            Text {
-                text: "->";
-                color: #94a3b8;
-                vertical-alignment: center;
+
+            Rectangle {
+                height: 1px;
+                background: #e2e8f0;
             }
-            Text {
-                text: item.text;
-                vertical-alignment: center;
-                color: #334155;
+
+            if root.phrase_list.length == 0: Rectangle {
+                height: 56px;
+                border-radius: 6px;
+                background: #f8fafc;
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: "暂无自定义短语，可在上方输入框添加。";
+                        font-size: 13px;
+                        color: #94a3b8;
+                        vertical-alignment: center;
+                    }
+                }
             }
-            Rectangle { } // 占位弹性
-            Button {
-                text: "删除";
-                clicked => { root.delete_custom_phrase(idx); }
+
+            // 数据列表项
+            for item[idx] in root.phrase_list: Rectangle {
+                height: 42px;
+                border-radius: 6px;
+                background: #f8fafc;
+                border-width: 1px;
+                border-color: #f1f5f9;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 16px;
+
+                    // 代码采用精致的轻量徽章
+                    VerticalLayout {
+                        alignment: center;
+                        width: 130px;
+                        Rectangle {
+                            height: 24px;
+                            border-radius: 4px;
+                            background: #ffffff;
+                            border-width: 1px;
+                            border-color: #cbd5e1;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                alignment: start;
+                                Text {
+                                    text: item.code;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    color: #0f172a;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // 展开内容
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: item.text;
+                            font-size: 13px;
+                            color: #334155;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle { } // 占位弹性
+
+                    // 操作按钮
+                    VerticalLayout {
+                        alignment: center;
+                        width: 64px;
+                        Button {
+                            text: "删除";
+                            clicked => { root.delete_custom_phrase(idx); }
+                        }
+                    }
+                }
             }
         }
     }
 }
+

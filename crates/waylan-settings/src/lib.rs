@@ -281,8 +281,8 @@ fn sync_gnome_indicator_mode(exclusive: bool) {
 mod tests {
     use super::*;
     use waylan_core::config::{
-        CandidateIndexStyle, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey,
-        ThemeMode, TypoCorrectionRules,
+        CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut, FullWidthPunctShortcut,
+        FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules,
     };
 
     #[test]
@@ -299,6 +299,9 @@ mod tests {
                 bracket: true,
                 comma_period: true,
             },
+            traditional_shortcut: TraditionalShortcut::CtrlShiftF,
+            full_width_char_shortcut: FullWidthCharShortcut::ShiftSpace,
+            full_width_punct_shortcut: FullWidthPunctShortcut::CtrlPeriod,
             theme: ThemeMode::Dark,
             candidate_orientation: CandidateOrientation::Vertical,
             candidate_index_style: CandidateIndexStyle::Circled,

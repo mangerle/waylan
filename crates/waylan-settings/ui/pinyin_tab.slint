@@ -1,5 +1,5 @@
-import { CheckBox, ComboBox } from "std-widgets.slint";
-import { SettingCard } from "common.slint";
+import { ComboBox } from "std-widgets.slint";
+import { SettingCard, AppCheckBox } from "common.slint";
 
 export component PinyinTab inherits VerticalLayout {
     spacing: 16px;
@@ -7,11 +7,6 @@ export component PinyinTab inherits VerticalLayout {
 
     // 拼音检索
     in-out property <bool> enable_acronym: true;
-
-    // 翻页按键多选开关
-    in-out property <bool> page_keys_minus_equal: true;
-    in-out property <bool> page_keys_bracket: false;
-    in-out property <bool> page_keys_comma_period: false;
 
     // 纠错规则
     in-out property <bool> typo_enable: false;
@@ -35,51 +30,23 @@ export component PinyinTab inherits VerticalLayout {
         title: "拼音匹配模式";
         subtitle: "选择音节检索与切分方式";
 
-        CheckBox {
+        AppCheckBox {
             text: "全拼（完整拼音音节匹配，默认常开）";
             checked: true;
             enabled: false;
         }
-        CheckBox {
+        AppCheckBox {
             text: "简拼（声母缩写快速匹配，例如输入 'bj' 候选 '北京'）";
             checked <=> root.enable_acronym;
         }
     }
 
-    SettingCard {
-        title: "候选翻页快捷键";
-        subtitle: "配置候选词列表翻页按键映射（支持多选同时生效）";
-
-        HorizontalLayout {
-            spacing: 24px;
-            alignment: start;
-
-            CheckBox {
-                text: "减号/等号 (- / =)";
-                checked <=> root.page_keys_minus_equal;
-            }
-            CheckBox {
-                text: "中括号 ([ / ])";
-                checked <=> root.page_keys_bracket;
-            }
-            CheckBox {
-                text: "逗号/句号 (, / .)";
-                checked <=> root.page_keys_comma_period;
-            }
-        }
-
-        Text {
-            text: "注: 键盘 PageUp / PageDown 键始终支持翻页。";
-            font-size: 12px;
-            color: #94a3b8;
-        }
-    }
 
     SettingCard {
         title: "拼音纠错选项";
         subtitle: "自动识别并修正拼音键入过程中的常见击键笔误与旧拼音格式";
 
-        CheckBox {
+        AppCheckBox {
             text: "启用拼音自动纠错功能";
             checked <=> root.typo_enable;
         }
@@ -94,22 +61,22 @@ export component PinyinTab inherits VerticalLayout {
 
             VerticalLayout {
                 spacing: 10px;
-                CheckBox {
+                AppCheckBox {
                     text: "gn -> ng (例如: zhangn -> zhang)";
                     checked <=> root.typo_gn_ng;
                     enabled: root.typo_enable;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "mg -> ng (例如: zhangm -> zhang)";
                     checked <=> root.typo_mg_ng;
                     enabled: root.typo_enable;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "iou -> iu (例如: niou -> niu)";
                     checked <=> root.typo_iou_iu;
                     enabled: root.typo_enable;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "uei -> ui (例如: guei -> gui)";
                     checked <=> root.typo_uei_ui;
                     enabled: root.typo_enable;
@@ -118,22 +85,22 @@ export component PinyinTab inherits VerticalLayout {
 
             VerticalLayout {
                 spacing: 10px;
-                CheckBox {
+                AppCheckBox {
                     text: "uen -> un (例如: luen -> lun)";
                     checked <=> root.typo_uen_un;
                     enabled: root.typo_enable;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "ue -> ve (例如: jue -> jve)";
                     checked <=> root.typo_ue_ve;
                     enabled: root.typo_enable;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "v -> u (例如: lv -> lu)";
                     checked <=> root.typo_v_u;
                     enabled: root.typo_enable;
                 }
-                CheckBox {
+                AppCheckBox {
                     text: "on -> ong (例如: zon -> zong)";
                     checked <=> root.typo_on_ong;
                     enabled: root.typo_enable;
@@ -146,23 +113,23 @@ export component PinyinTab inherits VerticalLayout {
         title: "高级模式与候选特性";
         subtitle: "配置特殊引导模式、生僻字过滤与候选提示细节";
 
-        CheckBox {
+        AppCheckBox {
             text: "启用 U 模式（拆字与笔画反查，输入 u 引导部件或横竖撇捺折）";
             checked <=> root.enable_u_mode;
         }
-        CheckBox {
+        AppCheckBox {
             text: "启用 I 模式（特殊符号与数字序号，输入 i 引导序号与单位符号）";
             checked <=> root.enable_i_mode;
         }
-        CheckBox {
+        AppCheckBox {
             text: "过滤超规范生僻汉字（隐藏罕见字，优先常用规范汉字）";
             checked <=> root.filter_uncommon_charset;
         }
-        CheckBox {
+        AppCheckBox {
             text: "候选词显示拼音标注（在候选词旁展示拼音与注释提示）";
             checked <=> root.show_pinyin_comment;
         }
-        CheckBox {
+        AppCheckBox {
             text: "多路候选自动去重（合并不同检索来源的重复候选词）";
             checked <=> root.auto_dedup;
         }

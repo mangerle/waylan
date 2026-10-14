@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::config_types::{
-    CandidateIndexStyle, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode,
-    TypoCorrectionRules,
+    CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut, FullWidthPunctShortcut,
+    FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules,
 };
 
 /// 微澜输入法全局配置
@@ -22,6 +22,12 @@ pub struct AppConfig {
     pub switch_key: SwitchKey,
     /// 翻页快捷键
     pub page_keys: PageKeys,
+    /// 简繁体即时切换快捷键
+    pub traditional_shortcut: TraditionalShortcut,
+    /// 字符全角/半角切换快捷键
+    pub full_width_char_shortcut: FullWidthCharShortcut,
+    /// 标点全角/半角切换快捷键
+    pub full_width_punct_shortcut: FullWidthPunctShortcut,
     /// 单页候选词数量（默认 5）
     pub page_size: usize,
     /// 候选文字大小（像素）
@@ -86,6 +92,9 @@ impl Default for AppConfig {
             full_width_punct: true,
             switch_key: SwitchKey::Shift,
             page_keys: PageKeys::default(),
+            traditional_shortcut: TraditionalShortcut::default(),
+            full_width_char_shortcut: FullWidthCharShortcut::default(),
+            full_width_punct_shortcut: FullWidthPunctShortcut::default(),
             page_size: 5,
             font_size: 15.0,
             theme: ThemeMode::Light,

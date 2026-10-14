@@ -9,8 +9,9 @@
 
 use crate::SettingsWindow;
 use waylan_core::config::{
-    AppConfig, CandidateIndexStyle, CandidateOrientation, FuzzyPinyinRules, PageKeys, SwitchKey,
-    ThemeMode, TypoCorrectionRules,
+    AppConfig, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
+    FullWidthPunctShortcut, FuzzyPinyinRules, PageKeys, SwitchKey, TraditionalShortcut,
+    TypoCorrectionRules,
 };
 
 /// 将 AppConfig 数据应用到 Slint 界面属性
@@ -27,10 +28,6 @@ pub fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_orientation_index(match cfg.candidate_orientation {
         CandidateOrientation::Horizontal => 0,
         CandidateOrientation::Vertical => 1,
-    });
-    window.set_theme_index(match cfg.theme {
-        ThemeMode::Light => 0,
-        ThemeMode::Dark => 1,
     });
     window.set_index_style_index(match cfg.candidate_index_style {
         CandidateIndexStyle::ModernSpace => 0,
@@ -50,6 +47,22 @@ pub fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_page_keys_minus_equal(cfg.page_keys.minus_equal);
     window.set_page_keys_bracket(cfg.page_keys.bracket);
     window.set_page_keys_comma_period(cfg.page_keys.comma_period);
+    window.set_traditional_shortcut_index(match cfg.traditional_shortcut {
+        TraditionalShortcut::CtrlShiftF => 0,
+        TraditionalShortcut::CtrlAltF => 1,
+        TraditionalShortcut::CtrlShiftT => 2,
+        TraditionalShortcut::Disabled => 3,
+    });
+    window.set_full_width_char_shortcut_index(match cfg.full_width_char_shortcut {
+        FullWidthCharShortcut::ShiftSpace => 0,
+        FullWidthCharShortcut::CtrlShiftSpace => 1,
+        FullWidthCharShortcut::Disabled => 2,
+    });
+    window.set_full_width_punct_shortcut_index(match cfg.full_width_punct_shortcut {
+        FullWidthPunctShortcut::CtrlPeriod => 0,
+        FullWidthPunctShortcut::AltPeriod => 1,
+        FullWidthPunctShortcut::Disabled => 2,
+    });
 
     // 输入与标点特性
     window.set_dynamic_adjust_freq(cfg.dynamic_adjust_freq);
@@ -115,12 +128,24 @@ pub fn update_config_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
         bracket: window.get_page_keys_bracket(),
         comma_period: window.get_page_keys_comma_period(),
     };
+    cfg.traditional_shortcut = match window.get_traditional_shortcut_index() {
+        1 => TraditionalShortcut::CtrlAltF,
+        2 => TraditionalShortcut::CtrlShiftT,
+        3 => TraditionalShortcut::Disabled,
+        _ => TraditionalShortcut::CtrlShiftF,
+    };
+    cfg.full_width_char_shortcut = match window.get_full_width_char_shortcut_index() {
+        1 => FullWidthCharShortcut::CtrlShiftSpace,
+        2 => FullWidthCharShortcut::Disabled,
+        _ => FullWidthCharShortcut::ShiftSpace,
+    };
+    cfg.full_width_punct_shortcut = match window.get_full_width_punct_shortcut_index() {
+        1 => FullWidthPunctShortcut::AltPeriod,
+        2 => FullWidthPunctShortcut::Disabled,
+        _ => FullWidthPunctShortcut::CtrlPeriod,
+    };
     cfg.page_size = window.get_page_size_val().round() as usize;
     cfg.font_size = window.get_font_size_val().round();
-    cfg.theme = match window.get_theme_index() {
-        1 => ThemeMode::Dark,
-        _ => ThemeMode::Light,
-    };
     cfg.candidate_orientation = match window.get_orientation_index() {
         1 => CandidateOrientation::Vertical,
         _ => CandidateOrientation::Horizontal,
@@ -229,11 +254,18 @@ mod tests {
         assert!(!window.get_show_pinyin_comment());
         assert!(!window.get_auto_dedup());
 
-        // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标，索引 2: 圆圈序号）
+        assert_eq!(window.get_traditional_shortcut_index(), 0);
+        assert_eq!(window.get_full_width_char_shortcut_index(), 0);
+        assert_eq!(window.get_full_width_punct_shortcut_index(), 0);
+
+        // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标，索引 2: 圆圈序号，修改快捷键）
         assert_eq!(window.get_index_style_index(), 0);
         window.set_page_size_val(8.0);
         window.set_enable_tray_index(1);
         window.set_index_style_index(2);
+        window.set_traditional_shortcut_index(1); // CtrlAltF
+        window.set_full_width_char_shortcut_index(1); // CtrlShiftSpace
+        window.set_full_width_punct_shortcut_index(1); // AltPeriod
 
         let mut updated_cfg = initial_cfg.clone();
         update_config_from_window(&window, &mut updated_cfg);
@@ -246,6 +278,18 @@ mod tests {
         );
         assert_eq!(updated_cfg.enable_tray, Some(false));
         assert!(!updated_cfg.exclusive_input_source);
+        assert_eq!(
+            updated_cfg.traditional_shortcut,
+            TraditionalShortcut::CtrlAltF
+        );
+        assert_eq!(
+            updated_cfg.full_width_char_shortcut,
+            FullWidthCharShortcut::CtrlShiftSpace
+        );
+        assert_eq!(
+            updated_cfg.full_width_punct_shortcut,
+            FullWidthPunctShortcut::AltPeriod
+        );
         // 关键：未在界面展示的高级图标配置绝对不可被清空
         assert_eq!(
             updated_cfg.tray_icon_theme_path.as_deref(),

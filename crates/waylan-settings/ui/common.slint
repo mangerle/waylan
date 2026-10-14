@@ -3,14 +3,38 @@ export struct PhraseItem {
     text: string,
 }
 
-export component NavItem inherits Rectangle {
-    in property <string> title;
-    in property <bool> active: false;
+export component Keycap inherits Rectangle {
+    in property <string> text;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: #cbd5e1;
+    background: #f8fafc;
+    height: 24px;
+    min-width: 26px;
+
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        alignment: center;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: 600;
+            color: #334155;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
     callback clicked();
 
-    height: 42px;
-    border-radius: 8px;
-    background: active ? #3b82f6 : (touch.has-hover ? #e2e8f0 : transparent);
+    height: 32px;
+    min-width: 110px;
+    border-radius: 6px;
+    background: touch.pressed ? #1e40af : (touch.has-hover ? #1d4ed8 : #2563eb);
 
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -19,21 +43,128 @@ export component NavItem inherits Rectangle {
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
-        alignment: start;
+        alignment: center;
         Text {
-            text: root.title;
-            color: root.active ? #ffffff : (touch.has-hover ? #0f172a : #334155);
-            font-size: 14px;
-            font-weight: root.active ? 600 : 400;
+            text: root.text;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 600;
             vertical-alignment: center;
         }
+    }
+}
+
+export component AppCheckBox inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <string> text;
+    in property <bool> enabled: true;
+
+    height: 24px;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.checked = !root.checked; }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+
+        // 方块指示器
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 4px;
+            border-width: 1.5px;
+            border-color: root.checked ? #2563eb : (touch.has-hover && root.enabled ? #94a3b8 : #cbd5e1);
+            background: root.checked ? #2563eb : (root.enabled ? #ffffff : #f1f5f9);
+
+            // 白色打勾 SVG
+            if root.checked: Image {
+                source: @image-url("../../../assets/icons/check.svg");
+                width: 11px;
+                height: 11px;
+                colorize: #ffffff;
+            }
+        }
+
+        // 文字
+        Text {
+            text: root.text;
+            font-size: 13px;
+            color: root.enabled ? (touch.has-hover ? #0f172a : #334155) : #94a3b8;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 42px;
+    border-radius: 8px;
+    background: active ? #eff6ff : (touch.has-hover ? #f1f5f9 : transparent);
+
+    touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.clicked(); }
+    }
+
+    // 选中时左侧高亮指示条
+    if root.active: Rectangle {
+        x: 0px;
+        y: 9px;
+        width: 3.5px;
+        height: 24px;
+        border-radius: 2px;
+        background: #2563eb;
+    }
+
+    HorizontalLayout {
+        width: 100%;
+        height: 100%;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        // 图标垂直居中容器
+        VerticalLayout {
+            alignment: center;
+            width: 18px;
+            Image {
+                source: root.icon;
+                width: 18px;
+                height: 18px;
+                colorize: root.active ? #2563eb : (touch.has-hover ? #0f172a : #64748b);
+            }
+        }
+
+        // 标题文字垂直居中容器，确保与图标中轴线严格一致
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.title;
+                color: root.active ? #2563eb : (touch.has-hover ? #0f172a : #334155);
+                font-size: 14px;
+                font-weight: root.active ? 600 : 500;
+                vertical-alignment: center;
+            }
+        }
+
+        // 弹性占位，保持左侧紧凑
+        Rectangle { }
     }
 }
 
 export component SettingCard inherits Rectangle {
     in property <string> title;
     in property <string> subtitle: "";
-    border-radius: 8px;
+    border-radius: 10px;
     border-width: 1px;
     border-color: #e2e8f0;
     background: #ffffff;
@@ -41,16 +172,16 @@ export component SettingCard inherits Rectangle {
     height: card-layout.preferred-height;
 
     card-layout := VerticalLayout {
-        padding: 16px;
-        spacing: 12px;
+        padding: 18px;
+        spacing: 14px;
 
         if root.title != "": VerticalLayout {
-            spacing: 2px;
+            spacing: 3px;
             Text {
                 text: root.title;
                 font-size: 15px;
                 font-weight: 700;
-                color: #1e293b;
+                color: #0f172a;
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
@@ -62,3 +193,77 @@ export component SettingCard inherits Rectangle {
         @children
     }
 }
+
+export component AppSlider inherits Rectangle {
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in-out property <float> value: 0;
+    in property <bool> enabled: true;
+
+    height: 24px;
+    min-width: 120px;
+
+    property <float> progress: (root.maximum > root.minimum)
+        ? Math.max(0.0, Math.min(1.0, (root.value - root.minimum) / (root.maximum - root.minimum)))
+        : 0.0;
+
+    track := Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 5px;
+        border-radius: 2.5px;
+        background: #e2e8f0;
+
+        // 科技蓝高亮已选进度条
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: root.progress * parent.width;
+            height: parent.height;
+            border-radius: 2.5px;
+            background: root.enabled ? #2563eb : #94a3b8;
+        }
+    }
+
+    thumb := Rectangle {
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        x: root.progress * (root.width - self.width);
+        y: (parent.height - self.height) / 2;
+        background: #ffffff;
+        border-width: 2.5px;
+        border-color: root.enabled ? (touch.has-hover || touch.pressed ? #1d4ed8 : #2563eb) : #94a3b8;
+        drop-shadow-blur: 4px;
+        drop-shadow-color: #00000025;
+        drop-shadow-offset-y: 1px;
+    }
+
+    touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        enabled: root.enabled;
+
+        function update_from_pos(pos_x: length) {
+            let usable_width = root.width - thumb.width;
+            if usable_width > 0px {
+                let clamped_x = Math.max(0px, Math.min(usable_width, pos_x - thumb.width / 2));
+                let ratio = clamped_x / usable_width;
+                root.value = root.minimum + ratio * (root.maximum - root.minimum);
+            }
+        }
+
+        moved => {
+            if self.pressed {
+                self.update_from_pos(self.mouse-x);
+            }
+        }
+
+        pointer-event(event) => {
+            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                self.update_from_pos(self.mouse-x);
+            }
+        }
+    }
+}
+
+
