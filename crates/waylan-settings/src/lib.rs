@@ -31,6 +31,17 @@ use waylan_core::config::AppConfig;
 /// 当窗口初始化或事件循环运行失败时返回错误。
 pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
     let window = SettingsWindow::new()?;
+
+    // 设置 XDG 应用标识（app_id / WM_CLASS），必须在窗口实例初始化后、首次呈现到桌面之前配置。
+    // 确保 Wayland 合成器（如 GNOME Mutter、KWin、Sway）将运行期窗口与 waylan-settings.desktop 权威关联，
+    // 从而使桌面环境 Dock 栏、Alt-Tab 任务切换器即刻匹配并显示微澜专属矢量应用图标，消除默认灰色齿轮。
+    let _ = slint::set_xdg_app_id("waylan-settings");
+
+    // 显式预设窗口初始逻辑尺寸，避免 Wayland 合成器在初次 configure 阶段因尺寸未就绪产生 0x0 断言阻塞
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(860.0, 600.0));
+
     window.set_app_version(SharedString::from(env!("CARGO_PKG_VERSION")));
 
     // 1. 加载持久化配置并同步到界面

@@ -8,6 +8,6 @@ Icon=waylan
 Terminal=false
 Type=Application
 Categories=Utility;InputMethod;
-StartupNotify=true
+StartupNotify=false
 Keywords=input;pinyin;waylan;chinese;输入法;拼音;中文;微澜;
 
