@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 微澜 (WayLan) 原生 Debian (.deb) 软件包构建脚本
-# 本脚本遵循 Debian 打包标准规范，输出开箱即用的 waylan_0.1.0_amd64.deb 包。
+# 本脚本遵循 Debian 打包标准规范，输出开箱即用的 waylan_1.0.0_amd64.deb 包。
 
 set -euo pipefail
 

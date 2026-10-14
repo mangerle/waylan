@@ -541,11 +541,11 @@ mod tests {
 
     #[test]
     fn test_format_ibus_component_and_engines_xml() {
-        let comp_xml = format_ibus_component_xml("/usr/bin/waylan", "0.1.0");
+        let comp_xml = format_ibus_component_xml("/usr/bin/waylan", "1.0.0");
         assert!(comp_xml.contains("<name>org.freedesktop.IBus.Waylan</name>"));
         assert!(comp_xml.contains("<exec>/usr/bin/waylan --ibus</exec>"));
 
-        let eng_xml = format_ibus_engines_xml("/usr/bin/waylan", "0.1.0");
+        let eng_xml = format_ibus_engines_xml("/usr/bin/waylan", "1.0.0");
         assert!(eng_xml.contains("<name>waylan</name>"));
         assert!(eng_xml.contains("<setup>/usr/bin/waylan settings</setup>"));
     }
