@@ -61,7 +61,5 @@ jobs:
           body_path: RELEASE_CHANGELOG.md
           files: |
             target/debian/*.deb
-            target/release/waylan
-            target/release/waylan-settings
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
