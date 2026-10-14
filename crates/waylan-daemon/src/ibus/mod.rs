@@ -38,7 +38,9 @@ use zbus::zvariant::Value;
 use crate::config::env_var_non_empty;
 use crate::session_bundle::SessionConfigBundle;
 use crate::tray::menu::SubprocessManager;
-use desktop_integration::{ensure_ibus_and_gnome_integration, format_ibus_engines_xml};
+use desktop_integration::{
+    ensure_ibus_and_gnome_integration, format_ibus_component_xml, format_ibus_engines_xml,
+};
 use engine::{
     IbusEngineService, IbusFactoryService, IbusGenericService, WAYLAN_ENGINE_OBJECT_PATH,
     WAYLAN_FACTORY_OBJECT_PATH,
@@ -605,6 +607,13 @@ pub fn print_ibus_engines_xml() {
         .unwrap_or_else(|| "/usr/bin/waylan".to_string());
     let version = env!("CARGO_PKG_VERSION");
     let xml = format_ibus_engines_xml(&exe_path, version);
+    let _ = io::stdout().write_all(xml.as_bytes());
+}
+
+/// 输出符合 IBus `<component>` 规范的 XML 组件描述文本（响应 `waylan --ibus-component-xml`）
+pub fn print_ibus_component_xml() {
+    let version = env!("CARGO_PKG_VERSION");
+    let xml = format_ibus_component_xml("/usr/bin/waylan", version);
     let _ = io::stdout().write_all(xml.as_bytes());
 }
 

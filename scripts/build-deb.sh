@@ -39,14 +39,15 @@ echo "[微澜打包] 步骤 2/4: 编译 Release 优化版本二进制程序 (way
 cd "${PROJECT_ROOT}"
 cargo build --release --bin waylan --bin waylan-settings
 
-echo "[微澜打包] 步骤 3/4: 检查 cargo-deb 打包工具与组件元数据版本同步..."
+echo "[微澜打包] 步骤 3/4: 检查 cargo-deb 打包工具与动态生成组件元数据..."
 if ! command -v cargo-deb >/dev/null 2>&1; then
     echo "未检测到 cargo-deb，正在通过 cargo 自动安装..."
     cargo install cargo-deb
 fi
-if [ -f "${PROJECT_ROOT}/assets/waylan.xml" ]; then
-    sed -i -E "s|<version>[^<]+</version>|<version>${PKG_VERSION}</version>|g" "${PROJECT_ROOT}/assets/waylan.xml"
-fi
+
+# 动态生成 IBus 组件描述元数据至构建输出目录 (target/generated/ibus/waylan.xml)，彻底杜绝污染源码仓库
+mkdir -p "${PROJECT_ROOT}/target/generated/ibus"
+"${PROJECT_ROOT}/target/release/waylan" --ibus-component-xml > "${PROJECT_ROOT}/target/generated/ibus/waylan.xml"
 
 echo "[微澜打包] 步骤 4/4: 调用 cargo-deb 构建原生 Debian 软件包..."
 cargo deb -p waylan-daemon --no-build --deb-revision ""

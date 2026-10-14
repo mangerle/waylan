@@ -76,7 +76,11 @@ fn ensure_user_icons_registered(home_path: &Path) {
 
 /// 生成完整的 IBus `<component>` XML 文本
 pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
-    let icon_path = resolve_engine_icon_path();
+    let icon_path = if exe_path == "/usr/bin/waylan" {
+        "waylan".to_string()
+    } else {
+        resolve_engine_icon_path()
+    };
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <component>
@@ -84,9 +88,9 @@ pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
     <description>WayLan Chinese Input Method Component</description>
     <exec>{exe} --ibus</exec>
     <version>{ver}</version>
-    <author>wangle</author>
-    <license>Apache-2.0</license>
-    <homepage>https://github.com/mangerle/waylan</homepage>
+    <author>WayLan Contributors</author>
+    <license>MIT OR Apache-2.0</license>
+    <homepage>https://github.com/waylan/waylan</homepage>
     <textdomain>waylan</textdomain>
     <engines>
         <engine>
@@ -94,8 +98,8 @@ pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
             <longname>微澜拼音</longname>
             <description>微澜 (WayLan) - 现代轻量纯 Rust 中文拼音输入法</description>
             <language>zh_CN</language>
-            <license>Apache-2.0</license>
-            <author>wangle</author>
+            <license>MIT OR Apache-2.0</license>
+            <author>WayLan Contributors</author>
             <icon>{icon}</icon>
             <layout>us</layout>
             <rank>99</rank>

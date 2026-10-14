@@ -30,6 +30,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ibus::print_ibus_engines_xml();
         return Ok(());
     }
+    if args.len() >= 2 && (args[1] == "--ibus-component-xml" || args[1] == "--component-xml") {
+        ibus::print_ibus_component_xml();
+        return Ok(());
+    }
 
     // 1. 初始化双通道日志系统（终端输出 + 文件落盘），确保后续 CLI 子命令与主服务日志正常输出
     let log_init_res = logger::init_logger();

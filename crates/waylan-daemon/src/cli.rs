@@ -15,7 +15,8 @@ pub fn print_main_usage() {
     println!("  -V, --version    显示版本信息");
     println!("  --check          执行算法引擎与词库环境自检");
     println!("  --ibus           以 IBus 引擎后端模式启动（适配 Ubuntu GNOME / Mutter 等桌面）");
-    println!("  --xml            输出符合 IBus 组件规范的 <engines> XML 描述");
+    println!("  --xml            输出符合 IBus 引擎规范的 <engines> XML 描述");
+    println!("  --ibus-component-xml 输出符合 IBus 组件元数据规范的 <component> XML 描述");
     println!("  --settings       启动图形化偏好设置界面");
     println!("子命令:");
     println!("  settings         启动图形化偏好设置界面");

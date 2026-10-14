@@ -47,7 +47,7 @@ assets = [
     ["../../data/bigram.table.bin", "usr/share/waylan/data/bigram.table.bin", "644"],
     ["../../data/opencc.dict.bin", "usr/share/waylan/data/opencc.dict.bin", "644"],
     ["../../data/dicts/**/*", "usr/share/waylan/dicts/", "644"],
-    ["../../assets/waylan.xml", "usr/share/ibus/component/waylan.xml", "644"],
+    ["../../target/generated/ibus/waylan.xml", "usr/share/ibus/component/waylan.xml", "644"],
     ["../../assets/*.svg", "usr/share/waylan/assets/", "644"],
     ["../../assets/*.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["../../assets/waylan.desktop", "usr/share/applications/waylan.desktop", "644"],
