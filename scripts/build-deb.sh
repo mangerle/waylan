@@ -46,7 +46,7 @@ if ! command -v cargo-deb >/dev/null 2>&1; then
 fi
 
 echo "[微澜打包] 步骤 4/4: 调用 cargo-deb 构建原生 Debian 软件包..."
-cargo deb -p waylan-daemon --no-build
+cargo deb -p waylan-daemon --no-build --deb-revision ""
 
 LATEST_DEB="$(ls -t "${PROJECT_ROOT}/target/debian/"*.deb 2>/dev/null | head -n1 || true)"
 DEB_SIZE="$(du -h "${LATEST_DEB}" 2>/dev/null | cut -f1 || echo "未知")"

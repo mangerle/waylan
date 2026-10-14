@@ -27,6 +27,7 @@ rustix.workspace = true
 
 [package.metadata.deb]
 name = "waylan"
+revision = ""
 maintainer = "WayLan Contributors <waylan@localhost>"
 copyright = "2026, WayLan Contributors"
 extended-description = """
