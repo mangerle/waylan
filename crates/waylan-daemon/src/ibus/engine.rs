@@ -134,7 +134,7 @@ impl IbusFactoryService {
                         path_str, e
                     );
                 }
-                info!(
+                debug!(
                     "[微澜 IBus] 成功为新应用输入上下文动态注册 Engine 实例: {}",
                     path_str
                 );

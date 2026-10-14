@@ -8,6 +8,9 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 /// 旧版 WAL 预写日志魔数标识（16 字节，V1 记录未携带频次字段）
 pub const WAL_MAGIC_V1: &[u8; 16] = b"WAYLAN_USERWAL01";
 
@@ -16,6 +19,30 @@ pub const WAL_MAGIC: &[u8; 16] = b"WAYLAN_USERWAL02";
 
 /// 校验和初始种子（非零常数，防止全零填充块通过校验和检查）
 pub const WAL_CHECKSUM_SEED: u32 = 0x5a5a_a5a5;
+
+static LAST_INTERNAL_COMPACT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// 查询当前是否处于进程内部刚刚完成 WAL 归并落盘的防重保护窗口内（毫秒）
+pub fn is_recent_internal_compact(window_ms: u64) -> bool {
+    let last = LAST_INTERNAL_COMPACT_MS.load(Ordering::Acquire);
+    if last == 0 {
+        return false;
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    now.saturating_sub(last) <= window_ms
+}
+
+/// 标记内部 WAL 归并压缩落盘完成
+pub fn mark_internal_compact() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    LAST_INTERNAL_COMPACT_MS.store(now, Ordering::Release);
+}
 
 impl UserAdaptiveModel {
     /// 追加单条用户上屏记录到 WAL（预写日志）中
@@ -390,8 +417,9 @@ impl UserAdaptiveModel {
             source: e,
         })?;
 
-        // 成功完成原子重命名后解除守卫删除
+        // 成功完成原子重命名后解除守卫删除并标记内部落盘完成
         guard.1 = true;
+        mark_internal_compact();
 
         if let Some(f) = orig_lock_file {
             let _ = flock(&f, FlockOperation::Unlock);

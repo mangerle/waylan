@@ -108,13 +108,18 @@ impl InotifyWatcher {
                 }
                 // 针对同目录下的用户自适应词库 user_dict.bin：
                 // 仅在外部进程（如设置中心）执行删除清空 (DELETE) 或原子归并替换 (MOVED_TO) 时触发热重载，
-                // 忽略输入法引擎自身在选词上屏时对 user_dict.bin 的常规创建与追加写操作。
-                if os_name == "user_dict.bin"
-                    && event
-                        .events()
-                        .intersects(ReadFlags::DELETE | ReadFlags::MOVED_TO)
-                {
-                    return true;
+                // 忽略输入法引擎自身在选词上屏时对 user_dict.bin 的常规创建与追加写操作；
+                // 同时忽略引擎自身在失焦或会话重放时 compact_wal（原子 rename）产生的内部自发事件。
+                if os_name == "user_dict.bin" {
+                    if event.events().intersects(ReadFlags::DELETE) {
+                        return true;
+                    }
+                    if event.events().intersects(ReadFlags::MOVED_TO) {
+                        if waylan_algo::user_adaptive::is_recent_internal_compact(1000) {
+                            return false;
+                        }
+                        return true;
+                    }
                 }
             }
         }
@@ -292,6 +297,19 @@ mod tests {
         assert!(
             watcher.drain_events(),
             "外部删除清空 user_dict.bin 应正常触发热重载"
+        );
+
+        // 4. 模拟进程内部调用 mark_internal_compact 归并落盘时，原子重命名不应误触发热重载
+        waylan_algo::user_adaptive::mark_internal_compact();
+        let internal_tmp = temp_dir.path().join("user_dict.internal.tmp");
+        File::create(&internal_tmp)
+            .expect("创建内部归并临时文件")
+            .write_all(b"WAYLAN_USERWAL02_INTERNAL")
+            .expect("写入内部归并数据");
+        std::fs::rename(&internal_tmp, &sibling_user_dict).expect("原子重命名替换 user_dict.bin");
+        assert!(
+            !watcher.drain_events(),
+            "内部 compact_wal 原子重命名 user_dict.bin 绝不能误触发热重载"
         );
     }
 }

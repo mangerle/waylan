@@ -192,6 +192,7 @@ struct IbusMonitorParams {
     reload_requested: Option<Arc<AtomicBool>>,
     exit_requested: Arc<AtomicBool>,
     loop_wakeup: Option<LoopWakeup>,
+    exclusive_input_source: bool,
 }
 
 /// 启动并运行 IBus 输入法会话事件循环
@@ -252,6 +253,7 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
         reload_requested,
         exit_requested,
         loop_wakeup,
+        exclusive_input_source,
     };
 
     info!("[微澜 IBus] 引擎服务已就绪，进入 GNOME / IBus 输入法事件循环。");
@@ -418,8 +420,11 @@ fn run_ibus_monitor_loop(
             if let Ok(mut guard) = shared_core.lock() {
                 apply_bundle_to_ibus_core(bundle, &mut guard);
             }
-            desktop_integration::ensure_gnome_input_source_registered(hide_ext);
-            desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
+            if hide_ext != params.exclusive_input_source {
+                params.exclusive_input_source = hide_ext;
+                desktop_integration::ensure_gnome_input_source_registered(hide_ext);
+                desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
+            }
             info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
         }
 
