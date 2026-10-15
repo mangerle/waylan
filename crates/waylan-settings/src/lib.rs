@@ -25,6 +25,7 @@ use std::rc::Rc;
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AuxiliaryDict;
+use waylan_algo::CompactMmapLexicon;
 use waylan_core::config::AppConfig;
 
 /// 运行 Slint 偏好设置中心图形界面
@@ -93,6 +94,21 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
         "自适应个性化历史词模型: {} 条记忆",
         user_model_count
     )));
+
+    // 系统预编译主词库状态统计
+    let mut base_dict_info = "系统预编译词库: base.dict.bin (未找到或未就绪)".to_string();
+    for path in AppConfig::base_dict_search_paths() {
+        if path.exists() {
+            if let Ok(lexicon) = CompactMmapLexicon::open(&path) {
+                base_dict_info = format!(
+                    "系统预编译词库: base.dict.bin (约 {:.1} 万组词条已就绪)",
+                    lexicon.num_candidates as f64 / 10_000.0
+                );
+                break;
+            }
+        }
+    }
+    window.set_base_dict_info(SharedString::from(base_dict_info));
 
     // 3. 注册保存设置回调（增量打补丁保存，保留自定义托盘图标等高级配置项）
     let window_weak = window.as_weak();
