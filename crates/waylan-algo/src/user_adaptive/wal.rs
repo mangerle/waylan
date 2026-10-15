@@ -342,7 +342,17 @@ impl UserAdaptiveModel {
                 let _ = std::fs::create_dir_all(parent);
             }
         }
-        let temp_path = path_ref.with_extension("wal.tmp");
+        let pid = std::process::id();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let file_stem = path_ref
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("wal");
+        let temp_file_name = format!("{}.{}.{}.tmp", file_stem, pid, timestamp);
+        let temp_path = path_ref.with_file_name(temp_file_name);
 
         struct TempFileGuard<'a>(&'a Path, bool);
         impl<'a> Drop for TempFileGuard<'a> {
