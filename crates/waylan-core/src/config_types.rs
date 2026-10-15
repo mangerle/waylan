@@ -234,3 +234,382 @@ pub enum FullWidthPunctShortcut {
     AltPeriod,
     Disabled,
 }
+
+/// 语音识别引擎类型选项
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum VoiceEngineType {
+    /// 本地离线端侧推理（Paraformer/Zipformer 等）
+    #[default]
+    Offline,
+    /// 线上云端 API 识别（OpenAI/阿里/腾讯等）
+    Cloud,
+    /// 仿真测试（零外部依赖测试链路）
+    Mock,
+}
+
+/// VAD 端点检测算法/模型类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum VadModelType {
+    /// Silero 神经网络 VAD 模型（基于 ONNX 权重文件）
+    #[default]
+    SileroOnnx,
+    /// 轻量能量门限（零模型纯数学算法）
+    Energy,
+}
+
+/// VAD 端点检测配置（支持自由更换模型与算法）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VadConfig {
+    /// VAD 类型
+    pub vad_type: VadModelType,
+    /// 自定义 VAD 模型文件路径（例如 "~/.local/share/waylan/models/vad/silero_vad.onnx"）
+    pub model_path: Option<String>,
+    /// 人声置信度门限（0.0 ~ 1.0）
+    pub speech_threshold: f32,
+    /// 静音超时判定时长（毫秒，默认 800ms）
+    pub silence_timeout_ms: u64,
+}
+
+impl Default for VadConfig {
+    fn default() -> Self {
+        Self {
+            vad_type: VadModelType::default(),
+            model_path: None,
+            speech_threshold: 0.5,
+            silence_timeout_ms: 800,
+        }
+    }
+}
+
+/// 本地离线 ASR 识别模型架构类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum OfflineModelType {
+    /// 阿里端到端 Paraformer 中文流式模型
+    #[default]
+    Paraformer,
+    /// 新一代 Zipformer 流式模型
+    Zipformer,
+    /// Whisper 离线模型
+    Whisper,
+}
+
+/// 本地离线 ASR 模型配置（支持自由更换模型文件与架构）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OfflineAsrConfig {
+    /// 模型架构类型
+    pub model_type: OfflineModelType,
+    /// 模型文件所在根目录路径（例如 "~/.local/share/waylan/models/asr/paraformer-zh"）
+    pub model_dir: Option<String>,
+    /// 编码器模型文件名或相对路径
+    pub encoder: String,
+    /// 解码器模型文件名或相对路径
+    pub decoder: String,
+    /// 词表（Tokens）文件名或相对路径
+    pub tokens: String,
+}
+
+impl Default for OfflineAsrConfig {
+    fn default() -> Self {
+        Self {
+            model_type: OfflineModelType::default(),
+            model_dir: None,
+            encoder: "encoder.int8.onnx".to_string(),
+            decoder: "decoder.int8.onnx".to_string(),
+            tokens: "tokens.txt".to_string(),
+        }
+    }
+}
+
+/// 云端线上 ASR 服务提供商协议类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CloudProviderType {
+    /// OpenAI 兼容音频转录接口（Whisper API）
+    #[default]
+    OpenAiCompatible,
+    /// 阿里云流式语音识别
+    Aliyun,
+    /// 腾讯云流式语音识别
+    Tencent,
+    /// 自定义 WebSocket 流式服务端
+    CustomWebSocket,
+}
+
+/// 线上云端语音识别配置（支持自由配置云端 API 与凭证）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudAsrConfig {
+    /// 云端提供商协议
+    pub provider: CloudProviderType,
+    /// 线上服务接口地址（URL）
+    pub endpoint: String,
+    /// 鉴权 API Key / Token（敏感机密凭证）
+    pub api_key: Option<String>,
+    /// 指定的远端模型名称
+    pub model: String,
+}
+
+impl Default for CloudAsrConfig {
+    fn default() -> Self {
+        Self {
+            provider: CloudProviderType::default(),
+            endpoint: "https://api.openai.com/v1/audio/transcriptions".to_string(),
+            api_key: None,
+            model: "whisper-1".to_string(),
+        }
+    }
+}
+
+/// 语音输入配置
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceConfig {
+    /// 是否开启语音输入功能
+    pub enabled: bool,
+    /// 连续听写开关快捷键（按一下开启，VAD分句上屏，按回车或再次按快捷键结束）
+    pub toggle_shortcut: String,
+    /// 长按对讲机快捷键（按住说话，松手即上屏）
+    pub push_to_talk_shortcut: String,
+    /// 识别引擎工作模式（本地离线 / 线上云端 / 仿真测试）
+    pub engine_type: VoiceEngineType,
+    /// 是否自动在识别文本末尾补全句号
+    pub auto_punctuation: bool,
+    /// 1. VAD 端点检测配置（支持自由更换模型与算法）
+    pub vad: VadConfig,
+    /// 2. 本地离线识别配置（支持自由更换模型与路径）
+    pub offline: OfflineAsrConfig,
+    /// 3. 线上云端识别配置（支持自由切换不同云服务）
+    pub cloud: CloudAsrConfig,
+    /// 麦克风音频输入设备名称（为 None 时自动使用系统默认设备）
+    pub device_name: Option<String>,
+    /// 自定义标点符号预测模型文件路径（为 None 时自动使用系统内置或默认模型）
+    pub punct_model_path: Option<String>,
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            toggle_shortcut: "Ctrl + Alt + V".to_string(),
+            push_to_talk_shortcut: "F8".to_string(),
+            engine_type: VoiceEngineType::default(),
+            auto_punctuation: true,
+            vad: VadConfig::default(),
+            offline: OfflineAsrConfig::default(),
+            cloud: CloudAsrConfig::default(),
+            device_name: None,
+            punct_model_path: None,
+        }
+    }
+}
+
+/// 归一化解析后的快捷键数据
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ParsedShortcut {
+    /// 是否需要按住 Ctrl
+    pub ctrl: bool,
+    /// 是否需要按住 Alt
+    pub alt: bool,
+    /// 是否需要按住 Shift
+    pub shift: bool,
+    /// 是否需要按住 Super / Win
+    pub super_key: bool,
+    /// 目标主键的 Linux evdev 扫描码
+    pub evdev_key: u32,
+}
+
+impl ParsedShortcut {
+    /// 从用户输入的快捷键描述文本解析（如 "Ctrl+Alt+V", "Alt+Space", "F8", "Super+V" 等）
+    pub fn parse(s: &str) -> Option<Self> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("disabled") || trimmed == "已禁用"
+        {
+            return None;
+        }
+
+        let mut ctrl = false;
+        let mut alt = false;
+        let mut shift = false;
+        let mut super_key = false;
+        let mut evdev_key = None;
+
+        for part in trimmed
+            .split('+')
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+        {
+            let lower = part.to_ascii_lowercase();
+            match lower.as_str() {
+                "ctrl" | "control" => ctrl = true,
+                "alt" | "mod1" => alt = true,
+                "shift" => shift = true,
+                "super" | "win" | "meta" => super_key = true,
+                _ => {
+                    if let Some(code) = parse_key_name(&lower) {
+                        evdev_key = Some(code);
+                    }
+                }
+            }
+        }
+
+        evdev_key.map(|k| Self {
+            ctrl,
+            alt,
+            shift,
+            super_key,
+            evdev_key: k,
+        })
+    }
+
+    /// 校验当前输入事件是否精确匹配该快捷键
+    pub fn matches(
+        &self,
+        evdev_key: u32,
+        shift_active: bool,
+        ctrl_active: bool,
+        alt_active: bool,
+        super_active: bool,
+    ) -> bool {
+        self.evdev_key == evdev_key
+            && self.ctrl == ctrl_active
+            && self.alt == alt_active
+            && self.shift == shift_active
+            && self.super_key == super_active
+    }
+}
+
+/// 将常见按键小写名称映射为标准 Linux evdev 扫描码
+fn parse_key_name(name: &str) -> Option<u32> {
+    let code = match name {
+        "space" | "空格" => 57,
+        "enter" | "return" | "回车" => 28,
+        "tab" => 15,
+        "esc" | "escape" => 1,
+        "backspace" => 14,
+        "f1" => 59,
+        "f2" => 60,
+        "f3" => 61,
+        "f4" => 62,
+        "f5" => 63,
+        "f6" => 64,
+        "f7" => 65,
+        "f8" => 66,
+        "f9" => 67,
+        "f10" => 68,
+        "f11" => 87,
+        "f12" => 88,
+        "a" => 30,
+        "b" => 48,
+        "c" => 46,
+        "d" => 32,
+        "e" => 18,
+        "f" => 33,
+        "g" => 34,
+        "h" => 35,
+        "i" => 23,
+        "j" => 36,
+        "k" => 37,
+        "l" => 38,
+        "m" => 50,
+        "n" => 49,
+        "o" => 24,
+        "p" => 25,
+        "q" => 16,
+        "r" => 19,
+        "s" => 31,
+        "t" => 20,
+        "u" => 22,
+        "v" => 47,
+        "w" => 17,
+        "x" => 45,
+        "y" => 21,
+        "z" => 44,
+        "1" => 2,
+        "2" => 3,
+        "3" => 4,
+        "4" => 5,
+        "5" => 6,
+        "6" => 7,
+        "7" => 8,
+        "8" => 9,
+        "9" => 10,
+        "0" => 11,
+        "grave" | "`" => 41,
+        "minus" | "-" => 12,
+        "equal" | "=" => 13,
+        "comma" | "," => 51,
+        "period" | "dot" | "." => 52,
+        "slash" | "/" => 53,
+        "semicolon" | ";" => 39,
+        _ => return None,
+    };
+    Some(code)
+}
+
+impl VoiceConfig {
+    /// 获取当前生效的连续听写开关快捷键 (Toggle)
+    pub fn get_effective_toggle_shortcut(&self) -> Option<ParsedShortcut> {
+        if !self.enabled {
+            return None;
+        }
+        ParsedShortcut::parse(&self.toggle_shortcut)
+    }
+
+    /// 获取当前生效的长按对讲机快捷键 (Push-to-Talk)
+    pub fn get_effective_ptt_shortcut(&self) -> Option<ParsedShortcut> {
+        if !self.enabled {
+            return None;
+        }
+        ParsedShortcut::parse(&self.push_to_talk_shortcut)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parsed_shortcut_parsing() {
+        let p1 = ParsedShortcut::parse("Ctrl + Alt + V").expect("必须成功解析");
+        assert!(p1.ctrl);
+        assert!(p1.alt);
+        assert!(!p1.shift);
+        assert!(!p1.super_key);
+        assert_eq!(p1.evdev_key, 47);
+
+        let p2 = ParsedShortcut::parse("F8").expect("单键必须成功解析");
+        assert!(!p2.ctrl);
+        assert!(!p2.alt);
+        assert_eq!(p2.evdev_key, 66);
+
+        let p3 = ParsedShortcut::parse("Super + Shift + V").expect("Super键解析");
+        assert!(p3.super_key);
+        assert!(p3.shift);
+        assert_eq!(p3.evdev_key, 47);
+
+        assert!(ParsedShortcut::parse("已禁用").is_none());
+        assert!(ParsedShortcut::parse("   ").is_none());
+    }
+
+    #[test]
+    fn test_voice_config_effective_dual_shortcuts() {
+        let mut cfg = VoiceConfig::default();
+        let toggle = cfg
+            .get_effective_toggle_shortcut()
+            .expect("默认开关按键必须生效");
+        assert!(toggle.matches(47, false, true, true, false));
+
+        let ptt = cfg
+            .get_effective_ptt_shortcut()
+            .expect("默认对讲机按键必须生效");
+        assert!(ptt.matches(66, false, false, false, false));
+
+        cfg.toggle_shortcut = "已禁用".to_string();
+        assert!(cfg.get_effective_toggle_shortcut().is_none());
+        assert!(cfg.get_effective_ptt_shortcut().is_some());
+
+        cfg.enabled = false;
+        assert!(cfg.get_effective_ptt_shortcut().is_none());
+    }
+}

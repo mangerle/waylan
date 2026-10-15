@@ -4,8 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::config_types::{
-    CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut, FullWidthPunctShortcut,
-    FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules,
+    CandidateIndexStyle, CandidateOrientation, CloudAsrConfig, CloudProviderType,
+    FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, OfflineAsrConfig,
+    OfflineModelType, PageKeys, ParsedShortcut, SwitchKey, ThemeMode, TraditionalShortcut,
+    TypoCorrectionRules, VadConfig, VadModelType, VoiceConfig, VoiceEngineType,
 };
 
 /// 微澜输入法全局配置
@@ -82,6 +84,8 @@ pub struct AppConfig {
     pub enable_tray: Option<bool>,
     /// 是否将微澜设为系统唯一独占输入源（用于单输入源自动隐藏 GNOME 原生顶栏指示器）
     pub exclusive_input_source: bool,
+    /// 语音输入功能配置
+    pub voice: VoiceConfig,
 }
 
 impl Default for AppConfig {
@@ -122,6 +126,7 @@ impl Default for AppConfig {
             tray_icon_en: None,
             enable_tray: None,
             exclusive_input_source: false,
+            voice: VoiceConfig::default(),
         }
     }
 }
@@ -147,6 +152,8 @@ impl AppConfig {
         } else {
             self.font_size = self.font_size.clamp(12.0, 24.0);
         }
+        self.voice.vad.silence_timeout_ms = self.voice.vad.silence_timeout_ms.clamp(200, 5000);
+        self.voice.vad.speech_threshold = self.voice.vad.speech_threshold.clamp(0.01, 0.99);
     }
 
     /// 获取无 HOME 环境下的受控运行时回退目录
