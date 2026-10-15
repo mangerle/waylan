@@ -668,7 +668,7 @@ impl IbusSessionCore {
                         self.is_push_to_talk_active = true;
                         self.push_to_talk_key = Some(evdev_key);
                         if self.voice_config.interaction.show_floating_bar {
-                            self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                            self.voice_display_text = Some("正在聆听中... ▏▎▍".to_string());
                         } else {
                             self.voice_display_text = None;
                         }
@@ -730,7 +730,7 @@ impl IbusSessionCore {
                         self.is_push_to_talk_active = false;
                         self.push_to_talk_key = None;
                         if self.voice_config.interaction.show_floating_bar {
-                            self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                            self.voice_display_text = Some("正在聆听中... ▏▎▍".to_string());
                         } else {
                             self.voice_display_text = None;
                         }
