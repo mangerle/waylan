@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use log::{debug, info};
 use rustix::event::{poll, PollFd, PollFlags};
@@ -547,8 +547,10 @@ fn run_ibus_monitor_loop(
         Arc::clone(&params.exit_requested),
     );
     let mut last_screen_locked = initial_screen_locked;
-
     let mut last_voice_active = false;
+    let mut last_reload_instant = Instant::now()
+        .checked_sub(Duration::from_secs(10))
+        .unwrap_or_else(Instant::now);
 
     loop {
         if params.exit_requested.load(Ordering::Acquire) {
@@ -746,39 +748,45 @@ fn run_ibus_monitor_loop(
             &mut params.last_mtime,
         );
         if should_reload {
-            let bundle = SessionConfigBundle::load_current();
-            let hide_ext = bundle.exclusive_input_source;
-            let current_has_tray = shared_core
-                .lock()
-                .map(|g| g.shared_is_chinese.is_some())
-                .unwrap_or(false);
-            let new_cfg = crate::config::AppConfig::load_or_create();
-            let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-                .map(|d| d.to_uppercase().contains("GNOME"))
-                .unwrap_or(false);
-            let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
+            let now = Instant::now();
+            if now.duration_since(last_reload_instant) < Duration::from_millis(800) {
+                debug!("[微澜 IBus] 处于热重载防抖窗口期内，已安全合并重复触发请求。");
+            } else {
+                last_reload_instant = now;
+                let bundle = SessionConfigBundle::load_current();
+                let hide_ext = bundle.exclusive_input_source;
+                let current_has_tray = shared_core
+                    .lock()
+                    .map(|g| g.shared_is_chinese.is_some())
+                    .unwrap_or(false);
+                let new_cfg = crate::config::AppConfig::load_or_create();
+                let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+                    .map(|d| d.to_uppercase().contains("GNOME"))
+                    .unwrap_or(false);
+                let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
 
-            if expected_tray != current_has_tray {
-                info!(
-                    "[微澜 IBus] 检测到指示器形态变更 (当前托盘: {}, 期望托盘: {})，正在触发平滑自重启...",
-                    current_has_tray, expected_tray
-                );
-                crate::session_bundle::trigger_graceful_restart_and_exit(
-                    params.exit_requested.as_ref(),
-                    params.loop_wakeup.as_ref(),
-                );
-                break;
-            }
+                if expected_tray != current_has_tray {
+                    info!(
+                        "[微澜 IBus] 检测到指示器形态变更 (当前托盘: {}, 期望托盘: {})，正在触发平滑自重启...",
+                        current_has_tray, expected_tray
+                    );
+                    crate::session_bundle::trigger_graceful_restart_and_exit(
+                        params.exit_requested.as_ref(),
+                        params.loop_wakeup.as_ref(),
+                    );
+                    break;
+                }
 
-            if let Ok(mut guard) = shared_core.lock() {
-                apply_bundle_to_ibus_core(bundle, &mut guard);
+                if let Ok(mut guard) = shared_core.lock() {
+                    apply_bundle_to_ibus_core(bundle, &mut guard);
+                }
+                if hide_ext != params.exclusive_input_source {
+                    params.exclusive_input_source = hide_ext;
+                    desktop_integration::ensure_gnome_input_source_registered(hide_ext);
+                    desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
+                }
+                info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
             }
-            if hide_ext != params.exclusive_input_source {
-                params.exclusive_input_source = hide_ext;
-                desktop_integration::ensure_gnome_input_source_registered(hide_ext);
-                desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
-            }
-            info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
         }
 
         let mode_changed = shared_core
