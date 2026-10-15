@@ -60,7 +60,10 @@ impl VoiceRecognizer for MockVoiceRecognizer {
         let current_step = self.accumulated_samples / 4800;
         if current_step > self.step_index && !self.demo_sentences.is_empty() {
             self.step_index = current_step;
-            let idx = (self.step_index.saturating_sub(1)).min(self.demo_sentences.len() - 1);
+            let idx = self
+                .step_index
+                .saturating_sub(1)
+                .min(self.demo_sentences.len() - 1);
             let text = self.demo_sentences[idx].to_string();
             return Ok(Some(text));
         }
@@ -70,7 +73,10 @@ impl VoiceRecognizer for MockVoiceRecognizer {
 
     fn finish(&mut self) -> Result<String, VoiceError> {
         let final_text = if self.step_index > 0 && !self.demo_sentences.is_empty() {
-            let idx = (self.step_index.saturating_sub(1)).min(self.demo_sentences.len() - 1);
+            let idx = self
+                .step_index
+                .saturating_sub(1)
+                .min(self.demo_sentences.len() - 1);
             self.demo_sentences[idx].to_string()
         } else {
             "微澜语音输入".to_string()
@@ -89,7 +95,7 @@ impl VoiceRecognizer for MockVoiceRecognizer {
 /// 解析指定的本地 ASR 模型目录路径（支持自定义配置、XDG 用户目录、系统共享目录与本地相对目录）
 pub fn resolve_asr_model_dir(
     custom_dir: Option<&str>,
-    model_type: OfflineModelType,
+    _model_type: OfflineModelType,
 ) -> Option<PathBuf> {
     if let Some(dir_str) = custom_dir {
         let p = PathBuf::from(dir_str);
@@ -97,41 +103,29 @@ pub fn resolve_asr_model_dir(
             return Some(p);
         }
     }
-    let subname = match model_type {
-        OfflineModelType::Paraformer => {
-            "asr/sherpa-onnx-streaming-paraformer-bilingual-zh-en-2023-03-03"
-        }
-        OfflineModelType::Zipformer => {
-            "asr/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
-        }
-        OfflineModelType::Whisper => "asr/whisper-tiny-zh",
-    };
+    let subnames = [
+        "asr/zipformer-zh",
+        "asr/sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01",
+        "asr/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+        "asr/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+    ];
+
+    let mut search_roots = Vec::new();
     if let Ok(home) = std::env::var("HOME") {
-        let home_path = PathBuf::from(home);
-        let p = home_path.join(".local/share/waylan/models").join(subname);
-        if p.exists() {
-            return Some(p);
+        search_roots.push(PathBuf::from(home).join(".local/share/waylan/models"));
+    }
+    search_roots.push(PathBuf::from("/usr/share/waylan/models"));
+    search_roots.push(PathBuf::from("models"));
+    search_roots.push(PathBuf::from("../../models"));
+    search_roots.push(PathBuf::from("../models"));
+
+    for root in &search_roots {
+        for sub in &subnames {
+            let p = root.join(sub);
+            if p.exists() {
+                return Some(p);
+            }
         }
-        let p_short = home_path.join(".local/share/waylan/models/asr/paraformer-zh");
-        if p_short.exists() {
-            return Some(p_short);
-        }
-    }
-    let sys_p = PathBuf::from("/usr/share/waylan/models").join(subname);
-    if sys_p.exists() {
-        return Some(sys_p);
-    }
-    let sys_p_short = PathBuf::from("/usr/share/waylan/models/asr/paraformer-zh");
-    if sys_p_short.exists() {
-        return Some(sys_p_short);
-    }
-    let local_p = PathBuf::from("models").join(subname);
-    if local_p.exists() {
-        return Some(local_p);
-    }
-    let local_p_short = PathBuf::from("models/asr/paraformer-zh");
-    if local_p_short.exists() {
-        return Some(local_p_short);
     }
     None
 }
@@ -165,14 +159,63 @@ impl OfflineVoiceRecognizer {
         let mut active_session = None;
 
         if let Some(ref path) = resolved_dir {
-            let enc_ok = path.join(&config.encoder).exists();
-            let dec_ok = path.join(&config.decoder).exists();
-            let tok_ok = path.join(&config.tokens).exists();
+            // 检查单文件 CTC 模型（如 2025 年的 Zipformer2-Small-CTC model.int8.onnx）
+            let ctc_model_file = ["model.int8.onnx", "model.onnx"]
+                .iter()
+                .map(|f| path.join(f))
+                .find(|p| p.exists());
 
-            if enc_ok && dec_ok && tok_ok {
+            let enc_file = if path.join(&config.encoder).exists() {
+                Some(path.join(&config.encoder))
+            } else if path.join("encoder.int8.onnx").exists() {
+                Some(path.join("encoder.int8.onnx"))
+            } else if path.join("encoder.onnx").exists() {
+                Some(path.join("encoder.onnx"))
+            } else {
+                None
+            };
+
+            let dec_file = if path.join(&config.decoder).exists() {
+                Some(path.join(&config.decoder))
+            } else if path.join("decoder.onnx").exists() {
+                Some(path.join("decoder.onnx"))
+            } else if path.join("decoder.int8.onnx").exists() {
+                Some(path.join("decoder.int8.onnx"))
+            } else {
+                None
+            };
+
+            let tok_file = if path.join(&config.tokens).exists() {
+                Some(path.join(&config.tokens))
+            } else if path.join("tokens.txt").exists() {
+                Some(path.join("tokens.txt"))
+            } else {
+                None
+            };
+
+            let joiner_file = ["joiner.int8.onnx", "joiner.onnx"]
+                .iter()
+                .map(|f| path.join(f))
+                .find(|p| p.exists());
+
+            // 自动侦测实际 Zipformer 流式模型架构：
+            // 1. 若存在单个 ctc 模型文件（如 model.int8.onnx），判定为 Zipformer2-CTC 极轻量流式引擎
+            // 2. 若存在 joiner 权重，判定为 Zipformer-Transducer 多文件流式引擎
+            let is_ctc = ctc_model_file.is_some() || joiner_file.is_none();
+
+            let files_ready = if is_ctc {
+                ctc_model_file.is_some() && tok_file.is_some()
+            } else {
+                enc_file.is_some()
+                    && dec_file.is_some()
+                    && tok_file.is_some()
+                    && joiner_file.is_some()
+            };
+
+            if files_ready {
                 info!(
-                    "[本地 ASR] 检测到完整本地离线模型文件 (架构: {:?}, 目录: {:?})",
-                    config.model_type, path
+                    "[本地 ASR] 检测到完整本地离线 Zipformer 模型 (是否CTC: {}, 目录: {:?})",
+                    is_ctc, path
                 );
                 models_ready = true;
 
@@ -182,33 +225,19 @@ impl OfflineVoiceRecognizer {
                 rec_cfg.decoding_method = Some("greedy_search".to_string());
                 rec_cfg.model_config.num_threads = 2;
                 rec_cfg.model_config.provider = Some("cpu".to_string());
-                rec_cfg.model_config.tokens =
-                    Some(path.join(&config.tokens).to_string_lossy().to_string());
+                rec_cfg.model_config.tokens = tok_file.map(|p| p.to_string_lossy().to_string());
 
-                match config.model_type {
-                    OfflineModelType::Paraformer => {
-                        rec_cfg.model_config.paraformer.encoder =
-                            Some(path.join(&config.encoder).to_string_lossy().to_string());
-                        rec_cfg.model_config.paraformer.decoder =
-                            Some(path.join(&config.decoder).to_string_lossy().to_string());
-                    }
-                    OfflineModelType::Zipformer => {
-                        rec_cfg.model_config.transducer.encoder =
-                            Some(path.join(&config.encoder).to_string_lossy().to_string());
-                        rec_cfg.model_config.transducer.decoder =
-                            Some(path.join(&config.decoder).to_string_lossy().to_string());
-                        for candidate in &["joiner.int8.onnx", "joiner.onnx"] {
-                            let jp = path.join(candidate);
-                            if jp.exists() {
-                                rec_cfg.model_config.transducer.joiner =
-                                    Some(jp.to_string_lossy().to_string());
-                                break;
-                            }
-                        }
-                    }
-                    OfflineModelType::Whisper => {
-                        warn!("[本地 ASR] Whisper 暂未配置在线流式架构，请配置流式模型");
-                    }
+                if is_ctc {
+                    rec_cfg.model_config.zipformer2_ctc.model =
+                        ctc_model_file.map(|p| p.to_string_lossy().to_string());
+                } else {
+                    rec_cfg.model_config.transducer.encoder =
+                        enc_file.map(|p| p.to_string_lossy().to_string());
+                    rec_cfg.model_config.transducer.decoder =
+                        dec_file.map(|p| p.to_string_lossy().to_string());
+                    rec_cfg.model_config.transducer.joiner =
+                        joiner_file.map(|p| p.to_string_lossy().to_string());
+                    rec_cfg.model_config.model_type = Some("zipformer2".to_string());
                 }
 
                 if let Some(recognizer) = OnlineRecognizer::create(&rec_cfg) {
@@ -224,8 +253,11 @@ impl OfflineVoiceRecognizer {
                 }
             } else {
                 warn!(
-                    "[本地 ASR] 模型目录缺少必要权重文件 (encoder: {}, decoder: {}, tokens: {})",
-                    enc_ok, dec_ok, tok_ok
+                    "[本地 ASR] 模型目录缺少必要权重文件 (encoder: {}, decoder: {}, tokens: {}, joiner: {})",
+                    enc_file.is_some(),
+                    dec_file.is_some(),
+                    tok_file.is_some(),
+                    joiner_file.is_some()
                 );
             }
         } else {
@@ -659,7 +691,7 @@ pub fn create_recognizer(config: &VoiceConfig) -> Box<dyn VoiceRecognizer> {
                 .cloud_profiles
                 .iter()
                 .find(|p| p.id == profile_id)
-                .map(|p| waylan_core::CloudAsrConfig {
+                .map(|p| CloudAsrConfig {
                     provider: p.provider,
                     endpoint: p.endpoint.clone(),
                     api_key: p.api_key.clone(),
@@ -714,6 +746,32 @@ mod tests {
         let rec = OfflineVoiceRecognizer::new(cfg);
         // 验证部署在标准 XDG 路径的模型是否成功被自探测发现并加载
         assert!(rec.is_models_ready());
+    }
+
+    #[test]
+    fn test_zipformer_streaming_recognition() {
+        let cfg = OfflineAsrConfig {
+            model_type: OfflineModelType::Zipformer,
+            ..Default::default()
+        };
+        let mut rec = OfflineVoiceRecognizer::new(cfg);
+        assert!(rec.is_models_ready(), "Zipformer 模型应成功加载就绪");
+        assert_eq!(rec.model_type(), OfflineModelType::Zipformer);
+
+        // 输入一段 1 秒静音采样并验证推理流正常推进
+        let pcm = vec![0.0f32; 16000];
+        let feed_res = rec.feed_pcm(&pcm);
+        assert!(
+            feed_res.is_ok(),
+            "feed_pcm 推理不应返回错误: {:?}",
+            feed_res
+        );
+        let finish_res = rec.finish();
+        assert!(
+            finish_res.is_ok(),
+            "finish 结束流不应返回错误: {:?}",
+            finish_res
+        );
     }
 
     #[test]

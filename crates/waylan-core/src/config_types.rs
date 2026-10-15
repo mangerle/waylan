@@ -285,13 +285,15 @@ impl Default for VadConfig {
 /// 本地离线 ASR 识别模型架构类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OfflineModelType {
-    /// 阿里端到端 Paraformer 中文流式模型
+    /// 新一代 Zipformer 流式模型 (CTC / Transducer 极轻量架构)
     #[default]
-    Paraformer,
-    /// 新一代 Zipformer 流式模型
+    #[serde(
+        alias = "Paraformer",
+        alias = "paraformer",
+        alias = "Whisper",
+        alias = "whisper"
+    )]
     Zipformer,
-    /// Whisper 离线模型
-    Whisper,
 }
 
 /// 本地离线 ASR 模型配置（支持自由更换模型文件与架构）

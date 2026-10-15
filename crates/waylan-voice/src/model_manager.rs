@@ -78,13 +78,8 @@ pub fn list_asr_models() -> Vec<ModelItem> {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    let display_name = if dir_name == "paraformer-zh" {
-                        "[内置] 阿里 Paraformer (中文流式 int8)".to_string()
-                    } else {
-                        format!("[内置] {}", dir_name)
-                    };
                     items.push(ModelItem {
-                        display_name,
+                        display_name: format!("[内置] {}", dir_name),
                         path: Some(p.to_string_lossy().to_string()),
                     });
                 }
@@ -92,10 +87,17 @@ pub fn list_asr_models() -> Vec<ModelItem> {
         }
     }
 
-    // 若系统目录未扫描到任何内置 ASR 模型，提供官方推荐项保底
+    // 优先将包含 zipformer 的模型排在推荐首位
+    items.sort_by(|a, b| {
+        let a_is_zip = a.display_name.to_lowercase().contains("zipformer");
+        let b_is_zip = b.display_name.to_lowercase().contains("zipformer");
+        b_is_zip.cmp(&a_is_zip)
+    });
+
+    // 若系统目录未扫描到任何内置 ASR 模型，提供默认项保底
     if items.is_empty() {
         items.push(ModelItem {
-            display_name: "[内置] 阿里 Paraformer (中文流式 int8)".to_string(),
+            display_name: "[内置] zipformer-zh".to_string(),
             path: None,
         });
     }
@@ -115,7 +117,7 @@ pub fn list_asr_models() -> Vec<ModelItem> {
                     if items
                         .iter()
                         .any(|m| m.path.as_deref() == Some(&p.to_string_lossy()))
-                        || dir_name == "paraformer-zh"
+                        || dir_name == "zipformer-zh"
                     {
                         continue; // 避免同名重复
                     }
