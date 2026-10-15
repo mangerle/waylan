@@ -49,14 +49,58 @@ pub fn open_user_models_directory() -> bool {
     }
 }
 
-/// 扫描并列出所有可用的 ASR 识别模型（内置系统模型 + 用户导入的子文件夹）
-pub fn list_asr_models() -> Vec<ModelItem> {
-    let mut items = vec![ModelItem {
-        display_name: "[系统内置] 阿里 Paraformer (中文流式 int8)".to_string(),
-        path: None,
-    }];
+/// 获取系统官方内置模型根目录（deb 安装路径 `/usr/share/waylan/models` 或源码工作区路径 `./models`）
+pub fn builtin_models_dir() -> Option<PathBuf> {
+    let sys_dir = PathBuf::from("/usr/share/waylan/models");
+    if sys_dir.is_dir() {
+        return Some(sys_dir);
+    }
+    let dev_dir = PathBuf::from("models");
+    if dev_dir.is_dir() {
+        return Some(dev_dir);
+    }
+    None
+}
 
-    // 扫描用户自定义目录: ~/.local/share/waylan/models/asr/*/
+/// 扫描并列出所有可用的 ASR 识别模型（动态扫描系统内置目录与用户导入目录）
+pub fn list_asr_models() -> Vec<ModelItem> {
+    let mut items = Vec::new();
+
+    // 1. 动态扫描系统内置目录: /usr/share/waylan/models/asr/ 或 models/asr/
+    if let Some(builtin_dir) = builtin_models_dir() {
+        let asr_dir = builtin_dir.join("asr");
+        if let Ok(entries) = fs::read_dir(asr_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let dir_name = p
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let display_name = if dir_name == "paraformer-zh" {
+                        "[内置] 阿里 Paraformer (中文流式 int8)".to_string()
+                    } else {
+                        format!("[内置] {}", dir_name)
+                    };
+                    items.push(ModelItem {
+                        display_name,
+                        path: Some(p.to_string_lossy().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    // 若系统目录未扫描到任何内置 ASR 模型，提供官方推荐项保底
+    if items.is_empty() {
+        items.push(ModelItem {
+            display_name: "[内置] 阿里 Paraformer (中文流式 int8)".to_string(),
+            path: None,
+        });
+    }
+
+    // 2. 动态扫描用户私有目录: ~/.local/share/waylan/models/asr/*/
     if let Some(user_dir) = user_models_dir() {
         let asr_dir = user_dir.join("asr");
         if let Ok(entries) = fs::read_dir(asr_dir) {
@@ -68,11 +112,15 @@ pub fn list_asr_models() -> Vec<ModelItem> {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    if dir_name == "paraformer-zh" {
-                        continue; // 与内置同名，保留内置选项即可
+                    if items
+                        .iter()
+                        .any(|m| m.path.as_deref() == Some(&p.to_string_lossy()))
+                        || dir_name == "paraformer-zh"
+                    {
+                        continue; // 避免同名重复
                     }
                     items.push(ModelItem {
-                        display_name: format!("[用户导入] {}", dir_name),
+                        display_name: format!("[用户] {}", dir_name),
                         path: Some(p.to_string_lossy().to_string()),
                     });
                 }
@@ -85,18 +133,49 @@ pub fn list_asr_models() -> Vec<ModelItem> {
 
 /// 扫描并列出所有可用的 VAD 端点检测模型/算法
 pub fn list_vad_models() -> Vec<ModelItem> {
-    let mut items = vec![
-        ModelItem {
-            display_name: "[系统内置] Silero VAD (神经网络模型)".to_string(),
-            path: None,
-        },
-        ModelItem {
-            display_name: "[纯能量门限] 零模型纯数学 (RMS)".to_string(),
-            path: Some("__energy__".to_string()),
-        },
-    ];
+    let mut items = Vec::new();
 
-    // 扫描用户自定义目录: ~/.local/share/waylan/models/vad/*.onnx
+    // 1. 动态扫描系统内置目录: /usr/share/waylan/models/vad/ 或 models/vad/
+    if let Some(builtin_dir) = builtin_models_dir() {
+        let vad_dir = builtin_dir.join("vad");
+        if let Ok(entries) = fs::read_dir(vad_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().map(|e| e == "onnx").unwrap_or(false) {
+                    let file_name = p
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let display_name = if file_name == "silero_vad.onnx" {
+                        "[内置] Silero VAD (神经网络模型)".to_string()
+                    } else {
+                        format!("[内置] {}", file_name)
+                    };
+                    items.push(ModelItem {
+                        display_name,
+                        path: Some(p.to_string_lossy().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    // 若系统目录未扫描到任何内置 VAD 模型，提供官方推荐项保底
+    if items.is_empty() {
+        items.push(ModelItem {
+            display_name: "[内置] Silero VAD (神经网络模型)".to_string(),
+            path: None,
+        });
+    }
+
+    // 2. 内置纯数学算法项（免模型纯能量门限）
+    items.push(ModelItem {
+        display_name: "[算法] 纯能量门限 (零模型纯数学 RMS)".to_string(),
+        path: Some("__energy__".to_string()),
+    });
+
+    // 3. 动态扫描用户私有目录: ~/.local/share/waylan/models/vad/*.onnx
     if let Some(user_dir) = user_models_dir() {
         let vad_dir = user_dir.join("vad");
         if let Ok(entries) = fs::read_dir(vad_dir) {
@@ -109,10 +188,10 @@ pub fn list_vad_models() -> Vec<ModelItem> {
                         .to_string_lossy()
                         .to_string();
                     if file_name == "silero_vad.onnx" {
-                        continue;
+                        continue; // 与官方内置同名，保留内置项
                     }
                     items.push(ModelItem {
-                        display_name: format!("[用户导入] {}", file_name),
+                        display_name: format!("[用户] {}", file_name),
                         path: Some(p.to_string_lossy().to_string()),
                     });
                 }
@@ -125,18 +204,50 @@ pub fn list_vad_models() -> Vec<ModelItem> {
 
 /// 扫描并列出所有可用的标点符号预测模型
 pub fn list_punct_models() -> Vec<ModelItem> {
-    let mut items = vec![
-        ModelItem {
-            display_name: "[系统内置] CT-Transformer 深度标点预测 (int8)".to_string(),
-            path: None,
-        },
-        ModelItem {
-            display_name: "[规则兜底] 基础句末规则兜底 (无模型)".to_string(),
-            path: Some("__rule_only__".to_string()),
-        },
-    ];
+    let mut items = Vec::new();
 
-    // 扫描用户自定义目录: ~/.local/share/waylan/models/punct/*.onnx
+    // 1. 动态扫描系统内置目录: /usr/share/waylan/models/punct/ 或 models/punct/
+    if let Some(builtin_dir) = builtin_models_dir() {
+        let punct_dir = builtin_dir.join("punct");
+        if let Ok(entries) = fs::read_dir(punct_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().map(|e| e == "onnx").unwrap_or(false) {
+                    let file_name = p
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let display_name =
+                        if file_name.contains("ct-transformer") || file_name.contains("model") {
+                            "[内置] CT-Transformer 深度标点 (int8)".to_string()
+                        } else {
+                            format!("[内置] {}", file_name)
+                        };
+                    items.push(ModelItem {
+                        display_name,
+                        path: Some(p.to_string_lossy().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    // 若系统目录未扫描到任何内置标点模型，提供官方推荐项保底
+    if items.is_empty() {
+        items.push(ModelItem {
+            display_name: "[内置] CT-Transformer 深度标点 (int8)".to_string(),
+            path: None,
+        });
+    }
+
+    // 2. 内置规则兜底项（免模型纯规则断句）
+    items.push(ModelItem {
+        display_name: "[规则] 基础句末规则兜底 (无模型)".to_string(),
+        path: Some("__rule_only__".to_string()),
+    });
+
+    // 3. 动态扫描用户私有目录: ~/.local/share/waylan/models/punct/*.onnx
     if let Some(user_dir) = user_models_dir() {
         let punct_dir = user_dir.join("punct");
         if let Ok(entries) = fs::read_dir(punct_dir) {
@@ -155,7 +266,7 @@ pub fn list_punct_models() -> Vec<ModelItem> {
                         continue; // 与官方内置同名，保留内置项即可
                     }
                     items.push(ModelItem {
-                        display_name: format!("[用户导入] {}", file_name),
+                        display_name: format!("[用户] {}", file_name),
                         path: Some(p.to_string_lossy().to_string()),
                     });
                 }
@@ -168,22 +279,59 @@ pub fn list_punct_models() -> Vec<ModelItem> {
 
 /// 扫描并列出所有可用的人声智能降噪 (NS) 模型
 pub fn list_ns_models() -> Vec<ModelItem> {
-    let mut items = vec![
-        ModelItem {
-            display_name: "[内置轻量] RNNoise 智能降噪 (零资源占用)".to_string(),
-            path: None,
-        },
-        ModelItem {
-            display_name: "[内置深度] DeepFilterNet3 深度消音 (强力消除机械键盘)".to_string(),
-            path: Some("__deepfilternet__".to_string()),
-        },
-        ModelItem {
-            display_name: "[直通透传] 关闭人声降噪 (Bypass)".to_string(),
-            path: Some("__bypass__".to_string()),
-        },
-    ];
+    let mut items = Vec::new();
 
-    // 扫描用户自定义目录: ~/.local/share/waylan/models/ns/*.onnx 或子目录
+    // 1. 动态扫描系统内置目录: /usr/share/waylan/models/ns/ 或 models/ns/
+    if let Some(builtin_dir) = builtin_models_dir() {
+        let ns_dir = builtin_dir.join("ns");
+        if let Ok(entries) = fs::read_dir(ns_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let file_name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if file_name == "deepfilternet3" {
+                    items.push(ModelItem {
+                        display_name: "[内置] DeepFilterNet3 深度消音 (强力消除机械键盘)"
+                            .to_string(),
+                        path: Some(p.to_string_lossy().to_string()),
+                    });
+                } else if p.is_dir() || p.extension().map(|e| e == "onnx").unwrap_or(false) {
+                    items.push(ModelItem {
+                        display_name: format!("[内置] {}", file_name),
+                        path: Some(p.to_string_lossy().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    // 若未在目录中检测到 deepfilternet3 物理目录，提供内置符号项保底
+    if !items
+        .iter()
+        .any(|m| m.display_name.contains("DeepFilterNet3"))
+    {
+        items.push(ModelItem {
+            display_name: "[内置] DeepFilterNet3 深度消音 (强力消除机械键盘)".to_string(),
+            path: Some("__deepfilternet__".to_string()),
+        });
+    }
+
+    // 2. 纯代码轻量内置引擎（纯 Rust，零模型文件依赖）
+    items.push(ModelItem {
+        display_name: "[内置] RNNoise 智能降噪 (纯代码零开销)".to_string(),
+        path: Some("__rnnoise__".to_string()),
+    });
+
+    // 3. 直通透传项（关闭降噪）
+    items.push(ModelItem {
+        display_name: "[直通] 关闭人声降噪 (Bypass)".to_string(),
+        path: Some("__bypass__".to_string()),
+    });
+
+    // 4. 动态扫描用户私有目录: ~/.local/share/waylan/models/ns/*.onnx 或子目录
     if let Some(user_dir) = user_models_dir() {
         let ns_dir = user_dir.join("ns");
         if let Ok(entries) = fs::read_dir(ns_dir) {
@@ -200,7 +348,7 @@ pub fn list_ns_models() -> Vec<ModelItem> {
                 let is_onnx = p.is_file() && p.extension().map(|e| e == "onnx").unwrap_or(false);
                 if is_onnx || p.is_dir() {
                     items.push(ModelItem {
-                        display_name: format!("[用户导入] {}", file_name),
+                        display_name: format!("[用户] {}", file_name),
                         path: Some(p.to_string_lossy().to_string()),
                     });
                 }
@@ -309,4 +457,65 @@ pub fn import_onnx_model_dialog(subdir: &str, title: &str) -> Option<PathBuf> {
     }
 
     Some(target_file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_list_asr_models_dynamic_scan() {
+        let models = list_asr_models();
+        assert!(!models.is_empty(), "ASR 扫描列表不应为空");
+        assert!(
+            models[0].display_name.contains("[内置]"),
+            "第一项应为内置模型: {}",
+            models[0].display_name
+        );
+    }
+
+    #[test]
+    fn test_list_vad_models_dynamic_scan() {
+        let models = list_vad_models();
+        assert!(models.len() >= 2, "VAD 应至少包含内置模型与纯能量算法");
+        assert!(
+            models
+                .iter()
+                .any(|m| m.path.as_deref() == Some("__energy__")),
+            "VAD 必须包含纯能量门限算法项"
+        );
+    }
+
+    #[test]
+    fn test_list_punct_models_dynamic_scan() {
+        let models = list_punct_models();
+        assert!(models.len() >= 2, "标点应至少包含内置模型与规则兜底项");
+        assert!(
+            models
+                .iter()
+                .any(|m| m.path.as_deref() == Some("__rule_only__")),
+            "标点必须包含规则兜底项"
+        );
+    }
+
+    #[test]
+    fn test_list_ns_models_dynamic_scan() {
+        let models = list_ns_models();
+        assert!(
+            models.len() >= 3,
+            "NS 必须包含深度消音、RNNoise轻量与直通模式"
+        );
+        assert!(
+            models
+                .iter()
+                .any(|m| m.path.as_deref() == Some("__rnnoise__")),
+            "NS 必须包含 RNNoise 纯代码轻量项"
+        );
+        assert!(
+            models
+                .iter()
+                .any(|m| m.path.as_deref() == Some("__bypass__")),
+            "NS 必须包含直通透传项"
+        );
+    }
 }

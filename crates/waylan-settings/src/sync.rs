@@ -314,7 +314,12 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let mut asr_idx = 0;
     if let Some(ref dir) = cfg.voice.offline.model_dir {
         for (i, m) in asr_models.iter().enumerate() {
-            if m.path.as_deref() == Some(dir) {
+            if m.path.as_deref() == Some(dir)
+                || m.path
+                    .as_deref()
+                    .map(|p| p.ends_with(dir) || dir.ends_with(p))
+                    .unwrap_or(false)
+            {
                 asr_idx = i;
                 break;
             }
@@ -332,10 +337,20 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         .collect();
     let mut vad_idx = 0;
     if cfg.voice.vad.vad_type == waylan_core::VadModelType::Energy {
-        vad_idx = 1;
+        for (i, m) in vad_models.iter().enumerate() {
+            if m.path.as_deref() == Some("__energy__") {
+                vad_idx = i;
+                break;
+            }
+        }
     } else if let Some(ref path) = cfg.voice.vad.model_path {
         for (i, m) in vad_models.iter().enumerate() {
-            if m.path.as_deref() == Some(path) {
+            if m.path.as_deref() == Some(path)
+                || m.path
+                    .as_deref()
+                    .map(|p| p.ends_with(path) || path.ends_with(p))
+                    .unwrap_or(false)
+            {
                 vad_idx = i;
                 break;
             }
@@ -354,7 +369,12 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let mut punct_idx = 0;
     if let Some(ref path) = cfg.voice.punct_model_path {
         for (i, m) in punct_models.iter().enumerate() {
-            if m.path.as_deref() == Some(path) {
+            if m.path.as_deref() == Some(path)
+                || m.path
+                    .as_deref()
+                    .map(|p| p.ends_with(path) || path.ends_with(p))
+                    .unwrap_or(false)
+            {
                 punct_idx = i;
                 break;
             }
@@ -374,14 +394,38 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     if !cfg.voice.afe.noise_suppression
         || cfg.voice.afe.ns_engine == waylan_core::NsEngineType::Bypass
     {
-        ns_idx = 2;
-    } else if cfg.voice.afe.ns_engine == waylan_core::NsEngineType::DeepFilterNet
+        for (i, m) in ns_models.iter().enumerate() {
+            if m.path.as_deref() == Some("__bypass__") {
+                ns_idx = i;
+                break;
+            }
+        }
+    } else if cfg.voice.afe.ns_engine == waylan_core::NsEngineType::Rnnoise
         && cfg.voice.afe.custom_ns_model_path.is_none()
     {
-        ns_idx = 1;
+        for (i, m) in ns_models.iter().enumerate() {
+            if m.path.as_deref() == Some("__rnnoise__") {
+                ns_idx = i;
+                break;
+            }
+        }
     } else if let Some(ref path) = cfg.voice.afe.custom_ns_model_path {
         for (i, m) in ns_models.iter().enumerate() {
-            if m.path.as_deref() == Some(path) {
+            if m.path.as_deref() == Some(path)
+                || m.path
+                    .as_deref()
+                    .map(|p| p.ends_with(path) || path.ends_with(p))
+                    .unwrap_or(false)
+            {
+                ns_idx = i;
+                break;
+            }
+        }
+    } else {
+        for (i, m) in ns_models.iter().enumerate() {
+            if m.path.as_deref() == Some("__deepfilternet__")
+                || m.display_name.contains("DeepFilterNet")
+            {
                 ns_idx = i;
                 break;
             }
@@ -484,18 +528,23 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
             cfg.voice.afe.noise_suppression = false;
             cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Bypass;
             cfg.voice.afe.custom_ns_model_path = None;
+        } else if m.path.as_deref() == Some("__rnnoise__") {
+            cfg.voice.afe.noise_suppression = true;
+            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Rnnoise;
+            cfg.voice.afe.custom_ns_model_path = None;
         } else if m.path.as_deref() == Some("__deepfilternet__") {
             cfg.voice.afe.noise_suppression = true;
             cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
             cfg.voice.afe.custom_ns_model_path = None;
-        } else if m.path.is_none() {
+        } else if let Some(ref path) = m.path {
             cfg.voice.afe.noise_suppression = true;
-            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Rnnoise;
-            cfg.voice.afe.custom_ns_model_path = None;
-        } else {
-            cfg.voice.afe.noise_suppression = true;
-            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
-            cfg.voice.afe.custom_ns_model_path = m.path.clone();
+            if path.contains("deepfilternet3") {
+                cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
+                cfg.voice.afe.custom_ns_model_path = None;
+            } else {
+                cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
+                cfg.voice.afe.custom_ns_model_path = Some(path.clone());
+            }
         }
     }
 }
