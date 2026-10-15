@@ -371,6 +371,8 @@ pub enum NsEngineType {
     Rnnoise,
     /// 深度滤波 DeepFilterNet (超强消除机械键盘敲击声)
     DeepFilterNet,
+    /// 新一代 GTCRN 深度神经网络降噪 (523KB SOTA 极轻量)
+    Gtcrn,
     /// 直通禁用降噪
     Bypass,
 }

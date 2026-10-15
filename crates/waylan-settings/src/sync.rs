@@ -484,13 +484,16 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
     let mut ns_idx = 0;
-    if cfg.voice.afe.ns_engine == waylan_core::NsEngineType::DeepFilterNet {
-        ns_idx = 1.min(ns_names.len().saturating_sub(1));
+    match cfg.voice.afe.ns_engine {
+        waylan_core::NsEngineType::Rnnoise => ns_idx = 0,
+        waylan_core::NsEngineType::DeepFilterNet => ns_idx = 1,
+        waylan_core::NsEngineType::Gtcrn => ns_idx = 2,
+        _ => {}
     }
     window.set_ns_model_names(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(ns_names),
     )));
-    window.set_ns_model_index(ns_idx as i32);
+    window.set_ns_model_index(ns_idx);
 }
 
 /// 从 Slint 界面属性增量读取语音输入配置
@@ -605,9 +608,9 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
         } else if m.path.as_deref() == Some("__deepfilternet__") {
             cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
             cfg.voice.afe.custom_ns_model_path = None;
-        } else if let Some(ref path) = m.path {
-            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
-            cfg.voice.afe.custom_ns_model_path = Some(path.clone());
+        } else if m.path.as_deref() == Some("__gtcrn__") {
+            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Gtcrn;
+            cfg.voice.afe.custom_ns_model_path = None;
         }
     }
 }

@@ -20,7 +20,7 @@ export component VoiceTab inherits VerticalLayout {
     in-out property <bool> afe_enabled: true;
     in-out property <bool> high_pass_filter: true;
     in-out property <bool> noise_suppression: true;
-    in property <[string]> ns_model_names: ["[内置] RNNoise 智能降噪 (轻量日常)", "[深度] DeepFilterNet3 (强力消除机械键盘)"];
+    in property <[string]> ns_model_names: ["[内置] RNNoise 智能降噪 (轻量日常)", "[深度] DeepFilterNet3 (强力消除机械键盘)", "[SOTA] GTCRN 深度降噪 (523KB 极速)"];
     in-out property <int> ns_model_index: 0;
     in-out property <bool> auto_gain_control: true;
 

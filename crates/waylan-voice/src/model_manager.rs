@@ -281,89 +281,28 @@ pub fn list_punct_models() -> Vec<ModelItem> {
 
 /// 扫描并列出所有可用的人声智能降噪 (NS) 模型
 pub fn list_ns_models() -> Vec<ModelItem> {
-    let mut items = Vec::new();
-
-    // 1. 动态扫描系统内置目录: /usr/share/waylan/models/ns/ 或 models/ns/
-    if let Some(builtin_dir) = builtin_models_dir() {
-        let ns_dir = builtin_dir.join("ns");
-        if let Ok(entries) = fs::read_dir(ns_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                let file_name = p
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                if file_name == "deepfilternet3" {
-                    items.push(ModelItem {
-                        display_name: "[内置] DeepFilterNet3 深度消音 (强力消除机械键盘)"
-                            .to_string(),
-                        path: Some(p.to_string_lossy().to_string()),
-                    });
-                } else if p.is_dir() || p.extension().map(|e| e == "onnx").unwrap_or(false) {
-                    items.push(ModelItem {
-                        display_name: format!("[内置] {}", file_name),
-                        path: Some(p.to_string_lossy().to_string()),
-                    });
-                }
-            }
-        }
-    }
-
-    // 若未在目录中检测到 deepfilternet3 物理目录，提供内置符号项保底
-    if !items
-        .iter()
-        .any(|m| m.display_name.contains("DeepFilterNet3"))
-    {
-        items.push(ModelItem {
-            display_name: "[内置] DeepFilterNet3 深度消音 (强力消除机械键盘)".to_string(),
+    vec![
+        // 1. 纯代码轻量内置引擎（纯 Rust，零模型文件依赖）
+        ModelItem {
+            display_name: "[内置] RNNoise 智能降噪 (轻量日常，0文件开销)".to_string(),
+            path: Some("__rnnoise__".to_string()),
+        },
+        // 2. 高阶深度消音（强力消除机械键盘打字声）
+        ModelItem {
+            display_name: "[深度] DeepFilterNet3 (强力消除机械键盘)".to_string(),
             path: Some("__deepfilternet__".to_string()),
-        });
-    }
-
-    // 2. 纯代码轻量内置引擎（纯 Rust，零模型文件依赖）
-    items.push(ModelItem {
-        display_name: "[内置] RNNoise 智能降噪 (纯代码零开销)".to_string(),
-        path: Some("__rnnoise__".to_string()),
-    });
-
-    // 3. 直通透传项（关闭降噪）
-    items.push(ModelItem {
-        display_name: "[直通] 关闭人声降噪 (Bypass)".to_string(),
-        path: Some("__bypass__".to_string()),
-    });
-
-    // 4. 动态扫描用户私有目录: ~/.local/share/waylan/models/ns/*.onnx 或子目录
-    if let Some(user_dir) = user_models_dir() {
-        let ns_dir = user_dir.join("ns");
-        if let Ok(entries) = fs::read_dir(ns_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                let file_name = p
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                if file_name == "deepfilternet3" {
-                    continue; // 与系统内置同名，保留内置项即可
-                }
-                let is_onnx = p.is_file() && p.extension().map(|e| e == "onnx").unwrap_or(false);
-                if is_onnx || p.is_dir() {
-                    items.push(ModelItem {
-                        display_name: format!("[用户] {}", file_name),
-                        path: Some(p.to_string_lossy().to_string()),
-                    });
-                }
-            }
-        }
-    }
-
-    items
-}
-
-/// 调用系统原生对话框导入人声降噪模型文件至用户 models/ns 目录
-pub fn import_ns_model_dialog() -> Option<PathBuf> {
-    import_onnx_model_dialog("ns", "请选择要导入的人声智能降噪模型文件 (.onnx)")
+        },
+        // 3. 新一代 SOTA 神经网络深度降噪 (523KB 极速)
+        ModelItem {
+            display_name: "[SOTA] GTCRN 深度降噪 (523KB 极速)".to_string(),
+            path: Some("__gtcrn__".to_string()),
+        },
+        // 4. 直通透传项（关闭降噪）
+        ModelItem {
+            display_name: "[直通] 关闭人声降噪 (Bypass)".to_string(),
+            path: Some("__bypass__".to_string()),
+        },
+    ]
 }
 
 /// 递归复制目录内容

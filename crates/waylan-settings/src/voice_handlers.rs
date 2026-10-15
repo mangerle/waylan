@@ -91,25 +91,11 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     });
 
     let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config;
     window.on_import_ns_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_ns_model_dialog() {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                win.set_global_status(SharedString::from(format!("成功导入降噪模型: {}", name)));
-                let mut cfg = current_cfg_cell.borrow().clone();
-                cfg.voice.afe.noise_suppression = true;
-                cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
-                cfg.voice.afe.custom_ns_model_path =
-                    Some(imported_path.to_string_lossy().to_string());
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
-            }
+            win.set_global_status(SharedString::from(
+                "系统已内置 RNNoise、DeepFilterNet3 与 GTCRN 三大优质降噪引擎，无需手动导入",
+            ));
         }
     });
 

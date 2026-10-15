@@ -237,7 +237,109 @@ impl NoiseSuppressor for DeepFilterSuppressor {
     }
 }
 
-/// 解析指定的 NS 降噪模型路径（支持自定义路径、用户家目录、系统目录与本地目录）
+/// 基于 sherpa-onnx 原生驱动的 SOTA 级 GTCRN 卷积循环深度降噪器 (523KB)
+pub struct GtcrnSuppressor {
+    denoiser: Option<sherpa_onnx::OnlineSpeechDenoiser>,
+    in_buf: Vec<f32>,
+    out_queue: Vec<f32>,
+}
+
+impl GtcrnSuppressor {
+    /// 创建 GTCRN 降噪器实例
+    pub fn new() -> Self {
+        let model_path = resolve_gtcrn_model_path();
+        let denoiser = if let Some(ref p) = model_path {
+            let mut cfg = sherpa_onnx::OnlineSpeechDenoiserConfig::default();
+            cfg.model.gtcrn.model = Some(p.to_string_lossy().to_string());
+            cfg.model.num_threads = 1;
+            cfg.model.provider = Some("cpu".to_string());
+            match sherpa_onnx::OnlineSpeechDenoiser::create(&cfg) {
+                Some(d) => {
+                    info!("[音频前端] 成功初始化系统内置 GTCRN 深度降噪神经网络引擎 (523KB, 模型: {:?})", p);
+                    Some(d)
+                }
+                None => {
+                    warn!("[音频前端] 初始化 GTCRN 降噪模型失败，将回退为直通模式");
+                    None
+                }
+            }
+        } else {
+            warn!("[音频前端] 未找到 GTCRN 降噪模型文件 (models/ns/gtcrn/gtcrn_simple.onnx)，将回退为直通模式");
+            None
+        };
+
+        Self {
+            denoiser,
+            in_buf: Vec::with_capacity(1600),
+            out_queue: Vec::with_capacity(1600),
+        }
+    }
+}
+
+impl Default for GtcrnSuppressor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoiseSuppressor for GtcrnSuppressor {
+    fn process(&mut self, samples: &mut [f32]) {
+        if samples.is_empty() {
+            return;
+        }
+
+        let Some(ref denoiser) = self.denoiser else {
+            return;
+        };
+
+        // 将切片送入流式推理，GTCRN 原生在 16kHz 单声道下工作
+        let denoised = denoiser.run(samples, 16000);
+        if !denoised.samples.is_empty() {
+            self.out_queue.extend(denoised.samples);
+        }
+
+        let needed = samples.len();
+        if self.out_queue.len() >= needed {
+            samples.copy_from_slice(&self.out_queue[..needed]);
+            self.out_queue.drain(..needed);
+        } else {
+            let available = self.out_queue.len();
+            samples[..available].copy_from_slice(&self.out_queue[..available]);
+            self.out_queue.clear();
+        }
+    }
+
+    fn reset(&mut self) {
+        if let Some(ref denoiser) = self.denoiser {
+            denoiser.reset();
+        }
+        self.in_buf.clear();
+        self.out_queue.clear();
+    }
+}
+
+/// 解析 GTCRN 模型文件路径（支持用户目录、系统共享目录与源码本地目录）
+pub fn resolve_gtcrn_model_path() -> Option<std::path::PathBuf> {
+    let sub = "ns/gtcrn/gtcrn_simple.onnx";
+    let mut search_roots = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        search_roots.push(std::path::PathBuf::from(home).join(".local/share/waylan/models"));
+    }
+    search_roots.push(std::path::PathBuf::from("/usr/share/waylan/models"));
+    search_roots.push(std::path::PathBuf::from("models"));
+    search_roots.push(std::path::PathBuf::from("../../models"));
+    search_roots.push(std::path::PathBuf::from("../models"));
+
+    for root in &search_roots {
+        let p = root.join(sub);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// 解析指定的 DeepFilterNet3 降噪模型路径
 pub fn resolve_ns_model_path(custom_path: Option<&str>) -> Option<std::path::PathBuf> {
     if let Some(p) = custom_path.filter(|s| !s.trim().is_empty()) {
         let path = std::path::PathBuf::from(p);
@@ -277,6 +379,10 @@ pub fn create_noise_suppressor(config: &AudioFrontEndConfig) -> Box<dyn NoiseSup
         NsEngineType::DeepFilterNet => {
             info!("[音频前端] 激活系统内置高阶深度级 DeepFilterNet3 降噪引擎 (强力消除机械键盘打字声)");
             Box::new(DeepFilterSuppressor::new())
+        }
+        NsEngineType::Gtcrn => {
+            info!("[音频前端] 激活系统内置 SOTA 级 GTCRN 深度降噪引擎 (523KB 极速)");
+            Box::new(GtcrnSuppressor::new())
         }
         NsEngineType::Rnnoise => {
             info!("[音频前端] 启用系统内置极轻量级 RNNoise 智能人声降噪引擎 (零资源占用)");
@@ -374,6 +480,25 @@ mod tests {
         for &s in &samples {
             assert!(!s.is_nan());
             assert!(!s.is_infinite());
+            assert!((-1.05..=1.05).contains(&s));
+        }
+
+        suppressor.reset();
+        assert!(suppressor.in_buf.is_empty());
+        assert!(suppressor.out_queue.is_empty());
+    }
+
+    #[test]
+    fn test_gtcrn_suppressor_processing_and_reset() {
+        let mut suppressor = GtcrnSuppressor::new();
+        // 构造 100ms 的 16kHz 正弦波音频
+        let mut samples: Vec<f32> = (0..1600)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * (i as f32) / 16000.0).sin() * 0.5)
+            .collect();
+        suppressor.process(&mut samples);
+        for &s in &samples {
+            assert!(!s.is_nan(), "GTCRN 降噪输出不得包含 NaN");
+            assert!(!s.is_infinite(), "GTCRN 降噪输出不得包含 Inf");
             assert!((-1.05..=1.05).contains(&s));
         }
 
