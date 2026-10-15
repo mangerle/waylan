@@ -15,6 +15,7 @@ waylan-core = { path = "../waylan-core" }
 waylan-algo = { path = "../waylan-algo" }
 waylan-ui = { path = "../waylan-ui" }
 waylan-wayland = { path = "../waylan-wayland" }
+waylan-voice = { path = "../waylan-voice" }
 toml.workspace = true
 serde.workspace = true
 log.workspace = true
@@ -47,6 +48,9 @@ assets = [
     ["../../data/bigram.table.bin", "usr/share/waylan/data/bigram.table.bin", "644"],
     ["../../data/opencc.dict.bin", "usr/share/waylan/data/opencc.dict.bin", "644"],
     ["../../data/dicts/**/*", "usr/share/waylan/dicts/", "644"],
+    ["../../models/vad/**/*", "usr/share/waylan/models/vad/", "644"],
+    ["../../models/asr/**/*", "usr/share/waylan/models/asr/", "644"],
+    ["../../models/punct/**/*", "usr/share/waylan/models/punct/", "644"],
     ["../../target/generated/ibus/waylan.xml", "usr/share/ibus/component/waylan.xml", "644"],
     ["../../assets/*.svg", "usr/share/waylan/assets/", "644"],
     ["../../assets/*.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],

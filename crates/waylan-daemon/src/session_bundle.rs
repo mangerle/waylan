@@ -21,7 +21,7 @@ use waylan_wayland::WaylandCapabilities;
 
 use crate::config::{
     AppConfig, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
-    FullWidthPunctShortcut, SwitchKey, ThemeMode, TraditionalShortcut,
+    FullWidthPunctShortcut, SwitchKey, ThemeMode, TraditionalShortcut, VoiceConfig,
 };
 
 /// 自动建立用户数据目录 (~/.local/share/waylan/) 与外部全量词库的符号链接
@@ -235,6 +235,7 @@ pub struct SessionConfigBundle {
     pub traditional_shortcut: TraditionalShortcut,
     pub full_width_char_shortcut: FullWidthCharShortcut,
     pub full_width_punct_shortcut: FullWidthPunctShortcut,
+    pub voice: VoiceConfig,
 }
 
 impl SessionConfigBundle {
@@ -303,6 +304,7 @@ impl SessionConfigBundle {
             traditional_shortcut: new_cfg.traditional_shortcut,
             full_width_char_shortcut: new_cfg.full_width_char_shortcut,
             full_width_punct_shortcut: new_cfg.full_width_punct_shortcut,
+            voice: new_cfg.voice,
         }
     }
 

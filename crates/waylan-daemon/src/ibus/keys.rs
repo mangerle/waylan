@@ -11,14 +11,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::{
     Candidate, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
-    FullWidthPunctShortcut, InputMode, TextAction, TraditionalShortcut,
+    FullWidthPunctShortcut, InputMode, TextAction, TraditionalShortcut, VoiceConfig,
 };
+use waylan_voice::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 use waylan_wayland::input_constants::*;
 
 /// 字母 F 的 evdev 扫描码 (33)
@@ -94,6 +95,18 @@ pub struct IbusSessionCore {
     pub traditional_shortcut: TraditionalShortcut,
     pub full_width_char_shortcut: FullWidthCharShortcut,
     pub full_width_punct_shortcut: FullWidthPunctShortcut,
+    pub voice_controller: VoiceSessionController,
+    pub voice_config: VoiceConfig,
+    pub voice_display_text: Option<String>,
+    pub voice_partial_text: Option<String>,
+    pub voice_event_rx: Option<std::sync::mpsc::Receiver<VoiceEvent>>,
+    pub last_voice_trigger_time: Instant,
+    /// 是否处于长按对讲机 (Push-to-Talk) 语音触发中
+    pub is_push_to_talk_active: bool,
+    /// 长按对讲机模式下的触发主键扫描码
+    pub push_to_talk_key: Option<u32>,
+    /// 当前拥有焦点的活跃 IBus 引擎对象路径（例如 "/org/freedesktop/IBus/Engine/1"、"/org/freedesktop/IBus/Engine/2" 等）
+    pub active_engine_path: Option<String>,
 }
 
 impl IbusSessionCore {
@@ -123,6 +136,17 @@ impl IbusSessionCore {
             traditional_shortcut: TraditionalShortcut::default(),
             full_width_char_shortcut: FullWidthCharShortcut::default(),
             full_width_punct_shortcut: FullWidthPunctShortcut::default(),
+            voice_controller: VoiceSessionController::new(),
+            voice_config: VoiceConfig::default(),
+            voice_display_text: None,
+            voice_partial_text: None,
+            voice_event_rx: None,
+            last_voice_trigger_time: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or_else(Instant::now),
+            is_push_to_talk_active: false,
+            push_to_talk_key: None,
+            active_engine_path: None,
         }
     }
 
@@ -156,6 +180,14 @@ impl IbusSessionCore {
 
     /// 重置当前预编辑与修饰键跟踪状态（用于失焦 `FocusOut` 或 `Reset`）
     pub fn reset_context(&mut self) {
+        if self.voice_controller.is_recording() {
+            self.voice_controller.cancel();
+        }
+        self.is_push_to_talk_active = false;
+        self.push_to_talk_key = None;
+        self.voice_display_text = None;
+        self.voice_partial_text = None;
+        self.voice_event_rx = None;
         self.engine.reset();
         self.shift_sm.reset();
         self.mods_depressed = 0;
@@ -163,6 +195,65 @@ impl IbusSessionCore {
         self.consumed_keys.clear();
         self.is_password_context = false;
         self.surrounding_text = None;
+    }
+
+    /// 判断当前是否处于语音输入或语音展示激活状态
+    pub fn is_voice_active(&self) -> bool {
+        self.voice_controller.is_recording() || self.voice_display_text.is_some()
+    }
+
+    /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
+    pub fn poll_voice_events(&mut self) -> Option<String> {
+        let mut final_commit = None;
+        if let Some(ref rx) = self.voice_event_rx {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    VoiceEvent::WaveformUpdated { waveform, .. } => {
+                        // 候选框保持精简优雅：仅展示纯粹的状态胶囊与音量波形，绝不将长段识别文字塞入候选框！
+                        self.voice_display_text = Some(format!("正在聆听中... {}", waveform));
+                    }
+                    VoiceEvent::PartialText(text) => {
+                        // 实时流式文字仅记录在 voice_partial_text 中，由 UiSnapshot 投递至光标处内联预编辑带下划线显示
+                        self.voice_partial_text = Some(text);
+                    }
+                    VoiceEvent::SegmentCommit(text) => {
+                        // VAD 自动断句分句上屏：直接提交当前整句至光标处，清空光标预编辑，但录音会话持续保持活跃！
+                        final_commit = Some(text);
+                        self.voice_partial_text = None;
+                        break;
+                    }
+                    VoiceEvent::FinalCommit(text) => {
+                        final_commit = Some(text);
+                        self.is_push_to_talk_active = false;
+                        self.push_to_talk_key = None;
+                        self.voice_display_text = None;
+                        self.voice_partial_text = None;
+                        break;
+                    }
+                    VoiceEvent::Cancelled => {
+                        self.is_push_to_talk_active = false;
+                        self.push_to_talk_key = None;
+                        self.voice_display_text = None;
+                        self.voice_partial_text = None;
+                        break;
+                    }
+                    VoiceEvent::Error(err) => {
+                        log::error!("[微澜 IBus 语音] 识别发生异常: {}", err);
+                        self.is_push_to_talk_active = false;
+                        self.push_to_talk_key = None;
+                        self.voice_display_text = None;
+                        self.voice_partial_text = None;
+                        break;
+                    }
+                }
+            }
+        }
+        if !self.voice_controller.is_recording() && self.voice_display_text.is_none() {
+            self.voice_event_rx = None;
+            self.is_push_to_talk_active = false;
+            self.push_to_talk_key = None;
+        }
+        final_commit
     }
 
     /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
@@ -296,20 +387,109 @@ impl IbusSessionCore {
             self.shift_sm.on_key_event(evdev_key, is_press, self.mode)
         };
         if !is_press {
+            // 对讲机长按模式 (Push-to-Talk)：松开主键或修饰键时立即截断并提交上屏
+            if self.is_push_to_talk_active && self.voice_controller.is_recording() {
+                let is_main_key_release = self.push_to_talk_key == Some(evdev_key);
+                let is_modifier_release = matches!(
+                    evdev_key,
+                    KEY_LEFTCTRL
+                        | KEY_RIGHTCTRL
+                        | KEY_LEFTALT
+                        | KEY_RIGHTALT
+                        | KEY_LEFTSHIFT
+                        | KEY_RIGHTSHIFT
+                        | KEY_LEFTMETA
+                        | KEY_RIGHTMETA
+                );
+                if is_main_key_release || is_modifier_release {
+                    log::info!("[微澜 IBus 语音] 对讲机模式快捷键松开，自动断句上屏提交");
+                    self.voice_controller.stop_and_commit();
+                    self.is_push_to_talk_active = false;
+                    self.push_to_talk_key = None;
+                    std::thread::sleep(Duration::from_millis(30));
+                    let final_text = self.poll_voice_events().unwrap_or_default();
+                    self.voice_display_text = None;
+                    self.voice_partial_text = None;
+                    self.voice_event_rx = None;
+                    let was_consumed = self.consumed_keys.take_release(evdev_key);
+                    return IbusKeyOutcome {
+                        consumed: was_consumed || is_main_key_release,
+                        commit_text: if final_text.is_empty() {
+                            None
+                        } else {
+                            log::info!("[微澜 IBus 语音] 成功生成文字上屏: \"{}\"", final_text);
+                            Some(final_text)
+                        },
+                        update_ui: true,
+                        ..Default::default()
+                    };
+                }
+            }
             return self.handle_key_release(evdev_key, toggled_mode);
         }
 
         let shift_active = (state & IBUS_SHIFT_MASK) != 0 || (self.mods_depressed & MOD_SHIFT) != 0;
         let ctrl_active = (state & IBUS_CONTROL_MASK) != 0 || (self.mods_depressed & MOD_CTRL) != 0;
         let alt_active = (state & IBUS_MOD1_MASK) != 0 || (self.mods_depressed & MOD_ALT) != 0;
+        let super_active = (state & IBUS_SUPER_MASK) != 0 || (self.mods_depressed & MOD_SUPER) != 0;
         let ctrl_or_alt = ibus_state_has_ctrl_or_alt(state)
             || (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
 
-        if let Some(shortcut_outcome) =
-            self.handle_global_shortcuts(evdev_key, shift_active, ctrl_active, alt_active)
-        {
+        if let Some(shortcut_outcome) = self.handle_global_shortcuts(
+            evdev_key,
+            shift_active,
+            ctrl_active,
+            alt_active,
+            super_active,
+        ) {
             self.consumed_keys.record_press(evdev_key, true);
             return shortcut_outcome;
+        }
+
+        // 录音状态下的快捷拦截：Esc 取消，Enter 提交，其它按键静默消费
+        if self.voice_controller.is_recording() {
+            if evdev_key == KEY_ESC {
+                self.voice_controller.cancel();
+                self.is_push_to_talk_active = false;
+                self.push_to_talk_key = None;
+                self.voice_display_text = None;
+                self.voice_partial_text = None;
+                self.voice_event_rx = None;
+                self.consumed_keys.record_press(evdev_key, true);
+                return IbusKeyOutcome {
+                    consumed: true,
+                    update_ui: true,
+                    ..Default::default()
+                };
+            }
+            if evdev_key == KEY_ENTER {
+                log::info!("[微澜 IBus 语音] Enter 键触发停止录音并请求提交");
+                self.voice_controller.stop_and_commit();
+                self.is_push_to_talk_active = false;
+                self.push_to_talk_key = None;
+                std::thread::sleep(Duration::from_millis(30));
+                let final_text = self.poll_voice_events().unwrap_or_default();
+                self.voice_display_text = None;
+                self.voice_partial_text = None;
+                self.voice_event_rx = None;
+                self.consumed_keys.record_press(evdev_key, true);
+                return IbusKeyOutcome {
+                    consumed: true,
+                    commit_text: if final_text.is_empty() {
+                        None
+                    } else {
+                        log::info!("[微澜 IBus 语音] 成功生成文字上屏: \"{}\"", final_text);
+                        Some(final_text)
+                    },
+                    update_ui: true,
+                    ..Default::default()
+                };
+            }
+            self.consumed_keys.record_press(evdev_key, true);
+            return IbusKeyOutcome {
+                consumed: true,
+                ..Default::default()
+            };
         }
 
         let mut outcome =
@@ -330,6 +510,7 @@ impl IbusSessionCore {
         shift_active: bool,
         ctrl_active: bool,
         alt_active: bool,
+        super_active: bool,
     ) -> Option<IbusKeyOutcome> {
         // 1. 简繁切换快捷键匹配
         let trad_match = match self.traditional_shortcut {
@@ -407,6 +588,123 @@ impl IbusSessionCore {
                 consumed: true,
                 ..Default::default()
             });
+        }
+
+        // 4. 语音输入触发快捷键匹配（支持方案 A：连续听写开关与长按对讲机双独立快捷键并存）
+        if self.voice_config.enabled {
+            // 4.1 优先匹配长按对讲机快捷键 (Push-to-Talk)
+            let ptt_match = self
+                .voice_config
+                .get_effective_ptt_shortcut()
+                .is_some_and(|s| {
+                    s.matches(
+                        evdev_key,
+                        shift_active,
+                        ctrl_active,
+                        alt_active,
+                        super_active,
+                    )
+                });
+
+            if ptt_match {
+                if self.voice_controller.is_recording() && self.is_push_to_talk_active {
+                    // 正在长按中，忽略系统的 Auto-Repeat 连发，持续录音
+                    return Some(IbusKeyOutcome {
+                        consumed: true,
+                        ..Default::default()
+                    });
+                } else if !self.voice_controller.is_recording() {
+                    // 首次按压触发启动对讲机录音
+                    log::info!("[微澜 IBus 语音] 对讲机模式快捷键按下，开始捕获语音");
+                    self.engine.reset();
+                    let (tx, rx) = std::sync::mpsc::sync_channel(32);
+                    let opts = VoiceSessionOptions {
+                        voice_config: self.voice_config.clone(),
+                    };
+                    if let Err(e) = self.voice_controller.start(opts, tx) {
+                        log::error!("[微澜 IBus 语音] 启动麦克风录音捕获失败: {}", e);
+                    } else {
+                        self.is_push_to_talk_active = true;
+                        self.push_to_talk_key = Some(evdev_key);
+                        self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                        self.voice_partial_text = None;
+                        self.voice_event_rx = Some(rx);
+                    }
+                    return Some(IbusKeyOutcome {
+                        consumed: true,
+                        update_ui: true,
+                        ..Default::default()
+                    });
+                }
+            }
+
+            // 4.2 匹配连续听写开关快捷键 (Toggle)
+            let toggle_match = self
+                .voice_config
+                .get_effective_toggle_shortcut()
+                .is_some_and(|s| {
+                    s.matches(
+                        evdev_key,
+                        shift_active,
+                        ctrl_active,
+                        alt_active,
+                        super_active,
+                    )
+                });
+
+            if toggle_match {
+                let now = Instant::now();
+                if now.duration_since(self.last_voice_trigger_time) < Duration::from_millis(400) {
+                    // 过滤按键连发（Auto-Repeat）或短时间内微秒级抖动
+                    return Some(IbusKeyOutcome {
+                        consumed: true,
+                        ..Default::default()
+                    });
+                }
+                self.last_voice_trigger_time = now;
+
+                if self.voice_controller.is_recording() {
+                    log::info!("[微澜 IBus 语音] 开关模式快捷键触发停止录音并请求提交");
+                    self.voice_controller.stop_and_commit();
+                    std::thread::sleep(Duration::from_millis(30));
+                    let final_text = self.poll_voice_events().unwrap_or_default();
+                    self.voice_display_text = None;
+                    self.voice_partial_text = None;
+                    self.voice_event_rx = None;
+                    return Some(IbusKeyOutcome {
+                        consumed: true,
+                        commit_text: if final_text.is_empty() {
+                            None
+                        } else {
+                            log::info!("[微澜 IBus 语音] 成功生成文字上屏: \"{}\"", final_text);
+                            Some(final_text)
+                        },
+                        update_ui: true,
+                        ..Default::default()
+                    });
+                } else {
+                    log::info!("[微澜 IBus 语音] 开关模式快捷键触发开启连续听写录音");
+                    self.engine.reset();
+                    let (tx, rx) = std::sync::mpsc::sync_channel(32);
+                    let opts = VoiceSessionOptions {
+                        voice_config: self.voice_config.clone(),
+                    };
+                    if let Err(e) = self.voice_controller.start(opts, tx) {
+                        log::error!("[微澜 IBus 语音] 启动麦克风录音捕获失败: {}", e);
+                    } else {
+                        self.is_push_to_talk_active = false;
+                        self.push_to_talk_key = None;
+                        self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                        self.voice_partial_text = None;
+                        self.voice_event_rx = Some(rx);
+                    }
+                    return Some(IbusKeyOutcome {
+                        consumed: true,
+                        update_ui: true,
+                        ..Default::default()
+                    });
+                }
+            }
         }
 
         None
@@ -707,6 +1005,8 @@ fn map_punct_or_control_keyval(keyval: u32) -> Option<u32> {
 mod tests {
     use super::*;
     use waylan_algo::types::AlgoConfig;
+
+    const KEY_V: u32 = 47;
 
     #[test]
     fn test_ibus_keyval_mapping() {
@@ -1095,5 +1395,107 @@ mod tests {
             "标点状态应切回全角中文标点"
         );
         assert!(punct_flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_ibus_voice_input_shortcut_and_cancel() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+
+        // 1. 验证默认配置下按下 Ctrl + Alt + V 触发语音输入激活
+        let start_res =
+            core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
+        assert!(start_res.consumed, "语音激活按键应被拦截消费");
+        assert!(start_res.update_ui, "语音启动时应请求刷新 UI 候选与预编辑");
+        assert!(
+            core.voice_controller.is_recording(),
+            "语音控制器应进入录音状态"
+        );
+        assert!(core.voice_display_text.is_some());
+
+        // 2. 录音状态下按下 ESC 键应取消录音并清除预编辑
+        let cancel_res = core.process_key_event(0xff1b, KEY_ESC, 0);
+        assert!(cancel_res.consumed);
+        assert!(cancel_res.update_ui);
+        assert!(!core.voice_controller.is_recording(), "ESC 键应终止录音");
+        assert!(core.voice_display_text.is_none());
+    }
+
+    #[test]
+    fn test_ibus_voice_input_commit_on_enter() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+
+        // 1. 触发语音录音
+        let _ = core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
+        assert!(core.voice_controller.is_recording());
+
+        // 2. 给予后台仿真录音线程极短时隙产生音频分块
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // 3. 按下 Enter 键，应停止录音并触发上屏或消费按键
+        let enter_res = core.process_key_event(0xff0d, KEY_ENTER, 0);
+        assert!(enter_res.consumed);
+        assert!(!core.voice_controller.is_recording());
+        assert!(core.voice_display_text.is_none());
+    }
+
+    #[test]
+    fn test_ibus_voice_input_push_to_talk_mode() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.push_to_talk_shortcut = "Ctrl + Alt + V".to_string();
+
+        // 1. 按下快捷键 Ctrl + Alt + V 开始录音
+        let press_res =
+            core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
+        assert!(press_res.consumed);
+        assert!(press_res.update_ui);
+        assert!(core.is_push_to_talk_active);
+        assert!(core.voice_controller.is_recording());
+
+        // 2. 长按过程中的 Auto-Repeat 连发应被直接消费，不重复启动也不停止
+        let repeat_res =
+            core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
+        assert!(repeat_res.consumed);
+        assert!(core.voice_controller.is_recording());
+
+        // 3. 模拟松开 V 键 (Release)，对讲机模式应立即停止录音并请求提交
+        let release_res = core.process_key_event(
+            b'v' as u32,
+            KEY_V,
+            IBUS_RELEASE_MASK | IBUS_CONTROL_MASK | IBUS_MOD1_MASK,
+        );
+        assert!(release_res.consumed);
+        assert!(release_res.update_ui);
+        assert!(!core.is_push_to_talk_active);
+        assert!(!core.voice_controller.is_recording());
+    }
+
+    #[test]
+    fn test_ibus_voice_input_custom_shortcut() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.toggle_shortcut = "F8".to_string();
+        core.voice_config.push_to_talk_shortcut = "已禁用".to_string();
+
+        // 1. 按下无关快捷键（例如默认的 Ctrl+Alt+V）不应触发
+        let unrelated =
+            core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
+        assert!(!unrelated.consumed || !core.voice_controller.is_recording());
+
+        // 2. 按下自定义的 F8 键（evdev 扫描码 66），应成功触发录音
+        let f8_res = core.process_key_event(0xffc5, 66, 0);
+        assert!(f8_res.consumed);
+        assert!(core.voice_controller.is_recording());
+
+        // 3. 按下 ESC 取消录音并释放会话
+        let esc_res = core.process_key_event(0xff1b, KEY_ESC, 0);
+        assert!(esc_res.consumed);
+        assert!(!core.voice_controller.is_recording());
     }
 }

@@ -42,8 +42,8 @@ use desktop_integration::{
     ensure_ibus_and_gnome_integration, format_ibus_component_xml, format_ibus_engines_xml,
 };
 use engine::{
-    IbusEngineService, IbusFactoryService, IbusGenericService, WAYLAN_ENGINE_OBJECT_PATH,
-    WAYLAN_FACTORY_OBJECT_PATH,
+    IbusEngineService, IbusFactoryService, IbusGenericService, UiSnapshot,
+    WAYLAN_ENGINE_OBJECT_PATH, WAYLAN_FACTORY_OBJECT_PATH,
 };
 use keys::IbusSessionCore;
 use types::{build_input_mode_property, build_waylan_ibus_component};
@@ -182,6 +182,7 @@ fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSession
     core.traditional_shortcut = bundle.traditional_shortcut;
     core.full_width_char_shortcut = bundle.full_width_char_shortcut;
     core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
+    core.voice_config = bundle.voice.clone();
     bundle.apply_to_engine_and_input(
         &mut core.engine,
         &mut core.shift_sm,
@@ -401,6 +402,8 @@ fn run_ibus_monitor_loop(
         info!("[微澜 IBus] 启动时检测到系统处于锁屏状态，已进入密码直通保护模式。");
     }
 
+    let mut last_voice_active = false;
+
     loop {
         if params.exit_requested.load(Ordering::Acquire) {
             info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
@@ -434,7 +437,156 @@ fn run_ibus_monitor_loop(
             last_screen_locked = current_screen_locked;
         }
 
-        poll_wakeup_and_inotify(inotify_watcher.as_ref(), params.loop_wakeup.as_ref(), 1000);
+        let (is_voice_active, target_engine_path) = {
+            if let Ok(guard) = shared_core.lock() {
+                let active = guard.is_voice_active();
+                let path = guard
+                    .active_engine_path
+                    .clone()
+                    .unwrap_or_else(|| WAYLAN_ENGINE_OBJECT_PATH.to_string());
+                (active, path)
+            } else {
+                (false, WAYLAN_ENGINE_OBJECT_PATH.to_string())
+            }
+        };
+
+        let poll_timeout_ms = if is_voice_active { 60 } else { 1000 };
+        poll_wakeup_and_inotify(
+            inotify_watcher.as_ref(),
+            params.loop_wakeup.as_ref(),
+            poll_timeout_ms,
+        );
+
+        // 驱动语音输入状态流式刷新与自动静音上屏提交
+        if is_voice_active {
+            let (voice_snap, voice_commit) = {
+                if let Ok(mut guard) = shared_core.lock() {
+                    let commit = guard.poll_voice_events();
+                    let snap = UiSnapshot::capture(&guard);
+                    (snap, commit)
+                } else {
+                    continue;
+                }
+            };
+
+            // 1. 发射候选框更新：跳动音量波形与状态指示在悬浮框呈现
+            let table_visible = !voice_snap.candidates.is_empty();
+            if let Ok(table_val) = types::build_ibus_lookup_table(
+                &voice_snap.candidates,
+                voice_snap.page_size,
+                voice_snap.selected_index,
+                voice_snap.orientation,
+                voice_snap.index_style,
+            ) {
+                let _ = conn.emit_signal(
+                    None::<&str>,
+                    target_engine_path.as_str(),
+                    "org.freedesktop.IBus.Engine",
+                    "UpdateLookupTable",
+                    &(Value::from(table_val), table_visible),
+                );
+            }
+
+            // 2. 实时流式预编辑：将识别出的真实汉字流式同步到光标处，无文字时保持清空防波形乱入
+            if let Ok(preedit_val) = types::build_ibus_preedit_text(&voice_snap.preedit) {
+                let char_len = voice_snap.preedit.chars().count() as u32;
+                let visible = !voice_snap.preedit.is_empty();
+                let _ = conn.emit_signal(
+                    None::<&str>,
+                    target_engine_path.as_str(),
+                    "org.freedesktop.IBus.Engine",
+                    "UpdatePreeditText",
+                    &(
+                        Value::from(preedit_val),
+                        char_len,
+                        visible,
+                        types::IBUS_ENGINE_PREEDIT_CLEAR,
+                    ),
+                );
+            }
+
+            // 3. 自动断句识别结果上屏
+            if let Some(ref commit_text) = voice_commit {
+                if !commit_text.is_empty() {
+                    info!(
+                        "[微澜 IBus 语音] 自动断句文字上屏 (目标路径: {}): \"{}\"",
+                        target_engine_path, commit_text
+                    );
+                    // 隐去悬浮候选框并清空预编辑，防止后续按键残留
+                    if let Ok(empty_table) = types::build_ibus_lookup_table(
+                        &[],
+                        1,
+                        0,
+                        types::IBUS_ORIENTATION_HORIZONTAL,
+                        waylan_core::CandidateIndexStyle::None,
+                    ) {
+                        let _ = conn.emit_signal(
+                            None::<&str>,
+                            target_engine_path.as_str(),
+                            "org.freedesktop.IBus.Engine",
+                            "UpdateLookupTable",
+                            &(Value::from(empty_table), false),
+                        );
+                    }
+                    if let Ok(empty_preedit) = types::build_ibus_preedit_text("") {
+                        let _ = conn.emit_signal(
+                            None::<&str>,
+                            target_engine_path.as_str(),
+                            "org.freedesktop.IBus.Engine",
+                            "UpdatePreeditText",
+                            &(
+                                Value::from(empty_preedit),
+                                0u32,
+                                false,
+                                types::IBUS_ENGINE_PREEDIT_CLEAR,
+                            ),
+                        );
+                    }
+                    // 纯净识别结果文字提交当前应用窗口
+                    if let Ok(text_val) = types::build_ibus_text(commit_text) {
+                        let _ = conn.emit_signal(
+                            None::<&str>,
+                            target_engine_path.as_str(),
+                            "org.freedesktop.IBus.Engine",
+                            "CommitText",
+                            &(Value::from(text_val),),
+                        );
+                    }
+                }
+            }
+        } else if last_voice_active {
+            // 录音状态结束过渡：立即隐去候选面板并确保预编辑清空
+            if let Ok(empty_table) = types::build_ibus_lookup_table(
+                &[],
+                1,
+                0,
+                types::IBUS_ORIENTATION_HORIZONTAL,
+                waylan_core::CandidateIndexStyle::None,
+            ) {
+                let _ = conn.emit_signal(
+                    None::<&str>,
+                    target_engine_path.as_str(),
+                    "org.freedesktop.IBus.Engine",
+                    "UpdateLookupTable",
+                    &(Value::from(empty_table), false),
+                );
+            }
+            if let Ok(empty_preedit) = types::build_ibus_preedit_text("") {
+                let _ = conn.emit_signal(
+                    None::<&str>,
+                    target_engine_path.as_str(),
+                    "org.freedesktop.IBus.Engine",
+                    "UpdatePreeditText",
+                    &(
+                        Value::from(empty_preedit),
+                        0u32,
+                        false,
+                        types::IBUS_ENGINE_PREEDIT_CLEAR,
+                    ),
+                );
+            }
+        }
+        last_voice_active = is_voice_active;
 
         if params.exit_requested.load(Ordering::Acquire) {
             info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");

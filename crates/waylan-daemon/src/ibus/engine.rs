@@ -43,18 +43,47 @@ const IBUS_INPUT_PURPOSE_PASSWORD: u32 = 2;
 const IBUS_INPUT_PURPOSE_PIN: u32 = 3;
 
 /// 锁外发射 UI 刷新信号所需的轻量状态快照
-struct UiSnapshot {
-    preedit: String,
-    candidates: Vec<Candidate>,
-    page_size: usize,
-    selected_index: usize,
-    orientation: i32,
-    index_style: CandidateIndexStyle,
+pub(crate) struct UiSnapshot {
+    pub(crate) preedit: String,
+    pub(crate) candidates: Vec<Candidate>,
+    pub(crate) page_size: usize,
+    pub(crate) selected_index: usize,
+    pub(crate) orientation: i32,
+    pub(crate) index_style: CandidateIndexStyle,
 }
 
 impl UiSnapshot {
     /// 从当前会话核心提取 UI 快照
-    fn capture(core: &IbusSessionCore) -> Self {
+    pub(crate) fn capture(core: &IbusSessionCore) -> Self {
+        // 当处于语音录入或语音展示期间：
+        // 1. 输入框预编辑（preedit）严格保持为空，彻底杜绝状态提示与音量波形字符误入宿主输入框；
+        // 2. 状态提示与跳动音量波形作为唯一的候选项呈现在悬浮候选框（LookupTable）内；
+        // 3. 序号样式设为 None，以干净利落的单行胶囊悬浮框展示。
+        if core.is_voice_active() {
+            let candidates = if let Some(ref voice_text) = core.voice_display_text {
+                vec![Candidate {
+                    text: voice_text.clone(),
+                    pinyin: String::new(),
+                    score: 1000,
+                    is_expandable: false,
+                    sub_candidates: Vec::new(),
+                }]
+            } else {
+                Vec::new()
+            };
+            // 实时流式文字同步至预编辑（preedit）：
+            // 若识别出实时文字，则流式显示在输入框光标处；若尚无文字（仅有波形），preedit 保持为空防止波形混入输入框
+            let preedit = core.voice_partial_text.clone().unwrap_or_default();
+            return Self {
+                preedit,
+                candidates,
+                page_size: 1,
+                selected_index: 0,
+                orientation: super::types::IBUS_ORIENTATION_HORIZONTAL,
+                index_style: CandidateIndexStyle::None,
+            };
+        }
+
         let is_v_mode = core.engine.raw_input().starts_with('v');
         let preedit = if core.engine.raw_input().is_empty() {
             String::new()
@@ -176,20 +205,20 @@ pub struct IbusEngineService {
 impl IbusEngineService {
     /// 在锁作用域之外根据快照向 `ibus-daemon` 发射预编辑与候选词表更新信号
     async fn emit_ui_snapshot(ctxt: &SignalContext<'_>, snap: &UiSnapshot) {
-        let visible = !snap.preedit.is_empty();
+        let preedit_visible = !snap.preedit.is_empty();
         if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
             let char_len = snap.preedit.chars().count() as u32;
             let _ = Self::update_preedit_text(
                 ctxt,
                 Value::from(preedit_val),
                 char_len,
-                visible,
+                preedit_visible,
                 IBUS_ENGINE_PREEDIT_CLEAR,
             )
             .await;
         }
 
-        let table_visible = visible && !snap.candidates.is_empty();
+        let table_visible = !snap.candidates.is_empty();
         if let Ok(table_val) = build_ibus_lookup_table(
             &snap.candidates,
             snap.page_size,
@@ -263,6 +292,7 @@ impl IbusEngineService {
     ) -> bool {
         let (outcome, snap, is_caps_locked) = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            guard.active_engine_path = Some(ctxt.path().to_string());
             if self.is_password.load(Ordering::Acquire) {
                 guard.is_password_context = true;
             }
@@ -482,6 +512,7 @@ impl IbusEngineService {
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let (mode, is_caps, trad, punct, char_full, snap) = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            guard.active_engine_path = Some(ctxt.path().to_string());
             // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
             // 既杜绝旧普通窗口残留密码标记，又防止因先触发 SetContentType 后触发 FocusIn 导致密码标记被误冲刷
             guard.is_password_context = self.is_password.load(Ordering::Acquire);
@@ -683,4 +714,36 @@ impl IbusEngineService {
         keycode: u32,
         state: u32,
     ) -> zbus::Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use waylan_algo::{AlgoConfig, AlgoEngine};
+
+    #[test]
+    fn test_ui_snapshot_voice_isolation() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+
+        // 模拟正常输入状态
+        let _ = core.process_key_event(b'n' as u32, 49, 0);
+        let normal_snap = UiSnapshot::capture(&core);
+        assert_eq!(normal_snap.preedit, "n");
+        assert!(!normal_snap.candidates.is_empty());
+
+        // 模拟语音激活状态：正在聆听中... ▏▎▍
+        core.voice_display_text = Some("正在聆听中... ▏▎▍".to_string());
+        let voice_snap = UiSnapshot::capture(&core);
+
+        // 核心断言：输入框预编辑必须完全为空，严禁将波形塞入输入框光标处
+        assert_eq!(
+            voice_snap.preedit, "",
+            "录音期间预编辑必须为空以防污染输入框"
+        );
+        // 核心断言：波形状态必须呈现在候选框中且不带数字序号
+        assert_eq!(voice_snap.candidates.len(), 1);
+        assert_eq!(voice_snap.candidates[0].text, "正在聆听中... ▏▎▍");
+        assert_eq!(voice_snap.index_style, CandidateIndexStyle::None);
+    }
 }

@@ -39,7 +39,11 @@ echo "[微澜打包] 步骤 2/4: 编译 Release 优化版本二进制程序 (way
 cd "${PROJECT_ROOT}"
 cargo build --release --bin waylan --bin waylan-settings
 
-echo "[微澜打包] 步骤 3/4: 检查 cargo-deb 打包工具与动态生成组件元数据..."
+echo "[微澜打包] 步骤 3/4: 检查模型资产、cargo-deb 工具与动态生成组件元数据..."
+if [ ! -f "${PROJECT_ROOT}/models/vad/silero_vad.onnx" ] || [ ! -d "${PROJECT_ROOT}/models/asr/paraformer-zh" ]; then
+    echo "[微澜打包 警告] models/ 目录下缺少基础语音模型，若需要离线语音识别开箱即用，请确保 models/ 目录已放置对应模型文件。"
+fi
+
 if ! command -v cargo-deb >/dev/null 2>&1; then
     echo "未检测到 cargo-deb，正在通过 cargo 自动安装..."
     cargo install cargo-deb
