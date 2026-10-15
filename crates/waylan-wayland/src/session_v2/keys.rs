@@ -52,6 +52,80 @@ fn commit_grid_candidate_by_index(
     }
 }
 
+/// 处理网格大候选面板的方向导航与 ESC 折叠键
+fn handle_grid_navigation_key(
+    session: &mut WaylanV2Session,
+    key: u32,
+    total: usize,
+    row_count: usize,
+    row: usize,
+    col: usize,
+) -> Option<bool> {
+    if key == KEY_DOWN {
+        let next_row = (row + 1) % row_count;
+        session.grid_selected_index = (next_row * 6 + col).min(total.saturating_sub(1));
+        session.refresh_candidate_surface();
+        return Some(true);
+    }
+    if key == KEY_UP {
+        let prev_row = if row == 0 {
+            row_count.saturating_sub(1)
+        } else {
+            row - 1
+        };
+        session.grid_selected_index = (prev_row * 6 + col).min(total.saturating_sub(1));
+        session.refresh_candidate_surface();
+        return Some(true);
+    }
+    if key == KEY_RIGHT {
+        session.grid_selected_index = (session.grid_selected_index + 1) % total;
+        session.refresh_candidate_surface();
+        return Some(true);
+    }
+    if key == KEY_LEFT {
+        session.grid_selected_index = if session.grid_selected_index == 0 {
+            total.saturating_sub(1)
+        } else {
+            session.grid_selected_index - 1
+        };
+        session.refresh_candidate_surface();
+        return Some(true);
+    }
+    if key == KEY_ESC {
+        session.is_grid_expanded = false;
+        session.grid_selected_index = 0;
+        session.refresh_candidate_surface();
+        return Some(true);
+    }
+    None
+}
+
+/// 处理网格大候选面板的数字键选词与空格键确认
+fn handle_grid_selection_key(
+    session: &mut WaylanV2Session,
+    key: u32,
+    now: u64,
+    total: usize,
+    row: usize,
+) -> Option<Option<(bool, Option<String>)>> {
+    if !session.is_shift_active() {
+        if let Some(digit) = keycode_to_digit(key) {
+            if (1..=6).contains(&digit) {
+                let target_idx = row * 6 + (digit - 1);
+                if target_idx < total {
+                    return Some(commit_grid_candidate_by_index(session, target_idx, now));
+                }
+            }
+            return Some(Some((true, None)));
+        }
+    }
+    if key == KEY_SPACE {
+        let idx = session.grid_selected_index.min(total.saturating_sub(1));
+        return Some(commit_grid_candidate_by_index(session, idx, now));
+    }
+    None
+}
+
 /// 处理处于 5 行网格大候选词面板展开态下的专属键盘导航与选词
 fn process_grid_expanded_key(
     session: &mut WaylanV2Session,
@@ -67,73 +141,52 @@ fn process_grid_expanded_key(
     let row = session.grid_selected_index / GRID_COLS;
     let col = session.grid_selected_index % GRID_COLS;
 
-    // 1. 下方向键（Down）：移动至下一行的对应列（循环跳转）
-    if key == KEY_DOWN {
-        let next_row = (row + 1) % row_count;
-        session.grid_selected_index = (next_row * GRID_COLS + col).min(total.saturating_sub(1));
-        session.refresh_candidate_surface();
-        return Some((true, None));
+    if let Some(consumed) = handle_grid_navigation_key(session, key, total, row_count, row, col) {
+        return Some((consumed, None));
     }
 
-    // 2. 上方向键（Up）：移动至上一行的对应列（循环跳转）
-    if key == KEY_UP {
-        let prev_row = if row == 0 {
-            row_count.saturating_sub(1)
-        } else {
-            row - 1
-        };
-        session.grid_selected_index = (prev_row * GRID_COLS + col).min(total.saturating_sub(1));
-        session.refresh_candidate_surface();
-        return Some((true, None));
-    }
-
-    // 3. 右方向键（Right）：在网格候选词中向后移动一项
-    if key == KEY_RIGHT {
-        session.grid_selected_index = (session.grid_selected_index + 1) % total;
-        session.refresh_candidate_surface();
-        return Some((true, None));
-    }
-
-    // 4. 左方向键（Left）：在网格候选词中向前移动一项
-    if key == KEY_LEFT {
-        session.grid_selected_index = if session.grid_selected_index == 0 {
-            total.saturating_sub(1)
-        } else {
-            session.grid_selected_index - 1
-        };
-        session.refresh_candidate_surface();
-        return Some((true, None));
-    }
-
-    // 5. 数字键（1-6，主键盘与小键盘，未按住 Shift）：选取当前行的第 1..=6 个候选词
-    if !session.is_shift_active() {
-        if let Some(digit) = keycode_to_digit(key) {
-            if (1..=6).contains(&digit) {
-                let target_idx = row * GRID_COLS + (digit - 1);
-                if target_idx < total {
-                    return commit_grid_candidate_by_index(session, target_idx, now);
-                }
-            }
-            // 超出范围的数字键（如 7-9 或 0）吞掉，防止穿透污染
-            return Some((true, None));
-        }
-    }
-
-    // 6. 空格键（Space）：将当前高亮选中的网格候选词确认上屏
-    if key == KEY_SPACE {
-        let idx = session.grid_selected_index.min(total.saturating_sub(1));
-        return commit_grid_candidate_by_index(session, idx, now);
-    }
-
-    // 7. ESC 键：折叠大网格并恢复常规单行条形候选框
-    if key == KEY_ESC {
-        session.is_grid_expanded = false;
-        session.grid_selected_index = 0;
-        session.refresh_candidate_surface();
-        return Some((true, None));
+    if let Some(res) = handle_grid_selection_key(session, key, now, total, row) {
+        return res;
     }
 
     None
+}
+
+/// 执行拼音组词按键动作状态流转
+fn apply_composition_action(
+    session: &mut WaylanV2Session,
+    action: KeyProcessAction,
+) -> (bool, Option<String>) {
+    match action {
+        KeyProcessAction::PassThrough => (false, None),
+        KeyProcessAction::Handled => {
+            session.grid_selected_index = 0;
+            let preedit = session.engine.formatted_preedit();
+            session.update_preedit(&preedit);
+            (true, None)
+        }
+        KeyProcessAction::ExpandGrid => {
+            session.is_grid_expanded = true;
+            session.grid_selected_index = session.engine.selected_index;
+            session.refresh_candidate_surface();
+            (true, None)
+        }
+        KeyProcessAction::Commit(committed) => {
+            session.commit_text(&committed);
+            (true, Some(committed))
+        }
+        KeyProcessAction::CommitPartial {
+            committed,
+            remaining_preedit,
+        } => {
+            session.commit_partial(&committed, &remaining_preedit);
+            (true, Some(committed))
+        }
+        KeyProcessAction::Reset => {
+            session.cancel_input();
+            (true, None)
+        }
+    }
 }
 
 /// 处理处于拼音组词状态下的键盘拦截
@@ -160,85 +213,63 @@ pub fn process_composition_key(
         params,
     )?;
 
-    match action {
-        KeyProcessAction::PassThrough => None,
-        KeyProcessAction::Handled => {
-            session.grid_selected_index = 0;
-            let preedit = session.engine.formatted_preedit();
-            session.update_preedit(&preedit);
-            Some((true, None))
-        }
-        KeyProcessAction::ExpandGrid => {
-            session.is_grid_expanded = true;
-            session.grid_selected_index = session.engine.selected_index;
-            session.refresh_candidate_surface();
-            Some((true, None))
-        }
-        KeyProcessAction::Commit(committed) => {
-            session.commit_text(&committed);
-            Some((true, Some(committed)))
-        }
-        KeyProcessAction::CommitPartial {
-            committed,
-            remaining_preedit,
-        } => {
-            session.commit_partial(&committed, &remaining_preedit);
-            Some((true, Some(committed)))
-        }
-        KeyProcessAction::Reset => {
-            session.cancel_input();
-            Some((true, None))
+    if matches!(action, KeyProcessAction::PassThrough) {
+        None
+    } else {
+        Some(apply_composition_action(session, action))
+    }
+}
+
+/// 处理空闲状态下的中文智能标点符号拦截
+fn handle_idle_punctuation(
+    session: &mut WaylanV2Session,
+    key: u32,
+) -> Option<(bool, Option<String>)> {
+    let punct_char = keycode_to_punctuation_with_shift(key, session.is_shift_active())?;
+    let context_buf = session.surrounding_text.as_ref().map(|(text, cursor, _)| {
+        let cursor_idx = (*cursor as usize).min(text.len());
+        let safe_cursor = clamp_char_boundary_floor(text, cursor_idx);
+        let start = safe_cursor.saturating_sub(64);
+        let safe_start = clamp_char_boundary_ceil(text, start);
+        text[safe_start..safe_cursor].to_string()
+    });
+
+    let actions = match context_buf {
+        Some(ref ctx) => session
+            .punctuation_processor
+            .process_punctuation_with_context(punct_char, ctx)?,
+        None => session
+            .punctuation_processor
+            .process_punctuation(punct_char)?,
+    };
+
+    let mut committed_out = None;
+    for action in actions {
+        match action {
+            TextAction::Commit(text) => {
+                session.commit_text(&text);
+                session.punctuation_processor.record_commit(&text);
+                committed_out = Some(text);
+            }
+            TextAction::MoveCursor(offset) => {
+                let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
+                for _ in 0..offset.unsigned_abs() {
+                    session.forward_key_to_seat(0, dir_key, true);
+                    session.forward_key_to_seat(0, dir_key, false);
+                }
+            }
+            _ => {}
         }
     }
+    Some((true, committed_out))
 }
 
 /// 处理输入缓冲区为空时的空闲按键输入（仅拦截中文标点，其余编辑键与数字键保持原生透传）
 pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool, Option<String>)> {
-    // 中文模式下的智能标点符号拦截（含 Shift 组合标点，如 !?$^_()""<>{}:~）
-    if let Some(punct_char) = keycode_to_punctuation_with_shift(key, session.is_shift_active()) {
-        // 优先从 surrounding_text 提取光标前文本作为上下文（至多截取 64 字节并安全对齐 UTF-8 字符边界）
-        let context_buf = session.surrounding_text.as_ref().map(|(text, cursor, _)| {
-            let cursor_idx = (*cursor as usize).min(text.len());
-            let safe_cursor = clamp_char_boundary_floor(text, cursor_idx);
-            let start = safe_cursor.saturating_sub(64);
-            let safe_start = clamp_char_boundary_ceil(text, start);
-            text[safe_start..safe_cursor].to_string()
-        });
-
-        let actions_opt = if let Some(ref ctx) = context_buf {
-            session
-                .punctuation_processor
-                .process_punctuation_with_context(punct_char, ctx)
-        } else {
-            session
-                .punctuation_processor
-                .process_punctuation(punct_char)
-        };
-
-        if let Some(actions) = actions_opt {
-            let mut committed_out = None;
-            for action in actions {
-                match action {
-                    TextAction::Commit(text) => {
-                        session.commit_text(&text);
-                        session.punctuation_processor.record_commit(&text);
-                        committed_out = Some(text);
-                    }
-                    TextAction::MoveCursor(offset) => {
-                        let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
-                        for _ in 0..offset.unsigned_abs() {
-                            session.forward_key_to_seat(0, dir_key, true);
-                            session.forward_key_to_seat(0, dir_key, false);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            return Some((true, committed_out));
-        }
+    if let Some(res) = handle_idle_punctuation(session, key) {
+        return Some(res);
     }
 
-    // 若为未按 Shift 的纯数字键输入，记录数字上下文以便后续触发 3.14 / 12:00 半角标点保护，但按键本身保持原生透传
     if !session.is_shift_active() {
         if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
             let s = digit_ch.to_string();
@@ -246,8 +277,82 @@ pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool
         }
     }
 
-    // 空闲编辑键（回车、退格、删除、空格、Tab、数字等）不拦截，原生透传给焦点应用以支持客户端按键连击与撤销栈
     None
+}
+
+/// 处理 CapsLock 键事件并在有拼音未上屏时提交英文字符
+fn handle_capslock_event(
+    session: &mut WaylanV2Session,
+    key: u32,
+    is_press: bool,
+) -> (bool, Option<String>) {
+    session.repeat_state = None;
+    if is_press {
+        if !session.engine.raw_input().is_empty() {
+            let raw = session.engine.raw_input().to_string();
+            session.commit_text(&raw);
+            session.engine.reset();
+            session.refresh_candidate_surface();
+            session.consumed_keys.record_press(key, false);
+            return (false, Some(raw));
+        }
+        session.consumed_keys.record_press(key, false);
+        (false, None)
+    } else {
+        (session.consumed_keys.take_release(key), None)
+    }
+}
+
+/// 处理按键释放阶段的 Shift/Ctrl 状态机模式切换
+fn handle_key_release_mode_toggle(
+    session: &mut WaylanV2Session,
+    key: u32,
+    toggled_mode: Option<InputMode>,
+) -> (bool, Option<String>) {
+    if session
+        .repeat_state
+        .is_some_and(|(rep_key, _)| rep_key == key)
+    {
+        session.repeat_state = None;
+    }
+    let was_press_consumed = session.consumed_keys.take_release(key);
+    if let Some(new_mode) = toggled_mode {
+        session.mode = new_mode;
+        if let Some(ref zh_flag) = session.shared_is_chinese {
+            zh_flag.store(
+                matches!(new_mode, InputMode::Chinese | InputMode::VMode),
+                Ordering::Release,
+            );
+        }
+        if let Some(ref notify_tx) = session.mode_notify_tx {
+            let _ = notify_tx.try_send(());
+        }
+        let mode_str = match new_mode {
+            InputMode::Chinese => "中文",
+            InputMode::English => "英文",
+            InputMode::VMode => "V模式",
+        };
+        debug!("[Wayland v2] 切换输入模式为：{}", mode_str);
+
+        if new_mode == InputMode::English && !session.engine.raw_input().is_empty() {
+            let raw = session.engine.raw_input().to_string();
+            session.commit_text(&raw);
+            session.engine.reset();
+            return (was_press_consumed, Some(raw));
+        }
+    }
+    (was_press_consumed, None)
+}
+
+/// 根据本次按键消费状态与连击设置更新连击计时器
+fn update_key_repeat(session: &mut WaylanV2Session, key: u32, consumed: bool) {
+    let (rate, delay) = session.repeat_info;
+    if consumed && rate > 0 && delay > 0 && !session.engine.raw_input().is_empty() {
+        let next_fire = Instant::now() + Duration::from_millis(delay.max(50) as u64);
+        session.repeat_state = Some((key, next_fire));
+    } else {
+        session.repeat_state = None;
+    }
 }
 
 /// 处理单个硬件按键事件并返回 (是否被输入法消费, 本次直接上屏文本)
@@ -269,81 +374,21 @@ pub fn process_key_event(
         return (false, None);
     }
 
-    // 当按下 CapsLock 键时：
-    // 若当前输入缓冲区有未完成的拼音，立即提交原始英文字母上屏并重置引擎与候选框；
-    // CapsLock 键本身必须透传给合成器，由合成器切换 XKB 大写锁定位（mods_locked）
     if key == KEY_CAPSLOCK {
-        session.repeat_state = None;
-        return if is_press {
-            if !session.engine.raw_input().is_empty() {
-                let raw = session.engine.raw_input().to_string();
-                session.commit_text(&raw);
-                session.engine.reset();
-                session.refresh_candidate_surface();
-                session.consumed_keys.record_press(key, false);
-                return (false, Some(raw));
-            }
-            session.consumed_keys.record_press(key, false);
-            (false, None)
-        } else {
-            (session.consumed_keys.take_release(key), None)
-        };
+        return handle_capslock_event(session, key, is_press);
     }
 
-    // 1. 优先经由 Shift/Ctrl 防误触状态机判定
     let toggled_mode = session
         .shift_state
         .on_key_event(key, is_press, session.mode);
 
-    // 按键释放阶段：依据该按键按下阶段是否被输入法消费决定是否消费释放事件，确保 Press/Release 严格对称
     if !is_press {
-        if session
-            .repeat_state
-            .is_some_and(|(rep_key, _)| rep_key == key)
-        {
-            session.repeat_state = None;
-        }
-        let was_press_consumed = session.consumed_keys.take_release(key);
-        if let Some(new_mode) = toggled_mode {
-            session.mode = new_mode;
-            if let Some(ref zh_flag) = session.shared_is_chinese {
-                zh_flag.store(
-                    matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                    Ordering::Release,
-                );
-            }
-            if let Some(ref notify_tx) = session.mode_notify_tx {
-                let _ = notify_tx.try_send(());
-            }
-            let mode_str = match new_mode {
-                InputMode::Chinese => "中文",
-                InputMode::English => "英文",
-                InputMode::VMode => "V模式",
-            };
-            debug!("[Wayland v2] 切换输入模式为：{}", mode_str);
-
-            if new_mode == InputMode::English && !session.engine.raw_input().is_empty() {
-                let raw = session.engine.raw_input().to_string();
-                session.commit_text(&raw);
-                session.engine.reset();
-                return (was_press_consumed, Some(raw));
-            }
-        }
-        return (was_press_consumed, None);
+        return handle_key_release_mode_toggle(session, key, toggled_mode);
     }
 
     let result = process_key_press_inner(session, key);
     session.consumed_keys.record_press(key, result.0);
-
-    // 若按键被输入法内部消费（如退格、方向键、拼音字母）且合成器开启了长按连击（rate > 0），启动连击计时
-    let (rate, delay) = session.repeat_info;
-    if result.0 && rate > 0 && delay > 0 && !session.engine.raw_input().is_empty() {
-        let next_fire = Instant::now() + Duration::from_millis(delay.max(50) as u64);
-        session.repeat_state = Some((key, next_fire));
-    } else {
-        session.repeat_state = None;
-    }
-
+    update_key_repeat(session, key, result.0);
     result
 }
 

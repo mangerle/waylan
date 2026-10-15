@@ -24,6 +24,35 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 
 use crate::session_v2::WaylanV2Session;
 
+/// 处理输入法激活状态确认（Done 事务）
+fn handle_v2_done(
+    state: &mut WaylanV2Session,
+    proxy: &ZwpInputMethodV2,
+    qhandle: &QueueHandle<WaylanV2Session>,
+) {
+    let now_active = state.apply_done_state();
+    if now_active {
+        if state.keyboard_grab.is_none() {
+            let grab = proxy.grab_keyboard(qhandle, ());
+            state.keyboard_grab = Some(grab);
+        }
+    } else if let Some(grab) = state.keyboard_grab.take() {
+        grab.release();
+    }
+}
+
+/// 处理输入法 v2 协议不可用时的安全回退与资源释放
+fn handle_v2_unavailable(state: &mut WaylanV2Session, proxy: &ZwpInputMethodV2) {
+    info!("[Wayland v2] 输入法 v2 协议不可用，正在自动降级兼容模式。");
+    state.pending_active = false;
+    state.is_active = false;
+    state.is_unavailable = true;
+    if let Some(grab) = state.keyboard_grab.take() {
+        grab.release();
+    }
+    proxy.destroy();
+}
+
 // 为 zwp_input_method_v2 实现事件分发
 impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
     fn event(
@@ -63,27 +92,8 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
                     WEnum::Value(ContentPurpose::Password | ContentPurpose::Pin)
                 );
             }
-            V2Event::Done => {
-                let now_active = state.apply_done_state();
-                if now_active {
-                    if state.keyboard_grab.is_none() {
-                        let grab = proxy.grab_keyboard(qhandle, ());
-                        state.keyboard_grab = Some(grab);
-                    }
-                } else if let Some(grab) = state.keyboard_grab.take() {
-                    grab.release();
-                }
-            }
-            V2Event::Unavailable => {
-                info!("[Wayland v2] 输入法 v2 协议不可用，正在自动降级兼容模式。");
-                state.pending_active = false;
-                state.is_active = false;
-                state.is_unavailable = true;
-                if let Some(grab) = state.keyboard_grab.take() {
-                    grab.release();
-                }
-                proxy.destroy();
-            }
+            V2Event::Done => handle_v2_done(state, proxy, qhandle),
+            V2Event::Unavailable => handle_v2_unavailable(state, proxy),
             _ => {}
         }
     }
@@ -122,6 +132,78 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
 }
 
 // 为 zwp_input_method_keyboard_grab_v2 实现事件分发
+/// 处理键盘抓取 keymap 映射配置同步
+fn handle_grab_keymap(
+    state: &mut WaylanV2Session,
+    format: WEnum<wayland_client::protocol::wl_keyboard::KeymapFormat>,
+    fd: &std::os::fd::OwnedFd,
+    size: u32,
+) {
+    debug!(
+        "[Wayland v2 键盘抓取] 收到键盘映射配置: format={:?}, 大小={} 字节",
+        format, size
+    );
+    if let Ok(mut file) = fd.try_clone().map(File::from) {
+        let read_len = (size as usize).min(1024 * 1024);
+        let mut buf = vec![0u8; read_len];
+        let read_ok = file.read_exact(&mut buf).is_ok();
+        let _ = file.seek(SeekFrom::Start(0));
+        if read_ok {
+            let text = String::from_utf8_lossy(&buf);
+            state
+                .keymap_layout
+                .update_from_xkb_text(text.trim_end_matches('\0'));
+            debug!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
+        }
+    }
+    if let Some(ref vk) = state.virtual_keyboard {
+        vk.keymap(u32::from(format), fd.as_fd(), size);
+        state.has_virtual_keymap = true;
+    }
+}
+
+/// 处理键盘抓取修饰键状态同步与 CapsLock 通知
+fn handle_grab_modifiers(
+    state: &mut WaylanV2Session,
+    mods_depressed: u32,
+    mods_latched: u32,
+    mods_locked: u32,
+    group: u32,
+) {
+    let prev_caps = state.is_caps_locked();
+    state.mods_depressed = mods_depressed;
+    state.mods_latched = mods_latched;
+    state.mods_locked = mods_locked;
+    state.mods_group = group;
+    if state.has_virtual_keymap {
+        if let Some(ref vk) = state.virtual_keyboard {
+            vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
+        }
+    }
+    let curr_caps = state.is_caps_locked();
+    if prev_caps != curr_caps {
+        if let Some(ref caps_flag) = state.shared_is_caps_locked {
+            caps_flag.store(curr_caps, Ordering::Release);
+        }
+        if let Some(ref notify_tx) = state.mode_notify_tx {
+            let _ = notify_tx.try_send(());
+        }
+        debug!(
+            "[Wayland v2] CapsLock 大写锁定状态变更: {}",
+            if curr_caps {
+                "开启大写"
+            } else {
+                "解除大写"
+            }
+        );
+    }
+    debug!(
+        "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}, latched={}, locked={}, group={}",
+        mods_depressed, mods_latched, mods_locked, group
+    );
+}
+
+// 为 zwp_input_method_keyboard_grab_v2 实现事件分发
 impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
     fn event(
         state: &mut Self,
@@ -134,30 +216,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
         state.sync_atomic_state();
         match event {
             GrabEvent::Keymap { format, fd, size } => {
-                debug!(
-                    "[Wayland v2 键盘抓取] 收到键盘映射配置: format={:?}, 大小={} 字节",
-                    format, size
-                );
-                // 尝试从 fd 读取 XKB keymap 文本并动态更新键盘字符映射以适配非 QWERTY 布局
-                if let Ok(mut file) = fd.try_clone().map(File::from) {
-                    let read_len = (size as usize).min(1024 * 1024);
-                    let mut buf = vec![0u8; read_len];
-                    let read_ok = file.read_exact(&mut buf).is_ok();
-                    let _ = file.seek(SeekFrom::Start(0));
-                    if read_ok {
-                        let text = String::from_utf8_lossy(&buf);
-                        state
-                            .keymap_layout
-                            .update_from_xkb_text(text.trim_end_matches('\0'));
-                        debug!(
-                            "[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。"
-                        );
-                    }
-                }
-                if let Some(ref vk) = state.virtual_keyboard {
-                    vk.keymap(u32::from(format), fd.as_fd(), size);
-                    state.has_virtual_keymap = true;
-                }
+                handle_grab_keymap(state, format, &fd, size);
             }
             GrabEvent::Key {
                 serial: _,
@@ -178,37 +237,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                 mods_locked,
                 group,
             } => {
-                let prev_caps = state.is_caps_locked();
-                state.mods_depressed = mods_depressed;
-                state.mods_latched = mods_latched;
-                state.mods_locked = mods_locked;
-                state.mods_group = group;
-                if state.has_virtual_keymap {
-                    if let Some(ref vk) = state.virtual_keyboard {
-                        vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
-                    }
-                }
-                let curr_caps = state.is_caps_locked();
-                if prev_caps != curr_caps {
-                    if let Some(ref caps_flag) = state.shared_is_caps_locked {
-                        caps_flag.store(curr_caps, Ordering::Release);
-                    }
-                    if let Some(ref notify_tx) = state.mode_notify_tx {
-                        let _ = notify_tx.try_send(());
-                    }
-                    debug!(
-                        "[Wayland v2] CapsLock 大写锁定状态变更: {}",
-                        if curr_caps {
-                            "开启大写"
-                        } else {
-                            "解除大写"
-                        }
-                    );
-                }
-                debug!(
-                    "[Wayland v2 键盘抓取] 收到修饰键变更: depressed={}, latched={}, locked={}, group={}",
-                    mods_depressed, mods_latched, mods_locked, group
-                );
+                handle_grab_modifiers(state, mods_depressed, mods_latched, mods_locked, group);
             }
             GrabEvent::RepeatInfo { rate, delay } => {
                 state.repeat_info = (rate, delay);
@@ -218,6 +247,30 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                 );
             }
             _ => {}
+        }
+    }
+}
+
+/// 处理鼠标点击选中特定索引的候选词
+fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let select_res = if state.is_grid_expanded {
+        state.engine.select_candidate_from_all(idx, now)
+    } else {
+        state.engine.select_candidate(idx, now)
+    };
+    if let Some((commit_text, remaining_len)) = select_res {
+        state.is_grid_expanded = false;
+        state.grid_selected_index = 0;
+        state.punctuation_processor.record_commit(&commit_text);
+        if remaining_len == 0 {
+            state.commit_text(&commit_text);
+        } else {
+            let formatted = state.engine.formatted_preedit();
+            state.commit_partial(&commit_text, &formatted);
         }
     }
 }
@@ -243,28 +296,7 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
             }
             state.refresh_candidate_surface();
         }
-        CandidateHitTarget::Select(idx) => {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let select_res = if state.is_grid_expanded {
-                state.engine.select_candidate_from_all(idx, now)
-            } else {
-                state.engine.select_candidate(idx, now)
-            };
-            if let Some((commit_text, remaining_len)) = select_res {
-                state.is_grid_expanded = false;
-                state.grid_selected_index = 0;
-                state.punctuation_processor.record_commit(&commit_text);
-                if remaining_len == 0 {
-                    state.commit_text(&commit_text);
-                } else {
-                    let formatted = state.engine.formatted_preedit();
-                    state.commit_partial(&commit_text, &formatted);
-                }
-            }
-        }
+        CandidateHitTarget::Select(idx) => handle_pointer_select_candidate(state, idx),
         CandidateHitTarget::NextPage => {
             state.engine.next_page();
             state.refresh_candidate_surface();

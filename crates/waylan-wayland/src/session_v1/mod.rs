@@ -272,6 +272,56 @@ impl WaylanV1Session {
         self.surface_manager
             .hide_wayland_surface(self.popup_wl_surface.as_ref(), &mut self.active_buffer);
     }
+
+    /// 重置会话的修饰键位图、按键消费记录及算法引擎状态
+    fn reset_input_state(&mut self) {
+        self.mods_depressed = 0;
+        self.phys_mods = 0;
+        self.consumed_keys.clear();
+        self.shift_sm.reset();
+        self.punctuation_processor.reset();
+        self.engine.reset();
+    }
+
+    /// 处理 V1 协议下的会话激活与键盘抓取建立
+    fn handle_v1_activate(
+        &mut self,
+        context: ZwpInputMethodContextV1,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        debug!("[微澜] 收到激活事件：用户已进入文本输入框。");
+        self.sync_external_state();
+        if let Some(old_kb) = self.grabbed_keyboard.take() {
+            if old_kb.version() >= 3 {
+                old_kb.release();
+            }
+        }
+        if let Some(old_ctx) = self.active_context.take() {
+            old_ctx.destroy();
+        }
+        let keyboard = context.grab_keyboard(qhandle, ());
+        self.grabbed_keyboard = Some(keyboard);
+        self.active_context = Some(context);
+        self.reset_input_state();
+    }
+
+    /// 处理 V1 协议下的会话失焦与资源回收
+    fn handle_v1_deactivate(&mut self, context: &ZwpInputMethodContextV1) {
+        debug!("[微澜] 收到失焦事件：用户已离开文本输入框。");
+        if self.active_context.as_ref() == Some(context) {
+            if let Some(active_ctx) = self.active_context.take() {
+                active_ctx.destroy();
+            }
+            if let Some(old_kb) = self.grabbed_keyboard.take() {
+                if old_kb.version() >= 3 {
+                    old_kb.release();
+                }
+            }
+            self.reset_input_state();
+            self.hide_candidate_surface();
+            let _ = self.engine.maybe_compact_user_dict();
+        }
+    }
 }
 
 // 为 zwp_input_method_v1 实现事件分发
@@ -285,50 +335,8 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
         qhandle: &QueueHandle<Self>,
     ) {
         match event {
-            MethodEvent::Activate { id } => {
-                debug!("[微澜] 收到焦点激活事件：用户已进入文本输入框。");
-                state.sync_external_state();
-                if let Some(old_kb) = state.grabbed_keyboard.take() {
-                    if old_kb.version() >= 3 {
-                        old_kb.release();
-                    }
-                }
-                if let Some(old_ctx) = state.active_context.take() {
-                    old_ctx.destroy();
-                }
-                // 捕获硬件键盘输入
-                let keyboard = id.grab_keyboard(qhandle, ());
-                state.grabbed_keyboard = Some(keyboard);
-                state.active_context = Some(id);
-                state.mods_depressed = 0;
-                state.phys_mods = 0;
-                state.consumed_keys.clear();
-                state.shift_sm.reset();
-                state.punctuation_processor.reset();
-                state.engine.reset();
-            }
-            MethodEvent::Deactivate { context } => {
-                debug!("[微澜] 收到失焦事件：用户已离开文本输入框。");
-                let is_current = state.active_context.as_ref() == Some(&context);
-                if is_current {
-                    if let Some(active_ctx) = state.active_context.take() {
-                        active_ctx.destroy();
-                    }
-                    if let Some(old_kb) = state.grabbed_keyboard.take() {
-                        if old_kb.version() >= 3 {
-                            old_kb.release();
-                        }
-                    }
-                    state.mods_depressed = 0;
-                    state.phys_mods = 0;
-                    state.consumed_keys.clear();
-                    state.shift_sm.reset();
-                    state.punctuation_processor.reset();
-                    state.engine.reset();
-                    state.hide_candidate_surface();
-                    let _ = state.engine.maybe_compact_user_dict();
-                }
-            }
+            MethodEvent::Activate { id } => state.handle_v1_activate(id, qhandle),
+            MethodEvent::Deactivate { context } => state.handle_v1_deactivate(&context),
         }
     }
 }
