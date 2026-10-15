@@ -82,8 +82,11 @@ impl Default for VoiceSessionController {
 }
 
 impl VoiceSessionController {
-    /// 创建会话控制器并拉起常驻工作线程
-    pub fn new() -> Self {
+    /// 尝试创建会话控制器并拉起常驻工作线程
+    ///
+    /// # Errors
+    /// 当系统底层线程资源耗尽或创建工作线程失败时返回错误。
+    pub fn try_new() -> Result<Self, VoiceError> {
         let is_active = Arc::new(AtomicBool::new(false));
         let (cmd_tx, cmd_rx) = sync_channel::<WorkerCommand>(16);
 
@@ -93,18 +96,41 @@ impl VoiceSessionController {
             .spawn(move || {
                 Self::worker_main(cmd_rx, active_clone);
             })
-            .expect("创建后台常驻语音工作线程必须成功");
+            .map_err(|e| VoiceError::WorkerThreadSpawnFailed(e.to_string()))?;
 
-        Self {
+        Ok(Self {
             is_active,
             cmd_tx,
             worker_handle: Some(handle),
+        })
+    }
+
+    /// 创建会话控制器并拉起常驻工作线程
+    ///
+    /// # 容错降级
+    /// 若系统资源紧张导致后台工作线程派生失败，记录错误日志并安全降级为禁用语音功能，
+    /// 保证输入法核心守护进程不会意外崩溃。
+    pub fn new() -> Self {
+        match Self::try_new() {
+            Ok(controller) => controller,
+            Err(e) => {
+                log::error!(
+                    "[微澜语音] 创建后台常驻语音工作线程失败，已安全降级为禁用语音功能: {}",
+                    e
+                );
+                let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
+                Self {
+                    is_active: Arc::new(AtomicBool::new(false)),
+                    cmd_tx,
+                    worker_handle: None,
+                }
+            }
         }
     }
 
     /// 当前是否正处于录音识别中
     pub fn is_recording(&self) -> bool {
-        self.is_active.load(Ordering::Acquire)
+        self.worker_handle.is_some() && self.is_active.load(Ordering::Acquire)
     }
 
     /// 启动语音录制与识别会话
@@ -117,6 +143,13 @@ impl VoiceSessionController {
         options: VoiceSessionOptions,
         event_tx: SyncSender<VoiceEvent>,
     ) -> Result<(), VoiceError> {
+        if self.worker_handle.is_none() {
+            log::warn!("[微澜语音] 语音后台工作线程未就绪（已被安全降级禁用），忽略启动录音请求");
+            return Err(VoiceError::WorkerThreadSpawnFailed(
+                "语音后台工作线程未就绪（已被安全降级禁用）".to_string(),
+            ));
+        }
+
         if self.is_recording() {
             warn!("[语音会话] 录音已在进行中，忽略重复启动请求");
             return Ok(());
@@ -139,7 +172,7 @@ impl VoiceSessionController {
 
     /// 停止录音并请求最终提交识别结果
     pub fn stop_and_commit(&mut self) {
-        if self.is_recording() {
+        if self.worker_handle.is_some() && self.is_recording() {
             self.is_active.store(false, Ordering::Release);
             let _ = self.cmd_tx.send(WorkerCommand::StopAndCommit);
         }
@@ -147,7 +180,7 @@ impl VoiceSessionController {
 
     /// 取消当前录音并丢弃未完成的识别
     pub fn cancel(&mut self) {
-        if self.is_recording() {
+        if self.worker_handle.is_some() && self.is_recording() {
             self.is_active.store(false, Ordering::Release);
             let _ = self.cmd_tx.send(WorkerCommand::Cancel);
         }
@@ -482,9 +515,11 @@ impl VoiceSessionController {
 impl Drop for VoiceSessionController {
     fn drop(&mut self) {
         self.is_active.store(false, Ordering::Release);
-        let _ = self.cmd_tx.send(WorkerCommand::Shutdown);
-        if let Some(handle) = self.worker_handle.take() {
-            let _ = handle.join();
+        if self.worker_handle.is_some() {
+            let _ = self.cmd_tx.send(WorkerCommand::Shutdown);
+            if let Some(handle) = self.worker_handle.take() {
+                let _ = handle.join();
+            }
         }
     }
 }
@@ -493,6 +528,34 @@ impl Drop for VoiceSessionController {
 mod tests {
     use super::*;
     use crate::recognizer::MockVoiceRecognizer;
+
+    #[test]
+    fn test_voice_session_controller_degraded_mode() {
+        // 手动构造一个工作线程派生失败时的降级控制器实例
+        let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
+        let mut controller = VoiceSessionController {
+            is_active: Arc::new(AtomicBool::new(false)),
+            cmd_tx,
+            worker_handle: None,
+        };
+
+        // 验证处于降级模式时的各项接口安全表现
+        assert!(
+            !controller.is_recording(),
+            "降级状态下录音状态应始终为 false"
+        );
+
+        let (event_tx, _event_rx) = sync_channel::<VoiceEvent>(4);
+        let start_res = controller.start(VoiceSessionOptions::default(), event_tx);
+        assert!(
+            start_res.is_err(),
+            "后台线程缺失时 start 应返回安全降级错误"
+        );
+
+        // 验证 stop 和 cancel 操作在降级模式下安全无副作用、不引发 panic
+        controller.stop_and_commit();
+        controller.cancel();
+    }
 
     #[test]
     fn test_push_pre_speech_silence_capacity_limit() {

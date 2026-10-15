@@ -32,4 +32,8 @@ pub enum VoiceError {
         engine_type: String,
         message: String,
     },
+
+    /// 创建语音后台常驻工作线程失败
+    #[error("创建语音后台工作线程失败，原因: {0}")]
+    WorkerThreadSpawnFailed(String),
 }
