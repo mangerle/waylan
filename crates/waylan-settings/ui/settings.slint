@@ -114,11 +114,11 @@ export component SettingsWindow inherits Window {
     in property <string> local_model_status: "已就绪: Paraformer 流式模型、Silero VAD 与 CT-Transformer 标点模型";
     in-out property <bool> high_pass_filter: true;
     in-out property <bool> auto_gain_control: true;
-    in property <[string]> asr_model_names: ["系统内置: 阿里 Paraformer (中文流式 int8)"];
+    in property <[string]> asr_model_names: ["[系统内置] 阿里 Paraformer (中文流式 int8)"];
     in-out property <int> asr_model_index: 0;
-    in property <[string]> vad_model_names: ["系统内置: Silero VAD (神经网络模型)", "纯能量门限 (零模型纯数学)"];
+    in property <[string]> vad_model_names: ["[系统内置] Silero VAD (神经网络模型)", "[纯能量门限] 零模型纯数学 (RMS)"];
     in-out property <int> vad_model_index: 0;
-    in property <[string]> punct_model_names: ["系统内置: CT-Transformer 深度标点预测", "基础句末规则兜底 (无模型)"];
+    in property <[string]> punct_model_names: ["[系统内置] CT-Transformer 深度标点预测 (int8)", "[规则兜底] 基础句末规则兜底 (无模型)"];
     in-out property <int> punct_model_index: 0;
     in property <[string]> ns_model_names: ["[内置轻量] RNNoise 智能降噪 (零资源占用)", "[内置深度] DeepFilterNet3 深度消音 (强力消除机械键盘)", "[直通透传] 关闭人声降噪 (Bypass)"];
     in-out property <int> ns_model_index: 0;

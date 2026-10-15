@@ -514,17 +514,30 @@ impl PunctuationRestorer {
         Self { model }
     }
 
-    /// 尝试定位并加载标点模型
+    /// 尝试定位并加载标点模型（严格根据用户在设置界面的选择加载）
     fn try_create_model(custom_path: Option<&str>) -> Option<OfflinePunctuation> {
-        let model_path = if let Some(p) = custom_path.filter(|s| !s.trim().is_empty()) {
-            let pb = PathBuf::from(p);
-            if pb.is_file() {
-                Some(pb)
-            } else {
-                Self::resolve_punct_model_path()
+        let model_path = match custom_path.filter(|s| !s.trim().is_empty()) {
+            Some("__rule_only__") => {
+                info!("[标点还原] 用户已在设置中心选择纯规则兜底，禁用神经网络标点模型");
+                return None;
             }
-        } else {
-            Self::resolve_punct_model_path()
+            Some(path) => {
+                let pb = PathBuf::from(path);
+                if pb.is_file() {
+                    info!("[标点还原] 正在加载用户指定的标点模型: {:?}", pb);
+                    Some(pb)
+                } else {
+                    warn!(
+                        "[标点还原] 用户指定的标点模型文件不存在: {:?}，正在回退至系统内置模型",
+                        pb
+                    );
+                    Self::resolve_builtin_punct_model_path()
+                }
+            }
+            None => {
+                // 默认使用官方系统内置模型
+                Self::resolve_builtin_punct_model_path()
+            }
         }?;
         info!("[标点还原] 检测到本地标点模型文件: {:?}", model_path);
         let mut config = OfflinePunctuationConfig::default();
@@ -544,17 +557,23 @@ impl PunctuationRestorer {
         }
     }
 
-    /// 定位本地标点模型权重文件
-    fn resolve_punct_model_path() -> Option<PathBuf> {
+    /// 定位系统官方内置标点模型权重文件
+    fn resolve_builtin_punct_model_path() -> Option<PathBuf> {
+        let filename = "punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.onnx";
         let mut candidates = Vec::new();
+        candidates.push(PathBuf::from("/usr/share/waylan/models/punct").join(filename));
+        candidates.push(PathBuf::from("models/punct").join(filename));
         if let Ok(home) = std::env::var("HOME") {
-            candidates
-                .push(PathBuf::from(&home).join(".local/share/waylan/models/punct/model.onnx"));
-            candidates.push(PathBuf::from(&home).join(".local/share/waylan/models/punct/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/model.onnx"));
+            candidates.push(
+                PathBuf::from(&home)
+                    .join(".local/share/waylan/models/punct")
+                    .join(filename),
+            );
         }
+        // 向前兼容旧版全精度文件名
         candidates.push(PathBuf::from("/usr/share/waylan/models/punct/model.onnx"));
-        candidates.push(PathBuf::from("/usr/share/waylan/models/punct/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/model.onnx"));
         candidates.push(PathBuf::from("models/punct/model.onnx"));
+
         candidates.into_iter().find(|p| p.is_file())
     }
 
@@ -682,5 +701,15 @@ mod tests {
             "标点预测应生成规范标点: {}",
             result
         );
+    }
+
+    #[test]
+    fn test_punctuation_restorer_options() {
+        // 1. 用户选择规则兜底
+        let rule_restorer = PunctuationRestorer::with_custom_path(Some("__rule_only__"));
+        assert_eq!(rule_restorer.restore("今天天气真好"), "今天天气真好。");
+
+        // 2. 空文本处理
+        assert_eq!(rule_restorer.restore("   "), "");
     }
 }

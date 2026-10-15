@@ -52,7 +52,7 @@ pub fn open_user_models_directory() -> bool {
 /// 扫描并列出所有可用的 ASR 识别模型（内置系统模型 + 用户导入的子文件夹）
 pub fn list_asr_models() -> Vec<ModelItem> {
     let mut items = vec![ModelItem {
-        display_name: "[内置] 阿里 Paraformer (中文流式 int8)".to_string(),
+        display_name: "[系统内置] 阿里 Paraformer (中文流式 int8)".to_string(),
         path: None,
     }];
 
@@ -87,11 +87,11 @@ pub fn list_asr_models() -> Vec<ModelItem> {
 pub fn list_vad_models() -> Vec<ModelItem> {
     let mut items = vec![
         ModelItem {
-            display_name: "[内置] Silero VAD (神经网络模型)".to_string(),
+            display_name: "[系统内置] Silero VAD (神经网络模型)".to_string(),
             path: None,
         },
         ModelItem {
-            display_name: "[算法] 纯能量门限 (零模型纯数学)".to_string(),
+            display_name: "[纯能量门限] 零模型纯数学 (RMS)".to_string(),
             path: Some("__energy__".to_string()),
         },
     ];
@@ -127,11 +127,11 @@ pub fn list_vad_models() -> Vec<ModelItem> {
 pub fn list_punct_models() -> Vec<ModelItem> {
     let mut items = vec![
         ModelItem {
-            display_name: "[内置] CT-Transformer 深度标点预测".to_string(),
+            display_name: "[系统内置] CT-Transformer 深度标点预测 (int8)".to_string(),
             path: None,
         },
         ModelItem {
-            display_name: "[规则] 基础句末规则兜底 (无模型)".to_string(),
+            display_name: "[规则兜底] 基础句末规则兜底 (无模型)".to_string(),
             path: Some("__rule_only__".to_string()),
         },
     ];
@@ -148,8 +148,11 @@ pub fn list_punct_models() -> Vec<ModelItem> {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    if file_name == "model.onnx" {
-                        continue;
+                    if file_name == "punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.onnx"
+                        || file_name == "model.onnx"
+                        || file_name == "model.int8.onnx"
+                    {
+                        continue; // 与官方内置同名，保留内置项即可
                     }
                     items.push(ModelItem {
                         display_name: format!("[用户导入] {}", file_name),
