@@ -1,5 +1,11 @@
+//! 候选框透明悬浮表面与渲染管线模块
+//!
+//! 负责 Wayland 候选框图层位置计算、多缓冲共享内存管理与矢量位图提交。
+
+pub mod cursor_rect;
+pub mod shm_slot;
+
 use log::{debug, warn};
-use memmap2::MmapMut;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::AsFd;
@@ -13,111 +19,8 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Dispatch, QueueHandle};
 
-/// 候选框共享内存持久槽位（复用匿名文件描述符、预分配内存空间、持久映射与 Wayland 共享内存池）
-pub struct ShmSlot {
-    /// 匿名共享内存文件
-    pub file: File,
-    /// 当前已向内核申请的文件容量（字节）
-    pub capacity: usize,
-    /// 标记当前槽位的缓冲区是否正被合成器读取占用
-    pub is_busy: bool,
-    /// 持久复用的 Wayland 共享内存池及其当前在合成器侧映射的字节大小（消除每次按键重复 mmap/munmap）
-    pub pool: Option<(WlShmPool, usize)>,
-    /// 内存映射句柄（直接写入共享内存，消除通过 file.seek 与 file.write_all 的重复用户态到内核态拷贝）
-    pub mmap: Option<MmapMut>,
-}
-
-impl ShmSlot {
-    /// 创建带有指定初始容量的共享内存槽位
-    pub fn new(capacity: usize) -> std::io::Result<Self> {
-        let file = CandidateSurfaceManager::create_shm_fd(capacity)?;
-        // SAFETY: 刚创建的匿名文件尚未与其他线程或进程共享，创建映射是安全的
-        let mmap = unsafe { MmapMut::map_mut(&file).ok() };
-        Ok(Self {
-            file,
-            capacity,
-            is_busy: false,
-            pool: None,
-            mmap,
-        })
-    }
-
-    /// 确保文件容量至少达到目标字节数（容量不足时按 2 倍扩容并重新映射）
-    pub fn ensure_capacity(&mut self, required_bytes: usize) -> std::io::Result<()> {
-        if self.capacity < required_bytes {
-            let new_cap = required_bytes
-                .max(self.capacity.saturating_mul(2))
-                .max(64 * 1024);
-            self.mmap = None;
-            self.file.set_len(new_cap as u64)?;
-            self.capacity = new_cap;
-            self.mmap = unsafe { MmapMut::map_mut(&self.file).ok() };
-        } else if self.mmap.is_none() {
-            self.mmap = unsafe { MmapMut::map_mut(&self.file).ok() };
-        }
-        Ok(())
-    }
-}
-
-/// 焦点应用中的光标位置矩形 (Cursor Rectangle)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CursorRect {
-    /// 焦点光标相对窗口左上角的 X 坐标
-    pub x: i32,
-    /// 焦点光标相对窗口左上角的 Y 坐标
-    pub y: i32,
-    /// 光标宽度（像素）
-    pub width: i32,
-    /// 光标高度（像素，通常为字符行高，如 18~24px）
-    pub height: i32,
-}
-
-impl CursorRect {
-    pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    /// 计算输入法候选框的最佳悬浮锚定坐标（优先悬浮在光标正下方，留出 4px 间隙）
-    pub fn compute_popup_position(
-        &self,
-        popup_width: u32,
-        popup_height: u32,
-        screen_height: i32,
-    ) -> (i32, i32) {
-        self.compute_popup_position_constrained(popup_width, popup_height, 0, screen_height)
-    }
-
-    /// 在指定屏幕宽度与高度约束下计算候选框悬浮坐标（自动执行水平右边缘防溢出平移与垂直下边缘向上翻转）
-    pub fn compute_popup_position_constrained(
-        &self,
-        popup_width: u32,
-        popup_height: u32,
-        screen_width: i32,
-        screen_height: i32,
-    ) -> (i32, i32) {
-        let popup_w = popup_width as i32;
-        let popup_h = popup_height as i32;
-
-        let mut target_y = self.y + self.height + 4;
-        // 如果超出屏幕下方，智能翻转至光标上方，防止遮挡文字
-        if screen_height > 0 && (target_y + popup_h) > screen_height {
-            target_y = (self.y - popup_h - 4).max(0);
-        }
-
-        let mut target_x = self.x;
-        // 如果超出屏幕右边缘，自动向左平移留出 4px 安全边距，防止候选框被屏幕边缘截断
-        if screen_width > 0 && (target_x + popup_w) > screen_width {
-            target_x = (screen_width - popup_w - 4).max(0);
-        }
-
-        (target_x, target_y)
-    }
-}
+pub use cursor_rect::CursorRect;
+pub use shm_slot::{create_shm_fd, ShmSlot};
 
 /// 候选框透明悬浮图层管理器
 pub struct CandidateSurfaceManager {
@@ -385,18 +288,20 @@ impl CandidateSurfaceManager {
             return None;
         }
 
+        // 1. 调用矢量渲染器绘制候选框位图
         let pixmap = self.renderer.render(state)?;
         let width = pixmap.width();
         let height = pixmap.height();
         self.on_input_active(width, height);
 
-        // 1. 计算当前位图所需的字节数
-        let required_bytes = pixmap.data().len();
+        let required_bytes = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
 
-        // 2. 轮换至下一个空闲持久化槽位（双缓冲交替，严格检查合成器已 release 的空闲槽位）
+        // 2. 轮转选取空闲的共享内存槽位（优先选取非 busy 的槽位）
         let mut available_slot = None;
-        for offset in 1..=self.shm_slots.len() {
-            let candidate = (self.current_slot + offset) % self.shm_slots.len();
+        for i in 0..self.shm_slots.len() {
+            let candidate = (self.current_slot + 1 + i) % self.shm_slots.len();
             if let Some(ref slot) = self.shm_slots[candidate] {
                 if !slot.is_busy {
                     available_slot = Some(candidate);
@@ -472,27 +377,15 @@ impl CandidateSurfaceManager {
         Some(())
     }
 
-    /// 将 RGBA/BGRA 像素位图写入匿名内存映射文件（用于跨进程传递给 Wayland 合成器）
-    /// 在 Linux 环境优先使用纯内存文件描述符 (memfd_create)，失败时平滑降级至 tempfile
+    /// 创建匿名共享内存文件（委托至 shm_slot 模块）
+    ///
+    /// # Errors
+    /// 当创建或调整文件大小失败时返回系统 I/O 错误。
     pub fn create_shm_fd(size: usize) -> std::io::Result<File> {
-        #[cfg(target_os = "linux")]
-        {
-            use rustix::fs::{memfd_create, MemfdFlags};
-            if let Ok(fd) = memfd_create(
-                "waylan-candidate-shm",
-                MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
-            ) {
-                let file = File::from(fd);
-                file.set_len(size as u64)?;
-                return Ok(file);
-            }
-        }
-        let file = tempfile::tempfile()?;
-        file.set_len(size as u64)?;
-        Ok(file)
+        shm_slot::create_shm_fd(size)
     }
 }
 
 #[cfg(test)]
-#[path = "surface_tests.rs"]
+#[path = "../surface_tests.rs"]
 mod tests;
