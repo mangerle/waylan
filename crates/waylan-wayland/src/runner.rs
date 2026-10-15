@@ -1,5 +1,4 @@
-use std::error::Error;
-use std::io::{self, ErrorKind};
+use std::io::ErrorKind;
 use std::sync::atomic::Ordering;
 
 use log::{info, warn};
@@ -18,13 +17,17 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     Anchor, KeyboardInteractivity,
 };
 
+use crate::error::WaylandRunnerError;
 use crate::protocol_v1::input_method_v1::zwp_input_method_v1::ZwpInputMethodV1;
 use crate::protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
 use crate::session_v1::WaylanV1Session;
 use crate::session_v2::WaylanV2Session;
 
 /// 启动并运行 Wayland V1 输入法事件循环（使用已初始化的会话实例）
-pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn Error>> {
+///
+/// # Errors
+/// 当连接 Wayland 合成器失败、缺少必要全局协议或事件队列派发异常时返回对应的细粒度错误。
+pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRunnerError> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut event_queue) = registry_queue_init(&conn)?;
     let qh = event_queue.handle();
@@ -38,7 +41,10 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn E
     }
 
     let Some(_global_info) = im_global else {
-        return Err("当前 Wayland 合成器未暴露 zwp_input_method_v1 接口".into());
+        return Err(WaylandRunnerError::UnsupportedProtocol {
+            interface: "zwp_input_method_v1",
+            reason: "合成器全局注册表中未声明该接口".to_string(),
+        });
     };
 
     let _input_method: ZwpInputMethodV1 = globals.bind(&qh, 1..=1, ())?;
@@ -146,9 +152,8 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn E
                             .revents()
                             .intersects(PollFlags::IN | PollFlags::ERR)
                         {
-                            if let Some(ref fd) = wakeup_fd {
-                                let mut buf = [0u8; 8];
-                                while rustix::io::read(&**fd, &mut buf).is_ok() {}
+                            if let Some(ref wakeup) = session.loop_wakeup {
+                                wakeup.drain();
                             }
                             session.sync_external_state();
                         }
@@ -181,9 +186,12 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn E
 }
 
 /// 启动并运行现代 Wayland V2 输入法事件循环（若协议不可用或发生错误，返回错误同时移交 session 实例以便降级）
+///
+/// # Errors
+/// 当连接 Wayland 合成器失败、缺少必需全局协议或事件队列异常时返回错误及当前会话实例。
 pub fn run_session_v2_loop_fallible(
     mut session: WaylanV2Session,
-) -> Result<(), (Box<dyn Error>, Box<WaylanV2Session>)> {
+) -> Result<(), (WaylandRunnerError, Box<WaylanV2Session>)> {
     let conn = match Connection::connect_to_env() {
         Ok(c) => c,
         Err(e) => return Err((e.into(), Box::new(session))),
@@ -196,11 +204,27 @@ pub fn run_session_v2_loop_fallible(
 
     let seat: WlSeat = match globals.bind(&qh, 1..=7, ()) {
         Ok(s) => s,
-        Err(e) => return Err((e.into(), Box::new(session))),
+        Err(e) => {
+            return Err((
+                WaylandRunnerError::MissingGlobal {
+                    interface: "wl_seat",
+                    reason: e.to_string(),
+                },
+                Box::new(session),
+            ));
+        }
     };
     let im_manager: ZwpInputMethodManagerV2 = match globals.bind(&qh, 1..=1, ()) {
         Ok(m) => m,
-        Err(e) => return Err((e.into(), Box::new(session))),
+        Err(e) => {
+            return Err((
+                WaylandRunnerError::UnsupportedProtocol {
+                    interface: "zwp_input_method_manager_v2",
+                    reason: e.to_string(),
+                },
+                Box::new(session),
+            ));
+        }
     };
     let input_method = im_manager.get_input_method(&seat, &qh, ());
     let pointer = seat.get_pointer(&qh, ());
@@ -211,7 +235,10 @@ pub fn run_session_v2_loop_fallible(
         Ok(c) => c,
         Err(e) => {
             return Err((
-                format!("无法绑定必需的基础全局协议 wl_compositor: {}", e).into(),
+                WaylandRunnerError::MissingGlobal {
+                    interface: "wl_compositor",
+                    reason: e.to_string(),
+                },
                 Box::new(session),
             ));
         }
@@ -225,7 +252,10 @@ pub fn run_session_v2_loop_fallible(
         Ok(s) => s,
         Err(e) => {
             return Err((
-                format!("无法绑定必需的共享内存协议 wl_shm: {}", e).into(),
+                WaylandRunnerError::MissingGlobal {
+                    interface: "wl_shm",
+                    reason: e.to_string(),
+                },
                 Box::new(session),
             ));
         }
@@ -242,14 +272,10 @@ pub fn run_session_v2_loop_fallible(
         }
         Err(e) => {
             return Err((
-                io::Error::new(
-                    ErrorKind::Unsupported,
-                    format!(
-                        "合成器缺少 zwp_virtual_keyboard_v1 扩展协议 ({})，为避免按键黑洞主动放弃 V2 会话",
-                        e
-                    ),
-                )
-                .into(),
+                WaylandRunnerError::UnsupportedProtocol {
+                    interface: "zwp_virtual_keyboard_v1",
+                    reason: format!("合成器缺少扩展协议 ({})，为避免按键黑洞主动放弃 V2 会话", e),
+                },
                 Box::new(session),
             ));
         }
@@ -327,9 +353,8 @@ pub fn run_session_v2_loop_fallible(
                             .revents()
                             .intersects(PollFlags::IN | PollFlags::ERR)
                         {
-                            if let Some(ref fd) = wakeup_fd {
-                                let mut buf = [0u8; 8];
-                                while rustix::io::read(&**fd, &mut buf).is_ok() {}
+                            if let Some(ref wakeup) = session.loop_wakeup {
+                                wakeup.drain();
                             }
                             session.sync_external_state();
                         }
@@ -364,6 +389,9 @@ pub fn run_session_v2_loop_fallible(
 }
 
 /// 启动并运行现代 Wayland V2 输入法事件循环（适用于 KDE Plasma 6 / GNOME / Hyprland / Sway）
-pub fn run_session_v2_loop(session: WaylanV2Session) -> Result<(), Box<dyn Error>> {
+///
+/// # Errors
+/// 当连接 Wayland 合成器失败、缺少必需全局协议或事件队列异常时返回对应的细粒度错误。
+pub fn run_session_v2_loop(session: WaylanV2Session) -> Result<(), WaylandRunnerError> {
     run_session_v2_loop_fallible(session).map_err(|(e, _)| e)
 }

@@ -6225,6 +6225,7 @@ dependencies = [
  "rustix 0.38.44",
  "signal-hook",
  "tempfile",
+ "thiserror 1.0.69",
  "waylan-algo",
  "waylan-core",
  "waylan-ui",

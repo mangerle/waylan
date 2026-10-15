@@ -1,3 +1,4 @@
+pub mod error;
 pub mod fs_watcher;
 pub mod input_constants;
 pub mod input_core;
@@ -10,6 +11,7 @@ pub mod session_v1;
 pub mod session_v2;
 pub mod surface;
 
+pub use error::WaylandRunnerError;
 pub use runner::*;
 pub use session_common::*;
 
