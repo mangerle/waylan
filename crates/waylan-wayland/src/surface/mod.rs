@@ -52,7 +52,29 @@ impl Default for CandidateSurfaceManager {
     }
 }
 
+/// 待合成器 release 的退役缓冲区队列最大容量上限（防止异常合成器丢事件引发内存与对象 ID 泄漏）
+const MAX_PENDING_RELEASE_BUFFERS: usize = 16;
+
 impl CandidateSurfaceManager {
+    /// 安全暂存等待 release 的退役缓冲区，达到上限时主动销毁最旧的代理对象防止泄漏
+    fn push_pending_release(&mut self, slot_idx: usize, buffer: WlBuffer) {
+        if self.pending_release_buffers.len() >= MAX_PENDING_RELEASE_BUFFERS {
+            let (old_slot, oldest_buf) = self.pending_release_buffers.remove(0);
+            warn!(
+                "[悬浮窗口] 退役缓冲区队列达到上限 ({})，主动销毁最旧退役缓冲（槽位: {}）。",
+                MAX_PENDING_RELEASE_BUFFERS, old_slot
+            );
+            oldest_buf.destroy();
+        }
+        self.pending_release_buffers.push((slot_idx, buffer));
+    }
+
+    /// 更新当前活动显示器的逻辑分辨率 (宽, 高)
+    pub fn update_screen_size(&mut self, width: i32, height: i32) {
+        if width > 0 && height > 0 {
+            self.screen_size = (width, height);
+        }
+    }
     pub fn new() -> Self {
         Self {
             cursor_rect: CursorRect::default(),
@@ -171,17 +193,17 @@ impl CandidateSurfaceManager {
         }
         // active_buffer 与 slot_buffers 引用同一底层 WlBuffer，统一由 slot_buffers 执行销毁防止重复销毁
         *active_buffer = None;
-        for (idx, slot_buf) in self.slot_buffers.iter_mut().enumerate() {
+        for idx in 0..self.slot_buffers.len() {
             let is_busy = self.shm_slots[idx]
                 .as_ref()
                 .map(|s| s.is_busy)
                 .unwrap_or(false);
             if !is_busy {
-                if let Some(buf) = slot_buf.take() {
+                if let Some(buf) = self.slot_buffers[idx].take() {
                     buf.destroy();
                 }
-            } else if let Some(buf) = slot_buf.take() {
-                self.pending_release_buffers.push((idx, buf));
+            } else if let Some(buf) = self.slot_buffers[idx].take() {
+                self.push_pending_release(idx, buf);
             }
         }
     }
@@ -266,7 +288,7 @@ impl CandidateSurfaceManager {
                 if !is_slot_busy {
                     old.destroy();
                 } else {
-                    self.pending_release_buffers.push((self.current_slot, old));
+                    self.push_pending_release(self.current_slot, old);
                 }
             }
             self.slot_buffers[self.current_slot] = Some(buffer.clone());
@@ -321,6 +343,21 @@ impl CandidateSurfaceManager {
             }
         };
 
+        // 若所选槽位仍被合成器占用，为避免覆盖正在被合成读取的共享内存引发撕裂，重新分配独立槽位
+        let is_slot_busy = self.shm_slots[next_slot]
+            .as_ref()
+            .map(|s| s.is_busy)
+            .unwrap_or(false);
+        if is_slot_busy {
+            debug!(
+                "[悬浮窗口] 槽位 {} 仍被合成器占用，重新分配独立共享内存槽位以杜绝数据竞争撕裂。",
+                next_slot
+            );
+            if let Ok(new_slot) = ShmSlot::new(required_bytes.max(64 * 1024)) {
+                self.shm_slots[next_slot] = Some(new_slot);
+            }
+        }
+
         if let Err(e) = self.ensure_slot(next_slot, required_bytes) {
             warn!(
                 "[悬浮窗口] 扩容共享内存槽位失败，槽位: {}，原因: {}",
@@ -360,19 +397,28 @@ impl CandidateSurfaceManager {
             }
         }
 
-        // 回退逻辑：若 mmap 不可用，采用文件 seek + write_all
+        // 回退逻辑：若 mmap 不可用，采用 1024 字节栈缓冲流式分块写入，杜绝频繁堆分配
         if slot.file.seek(SeekFrom::Start(0)).is_err() {
             return None;
         }
-        let mut buf = Vec::with_capacity(len);
-        for src in rgba.as_chunks::<4>().0 {
-            buf.push(src[2]);
-            buf.push(src[1]);
-            buf.push(src[0]);
-            buf.push(src[3]);
-        }
-        if slot.file.write_all(&buf).is_err() {
-            return None;
+        let total_pixels = len / 4;
+        let mut pixel_idx = 0;
+        let mut chunk_buf = [0u8; 1024];
+        let max_pixels_per_chunk = chunk_buf.len() / 4;
+        while pixel_idx < total_pixels {
+            let batch = (total_pixels - pixel_idx).min(max_pixels_per_chunk);
+            for i in 0..batch {
+                let src_idx = (pixel_idx + i) * 4;
+                let dst_idx = i * 4;
+                chunk_buf[dst_idx] = rgba[src_idx + 2];
+                chunk_buf[dst_idx + 1] = rgba[src_idx + 1];
+                chunk_buf[dst_idx + 2] = rgba[src_idx];
+                chunk_buf[dst_idx + 3] = rgba[src_idx + 3];
+            }
+            if slot.file.write_all(&chunk_buf[..batch * 4]).is_err() {
+                return None;
+            }
+            pixel_idx += batch;
         }
         Some(())
     }
