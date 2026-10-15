@@ -1,5 +1,6 @@
 import { ComboBox, LineEdit } from "std-widgets.slint";
 import { SettingCard, AppSwitch, SecondaryButton } from "common.slint";
+import { VoiceStageFourCard, VoiceStageFiveCard, VoiceStageSixCard } from "voice_pipeline_cards.slint";
 
 export component VoicePipelineTab inherits VerticalLayout {
     spacing: 16px;
@@ -34,6 +35,15 @@ export component VoicePipelineTab inherits VerticalLayout {
     in-out property <bool> auto_punctuation: true;
     in property <[string]> punct_model_names: ["[内置] CT-Transformer 深度标点 (int8)", "[规则] 基础句末规则兜底 (无模型)"];
     in-out property <int> punct_model_index: 0;
+
+    // 阶段五：文本规整与语气词过滤 (ITN)
+    in-out property <bool> itn_convert_numbers: true;
+    in-out property <bool> itn_filter_filler_words: true;
+    in-out property <bool> itn_pangu_spacing: true;
+
+    // 阶段六：交互展现与流式上屏
+    in-out property <bool> voice_real_time_preview: true;
+    in-out property <bool> voice_show_floating_bar: true;
 
     // 回调事件
     callback switch_to_cloud_tab();
@@ -457,67 +467,24 @@ export component VoicePipelineTab inherits VerticalLayout {
         }
     }
 
-    // 4. 阶段四：文本后处理与标点预测 (Punctuation) 卡片
-    SettingCard {
-        title: "阶段四：文本后处理与标点预测 (Punctuation)";
-        subtitle: "识别文字生成后，根据上下文语义自动预测并插入标点符号";
+    // 4. 阶段四：文本后处理与标点预测 (Punctuation)
+    VoiceStageFourCard {
+        auto_punctuation <=> root.auto_punctuation;
+        punct_model_names: root.punct_model_names;
+        punct_model_index <=> root.punct_model_index;
+        import_punct_model => { root.import_punct_model(); }
+    }
 
-        VerticalLayout {
-            spacing: 14px;
+    // 5. 阶段五：文本规整与语气词过滤 (ITN)
+    VoiceStageFiveCard {
+        convert_numbers <=> root.itn_convert_numbers;
+        filter_filler_words <=> root.itn_filter_filler_words;
+        pangu_spacing <=> root.itn_pangu_spacing;
+    }
 
-            // 阶段四总控开关
-            HorizontalLayout {
-                spacing: 16px;
-                alignment: space-between;
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 2px;
-                    alignment: center;
-                    Text { text: "启用标点预测还原总控"; font-size: 13px; font-weight: 600; color: #0f172a; }
-                    Text {
-                        text: "关闭后识别文本将原样上屏，不自动在句子中插入逗号、句号与问号";
-                        font-size: 12px;
-                        color: #64748b;
-                        wrap: word-wrap;
-                    }
-                }
-                HorizontalLayout {
-                    horizontal-stretch: 0;
-                    alignment: end;
-                    AppSwitch {
-                        checked <=> root.auto_punctuation;
-                        text: root.auto_punctuation ? "已开启" : "已关闭";
-                    }
-                }
-            }
-
-            Rectangle { height: 1px; background: #f1f5f9; }
-
-            // 标点模型选择
-            VerticalLayout {
-                spacing: 8px;
-                opacity: root.auto_punctuation ? 1.0 : 0.4;
-                HorizontalLayout {
-                    alignment: space-between;
-                    Text { text: "选用标点预测模型算法"; font-size: 13px; font-weight: 600; color: #0f172a; }
-                    SecondaryButton {
-                        text: "导入标点模型";
-                        clicked => {
-                            if (root.auto_punctuation) { root.import_punct_model(); }
-                        }
-                    }
-                }
-                Text {
-                    text: "利用深度 Transformer 网络或基础智能规则恢复标点符号";
-                    font-size: 12px;
-                    color: #64748b;
-                }
-                ComboBox {
-                    enabled: root.auto_punctuation;
-                    model: root.punct_model_names;
-                    current-index <=> root.punct_model_index;
-                }
-            }
-        }
+    // 6. 阶段六：交互展现与流式上屏
+    VoiceStageSixCard {
+        real_time_preview <=> root.voice_real_time_preview;
+        show_floating_bar <=> root.voice_show_floating_bar;
     }
 }

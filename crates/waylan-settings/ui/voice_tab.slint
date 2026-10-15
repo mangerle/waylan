@@ -40,6 +40,15 @@ export component VoiceTab inherits VerticalLayout {
     in property <[string]> punct_model_names: ["[内置] CT-Transformer 深度标点 (int8)", "[规则] 基础句末规则兜底 (无模型)"];
     in-out property <int> punct_model_index: 0;
 
+    // 阶段五：文本规整与语气词过滤 (ITN)
+    in-out property <bool> itn_convert_numbers: true;
+    in-out property <bool> itn_filter_filler_words: true;
+    in-out property <bool> itn_pangu_spacing: true;
+
+    // 阶段六：交互展现与流式上屏
+    in-out property <bool> voice_real_time_preview: true;
+    in-out property <bool> voice_show_floating_bar: true;
+
     // 云端服务配置列表与编辑状态
     in property <[CloudProfileItem]> cloud_profiles: [];
     in property <bool> is_editing_cloud: false;
@@ -165,6 +174,13 @@ export component VoiceTab inherits VerticalLayout {
         auto_punctuation <=> root.auto_punctuation;
         punct_model_names: root.punct_model_names;
         punct_model_index <=> root.punct_model_index;
+
+        itn_convert_numbers <=> root.itn_convert_numbers;
+        itn_filter_filler_words <=> root.itn_filter_filler_words;
+        itn_pangu_spacing <=> root.itn_pangu_spacing;
+
+        voice_real_time_preview <=> root.voice_real_time_preview;
+        voice_show_floating_bar <=> root.voice_show_floating_bar;
 
         switch_to_cloud_tab => { root.active_sub_tab = 1; }
         import_asr_model => { root.import_asr_model(); }

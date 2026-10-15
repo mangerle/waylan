@@ -1,0 +1,232 @@
+import { ComboBox } from "std-widgets.slint";
+import { SettingCard, AppSwitch, SecondaryButton } from "common.slint";
+
+export component VoiceStageFourCard inherits SettingCard {
+    title: "阶段四：文本后处理与标点预测 (Punctuation)";
+    subtitle: "识别文字生成后，根据上下文语义自动预测并插入标点符号";
+
+    in-out property <bool> auto_punctuation: true;
+    in property <[string]> punct_model_names: [];
+    in-out property <int> punct_model_index: 0;
+
+    callback import_punct_model();
+
+    VerticalLayout {
+        spacing: 14px;
+
+        // 阶段四总控开关
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text { text: "启用标点预测还原总控"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: "关闭后识别文本将原样上屏，不自动在句子中插入逗号、句号与问号";
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                alignment: end;
+                AppSwitch {
+                    checked <=> root.auto_punctuation;
+                    text: root.auto_punctuation ? "已开启" : "已关闭";
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: #f1f5f9; }
+
+        // 标点模型选择
+        VerticalLayout {
+            spacing: 8px;
+            opacity: root.auto_punctuation ? 1.0 : 0.4;
+            HorizontalLayout {
+                alignment: space-between;
+                Text { text: "选用标点预测模型算法"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                SecondaryButton {
+                    text: "导入标点模型";
+                    clicked => {
+                        if (root.auto_punctuation) { root.import_punct_model(); }
+                    }
+                }
+            }
+            Text {
+                text: "利用深度 Transformer 网络或基础智能规则恢复标点符号";
+                font-size: 12px;
+                color: #64748b;
+            }
+            ComboBox {
+                enabled: root.auto_punctuation;
+                model: root.punct_model_names;
+                current-index <=> root.punct_model_index;
+            }
+        }
+    }
+}
+
+export component VoiceStageFiveCard inherits SettingCard {
+    title: "阶段五：文本规整与语气词过滤 (ITN)";
+    subtitle: "识别文本输出后，自动进行大写数字转换、口语停顿语气词消除与中英文盘古空格规整";
+
+    in-out property <bool> convert_numbers: true;
+    in-out property <bool> filter_filler_words: true;
+    in-out property <bool> pangu_spacing: true;
+
+    VerticalLayout {
+        spacing: 14px;
+
+        // 开关 1：大写数字自动转阿拉伯数字
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text { text: "1. 大写数字自动转阿拉伯数字 (ITN)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: "将口述大写数字转换为标准阿拉伯数字（如“三点五”转“3.5”、“一九九八年”转“1998年”）";
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                alignment: end;
+                AppSwitch {
+                    checked <=> root.convert_numbers;
+                    text: root.convert_numbers ? "已开启" : "已关闭";
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: #f1f5f9; }
+
+        // 开关 2：口语停顿语气词自动过滤
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text { text: "2. 口语停顿语气词自动过滤 (Disfluency)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: "自动消除无意义口头禅（过滤孤立的“呃、啊、嗯、哦”与结巴重复，保护后接名词的指示代词）";
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                alignment: end;
+                AppSwitch {
+                    checked <=> root.filter_filler_words;
+                    text: root.filter_filler_words ? "已开启" : "已关闭";
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: #f1f5f9; }
+
+        // 开关 3：中英文自动盘古空格
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text { text: "3. 中英文自动盘古空格 (Pangu Spacing)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: "自动在中文字符与半角英文之间补充排版空格，并优雅保护全角中文标点与数字量词";
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                alignment: end;
+                AppSwitch {
+                    checked <=> root.pangu_spacing;
+                    text: root.pangu_spacing ? "已开启" : "已关闭";
+                }
+            }
+        }
+    }
+}
+
+export component VoiceStageSixCard inherits SettingCard {
+    title: "阶段六：交互展现与流式上屏";
+    subtitle: "控制语音识别过程中的视觉反馈方式，支持光标处实时出字与跟随光标的浮动波形条";
+
+    in-out property <bool> real_time_preview: true;
+    in-out property <bool> show_floating_bar: true;
+
+    VerticalLayout {
+        spacing: 14px;
+
+        // 开关 1：光标处实时文字预览
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text { text: "1. 光标处实时文字预览 (Inline Preedit)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: "开启后边说边在当前光标处显示带下划线的未确认文字；关闭后录音时保持静默，停顿或松手后整句上屏";
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                alignment: end;
+                AppSwitch {
+                    checked <=> root.real_time_preview;
+                    text: root.real_time_preview ? "已开启" : "已关闭";
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: #f1f5f9; }
+
+        // 开关 2：显示录音浮动波形条
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text { text: "2. 显示录音浮动波形条 (Floating Waveform)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: "录音时在光标处弹出单行音量胶囊条展示实时跳动波形；关闭后彻底静默、不弹候选框";
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                alignment: end;
+                AppSwitch {
+                    checked <=> root.show_floating_bar;
+                    text: root.show_floating_bar ? "已开启" : "已隐藏";
+                }
+            }
+        }
+    }
+}

@@ -298,6 +298,15 @@ fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     // 阶段四 标点预测
     window.set_auto_punctuation(cfg.voice.auto_punctuation);
 
+    // 阶段五 文本规整与语气词过滤 (ITN)
+    window.set_itn_convert_numbers(cfg.voice.itn.convert_numbers);
+    window.set_itn_filter_filler_words(cfg.voice.itn.filter_filler_words);
+    window.set_itn_pangu_spacing(cfg.voice.itn.pangu_spacing);
+
+    // 阶段六 交互展现与流式上屏
+    window.set_voice_real_time_preview(cfg.voice.interaction.real_time_preview);
+    window.set_voice_show_floating_bar(cfg.voice.interaction.show_floating_bar);
+
     // 云端服务 Profile 列表装载
     let active_cloud_id = if let Some(ref sel) = cfg.voice.selected_asr {
         sel.strip_prefix("cloud:")
@@ -529,6 +538,15 @@ fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     // 阶段四 标点预测
     cfg.voice.auto_punctuation = window.get_auto_punctuation();
 
+    // 阶段五 文本规整与语气词过滤 (ITN)
+    cfg.voice.itn.convert_numbers = window.get_itn_convert_numbers();
+    cfg.voice.itn.filter_filler_words = window.get_itn_filter_filler_words();
+    cfg.voice.itn.pangu_spacing = window.get_itn_pangu_spacing();
+
+    // 阶段六 交互展现与流式上屏
+    cfg.voice.interaction.real_time_preview = window.get_voice_real_time_preview();
+    cfg.voice.interaction.show_floating_bar = window.get_voice_show_floating_bar();
+
     update_voice_models_from_window(window, cfg);
 }
 
@@ -725,12 +743,19 @@ mod tests {
         assert_eq!(window.get_vad_silence_delay_index(), 2); // 800ms 对应索引 2
         assert!(!window.get_auto_punctuation());
         assert!(window.get_is_asr_cloud());
+        assert!(window.get_itn_convert_numbers());
+        assert!(window.get_itn_filter_filler_words());
+        assert!(window.get_itn_pangu_spacing());
+        assert!(window.get_voice_real_time_preview());
+        assert!(window.get_voice_show_floating_bar());
 
-        // 模拟用户在流水线界面修改：开启自动增益、切换 400ms 停顿、开启标点、切回本地 ASR (索引 0)
+        // 模拟用户在流水线界面修改：开启自动增益、切换 400ms 停顿、开启标点、切回本地 ASR (索引 0)、关闭语气词过滤、关闭波形条
         window.set_auto_gain_control(true);
         window.set_vad_silence_delay_index(0); // 400ms
         window.set_auto_punctuation(true);
         window.set_asr_model_index(0); // 本地模型
+        window.set_itn_filter_filler_words(false);
+        window.set_voice_show_floating_bar(false);
 
         let mut roundtrip_cfg = voice_pipeline_cfg.clone();
         update_config_from_window(&window, &mut roundtrip_cfg);
@@ -739,6 +764,11 @@ mod tests {
         assert!(roundtrip_cfg.voice.afe.auto_gain_control);
         assert_eq!(roundtrip_cfg.voice.vad.silence_timeout_ms, 400);
         assert!(roundtrip_cfg.voice.auto_punctuation);
+        assert!(!roundtrip_cfg.voice.itn.filter_filler_words);
+        assert!(roundtrip_cfg.voice.itn.convert_numbers);
+        assert!(roundtrip_cfg.voice.itn.pangu_spacing);
+        assert!(roundtrip_cfg.voice.interaction.real_time_preview);
+        assert!(!roundtrip_cfg.voice.interaction.show_floating_bar);
         assert_eq!(
             roundtrip_cfg.voice.engine_type,
             waylan_core::VoiceEngineType::Offline
