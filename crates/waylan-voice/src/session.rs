@@ -192,8 +192,7 @@ impl VoiceSessionController {
         let mut cached_vad: Option<Box<dyn VadProcessor>> = None;
         let mut cached_recognizer: Option<Box<dyn VoiceRecognizer>> = None;
         let mut cached_punct: Option<PunctuationRestorer> = None;
-        let mut last_engine_type: Option<waylan_core::VoiceEngineType> = None;
-        let mut last_cloud_endpoint: Option<String> = None;
+        let mut last_asr_fingerprint = None;
 
         info!("[语音会话] 后台常驻语音工作线程启动完成，进入就绪待命状态");
 
@@ -206,14 +205,11 @@ impl VoiceSessionController {
                         continue;
                     }
 
-                    // 1. 若配置中引擎类型或线上接口发生变更，主动失效识别器缓存以实现热切换
-                    if last_engine_type != Some(options.voice_config.engine_type)
-                        || last_cloud_endpoint.as_deref()
-                            != Some(&options.voice_config.cloud.endpoint)
-                    {
+                    // 1. 若配置中引擎类型、目标服务、云端凭据或离线模型目录发生变更，主动失效识别器缓存以实现热切换
+                    let current_fingerprint = Self::compute_asr_fingerprint(&options.voice_config);
+                    if last_asr_fingerprint.as_ref() != Some(&current_fingerprint) {
                         cached_recognizer = None;
-                        last_engine_type = Some(options.voice_config.engine_type);
-                        last_cloud_endpoint = Some(options.voice_config.cloud.endpoint.clone());
+                        last_asr_fingerprint = Some(current_fingerprint);
                     }
 
                     // 初始化或复用常驻语音识别、标点预测与 VAD 模型（仅在首次使用或配置切换时加载权重，后续 0 毫秒复用）
@@ -509,6 +505,49 @@ impl VoiceSessionController {
             }
             fallback
         }
+    }
+
+    /// 提取当前语音识别器的关键配置指纹，用于识别器缓存失效判定
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在单次会话启动时比对当前生效的识别器核心参数（引擎类型、选中的 Profile、实际云端配置与离线模型路径）。
+    /// - **核心优势**：只要用户在设置界面变更了云端 API Key、接口地址、切换了候选服务或离线目录，即刻触发热切换重建，无需重启进程。
+    /// - **代价与局限**：仅比对影响识别器初始化的关键元数据，开销极小（纳秒级元组比对）。
+    fn compute_asr_fingerprint(
+        cfg: &VoiceConfig,
+    ) -> (
+        waylan_core::VoiceEngineType,
+        Option<String>,
+        Option<waylan_core::CloudAsrConfig>,
+        Option<String>,
+    ) {
+        let effective_cloud = if let Some(ref sel) = cfg.selected_asr {
+            if let Some(profile_id) = sel.strip_prefix("cloud:") {
+                cfg.cloud_profiles
+                    .iter()
+                    .find(|p| p.id == profile_id)
+                    .map(|p| waylan_core::CloudAsrConfig {
+                        provider: p.provider,
+                        endpoint: p.endpoint.clone(),
+                        api_key: p.api_key.clone(),
+                        model: p.model.clone(),
+                    })
+                    .or_else(|| Some(cfg.cloud.clone()))
+            } else {
+                None
+            }
+        } else if cfg.engine_type == waylan_core::VoiceEngineType::Cloud {
+            Some(cfg.cloud.clone())
+        } else {
+            None
+        };
+
+        (
+            cfg.engine_type,
+            cfg.selected_asr.clone(),
+            effective_cloud,
+            cfg.offline.model_dir.clone(),
+        )
     }
 }
 

@@ -373,10 +373,43 @@ pub enum NsEngineType {
     Bypass,
 }
 
+/// 线上云端语音识别服务配置实例（Profile）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudProfile {
+    /// 唯一标识 ID（例如 "openai"、"groq"、"fastwhisper"）
+    pub id: String,
+    /// 界面友好展示备注名称（例如 "OpenAI 官方"、"Groq 极速转写"）
+    pub name: String,
+    /// 云端服务协议类型
+    pub provider: CloudProviderType,
+    /// 线上服务接口地址（URL）
+    pub endpoint: String,
+    /// 鉴权 API Key / Token（敏感机密凭据）
+    pub api_key: Option<String>,
+    /// 指定的远端模型名称（例如 "whisper-1"）
+    pub model: String,
+}
+
+impl Default for CloudProfile {
+    fn default() -> Self {
+        Self {
+            id: "default-openai".to_string(),
+            name: "OpenAI 官方".to_string(),
+            provider: CloudProviderType::default(),
+            endpoint: "https://api.openai.com/v1/audio/transcriptions".to_string(),
+            api_key: None,
+            model: "whisper-1".to_string(),
+        }
+    }
+}
+
 /// 音频前端预处理与降噪配置
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioFrontEndConfig {
+    /// 是否开启前端音频增强流水线总控（为 false 时全部旁路直通 Bypass）
+    pub enabled: bool,
     /// 是否开启 80Hz 高通滤波（切除机械低频底噪与电磁交流声）
     pub high_pass_filter: bool,
     /// 是否开启人声智能降噪
@@ -392,6 +425,7 @@ pub struct AudioFrontEndConfig {
 impl Default for AudioFrontEndConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             high_pass_filter: true,
             noise_suppression: true,
             ns_engine: NsEngineType::default(),
@@ -413,14 +447,18 @@ pub struct VoiceConfig {
     pub push_to_talk_shortcut: String,
     /// 识别引擎工作模式（本地离线 / 线上云端 / 仿真测试）
     pub engine_type: VoiceEngineType,
+    /// 当前统一选中的 ASR 识别目标（为 None 或以 "local:" 开头时走本地；以 "cloud:<id>" 开头时走对应云端服务）
+    pub selected_asr: Option<String>,
     /// 是否自动在识别文本末尾补全句号
     pub auto_punctuation: bool,
     /// 1. VAD 端点检测配置（支持自由更换模型与算法）
     pub vad: VadConfig,
     /// 2. 本地离线识别配置（支持自由更换模型与路径）
     pub offline: OfflineAsrConfig,
-    /// 3. 线上云端识别配置（支持自由切换不同云服务）
+    /// 3. 线上云端识别配置（保留旧版本单一兼容配置）
     pub cloud: CloudAsrConfig,
+    /// 3.1 线上云端多服务配置列表（支持配置多个独立的 Whisper 兼容服务）
+    pub cloud_profiles: Vec<CloudProfile>,
     /// 4. 音频前端预处理与降噪配置 (HPF + NS + AGC)
     pub afe: AudioFrontEndConfig,
     /// 麦克风音频输入设备名称（为 None 时自动使用系统默认设备）
@@ -436,10 +474,12 @@ impl Default for VoiceConfig {
             toggle_shortcut: "Ctrl + Alt + V".to_string(),
             push_to_talk_shortcut: "F8".to_string(),
             engine_type: VoiceEngineType::default(),
+            selected_asr: None,
             auto_punctuation: true,
             vad: VadConfig::default(),
             offline: OfflineAsrConfig::default(),
             cloud: CloudAsrConfig::default(),
+            cloud_profiles: vec![CloudProfile::default()],
             afe: AudioFrontEndConfig::default(),
             device_name: None,
             punct_model_path: None,

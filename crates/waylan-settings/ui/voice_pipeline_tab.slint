@@ -1,0 +1,523 @@
+import { ComboBox, LineEdit } from "std-widgets.slint";
+import { SettingCard, AppSwitch, SecondaryButton } from "common.slint";
+
+export component VoicePipelineTab inherits VerticalLayout {
+    spacing: 16px;
+
+    // 基础触发属性
+    in-out property <bool> voice_enabled: true;
+    in-out property <int> toggle_shortcut_index: 0;
+    in-out property <string> toggle_shortcut: "Ctrl + Alt + V";
+    in-out property <int> ptt_shortcut_index: 0;
+    in-out property <string> push_to_talk_shortcut: "F8";
+
+    // 阶段一：AFE 前端增强
+    in-out property <bool> afe_enabled: true;
+    in-out property <bool> high_pass_filter: true;
+    in-out property <bool> noise_suppression: true;
+    in property <[string]> ns_model_names: ["[内置] RNNoise 智能降噪 (轻量日常)", "[深度] DeepFilterNet3 (强力消除机械键盘)"];
+    in-out property <int> ns_model_index: 0;
+    in-out property <bool> auto_gain_control: true;
+
+    // 阶段二：VAD 端点检测
+    in-out property <int> vad_silence_delay_index: 1;
+    in property <[string]> vad_model_names: ["[内置] Silero VAD (神经网络模型)", "[算法] 纯能量门限 (零模型纯数学 RMS)"];
+    in-out property <int> vad_model_index: 0;
+
+    // 阶段三：ASR 核心识别
+    in property <[string]> asr_model_names: ["[本地] 阿里 Paraformer (中文流式 int8)"];
+    in-out property <int> asr_model_index: 0;
+    in property <string> asr_notice_text: "当前处于【本地离线模式】: 采用阿里 Paraformer 流式 int8 ONNX 引擎，所有音频计算均在本地完成，零延迟、零网络依赖、保障隐私安全。";
+    in property <bool> is_asr_cloud: false;
+
+    // 阶段四：标点预测
+    in-out property <bool> auto_punctuation: true;
+    in property <[string]> punct_model_names: ["[内置] CT-Transformer 深度标点 (int8)", "[规则] 基础句末规则兜底 (无模型)"];
+    in-out property <int> punct_model_index: 0;
+
+    // 回调事件
+    callback switch_to_cloud_tab();
+    callback import_asr_model();
+    callback import_vad_model();
+    callback import_punct_model();
+    callback import_ns_model();
+    callback open_models_directory();
+
+    // 0. 基础触发与快捷键控制卡片
+    SettingCard {
+        title: "触发与快捷键控制";
+        subtitle: "配置麦克风收音启动模式与快捷响应按键（支持连续听写开关与长按对讲机双独立模式）";
+
+        VerticalLayout {
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "启用语音输入功能"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "按下指定快捷键启动麦克风录音，自动将人声转换为汉字文本";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppSwitch {
+                        checked <=> root.voice_enabled;
+                        text: root.voice_enabled ? "已开启" : "已关闭";
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 连续听写开关快捷键 (Toggle)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "连续听写开关快捷键 (Toggle)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "按一次持续收音并流式上屏，再次按或回车结束";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 8px;
+                    alignment: end;
+                    ComboBox {
+                        model: ["Ctrl + Alt + V", "Alt + Space", "Ctrl + Space", "Super + V", "自定义快捷键", "已禁用"];
+                        current-index <=> root.toggle_shortcut_index;
+                        width: 140px;
+                        selected(text) => {
+                            if (root.toggle_shortcut_index == 0) { root.toggle_shortcut = "Ctrl + Alt + V"; }
+                            if (root.toggle_shortcut_index == 1) { root.toggle_shortcut = "Alt + Space"; }
+                            if (root.toggle_shortcut_index == 2) { root.toggle_shortcut = "Ctrl + Space"; }
+                            if (root.toggle_shortcut_index == 3) { root.toggle_shortcut = "Super + V"; }
+                            if (root.toggle_shortcut_index == 5) { root.toggle_shortcut = "已禁用"; }
+                        }
+                    }
+                    LineEdit {
+                        text <=> root.toggle_shortcut;
+                        placeholder-text: "如: Ctrl + Alt + V";
+                        width: 115px;
+                        edited(text) => {
+                            root.toggle_shortcut_index = 4;
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 长按对讲机快捷键 (Push-to-Talk)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "长按对讲机快捷键 (Push-to-Talk)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "按住按键说话，松开手指瞬间断句上屏并停止录音";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 8px;
+                    alignment: end;
+                    ComboBox {
+                        model: ["F8 (单键推荐)", "Alt + Space", "Ctrl + Space", "Super + V", "自定义快捷键", "已禁用"];
+                        current-index <=> root.ptt_shortcut_index;
+                        width: 140px;
+                        selected(text) => {
+                            if (root.ptt_shortcut_index == 0) { root.push_to_talk_shortcut = "F8"; }
+                            if (root.ptt_shortcut_index == 1) { root.push_to_talk_shortcut = "Alt + Space"; }
+                            if (root.ptt_shortcut_index == 2) { root.push_to_talk_shortcut = "Ctrl + Space"; }
+                            if (root.ptt_shortcut_index == 3) { root.push_to_talk_shortcut = "Super + V"; }
+                            if (root.ptt_shortcut_index == 5) { root.push_to_talk_shortcut = "已禁用"; }
+                        }
+                    }
+                    LineEdit {
+                        text <=> root.push_to_talk_shortcut;
+                        placeholder-text: "如: F8";
+                        width: 115px;
+                        edited(text) => {
+                            root.ptt_shortcut_index = 4;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 1. 阶段一：音频采集与前端增强 (AFE) 卡片
+    SettingCard {
+        title: "阶段一：音频采集与前端增强 (AFE)";
+        subtitle: "按照音频硬件与 DSP 链顺序，对麦克风输入信号进行低频滤波、AI 降噪与音量自适应平衡";
+
+        VerticalLayout {
+            spacing: 14px;
+
+            // 阶段一总控开关
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "启用前端音频增强流水线总控"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "关闭后原始音频直接旁路直通 (Bypass) 给识别器，不进行任何软件 DSP 处理";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppSwitch {
+                        checked <=> root.afe_enabled;
+                        text: root.afe_enabled ? "已开启" : "已直通";
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 顺序 1：80Hz 高通滤波
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                opacity: root.afe_enabled ? 1.0 : 0.4;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "1. 80Hz 高通滤波 (HPF - 切除机械低频)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "切除 80Hz 以下桌面物理碰撞、电磁交流声与喷麦低频气流干扰";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppSwitch {
+                        enabled: root.afe_enabled;
+                        checked <=> root.high_pass_filter;
+                        text: root.high_pass_filter ? "已开启" : "已关闭";
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 顺序 2：人声智能降噪
+            VerticalLayout {
+                spacing: 8px;
+                opacity: root.afe_enabled ? 1.0 : 0.4;
+
+                HorizontalLayout {
+                    spacing: 16px;
+                    alignment: space-between;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        alignment: center;
+                        Text { text: "2. 人声智能降噪 (Noise Suppression)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                        Text {
+                            text: "开启后可实时过滤机械键盘敲击、鼠标连击与机箱风扇白噪音";
+                            font-size: 12px;
+                            color: #64748b;
+                            wrap: word-wrap;
+                        }
+                    }
+                    HorizontalLayout {
+                        horizontal-stretch: 0;
+                        alignment: end;
+                        AppSwitch {
+                            enabled: root.afe_enabled;
+                            checked <=> root.noise_suppression;
+                            text: root.noise_suppression ? "已开启" : "已关闭";
+                        }
+                    }
+                }
+
+                // 降噪模型选择栏
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: space-between;
+                    opacity: (root.afe_enabled && root.noise_suppression) ? 1.0 : 0.4;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "选用降噪算法引擎:";
+                            font-size: 12px;
+                            color: #475569;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ComboBox {
+                            enabled: root.afe_enabled && root.noise_suppression;
+                            model: root.ns_model_names;
+                            current-index <=> root.ns_model_index;
+                            width: 260px;
+                        }
+                        SecondaryButton {
+                            text: "导入模型";
+                            clicked => { root.import_ns_model(); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 顺序 3：动态数字自动增益控制 (AGC)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                opacity: root.afe_enabled ? 1.0 : 0.4;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "3. 动态数字自动增益控制 (AGC - 平衡远近场音量)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "将人声音量平滑自适应拉升至最佳识别电平 (-16 dBFS)，静音防抽吸";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppSwitch {
+                        enabled: root.afe_enabled;
+                        checked <=> root.auto_gain_control;
+                        text: root.auto_gain_control ? "已开启" : "已关闭";
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 阶段二：语音活动检测与智能截断 (VAD) 卡片
+    SettingCard {
+        title: "阶段二：语音活动检测与智能截断 (VAD)";
+        subtitle: "精准探测说话起止与停顿，分句自动断句上屏提交";
+
+        VerticalLayout {
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "说话停顿截断时长 (断句灵敏度)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "检测到说话静音停顿达到设定毫秒后，自动判定该句结束并立即转写上屏";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    ComboBox {
+                        model: ["400 毫秒 (快速)", "600 毫秒 (推荐平衡)", "800 毫秒 (宽松)", "1000 毫秒 (慢速)"];
+                        current-index <=> root.vad_silence_delay_index;
+                        width: 180px;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "端点检测 (VAD) 算法与模型"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    SecondaryButton {
+                        text: "导入 VAD 文件";
+                        clicked => { root.import_vad_model(); }
+                    }
+                }
+                Text {
+                    text: "负责实时人声探测与静音边界判定";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+                ComboBox {
+                    model: root.vad_model_names;
+                    current-index <=> root.vad_model_index;
+                }
+            }
+        }
+    }
+
+    // 3. 阶段三：核心语音识别与转写 (ASR) 卡片
+    SettingCard {
+        title: "阶段三：核心语音识别与转写 (ASR)";
+        subtitle: "统一汇集端侧本地离线推理模型与线上云端 Whisper 兼容服务";
+
+        VerticalLayout {
+            spacing: 14px;
+
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "选用识别目标模型 (本地 / 云端大一统)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        SecondaryButton {
+                            text: "管理云端服务 »";
+                            clicked => { root.switch_to_cloud_tab(); }
+                        }
+                        SecondaryButton {
+                            text: "导入本地模型";
+                            clicked => { root.import_asr_model(); }
+                        }
+                    }
+                }
+                Text {
+                    text: "选择负责将采集声音转录为文字序列的核心大脑（选择云端服务前请先在云端管理页面添加对应配置）";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+                ComboBox {
+                    model: root.asr_model_names;
+                    current-index <=> root.asr_model_index;
+                }
+            }
+
+            // 模型特性提示胶囊
+            Rectangle {
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: root.is_asr_cloud ? #bfdbfe : #bbf7d0;
+                background: root.is_asr_cloud ? #eff6ff : #f0fdf4;
+
+                HorizontalLayout {
+                    padding: 10px;
+                    Text {
+                        text: root.asr_notice_text;
+                        font-size: 12px;
+                        color: root.is_asr_cloud ? #1e40af : #15803d;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 存储提示与目录打开
+            HorizontalLayout {
+                alignment: space-between;
+                VerticalLayout {
+                    spacing: 2px;
+                    Text { text: "本地模型存放路径: ~/.local/share/waylan/models/"; font-size: 11px; color: #64748b; }
+                    Text { text: "系统升级重装仅更新 /usr 目录，用户导入的模型与个性化配置受到物理隔离保护"; font-size: 11px; color: #94a3b8; }
+                }
+                SecondaryButton {
+                    text: "打开模型存放目录";
+                    clicked => { root.open_models_directory(); }
+                }
+            }
+        }
+    }
+
+    // 4. 阶段四：文本后处理与标点预测 (Punctuation) 卡片
+    SettingCard {
+        title: "阶段四：文本后处理与标点预测 (Punctuation)";
+        subtitle: "识别文字生成后，根据上下文语义自动预测并插入标点符号";
+
+        VerticalLayout {
+            spacing: 14px;
+
+            // 阶段四总控开关
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "启用标点预测还原总控"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "关闭后识别文本将原样上屏，不自动在句子中插入逗号、句号与问号";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppSwitch {
+                        checked <=> root.auto_punctuation;
+                        text: root.auto_punctuation ? "已开启" : "已关闭";
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 标点模型选择
+            VerticalLayout {
+                spacing: 8px;
+                opacity: root.auto_punctuation ? 1.0 : 0.4;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "选用标点预测模型算法"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    SecondaryButton {
+                        text: "导入标点模型";
+                        clicked => {
+                            if (root.auto_punctuation) { root.import_punct_model(); }
+                        }
+                    }
+                }
+                Text {
+                    text: "利用深度 Transformer 网络或基础智能规则恢复标点符号";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+                ComboBox {
+                    enabled: root.auto_punctuation;
+                    model: root.punct_model_names;
+                    current-index <=> root.punct_model_index;
+                }
+            }
+        }
+    }
+}

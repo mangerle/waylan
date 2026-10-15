@@ -11,11 +11,13 @@ slint::include_modules!();
 
 pub mod importer;
 pub mod sync;
+pub mod voice_handlers;
 
 use crate::importer::{
     import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file,
 };
 use crate::sync::{sync_config_to_window, update_config_from_window};
+use crate::voice_handlers::register_voice_callbacks;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::error::Error;
 use std::fs;
@@ -104,9 +106,11 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
                     let hide_ext = base_cfg.exclusive_input_source;
                     *current_cfg_cell.borrow_mut() = base_cfg;
                     sync_gnome_indicator_mode(hide_ext);
+                    win.set_global_status_is_error(false);
                     win.set_global_status(SharedString::from("配置已成功保存并同步！"));
                 }
                 Err(e) => {
+                    win.set_global_status_is_error(true);
                     win.set_global_status(SharedString::from(format!("保存失败: {}", e)));
                 }
             }
@@ -119,6 +123,7 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
         if let Some(win) = window_weak.upgrade() {
             let default_cfg = AppConfig::default();
             sync_config_to_window(&win, &default_cfg);
+            win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from("已恢复为默认配置（点击保存后生效）"));
         }
     });
@@ -248,109 +253,8 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    // 11. 注册语音模型导入与目录管理回调
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    window.on_import_asr_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_asr_model_dialog() {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                win.set_global_status(SharedString::from(format!(
-                    "成功导入 ASR 模型目录: {}",
-                    name
-                )));
-                let mut cfg = current_cfg_cell.borrow().clone();
-                cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
-            }
-        }
-    });
-
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    window.on_import_vad_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_onnx_model_dialog(
-                "vad",
-                "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
-            ) {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                win.set_global_status(SharedString::from(format!("成功导入 VAD 模型: {}", name)));
-                let mut cfg = current_cfg_cell.borrow().clone();
-                cfg.voice.vad.model_path = Some(imported_path.to_string_lossy().to_string());
-                cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
-            }
-        }
-    });
-
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    window.on_import_punct_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_onnx_model_dialog(
-                "punct",
-                "请选择要导入的标点符号预测模型文件 (.onnx)",
-            ) {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                win.set_global_status(SharedString::from(format!(
-                    "成功导入标点预测模型: {}",
-                    name
-                )));
-                let mut cfg = current_cfg_cell.borrow().clone();
-                cfg.voice.punct_model_path = Some(imported_path.to_string_lossy().to_string());
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
-            }
-        }
-    });
-
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config;
-    window.on_import_ns_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_ns_model_dialog() {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                win.set_global_status(SharedString::from(format!(
-                    "成功导入人声降噪模型: {}",
-                    name
-                )));
-                let mut cfg = current_cfg_cell.borrow().clone();
-                cfg.voice.afe.noise_suppression = true;
-                cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
-                cfg.voice.afe.custom_ns_model_path =
-                    Some(imported_path.to_string_lossy().to_string());
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
-            }
-        }
-    });
-
-    window.on_open_models_directory(move || {
-        waylan_voice::open_user_models_directory();
-    });
+    // 11. 注册语音流水线与云端管理回调事件
+    register_voice_callbacks(&window, loaded_config);
 
     window.run()?;
     Ok(())

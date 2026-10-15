@@ -7,7 +7,7 @@
 //!   2. 避免在事件回调中分散编写冗长脆弱的属性映射逻辑；
 //!   3. 支持无缝双向转换，便于单元测试与自动化验证。
 
-use crate::SettingsWindow;
+use crate::{CloudProfileItem, SettingsWindow};
 use waylan_core::config::{
     AppConfig, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
     FullWidthPunctShortcut, FuzzyPinyinRules, PageKeys, SwitchKey, TraditionalShortcut,
@@ -281,55 +281,136 @@ fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     };
     window.set_ptt_shortcut_index(ptt_idx);
 
-    window.set_voice_engine_index(match cfg.voice.engine_type {
-        waylan_core::VoiceEngineType::Offline => 0,
-        waylan_core::VoiceEngineType::Cloud => 1,
-        waylan_core::VoiceEngineType::Mock => 0,
-    });
-    window.set_auto_punctuation(cfg.voice.auto_punctuation);
+    // 阶段一 AFE 前端增强
+    window.set_afe_enabled(cfg.voice.afe.enabled);
     window.set_high_pass_filter(cfg.voice.afe.high_pass_filter);
+    window.set_noise_suppression(cfg.voice.afe.noise_suppression);
     window.set_auto_gain_control(cfg.voice.afe.auto_gain_control);
+
+    // 阶段二 VAD 端点截断
     window.set_vad_silence_delay_index(match cfg.voice.vad.silence_timeout_ms {
         0..=500 => 0,
         501..=700 => 1,
         701..=900 => 2,
         _ => 3,
     });
-    window.set_cloud_endpoint(slint::SharedString::from(&cfg.voice.cloud.endpoint));
-    window.set_cloud_api_key(slint::SharedString::from(
-        cfg.voice.cloud.api_key.as_deref().unwrap_or(""),
-    ));
-    window.set_cloud_model(slint::SharedString::from(&cfg.voice.cloud.model));
+
+    // 阶段四 标点预测
+    window.set_auto_punctuation(cfg.voice.auto_punctuation);
+
+    // 云端服务 Profile 列表装载
+    let active_cloud_id = if let Some(ref sel) = cfg.voice.selected_asr {
+        sel.strip_prefix("cloud:")
+    } else {
+        None
+    };
+    let cloud_items: Vec<CloudProfileItem> = cfg
+        .voice
+        .cloud_profiles
+        .iter()
+        .map(|p| CloudProfileItem {
+            id: slint::SharedString::from(&p.id),
+            name: slint::SharedString::from(&p.name),
+            endpoint: slint::SharedString::from(&p.endpoint),
+            api_key: slint::SharedString::from(
+                p.api_key
+                    .as_deref()
+                    .map(|k| {
+                        if k.len() > 6 {
+                            format!("{}******", &k[..4])
+                        } else {
+                            "******".to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| "未设置".to_string()),
+            ),
+            model: slint::SharedString::from(&p.model),
+            is_active: active_cloud_id == Some(p.id.as_str()),
+        })
+        .collect();
+    window.set_cloud_profiles(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(cloud_items),
+    )));
 
     sync_voice_models_to_window(window, cfg);
 }
 
 /// 同步语音四大模型（ASR / VAD / 标点 / NS降噪）列表与当前选中项至界面
 fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
-    let asr_models = waylan_voice::list_asr_models();
-    let asr_names: Vec<slint::SharedString> = asr_models
-        .iter()
-        .map(|m| slint::SharedString::from(&m.display_name))
-        .collect();
-    let mut asr_idx = 0;
-    if let Some(ref dir) = cfg.voice.offline.model_dir {
-        for (i, m) in asr_models.iter().enumerate() {
+    // 1. 统一 ASR 模型下拉列表（本地离线模型 + 线上云端 Profile）
+    let local_asrs = waylan_voice::list_asr_models();
+    let mut all_asr_names: Vec<slint::SharedString> = Vec::new();
+    for m in &local_asrs {
+        all_asr_names.push(slint::SharedString::from(format!(
+            "[本地] {}",
+            m.display_name
+        )));
+    }
+    for p in &cfg.voice.cloud_profiles {
+        all_asr_names.push(slint::SharedString::from(format!(
+            "[云端] {} ({})",
+            p.name, p.model
+        )));
+    }
+
+    let mut selected_idx = 0;
+    let mut is_cloud = false;
+    let mut notice = "当前处于【本地离线模式】: 采用阿里 Paraformer 流式 int8 ONNX 引擎，所有音频计算均在本地完成，零延迟、零网络依赖、保障隐私安全。".to_string();
+
+    if let Some(ref sel) = cfg.voice.selected_asr {
+        if let Some(cloud_id) = sel.strip_prefix("cloud:") {
+            if let Some(pos) = cfg
+                .voice
+                .cloud_profiles
+                .iter()
+                .position(|p| p.id == cloud_id)
+            {
+                selected_idx = local_asrs.len() + pos;
+                is_cloud = true;
+                let profile = &cfg.voice.cloud_profiles[pos];
+                notice = format!(
+                    "当前处于【云端转写模式 - {}】: 说话结束后将音频打包发送至目标云端 API，由远端 {} 模型转录。支持超大参数高精转写，请保持网络畅通。",
+                    profile.name, profile.model
+                );
+            }
+        } else {
+            // 本地模型匹配
+            if let Some(ref dir) = cfg.voice.offline.model_dir {
+                for (i, m) in local_asrs.iter().enumerate() {
+                    if m.path.as_deref() == Some(dir)
+                        || m.path
+                            .as_deref()
+                            .map(|p| p.ends_with(dir) || dir.ends_with(p))
+                            .unwrap_or(false)
+                    {
+                        selected_idx = i;
+                        break;
+                    }
+                }
+            }
+        }
+    } else if let Some(ref dir) = cfg.voice.offline.model_dir {
+        for (i, m) in local_asrs.iter().enumerate() {
             if m.path.as_deref() == Some(dir)
                 || m.path
                     .as_deref()
                     .map(|p| p.ends_with(dir) || dir.ends_with(p))
                     .unwrap_or(false)
             {
-                asr_idx = i;
+                selected_idx = i;
                 break;
             }
         }
     }
-    window.set_asr_model_names(slint::ModelRc::from(std::rc::Rc::new(
-        slint::VecModel::from(asr_names),
-    )));
-    window.set_asr_model_index(asr_idx as i32);
 
+    window.set_asr_model_names(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(all_asr_names),
+    )));
+    window.set_asr_model_index(selected_idx as i32);
+    window.set_asr_notice_text(slint::SharedString::from(notice));
+    window.set_is_asr_cloud(is_cloud);
+
+    // 2. VAD 端点检测模型
     let vad_models = waylan_voice::list_vad_models();
     let vad_names: Vec<slint::SharedString> = vad_models
         .iter()
@@ -361,6 +442,7 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     )));
     window.set_vad_model_index(vad_idx as i32);
 
+    // 3. 标点符号预测模型
     let punct_models = waylan_voice::list_punct_models();
     let punct_names: Vec<slint::SharedString> = punct_models
         .iter()
@@ -385,51 +467,16 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     )));
     window.set_punct_model_index(punct_idx as i32);
 
+    // 4. 人声智能降噪 (NS) 模型
     let ns_models = waylan_voice::list_ns_models();
     let ns_names: Vec<slint::SharedString> = ns_models
         .iter()
+        .filter(|m| m.path.as_deref() != Some("__bypass__"))
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
     let mut ns_idx = 0;
-    if !cfg.voice.afe.noise_suppression
-        || cfg.voice.afe.ns_engine == waylan_core::NsEngineType::Bypass
-    {
-        for (i, m) in ns_models.iter().enumerate() {
-            if m.path.as_deref() == Some("__bypass__") {
-                ns_idx = i;
-                break;
-            }
-        }
-    } else if cfg.voice.afe.ns_engine == waylan_core::NsEngineType::Rnnoise
-        && cfg.voice.afe.custom_ns_model_path.is_none()
-    {
-        for (i, m) in ns_models.iter().enumerate() {
-            if m.path.as_deref() == Some("__rnnoise__") {
-                ns_idx = i;
-                break;
-            }
-        }
-    } else if let Some(ref path) = cfg.voice.afe.custom_ns_model_path {
-        for (i, m) in ns_models.iter().enumerate() {
-            if m.path.as_deref() == Some(path)
-                || m.path
-                    .as_deref()
-                    .map(|p| p.ends_with(path) || path.ends_with(p))
-                    .unwrap_or(false)
-            {
-                ns_idx = i;
-                break;
-            }
-        }
-    } else {
-        for (i, m) in ns_models.iter().enumerate() {
-            if m.path.as_deref() == Some("__deepfilternet__")
-                || m.display_name.contains("DeepFilterNet")
-            {
-                ns_idx = i;
-                break;
-            }
-        }
+    if cfg.voice.afe.ns_engine == waylan_core::NsEngineType::DeepFilterNet {
+        ns_idx = 1.min(ns_names.len().saturating_sub(1));
     }
     window.set_ns_model_names(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(ns_names),
@@ -465,37 +512,48 @@ fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
         ptt_str
     };
 
-    cfg.voice.engine_type = match window.get_voice_engine_index() {
-        1 => waylan_core::VoiceEngineType::Cloud,
-        _ => waylan_core::VoiceEngineType::Offline,
-    };
-    cfg.voice.auto_punctuation = window.get_auto_punctuation();
+    // 阶段一 AFE 前端增强
+    cfg.voice.afe.enabled = window.get_afe_enabled();
     cfg.voice.afe.high_pass_filter = window.get_high_pass_filter();
+    cfg.voice.afe.noise_suppression = window.get_noise_suppression();
     cfg.voice.afe.auto_gain_control = window.get_auto_gain_control();
+
+    // 阶段二 VAD 端点检测截断时间
     cfg.voice.vad.silence_timeout_ms = match window.get_vad_silence_delay_index() {
         0 => 400,
         2 => 800,
         3 => 1000,
         _ => 600,
     };
-    cfg.voice.cloud.endpoint = window.get_cloud_endpoint().to_string();
-    let key = window.get_cloud_api_key().to_string();
-    cfg.voice.cloud.api_key = if key.trim().is_empty() {
-        None
-    } else {
-        Some(key.trim().to_string())
-    };
-    cfg.voice.cloud.model = window.get_cloud_model().to_string();
+
+    // 阶段四 标点预测
+    cfg.voice.auto_punctuation = window.get_auto_punctuation();
 
     update_voice_models_from_window(window, cfg);
 }
 
 /// 从 Slint 界面属性读取模型选择并持久化至配置
 fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
-    let asr_models = waylan_voice::list_asr_models();
+    let local_asrs = waylan_voice::list_asr_models();
     let asr_idx = window.get_asr_model_index() as usize;
-    if let Some(m) = asr_models.get(asr_idx) {
-        cfg.voice.offline.model_dir = m.path.clone();
+
+    if asr_idx < local_asrs.len() {
+        // 选中本地离线 ASR 模型
+        cfg.voice.engine_type = waylan_core::VoiceEngineType::Offline;
+        cfg.voice.selected_asr = None;
+        if let Some(m) = local_asrs.get(asr_idx) {
+            cfg.voice.offline.model_dir = m.path.clone();
+        }
+    } else {
+        // 选中云端 Profile
+        let cloud_idx = asr_idx - local_asrs.len();
+        if let Some(profile) = cfg.voice.cloud_profiles.get(cloud_idx) {
+            cfg.voice.engine_type = waylan_core::VoiceEngineType::Cloud;
+            cfg.voice.selected_asr = Some(format!("cloud:{}", profile.id));
+            cfg.voice.cloud.endpoint = profile.endpoint.clone();
+            cfg.voice.cloud.api_key = profile.api_key.clone();
+            cfg.voice.cloud.model = profile.model.clone();
+        }
     }
 
     let vad_models = waylan_voice::list_vad_models();
@@ -513,38 +571,25 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
     let punct_models = waylan_voice::list_punct_models();
     let punct_idx = window.get_punct_model_index() as usize;
     if let Some(m) = punct_models.get(punct_idx) {
-        if m.path.as_deref() == Some("__rule_only__") {
-            cfg.voice.auto_punctuation = true;
-            cfg.voice.punct_model_path = Some("__rule_only__".to_string());
-        } else {
-            cfg.voice.punct_model_path = m.path.clone();
-        }
+        cfg.voice.punct_model_path = m.path.clone();
     }
 
     let ns_models = waylan_voice::list_ns_models();
+    let ns_filtered: Vec<_> = ns_models
+        .into_iter()
+        .filter(|m| m.path.as_deref() != Some("__bypass__"))
+        .collect();
     let ns_idx = window.get_ns_model_index() as usize;
-    if let Some(m) = ns_models.get(ns_idx) {
-        if m.path.as_deref() == Some("__bypass__") {
-            cfg.voice.afe.noise_suppression = false;
-            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Bypass;
-            cfg.voice.afe.custom_ns_model_path = None;
-        } else if m.path.as_deref() == Some("__rnnoise__") {
-            cfg.voice.afe.noise_suppression = true;
+    if let Some(m) = ns_filtered.get(ns_idx) {
+        if m.path.as_deref() == Some("__rnnoise__") {
             cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Rnnoise;
             cfg.voice.afe.custom_ns_model_path = None;
         } else if m.path.as_deref() == Some("__deepfilternet__") {
-            cfg.voice.afe.noise_suppression = true;
             cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
             cfg.voice.afe.custom_ns_model_path = None;
         } else if let Some(ref path) = m.path {
-            cfg.voice.afe.noise_suppression = true;
-            if path.contains("deepfilternet3") {
-                cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
-                cfg.voice.afe.custom_ns_model_path = None;
-            } else {
-                cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
-                cfg.voice.afe.custom_ns_model_path = Some(path.clone());
-            }
+            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
+            cfg.voice.afe.custom_ns_model_path = Some(path.clone());
         }
     }
 }
@@ -650,5 +695,56 @@ mod tests {
         assert_eq!(updated_cfg.voice.toggle_shortcut, "已禁用");
         assert!(updated_cfg.voice.get_effective_ptt_shortcut().is_some());
         assert!(updated_cfg.voice.get_effective_toggle_shortcut().is_none());
+
+        // 验证语音流水线与云端 Profile 双向同步与模型切换
+        let mut voice_pipeline_cfg = updated_cfg.clone();
+        voice_pipeline_cfg.voice.afe.enabled = true;
+        voice_pipeline_cfg.voice.afe.high_pass_filter = false;
+        voice_pipeline_cfg.voice.afe.noise_suppression = true;
+        voice_pipeline_cfg.voice.afe.auto_gain_control = false;
+        voice_pipeline_cfg.voice.vad.silence_timeout_ms = 800;
+        voice_pipeline_cfg.voice.auto_punctuation = false;
+        voice_pipeline_cfg.voice.cloud_profiles = vec![waylan_core::CloudProfile {
+            id: "test-openai".to_string(),
+            name: "测试 OpenAI".to_string(),
+            provider: waylan_core::CloudProviderType::OpenAiCompatible,
+            endpoint: "https://api.openai.com/v1/audio/transcriptions".to_string(),
+            api_key: Some("sk-test12345678".to_string()),
+            model: "whisper-1".to_string(),
+        }];
+        voice_pipeline_cfg.voice.selected_asr = Some("cloud:test-openai".to_string());
+        voice_pipeline_cfg.voice.engine_type = waylan_core::VoiceEngineType::Cloud;
+
+        sync_config_to_window(&window, &voice_pipeline_cfg);
+
+        // 验证初始同步到窗口属性
+        assert!(window.get_afe_enabled());
+        assert!(!window.get_high_pass_filter());
+        assert!(window.get_noise_suppression());
+        assert!(!window.get_auto_gain_control());
+        assert_eq!(window.get_vad_silence_delay_index(), 2); // 800ms 对应索引 2
+        assert!(!window.get_auto_punctuation());
+        assert!(window.get_is_asr_cloud());
+
+        // 模拟用户在流水线界面修改：开启自动增益、切换 400ms 停顿、开启标点、切回本地 ASR (索引 0)
+        window.set_auto_gain_control(true);
+        window.set_vad_silence_delay_index(0); // 400ms
+        window.set_auto_punctuation(true);
+        window.set_asr_model_index(0); // 本地模型
+
+        let mut roundtrip_cfg = voice_pipeline_cfg.clone();
+        update_config_from_window(&window, &mut roundtrip_cfg);
+
+        // 验证回写持久化配置
+        assert!(roundtrip_cfg.voice.afe.auto_gain_control);
+        assert_eq!(roundtrip_cfg.voice.vad.silence_timeout_ms, 400);
+        assert!(roundtrip_cfg.voice.auto_punctuation);
+        assert_eq!(
+            roundtrip_cfg.voice.engine_type,
+            waylan_core::VoiceEngineType::Offline
+        );
+        assert!(roundtrip_cfg.voice.selected_asr.is_none());
+        assert_eq!(roundtrip_cfg.voice.cloud_profiles.len(), 1);
+        assert_eq!(roundtrip_cfg.voice.cloud_profiles[0].name, "测试 OpenAI");
     }
 }

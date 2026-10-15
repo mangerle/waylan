@@ -1,0 +1,234 @@
+import { LineEdit } from "std-widgets.slint";
+import { SettingCard, PrimaryButton, SecondaryButton, CloudProfileItem } from "common.slint";
+
+export component VoiceCloudTab inherits VerticalLayout {
+    spacing: 16px;
+
+    in property <[CloudProfileItem]> cloud_profiles: [];
+    in property <bool> is_editing: false;
+    in-out property <string> edit_name: "";
+    in-out property <string> edit_endpoint: "https://api.openai.com/v1/audio/transcriptions";
+    in-out property <string> edit_key: "";
+    in-out property <string> edit_model: "whisper-1";
+
+    callback start_add_profile();
+    callback start_edit_profile(int);
+    callback delete_profile(int);
+    callback save_profile(string, string, string, string);
+    callback cancel_edit();
+    callback test_profile(int);
+
+    // 1. 顶部操作栏与说明卡片
+    SettingCard {
+        title: "Whisper 兼容云端语音服务管理";
+        subtitle: "配置支持 OpenAI Whisper API 协议的公网云端或局域网自建服务（如 OpenAI、Groq、FastWhisper 等）";
+
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: "配置完成后，该服务将自动作为 [云端] 候选模型列入【语音流水线】的 ASR 识别下拉框中供直接选用。";
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+            }
+
+            if !root.is_editing: HorizontalLayout {
+                alignment: end;
+                PrimaryButton {
+                    text: "+ 添加服务";
+                    clicked => { root.start_add_profile(); }
+                }
+            }
+        }
+    }
+
+    // 2. 编辑 / 新增表单卡片（条件展示）
+    if root.is_editing: SettingCard {
+        title: "编辑云端服务参数";
+        subtitle: "配置连接凭证与目标远端模型（API Key 仅安全保存在本地配置文件中）";
+
+        VerticalLayout {
+            spacing: 14px;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "服务备注名称 (将展示在 ASR 模型下拉列表中)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                LineEdit {
+                    text <=> root.edit_name;
+                    placeholder-text: "例如: OpenAI 官方 或 Groq 极速云";
+                    height: 32px;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "API 接口地址 (Endpoint URL)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                LineEdit {
+                    text <=> root.edit_endpoint;
+                    placeholder-text: "https://api.openai.com/v1/audio/transcriptions";
+                    height: 32px;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "API Key (身份密钥凭据)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                LineEdit {
+                    text <=> root.edit_key;
+                    placeholder-text: "sk-********************************";
+                    height: 32px;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "远端模型名称 (Model Identifier)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                LineEdit {
+                    text <=> root.edit_model;
+                    placeholder-text: "whisper-1 或 whisper-large-v3";
+                    height: 32px;
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 10px;
+                SecondaryButton {
+                    text: "取消";
+                    clicked => { root.cancel_edit(); }
+                }
+                PrimaryButton {
+                    text: "保存云端服务";
+                    clicked => {
+                        root.save_profile(root.edit_name, root.edit_endpoint, root.edit_key, root.edit_model);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 空列表友好引导卡片
+    if root.cloud_profiles.length == 0 && !root.is_editing: SettingCard {
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            Text {
+                text: "暂未配置任何云端服务。点击上方「+ 添加服务」即可配置 OpenAI、Groq 或本地 Whisper 服务。";
+                font-size: 13px;
+                color: #94a3b8;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // 4. 已配置的云端服务卡片列表
+    for profile[idx] in root.cloud_profiles: SettingCard {
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+
+            VerticalLayout {
+                spacing: 6px;
+                horizontal-stretch: 1;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text {
+                        text: profile.name;
+                        font-size: 14px;
+                        font-weight: 700;
+                        color: #0f172a;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        border-radius: 4px;
+                        background: #eff6ff;
+                        border-width: 1px;
+                        border-color: #bfdbfe;
+                        height: 20px;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            Text {
+                                text: "模型: " + profile.model;
+                                font-size: 11px;
+                                color: #1e40af;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    Rectangle {
+                        border-radius: 4px;
+                        background: profile.api_key == "未设置" ? #fff7ed : #f1f5f9;
+                        border-width: 1px;
+                        border-color: profile.api_key == "未设置" ? #fed7aa : #e2e8f0;
+                        height: 20px;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            Text {
+                                text: profile.api_key == "未设置" ? "未配置密钥" : "密钥: " + profile.api_key;
+                                font-size: 11px;
+                                color: profile.api_key == "未设置" ? #c2410c : #475569;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    if profile.is_active: Rectangle {
+                        border-radius: 4px;
+                        background: #f0fdf4;
+                        border-width: 1px;
+                        border-color: #bbf7d0;
+                        height: 20px;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            Text {
+                                text: "当前流水线使用中";
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: #15803d;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    text: "接口: " + profile.endpoint;
+                    font-size: 11px;
+                    color: #64748b;
+                    wrap: char-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                spacing: 8px;
+                alignment: end;
+
+                SecondaryButton {
+                    text: "测试";
+                    clicked => { root.test_profile(idx); }
+                }
+                SecondaryButton {
+                    text: "编辑";
+                    clicked => { root.start_edit_profile(idx); }
+                }
+                SecondaryButton {
+                    text: "删除";
+                    clicked => { root.delete_profile(idx); }
+                }
+            }
+        }
+    }
+}

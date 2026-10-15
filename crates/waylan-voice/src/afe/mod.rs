@@ -23,6 +23,8 @@ use waylan_core::AudioFrontEndConfig;
 
 /// 音频前端预处理全流水线控制器
 pub struct AudioFrontEndPipeline {
+    /// 是否开启前端预处理阶段总控
+    enabled: bool,
     /// 是否开启 80Hz 高通滤波
     enable_hpf: bool,
     /// 80Hz 高通滤波器
@@ -41,6 +43,7 @@ impl AudioFrontEndPipeline {
     /// 根据语音配置创建音频前端预处理管道
     pub fn new(config: &AudioFrontEndConfig) -> Self {
         Self {
+            enabled: config.enabled,
             enable_hpf: config.high_pass_filter,
             hpf: HighPassFilter::default(),
             enable_ns: config.noise_suppression,
@@ -52,7 +55,7 @@ impl AudioFrontEndPipeline {
 
     /// 对输入单声道 16kHz PCM 浮点音频切片就地执行三阶段音频增强
     pub fn process(&mut self, samples: &mut [f32]) {
-        if samples.is_empty() {
+        if !self.enabled || samples.is_empty() {
             return;
         }
 

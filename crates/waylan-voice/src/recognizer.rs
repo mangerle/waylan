@@ -401,9 +401,11 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
         let api_key = match &self.config.api_key {
             Some(key) if !key.trim().is_empty() => key.trim().to_string(),
             _ => {
-                warn!("[云端 ASR] 未配置有效的 API Key 凭据，无法发起远端识别");
                 self.reset();
-                return Ok("未配置云端 API Key".to_string());
+                return Err(VoiceError::RecognizerFailed {
+                    engine_type: "云端 Whisper".to_string(),
+                    message: "未配置有效的 API Key 凭据，无法发起远端识别".to_string(),
+                });
             }
         };
 
@@ -492,22 +494,45 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
                     }
                     Ok(resp_str)
                 } else {
-                    let err_msg = format!("云端服务器返回错误状态码: {}", status);
-                    warn!("[云端 ASR] {}", err_msg);
-                    Ok(err_msg)
+                    let status_text = resp.status_text().to_string();
+                    let resp_body = resp.into_string().unwrap_or_default();
+                    let detail = if !resp_body.trim().is_empty() {
+                        format!(
+                            "状态码: {} ({}), 详情: {}",
+                            status,
+                            status_text,
+                            resp_body.trim()
+                        )
+                    } else {
+                        format!("状态码: {} ({})", status, status_text)
+                    };
+                    Err(VoiceError::RecognizerFailed {
+                        engine_type: "云端 Whisper".to_string(),
+                        message: format!("远端服务器返回错误: {}", detail),
+                    })
                 }
             }
-            Err(e) => {
-                let err_msg = format!("请求云端语音识别服务失败: {}", e);
-                warn!("[云端 ASR] {}", err_msg);
-                Ok(err_msg)
-            }
+            Err(e) => Err(VoiceError::RecognizerFailed {
+                engine_type: "云端 Whisper".to_string(),
+                message: format!("请求远端语音识别服务失败: {}", e),
+            }),
         }
     }
 
     fn reset(&mut self) {
         self.pcm_buffer.clear();
     }
+}
+
+/// 测试云端服务接口连通性与远端响应
+///
+/// # Errors
+/// 当网络请求失败或参数错误时返回 VoiceError
+pub fn test_cloud_profile_connection(config: &CloudAsrConfig) -> Result<String, VoiceError> {
+    let mut recognizer = CloudVoiceRecognizer::new(config.clone());
+    let dummy_samples = vec![0.0f32; 8000];
+    recognizer.feed_pcm(&dummy_samples)?;
+    recognizer.finish()
 }
 
 /// 离线标点符号预测还原器（基于 sherpa-onnx CT-Transformer 标点模型）
@@ -628,6 +653,23 @@ impl Default for PunctuationRestorer {
 
 /// 识别引擎工厂函数：根据系统配置动态构造对应的识别器后端
 pub fn create_recognizer(config: &VoiceConfig) -> Box<dyn VoiceRecognizer> {
+    if let Some(ref sel) = config.selected_asr {
+        if let Some(profile_id) = sel.strip_prefix("cloud:") {
+            let cloud_cfg = config
+                .cloud_profiles
+                .iter()
+                .find(|p| p.id == profile_id)
+                .map(|p| waylan_core::CloudAsrConfig {
+                    provider: p.provider,
+                    endpoint: p.endpoint.clone(),
+                    api_key: p.api_key.clone(),
+                    model: p.model.clone(),
+                })
+                .unwrap_or_else(|| config.cloud.clone());
+            return Box::new(CloudVoiceRecognizer::new(cloud_cfg));
+        }
+    }
+
     match config.engine_type {
         VoiceEngineType::Offline => Box::new(OfflineVoiceRecognizer::new(config.offline.clone())),
         VoiceEngineType::Cloud => Box::new(CloudVoiceRecognizer::new(config.cloud.clone())),
@@ -686,8 +728,14 @@ mod tests {
         let mut rec = create_recognizer(&cfg);
         let chunk = vec![0.1; 16000];
         assert!(rec.feed_pcm(&chunk).unwrap().is_none());
-        let res = rec.finish().unwrap();
-        assert_eq!(res, "未配置云端 API Key");
+        let res = rec.finish();
+        assert!(res.is_err(), "未配置 API Key 时应当返回识别失败错误");
+        let err_str = res.unwrap_err().to_string();
+        assert!(
+            err_str.contains("未配置有效的 API Key 凭据"),
+            "错误信息应清晰提示 API Key 凭据缺失: {}",
+            err_str
+        );
     }
 
     #[test]

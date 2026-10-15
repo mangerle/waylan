@@ -3,6 +3,15 @@ export struct PhraseItem {
     text: string,
 }
 
+export struct CloudProfileItem {
+    id: string,
+    name: string,
+    endpoint: string,
+    api_key: string,
+    model: string,
+    is_active: bool,
+}
+
 export component Keycap inherits Rectangle {
     in property <string> text;
     border-radius: 4px;
@@ -216,6 +225,7 @@ export component SettingCard inherits Rectangle {
                 text: root.subtitle;
                 font-size: 12px;
                 color: #64748b;
+                wrap: word-wrap;
             }
         }
 
@@ -291,6 +301,57 @@ export component AppSlider inherits Rectangle {
             if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
                 self.update_from_pos(self.mouse-x);
             }
+        }
+    }
+}
+
+export component AppSwitch inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <string> text: "";
+    in property <bool> enabled: true;
+
+    height: 24px;
+    width: layout.preferred-width;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.checked = !root.checked; }
+    }
+
+    layout := HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+
+        // 椭圆轨道
+        Rectangle {
+            width: 36px;
+            height: 20px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 10px;
+            background: !root.enabled ? #e2e8f0 : (root.checked ? #2563eb : (touch.has-hover ? #cbd5e1 : #e2e8f0));
+            animate background { duration: 150ms; }
+
+            // 滑块白球
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                y: 2px;
+                x: root.checked ? 18px : 2px;
+                border-radius: 8px;
+                background: #ffffff;
+                drop-shadow-blur: 2px;
+                drop-shadow-color: #00000030;
+                animate x { duration: 150ms; easing: ease-out; }
+            }
+        }
+
+        // 状态文字反馈
+        if root.text != "": Text {
+            text: root.text;
+            font-size: 13px;
+            font-weight: 500;
+            color: root.enabled ? (touch.has-hover ? #0f172a : #334155) : #94a3b8;
+            vertical-alignment: center;
         }
     }
 }

@@ -24,8 +24,8 @@ pub use model_manager::{
     open_user_models_directory, user_models_dir, ModelItem,
 };
 pub use recognizer::{
-    create_recognizer, encode_pcm_to_wav, CloudVoiceRecognizer, MockVoiceRecognizer,
-    OfflineVoiceRecognizer, PunctuationRestorer, VoiceRecognizer,
+    create_recognizer, encode_pcm_to_wav, test_cloud_profile_connection, CloudVoiceRecognizer,
+    MockVoiceRecognizer, OfflineVoiceRecognizer, PunctuationRestorer, VoiceRecognizer,
 };
 pub use session::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 pub use vad::{

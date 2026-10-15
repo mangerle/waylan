@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::config_types::{
-    AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
+    AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig, CloudProfile,
     CloudProviderType, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules,
     NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, SwitchKey,
     ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType, VoiceConfig,

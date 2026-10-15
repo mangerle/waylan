@@ -1,5 +1,5 @@
 import { Button, ScrollView } from "std-widgets.slint";
-import { PhraseItem, NavItem, PrimaryButton } from "common.slint";
+import { PhraseItem, NavItem, PrimaryButton, CloudProfileItem } from "common.slint";
 import { GeneralTab } from "general_tab.slint";
 import { PinyinTab } from "pinyin_tab.slint";
 import { FuzzyTab } from "fuzzy_tab.slint";
@@ -9,7 +9,7 @@ import { ShortcutsTab } from "shortcuts_tab.slint";
 import { VoiceTab } from "voice_tab.slint";
 import { AboutTab } from "about_tab.slint";
 
-export { PhraseItem }
+export { PhraseItem, CloudProfileItem }
 
 export component SettingsWindow inherits Window {
     title: "WayLan Settings";
@@ -108,26 +108,35 @@ export component SettingsWindow inherits Window {
     in-out property <string> toggle_shortcut: "Ctrl + Alt + V";
     in-out property <int> ptt_shortcut_index: 0;
     in-out property <string> push_to_talk_shortcut: "F8";
-    in-out property <int> voice_engine_index: 0;
-    in-out property <bool> auto_punctuation: true;
-    in-out property <int> vad_silence_delay_index: 1;
-    in property <string> local_model_status: "已就绪: Paraformer 流式模型、Silero VAD 与 CT-Transformer 标点模型";
+    in-out property <bool> afe_enabled: true;
     in-out property <bool> high_pass_filter: true;
+    in-out property <bool> noise_suppression: true;
+    in property <[string]> ns_model_names: ["[内置] RNNoise 智能降噪 (轻量日常)", "[深度] DeepFilterNet3 (强力消除机械键盘)"];
+    in-out property <int> ns_model_index: 0;
     in-out property <bool> auto_gain_control: true;
-    in property <[string]> asr_model_names: ["[内置] 阿里 Paraformer (中文流式 int8)"];
-    in-out property <int> asr_model_index: 0;
+    in-out property <int> vad_silence_delay_index: 1;
     in property <[string]> vad_model_names: ["[内置] Silero VAD (神经网络模型)", "[算法] 纯能量门限 (零模型纯数学 RMS)"];
     in-out property <int> vad_model_index: 0;
+    in property <[string]> asr_model_names: ["[本地] 阿里 Paraformer (中文流式 int8)"];
+    in-out property <int> asr_model_index: 0;
+    in property <string> asr_notice_text: "当前处于【本地离线模式】: 采用阿里 Paraformer 流式 int8 ONNX 引擎，所有音频计算均在本地完成，零延迟、零网络依赖、保障隐私安全。";
+    in property <bool> is_asr_cloud: false;
+    in-out property <bool> auto_punctuation: true;
     in property <[string]> punct_model_names: ["[内置] CT-Transformer 深度标点 (int8)", "[规则] 基础句末规则兜底 (无模型)"];
     in-out property <int> punct_model_index: 0;
-    in property <[string]> ns_model_names: ["[内置] DeepFilterNet3 深度消音 (强力消除机械键盘)", "[内置] RNNoise 智能降噪 (纯代码零开销)", "[直通] 关闭人声降噪 (Bypass)"];
-    in-out property <int> ns_model_index: 0;
-    in-out property <string> cloud_endpoint: "https://api.openai.com/v1/audio/transcriptions";
-    in-out property <string> cloud_api_key: "";
-    in-out property <string> cloud_model: "whisper-1";
+
+    // 语音二级 Tab 与云端管理
+    in-out property <int> voice_sub_tab: 0;
+    in property <[CloudProfileItem]> cloud_profiles: [];
+    in property <bool> is_editing_cloud: false;
+    in-out property <string> edit_cloud_name: "";
+    in-out property <string> edit_cloud_endpoint: "https://api.openai.com/v1/audio/transcriptions";
+    in-out property <string> edit_cloud_key: "";
+    in-out property <string> edit_cloud_model: "whisper-1";
 
     // 全局操作反馈
     in property <string> global_status: "";
+    in property <bool> global_status_is_error: false;
 
     // 回调事件
     callback save_settings();
@@ -143,6 +152,12 @@ export component SettingsWindow inherits Window {
     callback import_punct_model();
     callback import_ns_model();
     callback open_models_directory();
+    callback start_add_cloud_profile();
+    callback start_edit_cloud_profile(int);
+    callback delete_cloud_profile(int);
+    callback save_cloud_profile(string, string, string, string);
+    callback cancel_cloud_edit();
+    callback test_cloud_profile(int);
 
     HorizontalLayout {
         // ---------------- 左侧菜单侧边栏 ----------------
@@ -264,6 +279,7 @@ export component SettingsWindow inherits Window {
 
         // ---------------- 右侧内容面板 ----------------
         VerticalLayout {
+            horizontal-stretch: 1;
             padding: 24px;
             spacing: 16px;
 
@@ -395,33 +411,53 @@ export component SettingsWindow inherits Window {
                     }
 
                     if root.active_tab == 6: VoiceTab {
+                        active_sub_tab <=> root.voice_sub_tab;
                         voice_enabled <=> root.voice_enabled;
                         toggle_shortcut_index <=> root.toggle_shortcut_index;
                         toggle_shortcut <=> root.toggle_shortcut;
                         ptt_shortcut_index <=> root.ptt_shortcut_index;
                         push_to_talk_shortcut <=> root.push_to_talk_shortcut;
-                        voice_engine_index <=> root.voice_engine_index;
-                        auto_punctuation <=> root.auto_punctuation;
-                        vad_silence_delay_index <=> root.vad_silence_delay_index;
-                        local_model_status: root.local_model_status;
+
+                        afe_enabled <=> root.afe_enabled;
                         high_pass_filter <=> root.high_pass_filter;
-                        auto_gain_control <=> root.auto_gain_control;
-                        asr_model_names: root.asr_model_names;
-                        asr_model_index <=> root.asr_model_index;
-                        vad_model_names: root.vad_model_names;
-                        vad_model_index <=> root.vad_model_index;
-                        punct_model_names: root.punct_model_names;
-                        punct_model_index <=> root.punct_model_index;
+                        noise_suppression <=> root.noise_suppression;
                         ns_model_names: root.ns_model_names;
                         ns_model_index <=> root.ns_model_index;
+                        auto_gain_control <=> root.auto_gain_control;
+
+                        vad_silence_delay_index <=> root.vad_silence_delay_index;
+                        vad_model_names: root.vad_model_names;
+                        vad_model_index <=> root.vad_model_index;
+
+                        asr_model_names: root.asr_model_names;
+                        asr_model_index <=> root.asr_model_index;
+                        asr_notice_text: root.asr_notice_text;
+                        is_asr_cloud: root.is_asr_cloud;
+
+                        auto_punctuation <=> root.auto_punctuation;
+                        punct_model_names: root.punct_model_names;
+                        punct_model_index <=> root.punct_model_index;
+
+                        cloud_profiles: root.cloud_profiles;
+                        is_editing_cloud: root.is_editing_cloud;
+                        edit_cloud_name <=> root.edit_cloud_name;
+                        edit_cloud_endpoint <=> root.edit_cloud_endpoint;
+                        edit_cloud_key <=> root.edit_cloud_key;
+                        edit_cloud_model <=> root.edit_cloud_model;
+
                         import_asr_model => { root.import_asr_model(); }
                         import_vad_model => { root.import_vad_model(); }
                         import_punct_model => { root.import_punct_model(); }
                         import_ns_model => { root.import_ns_model(); }
                         open_models_directory => { root.open_models_directory(); }
-                        cloud_endpoint <=> root.cloud_endpoint;
-                        cloud_api_key <=> root.cloud_api_key;
-                        cloud_model <=> root.cloud_model;
+                        start_add_cloud_profile => { root.start_add_cloud_profile(); }
+                        start_edit_cloud_profile(idx) => { root.start_edit_cloud_profile(idx); }
+                        delete_cloud_profile(idx) => { root.delete_cloud_profile(idx); }
+                        save_cloud_profile(name, endpoint, key, model) => {
+                            root.save_cloud_profile(name, endpoint, key, model);
+                        }
+                        cancel_cloud_edit => { root.cancel_cloud_edit(); }
+                        test_cloud_profile(idx) => { root.test_cloud_profile(idx); }
                     }
 
                     if root.active_tab == 7: AboutTab {
@@ -437,26 +473,36 @@ export component SettingsWindow inherits Window {
             }
 
             HorizontalLayout {
-                spacing: 12px;
-                alignment: end;
+                spacing: 16px;
+                alignment: space-between;
 
-                if root.global_status != "": Text {
-                    text: root.global_status;
-                    font-size: 13px;
-                    color: #059669;
-                    vertical-alignment: center;
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    alignment: start;
+
+                    if root.global_status != "": Text {
+                        text: root.global_status;
+                        font-size: 13px;
+                        color: root.global_status_is_error ? #dc2626 : #059669;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
                 }
 
-                Rectangle { } // 弹簧占位
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 12px;
+                    alignment: end;
 
-                Button {
-                    text: "恢复默认设置";
-                    clicked => { root.reset_defaults(); }
-                }
+                    Button {
+                        text: "恢复默认设置";
+                        clicked => { root.reset_defaults(); }
+                    }
 
-                PrimaryButton {
-                    text: "保存设置并应用";
-                    clicked => { root.save_settings(); }
+                    PrimaryButton {
+                        text: "保存设置并应用";
+                        clicked => { root.save_settings(); }
+                    }
                 }
             }
         }
