@@ -209,12 +209,20 @@ impl IbusSessionCore {
             while let Ok(event) = rx.try_recv() {
                 match event {
                     VoiceEvent::WaveformUpdated { waveform, .. } => {
-                        // 候选框保持精简优雅：仅展示纯粹的状态胶囊与音量波形，绝不将长段识别文字塞入候选框！
-                        self.voice_display_text = Some(format!("正在聆听中... {}", waveform));
+                        // 仅在开启波形浮动条时展示状态胶囊与音量波形
+                        if self.voice_config.interaction.show_floating_bar {
+                            self.voice_display_text = Some(format!("正在聆听中... {}", waveform));
+                        } else {
+                            self.voice_display_text = None;
+                        }
                     }
                     VoiceEvent::PartialText(text) => {
-                        // 实时流式文字仅记录在 voice_partial_text 中，由 UiSnapshot 投递至光标处内联预编辑带下划线显示
-                        self.voice_partial_text = Some(text);
+                        // 仅在开启实时文字预览时记录预编辑文本
+                        if self.voice_config.interaction.real_time_preview {
+                            self.voice_partial_text = Some(text);
+                        } else {
+                            self.voice_partial_text = None;
+                        }
                     }
                     VoiceEvent::SegmentCommit(text) => {
                         // VAD 自动断句分句上屏：直接提交当前整句至光标处，清空光标预编辑，但录音会话持续保持活跃！
@@ -626,7 +634,11 @@ impl IbusSessionCore {
                     } else {
                         self.is_push_to_talk_active = true;
                         self.push_to_talk_key = Some(evdev_key);
-                        self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                        if self.voice_config.interaction.show_floating_bar {
+                            self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                        } else {
+                            self.voice_display_text = None;
+                        }
                         self.voice_partial_text = None;
                         self.voice_event_rx = Some(rx);
                     }
@@ -694,7 +706,11 @@ impl IbusSessionCore {
                     } else {
                         self.is_push_to_talk_active = false;
                         self.push_to_talk_key = None;
-                        self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                        if self.voice_config.interaction.show_floating_bar {
+                            self.voice_display_text = Some("[语音] 正在聆听中... ▏▎▍".to_string());
+                        } else {
+                            self.voice_display_text = None;
+                        }
                         self.voice_partial_text = None;
                         self.voice_event_rx = Some(rx);
                     }

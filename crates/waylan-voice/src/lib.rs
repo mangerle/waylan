@@ -8,6 +8,7 @@
 pub mod afe;
 pub mod capture;
 pub mod error;
+pub mod itn;
 pub mod model_manager;
 pub mod recognizer;
 pub mod session;
@@ -18,6 +19,9 @@ pub use afe::{
 };
 pub use capture::{AudioCapture, LinearResampler, TARGET_SAMPLE_RATE};
 pub use error::VoiceError;
+pub use itn::{
+    apply_pangu_spacing, convert_chinese_numbers, filter_filler_words, normalize_voice_text,
+};
 pub use model_manager::{
     ensure_user_models_dirs, import_asr_model_dialog, import_ns_model_dialog,
     import_onnx_model_dialog, list_asr_models, list_ns_models, list_punct_models, list_vad_models,

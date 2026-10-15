@@ -8,7 +8,7 @@ pub use crate::config_types::{
     CloudProviderType, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules,
     NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, SwitchKey,
     ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType, VoiceConfig,
-    VoiceEngineType,
+    VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig,
 };
 
 /// 微澜输入法全局配置

@@ -461,10 +461,55 @@ pub struct VoiceConfig {
     pub cloud_profiles: Vec<CloudProfile>,
     /// 4. 音频前端预处理与降噪配置 (HPF + NS + AGC)
     pub afe: AudioFrontEndConfig,
+    /// 5. 文本规整与语气词过滤配置 (ITN)
+    pub itn: VoiceItnConfig,
+    /// 6. 交互展现与流式上屏配置
+    pub interaction: VoiceInteractionConfig,
     /// 麦克风音频输入设备名称（为 None 时自动使用系统默认设备）
     pub device_name: Option<String>,
     /// 自定义标点符号预测模型文件路径（为 None 时自动使用系统内置或默认模型）
     pub punct_model_path: Option<String>,
+}
+
+/// 阶段五：文本规整与语气词过滤 (ITN) 配置
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceItnConfig {
+    /// 是否开启大写数字自动转阿拉伯数字（如“三点五”转“3.5”）
+    pub convert_numbers: bool,
+    /// 是否开启口语停顿语气词与结巴自动过滤（过滤“呃、啊、这个、那个”等口癖）
+    pub filter_filler_words: bool,
+    /// 是否开启中英文自动盘古空格
+    pub pangu_spacing: bool,
+}
+
+impl Default for VoiceItnConfig {
+    fn default() -> Self {
+        Self {
+            convert_numbers: true,
+            filter_filler_words: true,
+            pangu_spacing: true,
+        }
+    }
+}
+
+/// 阶段六：交互展现与流式上屏配置
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceInteractionConfig {
+    /// 是否在光标处实时文字预览（边说边出字；关闭后为松手/停顿后整句上屏）
+    pub real_time_preview: bool,
+    /// 是否显示录音浮动波形条
+    pub show_floating_bar: bool,
+}
+
+impl Default for VoiceInteractionConfig {
+    fn default() -> Self {
+        Self {
+            real_time_preview: true,
+            show_floating_bar: true,
+        }
+    }
 }
 
 impl Default for VoiceConfig {
@@ -481,6 +526,8 @@ impl Default for VoiceConfig {
             cloud: CloudAsrConfig::default(),
             cloud_profiles: vec![CloudProfile::default()],
             afe: AudioFrontEndConfig::default(),
+            itn: VoiceItnConfig::default(),
+            interaction: VoiceInteractionConfig::default(),
             device_name: None,
             punct_model_path: None,
         }

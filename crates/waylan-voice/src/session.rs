@@ -313,6 +313,7 @@ impl VoiceSessionController {
                             recognizer,
                             punct_restorer,
                             voice_config.auto_punctuation,
+                            &voice_config.itn,
                         );
                         info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
                         let _ = event_tx.send(VoiceEvent::FinalCommit(final_text));
@@ -345,8 +346,10 @@ impl VoiceSessionController {
                     let now = Instant::now();
                     let rms = calculate_rms(&samples);
 
-                    // 刷新动态波形条（约 80ms 间隔）
-                    if now.duration_since(last_visual_time) >= Duration::from_millis(80) {
+                    // 刷新动态波形条（约 80ms 间隔，仅在开启浮动条时上报）
+                    if voice_config.interaction.show_floating_bar
+                        && now.duration_since(last_visual_time) >= Duration::from_millis(80)
+                    {
                         let wave = visualizer.update(rms);
                         if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) = event_tx
                             .try_send(VoiceEvent::WaveformUpdated {
@@ -373,6 +376,7 @@ impl VoiceSessionController {
                             &mut pre_speech_buffer,
                             &mut last_partial_text,
                             event_tx,
+                            voice_config.interaction.real_time_preview,
                         );
                         if !should_continue {
                             break;
@@ -391,6 +395,7 @@ impl VoiceSessionController {
                             recognizer,
                             punct_restorer,
                             voice_config.auto_punctuation,
+                            &voice_config.itn,
                         );
                         if !seg_text.is_empty() {
                             info!("[语音会话] 自动断句分句上屏结果: \"{}\"", seg_text);
@@ -444,6 +449,7 @@ impl VoiceSessionController {
         pre_speech_buffer: &mut VecDeque<f32>,
         last_partial_text: &mut String,
         event_tx: &SyncSender<VoiceEvent>,
+        real_time_preview: bool,
     ) -> bool {
         let feed_result = if !pre_speech_buffer.is_empty() {
             let mut combined = Vec::with_capacity(pre_speech_buffer.len() + samples.len());
@@ -459,11 +465,13 @@ impl VoiceSessionController {
                 if !partial.is_empty() && partial != *last_partial_text {
                     info!("[语音会话] 实时流式识别出字: \"{}\"", partial);
                     *last_partial_text = partial.clone();
-                    if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-                        event_tx.try_send(VoiceEvent::PartialText(partial))
-                    {
-                        info!("[语音会话] 外部事件通道已关闭，退出录音循环");
-                        return false;
+                    if real_time_preview {
+                        if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
+                            event_tx.try_send(VoiceEvent::PartialText(partial))
+                        {
+                            info!("[语音会话] 外部事件通道已关闭，退出录音循环");
+                            return false;
+                        }
                     }
                 }
             }
@@ -478,21 +486,20 @@ impl VoiceSessionController {
         true
     }
 
-    /// 提取最终整句识别文字并按需自动预测补全标点符号
+    /// 提取最终整句识别文字并按需自动预测补全标点符号及进行 ITN 规整
     fn extract_final_text(
         recognizer: &mut dyn VoiceRecognizer,
         punct_restorer: Option<&PunctuationRestorer>,
         auto_punctuation: bool,
+        itn_config: &waylan_core::VoiceItnConfig,
     ) -> String {
         let raw_text = recognizer.finish().unwrap_or_default();
         if raw_text.is_empty() {
             return String::new();
         }
-        if !auto_punctuation {
-            return raw_text;
-        }
-
-        if let Some(restorer) = punct_restorer {
+        let punct_text = if !auto_punctuation {
+            raw_text
+        } else if let Some(restorer) = punct_restorer {
             restorer.restore(&raw_text)
         } else {
             let mut fallback = raw_text;
@@ -504,7 +511,10 @@ impl VoiceSessionController {
                 fallback.push('。');
             }
             fallback
-        }
+        };
+
+        // 阶段五：文本规整与语气词过滤 (ITN)
+        crate::itn::normalize_voice_text(&punct_text, itn_config)
     }
 
     /// 提取当前语音识别器的关键配置指纹，用于识别器缓存失效判定
@@ -623,6 +633,7 @@ mod tests {
             &mut pre_buffer,
             &mut last_partial,
             &tx,
+            true,
         );
 
         assert!(res);
@@ -632,13 +643,15 @@ mod tests {
 
     #[test]
     fn test_extract_final_text_punctuation() {
+        let itn_cfg = waylan_core::VoiceItnConfig::default();
         let mut recognizer = MockVoiceRecognizer::new();
-        let text = VoiceSessionController::extract_final_text(&mut recognizer, None, true);
+        let text =
+            VoiceSessionController::extract_final_text(&mut recognizer, None, true, &itn_cfg);
         assert!(text.ends_with('。'));
 
         let mut recognizer2 = MockVoiceRecognizer::new();
         let text_no_punct =
-            VoiceSessionController::extract_final_text(&mut recognizer2, None, false);
+            VoiceSessionController::extract_final_text(&mut recognizer2, None, false, &itn_cfg);
         assert_eq!(text_no_punct, "微澜语音输入");
     }
 }
