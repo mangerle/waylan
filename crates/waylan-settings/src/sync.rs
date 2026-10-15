@@ -111,6 +111,9 @@ pub fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_filter_uncommon_charset(cfg.filter_uncommon_charset);
     window.set_show_pinyin_comment(cfg.show_pinyin_comment);
     window.set_auto_dedup(cfg.auto_dedup);
+
+    // 语音输入特性与模型同步
+    sync_voice_to_window(window, cfg);
 }
 
 /// 基于 Slint 界面属性增量更新已有的 AppConfig（保留未在界面中展示的高级配置项，防误清空）
@@ -213,7 +216,235 @@ pub fn update_config_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     cfg.filter_uncommon_charset = window.get_filter_uncommon_charset();
     cfg.show_pinyin_comment = window.get_show_pinyin_comment();
     cfg.auto_dedup = window.get_auto_dedup();
+
+    // 语音输入特性与模型同步
+    update_voice_from_window(window, cfg);
+
     cfg.sanitize();
+}
+
+/// 同步语音输入配置与模型状态至 Slint 界面属性
+fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
+    window.set_voice_enabled(cfg.voice.enabled);
+
+    // 连续听写开关快捷键 (Toggle)
+    let toggle_str = cfg.voice.toggle_shortcut.trim();
+    window.set_toggle_shortcut(slint::SharedString::from(toggle_str));
+    let toggle_idx = if toggle_str.is_empty()
+        || toggle_str.eq_ignore_ascii_case("disabled")
+        || toggle_str == "已禁用"
+    {
+        5
+    } else if toggle_str.eq_ignore_ascii_case("ctrl + alt + v")
+        || toggle_str.eq_ignore_ascii_case("ctrl+alt+v")
+    {
+        0
+    } else if toggle_str.eq_ignore_ascii_case("alt + space")
+        || toggle_str.eq_ignore_ascii_case("alt+space")
+    {
+        1
+    } else if toggle_str.eq_ignore_ascii_case("ctrl + space")
+        || toggle_str.eq_ignore_ascii_case("ctrl+space")
+    {
+        2
+    } else if toggle_str.eq_ignore_ascii_case("super + v")
+        || toggle_str.eq_ignore_ascii_case("super+v")
+    {
+        3
+    } else {
+        4
+    };
+    window.set_toggle_shortcut_index(toggle_idx);
+
+    // 长按对讲机快捷键 (Push-to-Talk)
+    let ptt_str = cfg.voice.push_to_talk_shortcut.trim();
+    window.set_push_to_talk_shortcut(slint::SharedString::from(ptt_str));
+    let ptt_idx = if ptt_str.is_empty()
+        || ptt_str.eq_ignore_ascii_case("disabled")
+        || ptt_str == "已禁用"
+    {
+        5
+    } else if ptt_str.eq_ignore_ascii_case("f8") {
+        0
+    } else if ptt_str.eq_ignore_ascii_case("alt + space")
+        || ptt_str.eq_ignore_ascii_case("alt+space")
+    {
+        1
+    } else if ptt_str.eq_ignore_ascii_case("ctrl + space")
+        || ptt_str.eq_ignore_ascii_case("ctrl+space")
+    {
+        2
+    } else if ptt_str.eq_ignore_ascii_case("super + v") || ptt_str.eq_ignore_ascii_case("super+v") {
+        3
+    } else {
+        4
+    };
+    window.set_ptt_shortcut_index(ptt_idx);
+
+    window.set_voice_engine_index(match cfg.voice.engine_type {
+        waylan_core::VoiceEngineType::Offline => 0,
+        waylan_core::VoiceEngineType::Cloud => 1,
+        waylan_core::VoiceEngineType::Mock => 0,
+    });
+    window.set_auto_punctuation(cfg.voice.auto_punctuation);
+    window.set_vad_silence_delay_index(match cfg.voice.vad.silence_timeout_ms {
+        0..=500 => 0,
+        501..=700 => 1,
+        701..=900 => 2,
+        _ => 3,
+    });
+    window.set_cloud_endpoint(slint::SharedString::from(&cfg.voice.cloud.endpoint));
+    window.set_cloud_api_key(slint::SharedString::from(
+        cfg.voice.cloud.api_key.as_deref().unwrap_or(""),
+    ));
+    window.set_cloud_model(slint::SharedString::from(&cfg.voice.cloud.model));
+
+    sync_voice_models_to_window(window, cfg);
+}
+
+/// 同步语音三大模型（ASR / VAD / 标点）列表与当前选中项至界面
+fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
+    let asr_models = waylan_voice::list_asr_models();
+    let asr_names: Vec<slint::SharedString> = asr_models
+        .iter()
+        .map(|m| slint::SharedString::from(&m.display_name))
+        .collect();
+    let mut asr_idx = 0;
+    if let Some(ref dir) = cfg.voice.offline.model_dir {
+        for (i, m) in asr_models.iter().enumerate() {
+            if m.path.as_deref() == Some(dir) {
+                asr_idx = i;
+                break;
+            }
+        }
+    }
+    window.set_asr_model_names(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(asr_names),
+    )));
+    window.set_asr_model_index(asr_idx as i32);
+
+    let vad_models = waylan_voice::list_vad_models();
+    let vad_names: Vec<slint::SharedString> = vad_models
+        .iter()
+        .map(|m| slint::SharedString::from(&m.display_name))
+        .collect();
+    let mut vad_idx = 0;
+    if cfg.voice.vad.vad_type == waylan_core::VadModelType::Energy {
+        vad_idx = 1;
+    } else if let Some(ref path) = cfg.voice.vad.model_path {
+        for (i, m) in vad_models.iter().enumerate() {
+            if m.path.as_deref() == Some(path) {
+                vad_idx = i;
+                break;
+            }
+        }
+    }
+    window.set_vad_model_names(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(vad_names),
+    )));
+    window.set_vad_model_index(vad_idx as i32);
+
+    let punct_models = waylan_voice::list_punct_models();
+    let punct_names: Vec<slint::SharedString> = punct_models
+        .iter()
+        .map(|m| slint::SharedString::from(&m.display_name))
+        .collect();
+    let mut punct_idx = 0;
+    if let Some(ref path) = cfg.voice.punct_model_path {
+        for (i, m) in punct_models.iter().enumerate() {
+            if m.path.as_deref() == Some(path) {
+                punct_idx = i;
+                break;
+            }
+        }
+    }
+    window.set_punct_model_names(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(punct_names),
+    )));
+    window.set_punct_model_index(punct_idx as i32);
+}
+
+/// 从 Slint 界面属性增量读取语音输入配置
+fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
+    cfg.voice.enabled = window.get_voice_enabled();
+
+    // 连续听写开关快捷键 (Toggle)
+    let toggle_str = window.get_toggle_shortcut().trim().to_string();
+    cfg.voice.toggle_shortcut = if window.get_toggle_shortcut_index() == 5
+        || toggle_str.is_empty()
+        || toggle_str.eq_ignore_ascii_case("disabled")
+        || toggle_str == "已禁用"
+    {
+        "已禁用".to_string()
+    } else {
+        toggle_str
+    };
+
+    // 长按对讲机快捷键 (Push-to-Talk)
+    let ptt_str = window.get_push_to_talk_shortcut().trim().to_string();
+    cfg.voice.push_to_talk_shortcut = if window.get_ptt_shortcut_index() == 5
+        || ptt_str.is_empty()
+        || ptt_str.eq_ignore_ascii_case("disabled")
+        || ptt_str == "已禁用"
+    {
+        "已禁用".to_string()
+    } else {
+        ptt_str
+    };
+
+    cfg.voice.engine_type = match window.get_voice_engine_index() {
+        1 => waylan_core::VoiceEngineType::Cloud,
+        _ => waylan_core::VoiceEngineType::Offline,
+    };
+    cfg.voice.auto_punctuation = window.get_auto_punctuation();
+    cfg.voice.vad.silence_timeout_ms = match window.get_vad_silence_delay_index() {
+        0 => 400,
+        2 => 800,
+        3 => 1000,
+        _ => 600,
+    };
+    cfg.voice.cloud.endpoint = window.get_cloud_endpoint().to_string();
+    let key = window.get_cloud_api_key().to_string();
+    cfg.voice.cloud.api_key = if key.trim().is_empty() {
+        None
+    } else {
+        Some(key.trim().to_string())
+    };
+    cfg.voice.cloud.model = window.get_cloud_model().to_string();
+
+    update_voice_models_from_window(window, cfg);
+}
+
+/// 从 Slint 界面属性读取模型选择并持久化至配置
+fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
+    let asr_models = waylan_voice::list_asr_models();
+    let asr_idx = window.get_asr_model_index() as usize;
+    if let Some(m) = asr_models.get(asr_idx) {
+        cfg.voice.offline.model_dir = m.path.clone();
+    }
+
+    let vad_models = waylan_voice::list_vad_models();
+    let vad_idx = window.get_vad_model_index() as usize;
+    if let Some(m) = vad_models.get(vad_idx) {
+        if m.path.as_deref() == Some("__energy__") {
+            cfg.voice.vad.vad_type = waylan_core::VadModelType::Energy;
+            cfg.voice.vad.model_path = None;
+        } else {
+            cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
+            cfg.voice.vad.model_path = m.path.clone();
+        }
+    }
+
+    let punct_models = waylan_voice::list_punct_models();
+    let punct_idx = window.get_punct_model_index() as usize;
+    if let Some(m) = punct_models.get(punct_idx) {
+        if m.path.as_deref() == Some("__rule_only__") {
+            cfg.voice.auto_punctuation = true;
+            cfg.voice.punct_model_path = Some("__rule_only__".to_string());
+        } else {
+            cfg.voice.punct_model_path = m.path.clone();
+        }
+    }
 }
 
 /// 从 Slint 界面属性读取并构造 AppConfig 数据
@@ -297,5 +528,25 @@ mod tests {
         );
         assert_eq!(updated_cfg.tray_icon_zh.as_deref(), Some("custom-zh.svg"));
         assert_eq!(updated_cfg.tray_icon_en.as_deref(), Some("custom-en.svg"));
+
+        // 验证语音双独立快捷键初始同步
+        assert_eq!(window.get_toggle_shortcut().as_str(), "Ctrl + Alt + V");
+        assert_eq!(window.get_toggle_shortcut_index(), 0);
+        assert_eq!(window.get_push_to_talk_shortcut().as_str(), "F8");
+        assert_eq!(window.get_ptt_shortcut_index(), 0);
+
+        // 模拟用户在 UI 界面自定义设置：切换长按对讲机为 Super + V，禁用连续听写
+        window.set_ptt_shortcut_index(3);
+        window.set_push_to_talk_shortcut("Super + V".into());
+        window.set_toggle_shortcut_index(5);
+        window.set_toggle_shortcut("已禁用".into());
+
+        update_config_from_window(&window, &mut updated_cfg);
+
+        // 验证语音快捷键修改并持久化成功
+        assert_eq!(updated_cfg.voice.push_to_talk_shortcut, "Super + V");
+        assert_eq!(updated_cfg.voice.toggle_shortcut, "已禁用");
+        assert!(updated_cfg.voice.get_effective_ptt_shortcut().is_some());
+        assert!(updated_cfg.voice.get_effective_toggle_shortcut().is_none());
     }
 }

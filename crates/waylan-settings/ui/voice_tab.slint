@@ -1,0 +1,425 @@
+import { ComboBox, LineEdit } from "std-widgets.slint";
+import { SettingCard, AppCheckBox, SecondaryButton } from "common.slint";
+
+export component VoiceTab inherits VerticalLayout {
+    spacing: 16px;
+    padding-right: 18px;
+
+    // 基础触发属性
+    in-out property <bool> voice_enabled: true;
+    in-out property <int> toggle_shortcut_index: 0; // 0: Ctrl+Alt+V, 1: Alt+Space, 2: Ctrl+Space, 3: Super+V, 4: 自定义, 5: 已禁用
+    in-out property <string> toggle_shortcut: "Ctrl + Alt + V";
+    in-out property <int> ptt_shortcut_index: 0; // 0: F8, 1: Alt+Space, 2: Ctrl+Space, 3: Super+V, 4: 自定义, 5: 已禁用
+    in-out property <string> push_to_talk_shortcut: "F8";
+    in-out property <int> voice_engine_index: 0; // 0: 本地离线, 1: 线上云端
+    in-out property <bool> auto_punctuation: true;
+    in-out property <int> vad_silence_delay_index: 1; // 0: 400ms, 1: 600ms, 2: 800ms, 3: 1000ms
+    in property <string> local_model_status: "已检测到阿里 Paraformer 离线流式模型与 Silero VAD";
+
+    // 本地三类模型的枚举列表与当前选中索引
+    in property <[string]> asr_model_names: ["系统内置: 阿里 Paraformer (中文流式 int8)"];
+    in-out property <int> asr_model_index: 0;
+    in property <[string]> vad_model_names: ["系统内置: Silero VAD (神经网络模型)", "纯能量门限 (零模型纯数学)"];
+    in-out property <int> vad_model_index: 0;
+    in property <[string]> punct_model_names: ["系统内置: CT-Transformer 深度标点预测", "基础句末规则兜底 (无模型)"];
+    in-out property <int> punct_model_index: 0;
+
+    // 回调事件
+    callback import_asr_model();
+    callback import_vad_model();
+    callback import_punct_model();
+    callback open_models_directory();
+
+    // 云端配置属性
+    in-out property <string> cloud_endpoint: "https://api.openai.com/v1/audio/transcriptions";
+    in-out property <string> cloud_api_key: "";
+    in-out property <string> cloud_model: "whisper-1";
+
+    // 1. 基础开关与快捷按键卡片
+    SettingCard {
+        title: "语音输入与触发控制";
+        subtitle: "配置系统语音转文字（ASR）的双独立快捷键（连续听写开关与长按对讲机）与标点自动补全";
+
+        VerticalLayout {
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "启用语音输入功能"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "按下指定快捷键启动麦克风录音，自动将人声转换为汉字文本";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppCheckBox {
+                        text: root.voice_enabled ? "已开启" : "已关闭";
+                        checked <=> root.voice_enabled;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 1. 连续听写开关快捷键 (Toggle)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "连续听写开关快捷键 (Toggle)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "敲击一次开启持续录音，VAD 分句自动断句上屏，回车键 Enter 或再次敲击结束";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 8px;
+                    alignment: end;
+                    ComboBox {
+                        model: ["Ctrl + Alt + V", "Alt + Space", "Ctrl + Space", "Super + V", "自定义快捷键", "已禁用"];
+                        current-index <=> root.toggle_shortcut_index;
+                        width: 140px;
+                        selected(text) => {
+                            if (root.toggle_shortcut_index == 0) { root.toggle_shortcut = "Ctrl + Alt + V"; }
+                            if (root.toggle_shortcut_index == 1) { root.toggle_shortcut = "Alt + Space"; }
+                            if (root.toggle_shortcut_index == 2) { root.toggle_shortcut = "Ctrl + Space"; }
+                            if (root.toggle_shortcut_index == 3) { root.toggle_shortcut = "Super + V"; }
+                            if (root.toggle_shortcut_index == 5) { root.toggle_shortcut = "已禁用"; }
+                        }
+                    }
+                    LineEdit {
+                        text <=> root.toggle_shortcut;
+                        placeholder-text: "如: Ctrl + Alt + V";
+                        width: 115px;
+                        edited(text) => {
+                            root.toggle_shortcut_index = 4;
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 2. 长按对讲机快捷键 (Push-to-Talk)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "长按对讲机快捷键 (Push-to-Talk)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "按住快捷键说话，松手（按键抬起）瞬间立即断句上屏并关闭录音";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 8px;
+                    alignment: end;
+                    ComboBox {
+                        model: ["F8 (单键推荐)", "Alt + Space", "Ctrl + Space", "Super + V", "自定义快捷键", "已禁用"];
+                        current-index <=> root.ptt_shortcut_index;
+                        width: 140px;
+                        selected(text) => {
+                            if (root.ptt_shortcut_index == 0) { root.push_to_talk_shortcut = "F8"; }
+                            if (root.ptt_shortcut_index == 1) { root.push_to_talk_shortcut = "Alt + Space"; }
+                            if (root.ptt_shortcut_index == 2) { root.push_to_talk_shortcut = "Ctrl + Space"; }
+                            if (root.ptt_shortcut_index == 3) { root.push_to_talk_shortcut = "Super + V"; }
+                            if (root.ptt_shortcut_index == 5) { root.push_to_talk_shortcut = "已禁用"; }
+                        }
+                    }
+                    LineEdit {
+                        text <=> root.push_to_talk_shortcut;
+                        placeholder-text: "如: F8";
+                        width: 115px;
+                        edited(text) => {
+                            root.ptt_shortcut_index = 4;
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "自动预测并添加标点符号"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "利用 CT-Transformer 标点模型或智能规则自动在句子中插入逗号、句号与问号";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppCheckBox {
+                        text: root.auto_punctuation ? "已开启" : "已关闭";
+                        checked <=> root.auto_punctuation;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 识别引擎与离线推理参数
+    SettingCard {
+        title: "识别引擎与端点检测 (VAD)";
+        subtitle: "自由切换端侧纯离线推理或公网云端服务，调节静音截断时间";
+
+        VerticalLayout {
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "语音识别引擎模式"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "端侧本地离线模式零网络依赖且保护隐私；云端服务支持超大参数模型";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    ComboBox {
+                        model: ["端侧本地离线 (Paraformer)", "线上云端服务 (Whisper API)"];
+                        current-index <=> root.voice_engine_index;
+                        width: 210px;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "VAD 静音停顿截断时长"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "检测到说话停顿超过设定毫秒后，自动判定句子结束并立即上屏提交";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    ComboBox {
+                        model: ["400 毫秒 (快速)", "600 毫秒 (推荐平衡)", "800 毫秒 (宽松)", "1000 毫秒 (慢速)"];
+                        current-index <=> root.vad_silence_delay_index;
+                        width: 170px;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 本地模型部署状态展示
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "本地离线模型状态"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: root.local_model_status;
+                    font-size: 12px;
+                    color: #059669;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "基础模型由系统内置提供 (/usr/share/waylan/models/)，也支持在 ~/.local/share/waylan/models/ 中覆盖自定义模型。";
+                    font-size: 11px;
+                    color: #94a3b8;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+
+    // 3. 本地离线模型选择与导入卡片
+    SettingCard {
+        title: "本地离线模型管理与导入";
+        subtitle: "切换不同模型架构或自由导入个人私有模型，模型保存在 ~/.local/share/waylan/models/ 绝不丢失";
+
+        VerticalLayout {
+            spacing: 16px;
+
+            // ASR 识别模型
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "语音识别 (ASR) 模型"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    SecondaryButton {
+                        text: "导入模型目录";
+                        clicked => { root.import_asr_model(); }
+                    }
+                }
+                Text {
+                    text: "负责将采集到的音频流实时转写为文字序列";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+                ComboBox {
+                    model: root.asr_model_names;
+                    current-index <=> root.asr_model_index;
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // VAD 端点检测模型
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "语音活动检测 (VAD) 模型"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    SecondaryButton {
+                        text: "导入 VAD 文件";
+                        clicked => { root.import_vad_model(); }
+                    }
+                }
+                Text {
+                    text: "负责实时人声探测与智能静音停顿截断判定";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+                ComboBox {
+                    model: root.vad_model_names;
+                    current-index <=> root.vad_model_index;
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 标点符号预测模型
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "标点符号预测还原模型"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    SecondaryButton {
+                        text: "导入标点文件";
+                        clicked => { root.import_punct_model(); }
+                    }
+                }
+                Text {
+                    text: "负责为长文本流自动预测还原逗号、句号与问号等符号";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+                ComboBox {
+                    model: root.punct_model_names;
+                    current-index <=> root.punct_model_index;
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 底部操作与存储提示
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text {
+                        text: "用户模型存储目录: ~/.local/share/waylan/models/";
+                        font-size: 11px;
+                        color: #64748b;
+                    }
+                    Text {
+                        text: "系统升级重装仅触碰 /usr/ 目录，用户导入的模型与个性化词库受到操作系统物理保护，绝不被破坏。";
+                        font-size: 11px;
+                        color: #94a3b8;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    SecondaryButton {
+                        text: "打开模型存放目录";
+                        clicked => { root.open_models_directory(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. 线上云端 API 配置卡片（仅当选择云端时重点关注）
+    SettingCard {
+        title: "线上云端识别服务配置 (Whisper 兼容)";
+        subtitle: "支持 OpenAI Whisper、Groq、FastWhisper、OneAPI 及各类自建 HTTP 转写接口";
+
+        VerticalLayout {
+            spacing: 14px;
+
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "API 接口地址 (Endpoint)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                LineEdit {
+                    text <=> root.cloud_endpoint;
+                    placeholder-text: "https://api.openai.com/v1/audio/transcriptions";
+                    height: 32px;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "API Key (身份凭据)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                LineEdit {
+                    text <=> root.cloud_api_key;
+                    placeholder-text: "sk-********************************";
+                    height: 32px;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "模型名称 (Model)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                LineEdit {
+                    text <=> root.cloud_model;
+                    placeholder-text: "whisper-1";
+                    height: 32px;
+                }
+            }
+        }
+    }
+}

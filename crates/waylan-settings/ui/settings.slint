@@ -6,6 +6,7 @@ import { FuzzyTab } from "fuzzy_tab.slint";
 import { DictTab } from "dict_tab.slint";
 import { UserDataTab } from "user_data_tab.slint";
 import { ShortcutsTab } from "shortcuts_tab.slint";
+import { VoiceTab } from "voice_tab.slint";
 import { AboutTab } from "about_tab.slint";
 
 export { PhraseItem }
@@ -13,13 +14,13 @@ export { PhraseItem }
 export component SettingsWindow inherits Window {
     title: "WayLan Settings";
     icon: @image-url("../../../assets/waylan.svg");
-    min-width: 800px;
-    min-height: 540px;
-    preferred-width: 860px;
-    preferred-height: 600px;
+    min-width: 860px;
+    min-height: 560px;
+    preferred-width: 900px;
+    preferred-height: 620px;
     background: #f8fafc;
 
-    // 导航项索引 (0: 常规, 1: 拼音模式, 2: 模糊音, 3: 词典, 4: 用户数据, 5: 快捷键, 6: 关于)
+    // 导航项索引 (0: 常规, 1: 拼音模式, 2: 模糊音, 3: 词典, 4: 用户数据, 5: 快捷键, 6: 语音输入, 7: 关于)
     in-out property <int> active_tab: 0;
 
     // 应用程序版本（由 Rust 在启动时通过 env!("CARGO_PKG_VERSION") 动态注入）
@@ -101,6 +102,26 @@ export component SettingsWindow inherits Window {
     in-out property <int> full_width_char_shortcut_index: 0;
     in-out property <int> full_width_punct_shortcut_index: 0;
 
+    // 语音输入属性
+    in-out property <bool> voice_enabled: true;
+    in-out property <int> toggle_shortcut_index: 0;
+    in-out property <string> toggle_shortcut: "Ctrl + Alt + V";
+    in-out property <int> ptt_shortcut_index: 0;
+    in-out property <string> push_to_talk_shortcut: "F8";
+    in-out property <int> voice_engine_index: 0;
+    in-out property <bool> auto_punctuation: true;
+    in-out property <int> vad_silence_delay_index: 1;
+    in property <string> local_model_status: "已就绪: Paraformer 流式模型、Silero VAD 与 CT-Transformer 标点模型";
+    in property <[string]> asr_model_names: ["系统内置: 阿里 Paraformer (中文流式 int8)"];
+    in-out property <int> asr_model_index: 0;
+    in property <[string]> vad_model_names: ["系统内置: Silero VAD (神经网络模型)", "纯能量门限 (零模型纯数学)"];
+    in-out property <int> vad_model_index: 0;
+    in property <[string]> punct_model_names: ["系统内置: CT-Transformer 深度标点预测", "基础句末规则兜底 (无模型)"];
+    in-out property <int> punct_model_index: 0;
+    in-out property <string> cloud_endpoint: "https://api.openai.com/v1/audio/transcriptions";
+    in-out property <string> cloud_api_key: "";
+    in-out property <string> cloud_model: "whisper-1";
+
     // 全局操作反馈
     in property <string> global_status: "";
 
@@ -113,6 +134,10 @@ export component SettingsWindow inherits Window {
     callback add_custom_phrase(string, string);
     callback delete_custom_phrase(int);
     callback clear_user_model();
+    callback import_asr_model();
+    callback import_vad_model();
+    callback import_punct_model();
+    callback open_models_directory();
 
     HorizontalLayout {
         // ---------------- 左侧菜单侧边栏 ----------------
@@ -210,10 +235,16 @@ export component SettingsWindow inherits Window {
                     clicked => { root.active_tab = 5; }
                 }
                 NavItem {
-                    icon: @image-url("../../../assets/icons/nav_about.svg");
-                    title: "关于";
+                    icon: @image-url("../../../assets/icons/nav_voice.svg");
+                    title: "语音输入";
                     active: root.active_tab == 6;
                     clicked => { root.active_tab = 6; }
+                }
+                NavItem {
+                    icon: @image-url("../../../assets/icons/nav_about.svg");
+                    title: "关于";
+                    active: root.active_tab == 7;
+                    clicked => { root.active_tab = 7; }
                 }
 
                 Rectangle { } // 弹性占位
@@ -240,7 +271,8 @@ export component SettingsWindow inherits Window {
                           root.active_tab == 2 ? "模糊音" :
                           root.active_tab == 3 ? "词典" :
                           root.active_tab == 4 ? "用户数据" :
-                          root.active_tab == 5 ? "快捷键" : "关于";
+                          root.active_tab == 5 ? "快捷键" :
+                          root.active_tab == 6 ? "语音输入" : "关于";
                     font-size: 20px;
                     font-weight: 700;
                     color: #0f172a;
@@ -251,7 +283,8 @@ export component SettingsWindow inherits Window {
                           root.active_tab == 2 ? "配置平翘舌、前后鼻音与易混淆音节模糊匹配规则" :
                           root.active_tab == 3 ? "查看系统词库状态，导入外部拼音、英文与符号词库" :
                           root.active_tab == 4 ? "管理用户快捷短语展开规则与自适应历史自造词记忆" :
-                          root.active_tab == 5 ? "配置中英切换键，查看输入法预设快捷键映射指南" : "微澜输入法版本信息、技术架构与开源许可声明";
+                          root.active_tab == 5 ? "配置中英切换键，查看输入法预设快捷键映射指南" :
+                          root.active_tab == 6 ? "配置语音输入快捷按键、端侧离线 Paraformer 模型、标点预测与云端服务" : "微澜输入法版本信息、技术架构与开源许可声明";
                     font-size: 12px;
                     color: #64748b;
                 }
@@ -356,7 +389,32 @@ export component SettingsWindow inherits Window {
                         full_width_punct_shortcut_index <=> root.full_width_punct_shortcut_index;
                     }
 
-                    if root.active_tab == 6: AboutTab {
+                    if root.active_tab == 6: VoiceTab {
+                        voice_enabled <=> root.voice_enabled;
+                        toggle_shortcut_index <=> root.toggle_shortcut_index;
+                        toggle_shortcut <=> root.toggle_shortcut;
+                        ptt_shortcut_index <=> root.ptt_shortcut_index;
+                        push_to_talk_shortcut <=> root.push_to_talk_shortcut;
+                        voice_engine_index <=> root.voice_engine_index;
+                        auto_punctuation <=> root.auto_punctuation;
+                        vad_silence_delay_index <=> root.vad_silence_delay_index;
+                        local_model_status: root.local_model_status;
+                        asr_model_names: root.asr_model_names;
+                        asr_model_index <=> root.asr_model_index;
+                        vad_model_names: root.vad_model_names;
+                        vad_model_index <=> root.vad_model_index;
+                        punct_model_names: root.punct_model_names;
+                        punct_model_index <=> root.punct_model_index;
+                        import_asr_model => { root.import_asr_model(); }
+                        import_vad_model => { root.import_vad_model(); }
+                        import_punct_model => { root.import_punct_model(); }
+                        open_models_directory => { root.open_models_directory(); }
+                        cloud_endpoint <=> root.cloud_endpoint;
+                        cloud_api_key <=> root.cloud_api_key;
+                        cloud_model <=> root.cloud_model;
+                    }
+
+                    if root.active_tab == 7: AboutTab {
                         app_version: root.app_version;
                     }
                 }

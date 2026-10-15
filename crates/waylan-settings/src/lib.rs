@@ -248,6 +248,84 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    // 11. 注册语音模型导入与目录管理回调
+    let window_weak = window.as_weak();
+    let current_cfg_cell = loaded_config.clone();
+    window.on_import_asr_model(move || {
+        if let Some(win) = window_weak.upgrade() {
+            if let Some(imported_path) = waylan_voice::import_asr_model_dialog() {
+                let name = imported_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                win.set_global_status(SharedString::from(format!(
+                    "成功导入 ASR 模型目录: {}",
+                    name
+                )));
+                let mut cfg = current_cfg_cell.borrow().clone();
+                cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
+                let _ = cfg.save_default();
+                *current_cfg_cell.borrow_mut() = cfg.clone();
+                sync_config_to_window(&win, &cfg);
+            }
+        }
+    });
+
+    let window_weak = window.as_weak();
+    let current_cfg_cell = loaded_config.clone();
+    window.on_import_vad_model(move || {
+        if let Some(win) = window_weak.upgrade() {
+            if let Some(imported_path) = waylan_voice::import_onnx_model_dialog(
+                "vad",
+                "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
+            ) {
+                let name = imported_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                win.set_global_status(SharedString::from(format!("成功导入 VAD 模型: {}", name)));
+                let mut cfg = current_cfg_cell.borrow().clone();
+                cfg.voice.vad.model_path = Some(imported_path.to_string_lossy().to_string());
+                cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
+                let _ = cfg.save_default();
+                *current_cfg_cell.borrow_mut() = cfg.clone();
+                sync_config_to_window(&win, &cfg);
+            }
+        }
+    });
+
+    let window_weak = window.as_weak();
+    let current_cfg_cell = loaded_config;
+    window.on_import_punct_model(move || {
+        if let Some(win) = window_weak.upgrade() {
+            if let Some(imported_path) = waylan_voice::import_onnx_model_dialog(
+                "punct",
+                "请选择要导入的标点符号预测模型文件 (.onnx)",
+            ) {
+                let name = imported_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                win.set_global_status(SharedString::from(format!(
+                    "成功导入标点预测模型: {}",
+                    name
+                )));
+                let mut cfg = current_cfg_cell.borrow().clone();
+                cfg.voice.punct_model_path = Some(imported_path.to_string_lossy().to_string());
+                let _ = cfg.save_default();
+                *current_cfg_cell.borrow_mut() = cfg.clone();
+                sync_config_to_window(&win, &cfg);
+            }
+        }
+    });
+
+    window.on_open_models_directory(move || {
+        waylan_voice::open_user_models_directory();
+    });
+
     window.run()?;
     Ok(())
 }
@@ -346,6 +424,7 @@ mod tests {
             tray_icon_theme_path: Some("/custom/icons".into()),
             tray_icon_zh: Some("custom-zh".into()),
             tray_icon_en: Some("custom-en".into()),
+            voice: waylan_core::VoiceConfig::default(),
         };
         cfg.sanitize();
 

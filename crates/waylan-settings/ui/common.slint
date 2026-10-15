@@ -54,6 +54,35 @@ export component PrimaryButton inherits Rectangle {
     }
 }
 
+export component SecondaryButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+
+    height: 30px;
+    min-width: 96px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: touch.has-hover ? #94a3b8 : #cbd5e1;
+    background: touch.pressed ? #e2e8f0 : (touch.has-hover ? #f8fafc : #ffffff);
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+        Text {
+            text: root.text;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component AppCheckBox inherits Rectangle {
     in-out property <bool> checked: false;
     in property <string> text;
