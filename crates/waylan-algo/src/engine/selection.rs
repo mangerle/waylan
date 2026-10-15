@@ -118,7 +118,7 @@ impl AlgoEngine {
         }
 
         // 计算消费的拼音字母长度并执行分段确认（优先直接读取候选词产生时统一标记的 consumed_len，避免重复构图）
-        let consumed_len = if let Some(len) = selected.consumed_len {
+        let mut consumed_len = if let Some(len) = selected.consumed_len {
             len.min(self.composition.len())
         } else if selected.is_expandable
             || selected.tier == CandidateTier::TypoCorrection
@@ -127,8 +127,27 @@ impl AlgoEngine {
         {
             self.composition.len()
         } else {
-            Self::compute_consumed_len(self.composition.as_str(), &selected.pinyin)
+            let calculated =
+                Self::calculate_consumed_len(self.composition.as_str(), &selected.pinyin, &[]);
+            if calculated > 0 {
+                calculated
+            } else {
+                Self::compute_consumed_len(self.composition.as_str(), &selected.pinyin)
+            }
         };
+
+        // 核心安全保底：用户主动选词提交时，消费长度绝对不可为 0！
+        // 若经过多级音节对齐计算后消费长度仍为 0，说明候选词属于整段联想或长词补全，
+        // 必须保底消费全部剩余拼音，彻底消除状态机死锁与重复上屏。
+        if consumed_len == 0 {
+            log::warn!(
+                "[算法引擎] 选词提交消费长度为 0，触发安全保底消费全部拼音: 词条=\"{}\", 拼音=\"{}\", 剩余拼音=\"{}\"",
+                selected.text,
+                selected.pinyin,
+                self.composition.as_str()
+            );
+            consumed_len = self.composition.len();
+        }
 
         if should_record {
             self.partial_commit_segments

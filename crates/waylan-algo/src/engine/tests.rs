@@ -339,3 +339,31 @@ fn test_select_candidate_partial_commit_consumed_len() {
         assert_eq!(engine.raw_input(), "ma", "引擎剩余拼音应为 ma");
     }
 }
+
+#[test]
+fn test_select_candidate_zero_consumed_len_fallback() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    for ch in "nihaoma".chars() {
+        engine.push_char(ch);
+    }
+    assert!(!engine.candidates().is_empty());
+
+    // 人工插入一个 consumed_len 为 Some(0) 或失配的候选词到首位，验证强健的保底机制
+    let mut mock_cand = engine.candidates()[0].clone();
+    mock_cand.consumed_len = Some(0);
+    mock_cand.pinyin = "qun'ze".to_string();
+    engine.current_candidates.insert(0, mock_cand);
+
+    // 选中该候选词上屏
+    let result = engine.select_candidate(0, 1000);
+    assert!(result.is_some(), "选词必须成功");
+    let (_, remaining_len) = result.unwrap();
+
+    // 断言：安全保底必须生效，消费全部拼音，剩余拼音长度归零，绝对不可死锁
+    assert_eq!(
+        remaining_len, 0,
+        "消费长度为 0 的异常候选词提交后必须保底消费全部拼音"
+    );
+    assert!(engine.raw_input().is_empty(), "引擎拼音必须完全清空");
+    assert!(engine.candidates().is_empty(), "候选词列表必须完全清空");
+}

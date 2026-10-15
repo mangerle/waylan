@@ -217,6 +217,9 @@ impl IbusEngineService {
             )
             .await;
         }
+        if !preedit_visible {
+            let _ = Self::hide_preedit_text(ctxt).await;
+        }
 
         let table_visible = !snap.candidates.is_empty();
         if let Ok(table_val) = build_ibus_lookup_table(
@@ -227,6 +230,9 @@ impl IbusEngineService {
             snap.index_style,
         ) {
             let _ = Self::update_lookup_table(ctxt, Value::from(table_val), table_visible).await;
+        }
+        if !table_visible {
+            let _ = Self::hide_lookup_table(ctxt).await;
         }
     }
 
@@ -277,6 +283,8 @@ impl IbusEngineService {
             UiSnapshot::capture(&guard)
         };
         Self::emit_ui_snapshot(ctxt, &snap).await;
+        let _ = Self::hide_preedit_text(ctxt).await;
+        let _ = Self::hide_lookup_table(ctxt).await;
     }
 }
 
@@ -685,6 +693,9 @@ impl IbusEngineService {
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
+    pub async fn hide_preedit_text(ctxt: &SignalContext<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
     pub async fn update_auxiliary_text(
         ctxt: &SignalContext<'_>,
         text: Value<'_>,
@@ -697,6 +708,9 @@ impl IbusEngineService {
         table: Value<'_>,
         visible: bool,
     ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn hide_lookup_table(ctxt: &SignalContext<'_>) -> zbus::Result<()>;
 
     #[zbus(signal)]
     pub async fn register_properties(

@@ -827,8 +827,19 @@ impl IbusSessionCore {
                     ..Default::default()
                 })
             }
-            KeyProcessAction::Commit(committed)
-            | KeyProcessAction::CommitPartial { committed, .. } => Some(IbusKeyOutcome {
+            KeyProcessAction::Commit(committed) => {
+                // 完整选词提交上屏时，防御性确保算法引擎内部拼音完全清空，杜绝残余状态影响后续按键
+                if !self.engine.raw_input().is_empty() {
+                    self.engine.reset();
+                }
+                Some(IbusKeyOutcome {
+                    consumed: true,
+                    commit_text: Some(committed),
+                    update_ui: true,
+                    ..Default::default()
+                })
+            }
+            KeyProcessAction::CommitPartial { committed, .. } => Some(IbusKeyOutcome {
                 consumed: true,
                 commit_text: Some(committed),
                 update_ui: true,
