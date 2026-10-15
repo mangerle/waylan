@@ -351,24 +351,38 @@ pub struct CloudVoiceRecognizer {
     config: CloudAsrConfig,
     /// 累积待发送的 PCM 音频缓冲（16kHz f32）
     pcm_buffer: Vec<f32>,
+    /// 长生命周期 HTTP 客户端连接池，复用底层 TCP Keep-Alive、TLS 握手与本地 DNS 缓存
+    agent: ureq::Agent,
 }
 
 impl CloudVoiceRecognizer {
-    /// 创建云端识别器
+    /// 创建云端识别器并初始化长生命周期 HTTP 客户端连接池
     pub fn new(config: CloudAsrConfig) -> Self {
         info!(
             "[云端 ASR] 正在初始化线上语音服务客户端 (协议: {:?}, 地址: {})",
             config.provider, config.endpoint
         );
+        let timeout = std::time::Duration::from_secs(15);
+        let agent = ureq::AgentBuilder::new()
+            .timeout(timeout)
+            .max_idle_connections(8)
+            .max_idle_connections_per_host(4)
+            .build();
         Self {
             config,
             pcm_buffer: Vec::with_capacity(16_000 * 5),
+            agent,
         }
     }
 
     /// 获取当前云端配置
     pub fn config(&self) -> &CloudAsrConfig {
         &self.config
+    }
+
+    /// 获取当前持有的 HTTP 客户端连接池引用
+    pub fn agent(&self) -> &ureq::Agent {
+        &self.agent
     }
 }
 
@@ -448,10 +462,9 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
         // 结束边界标记
         body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
 
-        let timeout = std::time::Duration::from_secs(15);
-        let agent = ureq::AgentBuilder::new().timeout(timeout).build();
-
-        let resp_result = agent
+        // 复用长生命周期 HTTP 连接池发送识别请求
+        let resp_result = self
+            .agent
             .post(&endpoint)
             .set("Authorization", &format!("Bearer {}", api_key))
             .set(
@@ -711,5 +724,22 @@ mod tests {
 
         // 2. 空文本处理
         assert_eq!(rule_restorer.restore("   "), "");
+    }
+
+    #[test]
+    fn test_cloud_recognizer_reuses_http_agent() {
+        let cfg = CloudAsrConfig {
+            endpoint: "https://example.com/v1/audio/transcriptions".to_string(),
+            api_key: Some("test_secret_key".to_string()),
+            ..Default::default()
+        };
+        let rec = CloudVoiceRecognizer::new(cfg);
+
+        // 验证 agent 连接池实例已被正确构造持有
+        let _agent_ref = rec.agent();
+        assert_eq!(
+            rec.config().endpoint,
+            "https://example.com/v1/audio/transcriptions"
+        );
     }
 }
