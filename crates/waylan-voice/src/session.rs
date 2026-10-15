@@ -205,12 +205,6 @@ impl VoiceSessionController {
         while let Ok(cmd) = cmd_rx.recv() {
             match cmd {
                 WorkerCommand::Start { options, event_tx } => {
-                    // 若在工作线程处理前主线程已触发取消，直接忽略本次启动
-                    if !is_active.load(Ordering::Acquire) {
-                        info!("[语音会话] 录音启动前已被主线程取消，跳过本次录制");
-                        continue;
-                    }
-
                     // 1. 若配置中引擎类型、目标服务、云端凭据或离线模型目录发生变更，主动失效识别器缓存以实现热切换
                     let current_fingerprint = Self::compute_asr_fingerprint(&options.voice_config);
                     if last_asr_fingerprint.as_ref() != Some(&current_fingerprint) {
@@ -308,12 +302,7 @@ impl VoiceSessionController {
             VecDeque::with_capacity(PRE_SPEECH_BUFFER_CAPACITY);
 
         loop {
-            if !is_active.load(Ordering::Acquire) {
-                info!("[语音会话] 检测到外部会话已取消或关闭，平滑退出录音循环");
-                break;
-            }
-
-            // 1. 检查外部主动停止或取消命令
+            // 1. 优先检查外部主动停止、提交或取消命令，确保指令不因 is_active 竞态而被跳过
             if let Ok(cmd) = cmd_rx.try_recv() {
                 match cmd {
                     WorkerCommand::StopAndCommit => {
@@ -322,14 +311,22 @@ impl VoiceSessionController {
                             let buffered: Vec<f32> = pre_speech_buffer.drain(..).collect();
                             let _ = recognizer.feed_pcm(&buffered);
                         }
-                        let final_text = Self::extract_final_text(
+                        let mut final_text = Self::extract_final_text(
                             recognizer,
                             punct_restorer,
                             voice_config.auto_punctuation,
                             &voice_config.itn,
                         );
+                        if final_text.is_empty() && !last_partial_text.is_empty() {
+                            info!(
+                                "[语音会话] finish 结果为空，采用实时流式识别出的预览文本保底: \"{}\"",
+                                last_partial_text
+                            );
+                            final_text = last_partial_text.clone();
+                        }
                         info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
                         let _ = event_tx.send(VoiceEvent::FinalCommit(final_text));
+                        is_active.store(false, Ordering::Release);
                         break;
                     }
                     WorkerCommand::Cancel => {
@@ -337,11 +334,13 @@ impl VoiceSessionController {
                         pre_speech_buffer.clear();
                         recognizer.reset();
                         let _ = event_tx.send(VoiceEvent::Cancelled);
+                        is_active.store(false, Ordering::Release);
                         break;
                     }
                     WorkerCommand::Shutdown => {
                         pre_speech_buffer.clear();
                         recognizer.reset();
+                        is_active.store(false, Ordering::Release);
                         break;
                     }
                     WorkerCommand::UnloadModels => {
@@ -355,6 +354,11 @@ impl VoiceSessionController {
                         // 录音期间忽略重复 Start
                     }
                 }
+            }
+
+            if !is_active.load(Ordering::Acquire) {
+                info!("[语音会话] 检测到外部会话已取消或关闭，平滑退出录音循环");
+                break;
             }
 
             // 2. 接收重采样后的 16kHz PCM 音频切片（超时 50ms 防止阻塞）

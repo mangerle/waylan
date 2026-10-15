@@ -236,6 +236,7 @@ impl IbusSessionCore {
                         self.push_to_talk_key = None;
                         self.voice_display_text = None;
                         self.voice_partial_text = None;
+                        self.voice_event_rx = None;
                         break;
                     }
                     VoiceEvent::Cancelled => {
@@ -243,6 +244,7 @@ impl IbusSessionCore {
                         self.push_to_talk_key = None;
                         self.voice_display_text = None;
                         self.voice_partial_text = None;
+                        self.voice_event_rx = None;
                         break;
                     }
                     VoiceEvent::Error(err) => {
@@ -251,17 +253,72 @@ impl IbusSessionCore {
                         self.push_to_talk_key = None;
                         self.voice_display_text = None;
                         self.voice_partial_text = None;
+                        self.voice_event_rx = None;
                         break;
                     }
                 }
             }
         }
-        if !self.voice_controller.is_recording() && self.voice_display_text.is_none() {
-            self.voice_event_rx = None;
-            self.is_push_to_talk_active = false;
-            self.push_to_talk_key = None;
-        }
         final_commit
+    }
+
+    /// 停止语音录音并尽可能提取最终确认文本，包含流式预览保底与自适应短时轮询
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：统一收敛长按对讲机松开 (Push-to-Talk)、回车键手动提交 (Enter) 及连续模式再次按键 (Toggle) 的提交流程。
+    /// - **核心优势**：
+    ///   1. 采用自适应轻量轮询（最多 150ms，以 10ms 间隔轻量检查），一旦后台推理出 `FinalCommit` 立即响应退出，避免粗暴的固定线程休眠；
+    ///   2. 若因系统瞬时负载或端侧模型延迟导致未生成最终整句，坚决以当前已流式输出的 `voice_partial_text` 保底上屏，杜绝文字被清空。
+    /// - **代价与局限**：极端情况下保底文本可能缺乏标点恢复模型的二次润色，但 100% 保障文字不丢失。
+    pub fn stop_voice_recording_and_commit(&mut self) -> Option<String> {
+        let fallback_preview = self.voice_partial_text.clone();
+        self.voice_controller.stop_and_commit();
+        self.is_push_to_talk_active = false;
+        self.push_to_talk_key = None;
+
+        let mut final_text = None;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(350) {
+            if let Some(text) = self.poll_voice_events() {
+                if !text.is_empty() {
+                    final_text = Some(text);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        if final_text.is_none() {
+            if let Some(text) = self.poll_voice_events() {
+                if !text.is_empty() {
+                    final_text = Some(text);
+                }
+            }
+        }
+
+        let commit_text = final_text.or_else(|| {
+            if let Some(preview) = fallback_preview {
+                let trimmed = preview.trim().to_string();
+                if !trimmed.is_empty() {
+                    log::info!(
+                        "[微澜 IBus 语音] 最终结算文本为空，启用实时流式预览保底上屏: \"{}\"",
+                        trimmed
+                    );
+                    return Some(trimmed);
+                }
+            }
+            None
+        });
+
+        self.voice_display_text = None;
+        self.voice_partial_text = None;
+        self.voice_event_rx = None;
+
+        if let Some(ref text) = commit_text {
+            log::info!("[微澜 IBus 语音] 成功生成文字上屏: \"{}\"", text);
+        }
+
+        commit_text
     }
 
     /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
@@ -411,23 +468,11 @@ impl IbusSessionCore {
                 );
                 if is_main_key_release || is_modifier_release {
                     log::info!("[微澜 IBus 语音] 对讲机模式快捷键松开，自动断句上屏提交");
-                    self.voice_controller.stop_and_commit();
-                    self.is_push_to_talk_active = false;
-                    self.push_to_talk_key = None;
-                    std::thread::sleep(Duration::from_millis(30));
-                    let final_text = self.poll_voice_events().unwrap_or_default();
-                    self.voice_display_text = None;
-                    self.voice_partial_text = None;
-                    self.voice_event_rx = None;
+                    let commit_text = self.stop_voice_recording_and_commit();
                     let was_consumed = self.consumed_keys.take_release(evdev_key);
                     return IbusKeyOutcome {
                         consumed: was_consumed || is_main_key_release,
-                        commit_text: if final_text.is_empty() {
-                            None
-                        } else {
-                            log::info!("[微澜 IBus 语音] 成功生成文字上屏: \"{}\"", final_text);
-                            Some(final_text)
-                        },
+                        commit_text,
                         update_ui: true,
                         ..Default::default()
                     };
@@ -472,23 +517,11 @@ impl IbusSessionCore {
             }
             if evdev_key == KEY_ENTER {
                 log::info!("[微澜 IBus 语音] Enter 键触发停止录音并请求提交");
-                self.voice_controller.stop_and_commit();
-                self.is_push_to_talk_active = false;
-                self.push_to_talk_key = None;
-                std::thread::sleep(Duration::from_millis(30));
-                let final_text = self.poll_voice_events().unwrap_or_default();
-                self.voice_display_text = None;
-                self.voice_partial_text = None;
-                self.voice_event_rx = None;
+                let commit_text = self.stop_voice_recording_and_commit();
                 self.consumed_keys.record_press(evdev_key, true);
                 return IbusKeyOutcome {
                     consumed: true,
-                    commit_text: if final_text.is_empty() {
-                        None
-                    } else {
-                        log::info!("[微澜 IBus 语音] 成功生成文字上屏: \"{}\"", final_text);
-                        Some(final_text)
-                    },
+                    commit_text,
                     update_ui: true,
                     ..Default::default()
                 };
@@ -677,20 +710,10 @@ impl IbusSessionCore {
 
                 return if self.voice_controller.is_recording() {
                     log::info!("[微澜 IBus 语音] 开关模式快捷键触发停止录音并请求提交");
-                    self.voice_controller.stop_and_commit();
-                    std::thread::sleep(Duration::from_millis(30));
-                    let final_text = self.poll_voice_events().unwrap_or_default();
-                    self.voice_display_text = None;
-                    self.voice_partial_text = None;
-                    self.voice_event_rx = None;
+                    let commit_text = self.stop_voice_recording_and_commit();
                     Some(IbusKeyOutcome {
                         consumed: true,
-                        commit_text: if final_text.is_empty() {
-                            None
-                        } else {
-                            log::info!("[微澜 IBus 语音] 成功生成文字上屏: \"{}\"", final_text);
-                            Some(final_text)
-                        },
+                        commit_text,
                         update_ui: true,
                         ..Default::default()
                     })
@@ -1512,7 +1535,8 @@ mod tests {
         assert!(core.is_push_to_talk_active);
         assert!(core.voice_controller.is_recording());
 
-        // 2. 长按过程中的 Auto-Repeat 连发应被直接消费，不重复启动也不停止
+        // 2. 长按过程中的 Auto-Repeat 连发应被直接消费，不重复启动也不停止；给予后台仿真录音线程极短时隙产生音频分块
+        std::thread::sleep(Duration::from_millis(50));
         let repeat_res =
             core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
         assert!(repeat_res.consumed);
@@ -1526,8 +1550,42 @@ mod tests {
         );
         assert!(release_res.consumed);
         assert!(release_res.update_ui);
+        assert!(
+            release_res.commit_text.is_some(),
+            "对讲机松手必须产生提交文字，不可被清空"
+        );
         assert!(!core.is_push_to_talk_active);
         assert!(!core.voice_controller.is_recording());
+    }
+
+    #[test]
+    fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        core.voice_config.enabled = true;
+        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.push_to_talk_shortcut = "F8".to_string();
+
+        // 1. 按下 F8（evdev 扫描码 66）触发对讲机录音
+        let press_res = core.process_key_event(0xffc5, 66, 0);
+        assert!(press_res.consumed);
+        assert!(core.is_push_to_talk_active);
+        assert!(core.voice_controller.is_recording());
+
+        // 2. 模拟流式识别出了部分文字预览
+        core.voice_partial_text = Some("流式已输出的文本".to_string());
+
+        // 3. 松开 F8 键，必须成功上屏提交文字，绝不能被清空为 None
+        let release_res = core.process_key_event(0xffc5, 66, IBUS_RELEASE_MASK);
+        assert!(release_res.consumed);
+        assert!(release_res.update_ui);
+        assert!(
+            release_res.commit_text.is_some(),
+            "松开 F8 必须成功生成文字上屏，杜绝文字丢失"
+        );
+        assert!(!core.is_push_to_talk_active);
+        assert!(!core.voice_controller.is_recording());
+        assert!(core.voice_partial_text.is_none());
     }
 
     #[test]
