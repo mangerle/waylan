@@ -142,3 +142,52 @@ fn test_viterbi_beam_deduplication_preserves_diversity() {
         "按末端词去重后，次高分词‘清华’不应被‘情话’的多前驱副本挤出束外"
     );
 }
+
+#[test]
+fn test_dynamic_beam_width_scaling() {
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(1), 8);
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(4), 8);
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(5), 12);
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(8), 12);
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(9), 16);
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(15), 16);
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(16), 20);
+    assert_eq!(ViterbiDecoder::dynamic_beam_width(30), 20);
+}
+
+#[test]
+fn test_viterbi_super_long_sentence_beam_stability() {
+    let mut table = LexiconTable::new();
+    let words = [
+        ("wo'men", "我们", 30_000),
+        ("dou", "都", 25_000),
+        ("shi", "是", 28_000),
+        ("zhi'neng", "智能", 20_000),
+        ("shu'ru'fa", "输入法", 22_000),
+        ("de", "的", 40_000),
+        ("zhong'shi", "忠实", 15_000),
+        ("yong'hu", "用户", 26_000),
+    ];
+    for (pinyin, hanzi, score) in words {
+        table.insert(pinyin, hanzi, score);
+    }
+
+    let syllables = vec![
+        "wo".to_string(),
+        "men".to_string(),
+        "dou".to_string(),
+        "shi".to_string(),
+        "zhi".to_string(),
+        "neng".to_string(),
+        "shu".to_string(),
+        "ru".to_string(),
+        "fa".to_string(),
+        "de".to_string(),
+        "zhong".to_string(),
+        "shi".to_string(),
+        "yong".to_string(),
+        "hu".to_string(),
+    ];
+    let best = ViterbiDecoder::decode_sentence(&syllables, "", &table).expect("超长句应解码成功");
+    assert_eq!(best.text, "我们都是智能输入法的忠实用户");
+}

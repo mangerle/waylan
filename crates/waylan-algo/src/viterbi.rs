@@ -145,8 +145,27 @@ fn backtrack_sentence(
 pub struct ViterbiDecoder;
 
 impl ViterbiDecoder {
-    /// 束搜索最大保留宽度
-    const BEAM_WIDTH: usize = 8;
+    /// 默认基础束搜索最大保留宽度
+    pub const DEFAULT_BEAM_WIDTH: usize = 8;
+
+    /// 依据音节切分序列长度自适应计算束搜索保留宽度
+    ///
+    /// # 算法策略
+    /// - 短词短语 (音节数 <= 4): 束宽 8，保持微秒级超低延迟；
+    /// - 中等短语 (音节数 5..=8): 束宽 12，平衡探索广度与计算量；
+    /// - 长句 (音节数 9..=15): 束宽 16，保留更多弱局部假设以保障全局连贯性；
+    /// - 超长句 (音节数 > 15): 束宽 20，彻底解决前序贪心激进剪枝导致的长句失步问题。
+    pub fn dynamic_beam_width(syllable_count: usize) -> usize {
+        if syllable_count <= 4 {
+            Self::DEFAULT_BEAM_WIDTH
+        } else if syllable_count <= 8 {
+            12
+        } else if syllable_count <= 15 {
+            16
+        } else {
+            20
+        }
+    }
 
     /// 对给定的音节切分列表与末尾残存拼音进行整句动态规划求解
     pub fn decode_sentence(
@@ -232,6 +251,9 @@ impl ViterbiDecoder {
         dp: &mut [Vec<ViterbiBeamNode>],
     ) {
         let n = syllables.len();
+        let beam_width = Self::dynamic_beam_width(n);
+        let raw_limit = if n > 4 { 6 } else { 4 };
+
         for start_idx in 0..n {
             if dp[start_idx].is_empty() {
                 continue;
@@ -244,7 +266,7 @@ impl ViterbiDecoder {
                 let sub_syls = &syllables[start_idx..end_idx];
                 let key = sub_syls.join("'");
 
-                let raw_entries = match table.get_top_raw_entries(&key, 4) {
+                let raw_entries = match table.get_top_raw_entries(&key, raw_limit) {
                     Some(entries) if !entries.is_empty() => entries,
                     _ => {
                         if span == 1 {
@@ -263,7 +285,7 @@ impl ViterbiDecoder {
                 let prev_beam = &left_dp[start_idx];
                 let target_beam = &mut right_dp[0];
 
-                for (text, raw_score, word_id_opt) in raw_entries.iter().take(4) {
+                for (text, raw_score, word_id_opt) in raw_entries.iter().take(raw_limit) {
                     let freq_score = Self::unigram_log_score(*raw_score);
                     let curr_word_id = word_id_opt.or_else(|| {
                         if has_bigram {
@@ -317,9 +339,9 @@ impl ViterbiDecoder {
                     }
                 }
 
-                // 束搜索剪枝：保留得分最高的 Top-K 个不同末端词状态
+                // 束搜索剪枝：保留得分最高的 Top-K 个不同末端词状态（根据序列长度自适应确定 K）
                 target_beam.sort_by_key(|state| std::cmp::Reverse(state.total_score));
-                target_beam.truncate(Self::BEAM_WIDTH);
+                target_beam.truncate(beam_width);
             }
         }
     }
