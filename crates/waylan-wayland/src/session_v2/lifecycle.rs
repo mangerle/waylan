@@ -10,7 +10,7 @@ use super::WaylanV2Session;
 
 impl WaylanV2Session {
     /// 挂起 Activate 事件（等待 Done 事件原子提交）
-    pub fn stage_activate(&mut self) {
+    pub(crate) fn stage_activate(&mut self) {
         self.pending_active = true;
         self.pending_focus_reset = true;
         self.pending_surrounding_text = None;
@@ -18,7 +18,7 @@ impl WaylanV2Session {
     }
 
     /// 挂起 Deactivate 事件（等待 Done 事件原子提交）
-    pub fn stage_deactivate(&mut self) {
+    pub(crate) fn stage_deactivate(&mut self) {
         self.pending_active = false;
         self.pending_focus_reset = true;
         self.pending_surrounding_text = None;
@@ -26,12 +26,12 @@ impl WaylanV2Session {
     }
 
     /// 挂起 SurroundingText 事件（等待 Done 事件原子提交）
-    pub fn stage_surrounding_text(&mut self, text: String, cursor: u32, anchor: u32) {
+    pub(crate) fn stage_surrounding_text(&mut self, text: String, cursor: u32, anchor: u32) {
         self.pending_surrounding_text = Some((text, cursor, anchor));
     }
 
     /// 在收到 Done 事件时原子应用挂起的双缓冲状态并递增 done_serial，返回生效后的激活状态
-    pub fn apply_done_state(&mut self) -> bool {
+    pub(crate) fn apply_done_state(&mut self) -> bool {
         self.done_serial = self.done_serial.wrapping_add(1);
         let was_active = self.is_active;
         let now_active = self.pending_active;
@@ -85,7 +85,7 @@ impl WaylanV2Session {
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）
-    pub fn sync_external_state(&mut self) {
+    pub(crate) fn sync_external_state(&mut self) {
         let should_reload = check_reload_requested_or_files_changed(
             self.reload_requested.as_deref(),
             &mut self.inotify_watcher,
@@ -107,12 +107,12 @@ impl WaylanV2Session {
     }
 
     /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
-    pub fn init_inotify_watcher(&mut self) {
+    pub(crate) fn init_inotify_watcher(&mut self) {
         init_session_inotify_watcher(&self.watched_paths, &mut self.inotify_watcher, "Wayland V2");
     }
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
-    pub fn sync_atomic_state(&mut self) {
+    pub(crate) fn sync_atomic_state(&mut self) {
         if is_reload_requested(self.reload_requested.as_deref()) {
             self.sync_external_state();
             return;

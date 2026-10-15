@@ -9,7 +9,7 @@ use super::WaylanV2Session;
 use crate::input_core::*;
 
 /// 根据当前 V2 会话算法引擎与输入模式构建候选框渲染状态
-pub fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateBoxState {
+pub(crate) fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateBoxState {
     crate::session_common::build_common_candidate_box_state(
         &session.engine,
         session.mode,
@@ -21,10 +21,7 @@ pub fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateBoxState
 }
 
 /// 处理英文模式下的按键输入（所有常规按键不拦截，由席位原生透传以支持 Key Repeat 与系统布局）
-pub fn process_english_mode_key(
-    _session: &mut WaylanV2Session,
-    _key: u32,
-) -> (bool, Option<String>) {
+fn process_english_mode_key(_session: &mut WaylanV2Session, _key: u32) -> (bool, Option<String>) {
     (false, None)
 }
 
@@ -190,7 +187,7 @@ fn apply_composition_action(
 }
 
 /// 处理处于拼音组词状态下的键盘拦截
-pub fn process_composition_key(
+fn process_composition_key(
     session: &mut WaylanV2Session,
     key: u32,
     now: u64,
@@ -265,7 +262,7 @@ fn handle_idle_punctuation(
 }
 
 /// 处理输入缓冲区为空时的空闲按键输入（仅拦截中文标点，其余编辑键与数字键保持原生透传）
-pub fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool, Option<String>)> {
+fn process_idle_key(session: &mut WaylanV2Session, key: u32) -> Option<(bool, Option<String>)> {
     if let Some(res) = handle_idle_punctuation(session, key) {
         return Some(res);
     }
@@ -356,7 +353,7 @@ fn update_key_repeat(session: &mut WaylanV2Session, key: u32, consumed: bool) {
 }
 
 /// 处理单个硬件按键事件并返回 (是否被输入法消费, 本次直接上屏文本)
-pub fn process_key_event(
+pub(crate) fn process_key_event(
     session: &mut WaylanV2Session,
     key: u32,
     is_press: bool,
@@ -393,7 +390,7 @@ pub fn process_key_event(
 }
 
 /// 处理按键按下阶段的核心分发逻辑
-pub fn process_key_press_inner(session: &mut WaylanV2Session, key: u32) -> (bool, Option<String>) {
+fn process_key_press_inner(session: &mut WaylanV2Session, key: u32) -> (bool, Option<String>) {
     // 快捷键穿透：Ctrl / Alt / Super 等修饰组合键透传
     if session.has_ctrl_or_alt() {
         return (false, None);
@@ -441,7 +438,7 @@ pub fn process_key_press_inner(session: &mut WaylanV2Session, key: u32) -> (bool
 }
 
 /// 计算事件循环下一次 poll 的等待超时毫秒数（若存在活跃按键连击，按剩余到期时间缩短超时）
-pub fn next_poll_timeout_ms(session: &WaylanV2Session, default_ms: i32) -> i32 {
+pub(crate) fn next_poll_timeout_ms(session: &WaylanV2Session, default_ms: i32) -> i32 {
     let Some((_, next_fire)) = session.repeat_state else {
         return default_ms;
     };
@@ -458,7 +455,7 @@ pub fn next_poll_timeout_ms(session: &WaylanV2Session, default_ms: i32) -> i32 {
 }
 
 /// 检查并触发已到期的长按按键连击事件
-pub fn drive_key_repeat(session: &mut WaylanV2Session) {
+pub(crate) fn drive_key_repeat(session: &mut WaylanV2Session) {
     let Some((key, next_fire)) = session.repeat_state else {
         return;
     };

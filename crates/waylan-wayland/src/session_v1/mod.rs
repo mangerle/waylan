@@ -135,11 +135,22 @@ impl Default for WaylanV1Session {
 }
 
 impl WaylanV1Session {
+    /// 创建默认配置的 Wayland V1 输入法会话实例
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：为支持早期或经典 Wayland 协议的桌面环境提供开箱即用的默认输入法会话。
+    /// - **核心优势**：内建示例字库与标准标点映射，无需前置繁琐配置即可执行协议握手与连通性验证。
+    /// - **代价与局限**：搭载精简示例词库，生产环境通常需使用 `with_engine` 注入完整词库实例。
     pub fn new() -> Self {
         Self::default()
     }
 
     /// 使用外部预加载并配置好的算法引擎构造输入法会话
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在生产环境下注入已完成字库加载、用户自适应词典配置与全量词库映射的核心引擎。
+    /// - **核心优势**：在 V2 降级或会话重启时直接移交核心引擎状态，避免数十兆词库在内存中二次加载解析。
+    /// - **代价与局限**：调用方需负责算法引擎的预热与全生命周期参数调优。
     pub fn with_engine(engine: AlgoEngine) -> Self {
         Self {
             engine,
@@ -148,7 +159,7 @@ impl WaylanV1Session {
     }
 
     /// 根据按键按下/释放事件更新修饰键位掩码
-    pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
+    pub(crate) fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
         update_session_modifiers(
             &mut self.mods_depressed,
             &mut self.phys_mods,
@@ -159,24 +170,24 @@ impl WaylanV1Session {
 
     /// 判断当前是否处于 Shift 按下状态
     #[inline]
-    pub fn is_shift_active(&self) -> bool {
+    pub(crate) fn is_shift_active(&self) -> bool {
         is_shift_active_state(self.mods_depressed, self.phys_mods)
     }
 
     /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
     #[inline]
-    pub fn has_ctrl_or_alt(&self) -> bool {
+    pub(crate) fn has_ctrl_or_alt(&self) -> bool {
         has_ctrl_or_alt_state(self.mods_depressed, self.phys_mods)
     }
 
     /// 判断当前是否处于 CapsLock 大写锁定状态
     #[inline]
-    pub fn is_caps_locked(&self) -> bool {
+    pub(crate) fn is_caps_locked(&self) -> bool {
         is_caps_locked_state(self.mods_locked)
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）
-    pub fn sync_external_state(&mut self) {
+    pub(crate) fn sync_external_state(&mut self) {
         let should_reload = check_reload_requested_or_files_changed(
             self.reload_requested.as_deref(),
             &mut self.inotify_watcher,
@@ -198,17 +209,17 @@ impl WaylanV1Session {
     }
 
     /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
-    pub fn init_inotify_watcher(&mut self) {
+    pub(crate) fn init_inotify_watcher(&mut self) {
         init_session_inotify_watcher(&self.watched_paths, &mut self.inotify_watcher, "Wayland V1");
     }
 
     /// 计算事件循环下一次 poll 的等待超时毫秒数
-    pub fn next_poll_timeout_ms(&self, default_ms: i32) -> i32 {
+    pub(crate) fn next_poll_timeout_ms(&self, default_ms: i32) -> i32 {
         default_ms
     }
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
-    pub fn sync_atomic_state(&mut self) {
+    pub(crate) fn sync_atomic_state(&mut self) {
         if is_reload_requested(self.reload_requested.as_deref()) {
             self.sync_external_state();
             return;
@@ -234,11 +245,16 @@ impl WaylanV1Session {
     }
 
     /// 构造当前候选框的渲染状态
-    pub fn build_candidate_box_state(&self) -> CandidateBoxState {
+    pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
         build_common_candidate_box_state(&self.engine, self.mode, true, false, 0, false)
     }
 
     /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在 V1 协议下将算法引擎候选状态渲染并提交至 InputPanel 或 LayerShell 悬浮表面。
+    /// - **核心优势**：自动处理边缘防溢出坐标计算与 LayerShell 边距定位更新，确保候选框吸附于光标附近。
+    /// - **代价与局限**：在无 LayerShell 支持的环境下依赖 InputPanel 原生相对偏移定位。
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
         let params = CandidateSurfaceCommitParams {
@@ -268,6 +284,11 @@ impl WaylanV1Session {
     }
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在 V1 会话失焦或清空输入时卸载候选表面，恢复屏幕原状。
+    /// - **核心优势**：通知合成器解绑当前活动缓冲，安全回收共享内存槽位。
+    /// - **代价与局限**：需等待合成器处理缓冲解绑与释放确认。
     pub fn hide_candidate_surface(&mut self) {
         self.surface_manager
             .hide_wayland_surface(self.popup_wl_surface.as_ref(), &mut self.active_buffer);

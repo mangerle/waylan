@@ -133,6 +133,12 @@ pub struct WaylanV2Session {
 }
 
 impl WaylanV2Session {
+    /// 基于已加载并配置好的核心算法引擎构造 Wayland V2 输入法会话
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：对接 Wayland `zwp_input_method_v2` 协议标准，通过双缓冲事务机制实现与现代桌面合成器的输入法会话解耦。
+    /// - **核心优势**：零拷贝算法引擎集成，支持虚拟键盘直通回退、周围文本感知、光标矩形防溢出对齐与客户端按键连击加速。
+    /// - **代价与局限**：强依赖合成器完整实现 V2 输入法扩展协议，不支持无该协议的早期合成器环境。
     pub fn new(engine: AlgoEngine) -> Self {
         Self {
             engine,
@@ -188,7 +194,7 @@ impl WaylanV2Session {
     }
 
     /// 根据按键按下/释放事件更新修饰键位掩码
-    pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
+    pub(crate) fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
         update_session_modifiers(
             &mut self.mods_depressed,
             &mut self.phys_mods,
@@ -199,33 +205,38 @@ impl WaylanV2Session {
 
     /// 判断当前是否处于 Shift 按下状态
     #[inline]
-    pub fn is_shift_active(&self) -> bool {
+    pub(crate) fn is_shift_active(&self) -> bool {
         is_shift_active_state(self.mods_depressed, self.phys_mods)
     }
 
     /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
     #[inline]
-    pub fn has_ctrl_or_alt(&self) -> bool {
+    pub(crate) fn has_ctrl_or_alt(&self) -> bool {
         has_ctrl_or_alt_state(self.mods_depressed, self.phys_mods)
     }
 
     /// 判断当前是否处于 CapsLock 大写锁定状态
     #[inline]
-    pub fn is_caps_locked(&self) -> bool {
+    pub(crate) fn is_caps_locked(&self) -> bool {
         is_caps_locked_state(self.mods_locked)
     }
 
     /// 设置关联的 V2 输入法实例
-    pub fn set_input_method(&mut self, im: ZwpInputMethodV2) {
+    pub(crate) fn set_input_method(&mut self, im: ZwpInputMethodV2) {
         self.input_method = Some(im);
     }
 
     /// 根据当前算法引擎与输入模式构建候选框渲染状态
-    pub fn build_candidate_box_state(&self) -> CandidateBoxState {
+    pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
         keys::build_candidate_box_state(self)
     }
 
     /// 触发候选框悬浮表面重绘并提交至 Wayland 表面
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在候选词状态变迁、用户词库重载或配置变更后主动刷新并提交合成器渲染候选框。
+    /// - **核心优势**：自动协调多缓冲槽位轮转与脏区域计算，仅在存在有效候选词时请求合成器展示。
+    /// - **代价与局限**：涉及矢量绘制与共享内存提交，频繁调用会产生微秒级渲染开销。
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
         let params = CandidateSurfaceCommitParams {
@@ -238,6 +249,11 @@ impl WaylanV2Session {
     }
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在输入结束、用户取消或失焦时隐藏悬浮图层，清理屏幕遮挡。
+    /// - **核心优势**：主动解绑活跃缓冲并调用 attach(None)，避免无效占用桌面图层资源。
+    /// - **代价与局限**：向合成器发送清空表面指令，需等待合成器下发 release 事件回收缓冲槽位。
     pub fn hide_candidate_surface(&mut self) {
         hide_candidate_surface_buffer(
             &mut self.surface_manager,
@@ -247,7 +263,7 @@ impl WaylanV2Session {
     }
 
     /// 提交指定文本上屏，并重置预编辑状态
-    pub fn commit_text(&mut self, text: &str) {
+    pub(crate) fn commit_text(&mut self, text: &str) {
         self.is_grid_expanded = false;
         self.grid_selected_index = 0;
         if let Some(im) = &self.input_method {
@@ -259,7 +275,7 @@ impl WaylanV2Session {
     }
 
     /// 更新当前 preedit 预编辑字符串到目标客户端
-    pub fn update_preedit(&mut self, preedit: &str) {
+    pub(crate) fn update_preedit(&mut self, preedit: &str) {
         if let Some(im) = &self.input_method {
             let cursor = if preedit.is_empty() {
                 0
@@ -277,7 +293,7 @@ impl WaylanV2Session {
     }
 
     /// 分段确认部分文本上屏，并以剩余拼音继续推进预编辑与候选渲染
-    pub fn commit_partial(&mut self, text: &str, remaining_preedit: &str) {
+    pub(crate) fn commit_partial(&mut self, text: &str, remaining_preedit: &str) {
         if let Some(im) = &self.input_method {
             im.commit_string(text.to_string());
             let cursor = self.engine.formatted_cursor_byte_offset() as i32;
@@ -288,7 +304,7 @@ impl WaylanV2Session {
     }
 
     /// 取消当前输入，重置引擎与预编辑区
-    pub fn cancel_input(&mut self) {
+    pub(crate) fn cancel_input(&mut self) {
         self.is_grid_expanded = false;
         self.grid_selected_index = 0;
         self.engine.reset();
@@ -296,6 +312,11 @@ impl WaylanV2Session {
     }
 
     /// 触发退格向后删除（空缓冲区或英文模式下删除光标前 1 个字符或删除当前选区）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：基于周围文本感知实现精确的退格字符删除或文本选区清理。
+    /// - **核心优势**：在协议层直接通过 `delete_surrounding_text` 提交删除事务，无需通过虚拟键盘注入按键。
+    /// - **代价与局限**：依赖目标应用程序正确上报周围文本（surrounding_text），若应用不支持则无法执行。
     pub fn delete_backward(&mut self) {
         if let Some(im) = &self.input_method {
             let (before, after) = calculate_delete_backward_range(self.surrounding_text.as_ref());
@@ -307,6 +328,11 @@ impl WaylanV2Session {
     }
 
     /// 触发向前删除（Delete 键删除光标后 1 个字符或删除当前选区）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在 Delete 键触发或向前编辑时按字符或选区范围精确执行删除。
+    /// - **核心优势**：单次事务原子执行，避免光标漂移与删除滞后。
+    /// - **代价与局限**：同样依赖宿主文本控件上报合法且准确的周围文本上下文。
     pub fn delete_forward(&mut self) {
         if let Some(im) = &self.input_method {
             let (before, after) = calculate_delete_forward_range(self.surrounding_text.as_ref());
@@ -318,7 +344,7 @@ impl WaylanV2Session {
     }
 
     /// 将未被输入法消费的原始物理按键通过虚拟键盘协议回投到席位，确保快捷键与控制键正常透传
-    pub fn forward_key_to_seat(&mut self, time: u32, key: u32, is_press: bool) {
+    pub(crate) fn forward_key_to_seat(&mut self, time: u32, key: u32, is_press: bool) {
         if !self.has_virtual_keymap {
             debug!(
                 "[Wayland v2 键盘回投] 虚拟键盘 keymap 尚未就绪，跳过转发键码 {} (press={})",
@@ -338,17 +364,17 @@ impl WaylanV2Session {
     }
 
     /// 处理单个硬件按键事件并返回 (是否被输入法消费, 本次直接上屏文本)
-    pub fn process_key_event(&mut self, key: u32, is_press: bool) -> (bool, Option<String>) {
+    pub(crate) fn process_key_event(&mut self, key: u32, is_press: bool) -> (bool, Option<String>) {
         keys::process_key_event(self, key, is_press)
     }
 
     /// 计算下一次 poll 等待超时时间（毫秒），兼顾按键长按连击定时器
-    pub fn next_poll_timeout_ms(&self, default_ms: i32) -> i32 {
+    pub(crate) fn next_poll_timeout_ms(&self, default_ms: i32) -> i32 {
         keys::next_poll_timeout_ms(self, default_ms)
     }
 
     /// 检查并触发到期的长按按键连击事件
-    pub fn drive_key_repeat(&mut self) {
+    pub(crate) fn drive_key_repeat(&mut self) {
         keys::drive_key_repeat(self);
     }
 

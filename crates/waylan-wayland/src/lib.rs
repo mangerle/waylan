@@ -13,7 +13,6 @@ pub mod surface;
 
 pub use error::WaylandRunnerError;
 pub use runner::*;
-pub use session_common::*;
 
 pub use fs_watcher::InotifyWatcher;
 pub use input_core::{
@@ -143,7 +142,16 @@ impl Dispatch<WlRegistry, GlobalListContents> for WaylandProbeState {
     }
 }
 
-/// 探测当前运行环境中的 Wayland 合成器协议能力
+/// 探测当前宿主运行环境中的 Wayland 合成器协议能力
+///
+/// # 设计原理
+/// - **实现初衷**：在输入法守护进程启动阶段轻量连接合成器全局注册表，检测环境是否支持
+///   现代 V2 输入法协议、经典 V1 协议以及 LayerShell 浮动扩展，为后续会话协议选型提供决策依据。
+/// - **核心优势**：只读查询注册表元数据，探测完成后立即析构临时连接与队列，无常驻内存或描述符开销。
+/// - **代价与局限**：需发起一次短暂的同步 IPC 往返（Roundtrip），在合成器负载极高时可能存在毫秒级阻塞。
+///
+/// # Errors
+/// 当未能连接至环境变量 `WAYLAND_DISPLAY` 指定的套接字，或初始注册表同步失败时返回底层错误。
 pub fn probe_wayland_environment() -> Result<WaylandCapabilities, Box<dyn Error>> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut event_queue) = registry_queue_init(&conn)?;

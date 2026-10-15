@@ -172,6 +172,12 @@ fn poll_and_read_events(
 
 /// 启动并运行 Wayland V1 输入法事件循环（使用已初始化的会话实例）
 ///
+/// # 设计原理
+/// - **实现初衷**：为早期 Wayland 合成器（如 wlroots 早期版本、支持 `zwp_input_method_v1` 的桌面环境）
+///   提供完整兼容器，通过 InputPanel 或 LayerShell 悬浮渲染候选框。
+/// - **核心优势**：兼容性广泛，支持基于 XKB 的按键直接抓取与上下文内联提交流程。
+/// - **代价与局限**：协议缺乏焦点光标精准矩形广播，需依赖光标防溢出计算估算坐标。
+///
 /// # Errors
 /// 当连接 Wayland 合成器失败、缺少必要全局协议或事件队列派发异常时返回对应的细粒度错误。
 pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRunnerError> {
@@ -300,6 +306,11 @@ fn bind_session_v2_globals(
 
 /// 启动并运行现代 Wayland V2 输入法事件循环（若协议不可用或发生错误，返回错误同时移交 session 实例以便降级）
 ///
+/// # 设计原理
+/// - **实现初衷**：在宿主环境不支持 V2 协议或初始化失败时，避免销毁已加载的词库算法引擎与配置状态，支持无缝降级。
+/// - **核心优势**：通过所有权移交返回当前会话实例，调用方可重用算法状态直接拉起 V1 或其他备用后端，消除二次初始化耗时。
+/// - **代价与局限**：函数签名返回携带 `Box<WaylanV2Session>` 的复合元组错误，相较于纯错误类型契约略为复杂。
+///
 /// # Errors
 /// 当连接 Wayland 合成器失败、缺少必需全局协议或事件队列异常时返回错误及当前会话实例。
 pub fn run_session_v2_loop_fallible(
@@ -379,6 +390,11 @@ pub fn run_session_v2_loop_fallible(
 }
 
 /// 启动并运行现代 Wayland V2 输入法事件循环（适用于 KDE Plasma 6 / GNOME / Hyprland / Sway）
+///
+/// # 设计原理
+/// - **实现初衷**：对接现代 Wayland `zwp_input_method_v2` 规范，通过双缓冲事务完成按键拦截、周围文本感知与光标矩形对齐。
+/// - **核心优势**：支持虚拟键盘事件回退机制，按键不拦截时交由席位原生转发，且支持客户端按键长按连击。
+/// - **代价与局限**：对合成器协议栈要求严格，必须同时存在 `zwp_input_method_manager_v2` 与 `zwp_virtual_keyboard_v1`。
 ///
 /// # Errors
 /// 当连接 Wayland 合成器失败、缺少必需全局协议或事件队列异常时返回对应的细粒度错误。

@@ -20,7 +20,7 @@ use wayland_client::protocol::{
 use wayland_client::{Dispatch, QueueHandle};
 
 pub use cursor_rect::CursorRect;
-pub use shm_slot::{create_shm_fd, ShmSlot};
+pub(crate) use shm_slot::ShmSlot;
 
 /// 候选框透明悬浮图层管理器
 pub struct CandidateSurfaceManager {
@@ -35,15 +35,15 @@ pub struct CandidateSurfaceManager {
     /// 候选框矢量渲染器实例
     pub renderer: CandidateBoxRenderer,
     /// 共享内存环形多缓冲槽位（交替使用以避免单缓冲画面撕裂与频繁创建文件）
-    pub shm_slots: [Option<ShmSlot>; 4],
+    pub(crate) shm_slots: [Option<ShmSlot>; 4],
     /// 各槽位绑定的 Wayland 活跃缓冲区对象（等待 release 回调）
-    pub slot_buffers: [Option<WlBuffer>; 4],
+    pub(crate) slot_buffers: [Option<WlBuffer>; 4],
     /// 当前活跃槽位索引
-    pub current_slot: usize,
+    pub(crate) current_slot: usize,
     /// 目标显示器逻辑分辨率 (宽, 高)，用于贴边防溢出平移与向上翻转
     pub screen_size: (i32, i32),
     /// 待合成器 release 的退役缓冲区列表（附带所属槽位索引，防止隐藏表面后 is_busy 永久锁死）
-    pub pending_release_buffers: Vec<(usize, WlBuffer)>,
+    pub(crate) pending_release_buffers: Vec<(usize, WlBuffer)>,
 }
 
 impl Default for CandidateSurfaceManager {
@@ -75,6 +75,13 @@ impl CandidateSurfaceManager {
             self.screen_size = (width, height);
         }
     }
+
+    /// 创建默认候选框悬浮表面管理器实例
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：统一管理 Wayland 输入法候选框的矢量栅格化、光标跟随、防溢出与多缓冲共享内存交换。
+    /// - **核心优势**：预分配 4 缓冲环形槽位配合延迟按需分配，零开销冷启动，且杜绝每帧重复创建文件描述符与内存映射。
+    /// - **代价与局限**：维护多缓冲生命周期状态机，需精确跟踪合成器下发的 release 事件与容量扩容。
     pub fn new() -> Self {
         Self {
             cursor_rect: CursorRect::default(),
@@ -424,6 +431,11 @@ impl CandidateSurfaceManager {
     }
 
     /// 创建匿名共享内存文件（委托至 shm_slot 模块）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：为上层应用或测试提供创建兼容 Wayland wl_shm 协议的标准匿名内存描述符工具方法。
+    /// - **核心优势**：自动适配 Linux `memfd_create` 纯内存文件与跨平台临时文件回退。
+    /// - **代价与局限**：创建并返回未映射的原始系统文件描述符，调用方需自行维护其生命周期。
     ///
     /// # Errors
     /// 当创建或调整文件大小失败时返回系统 I/O 错误。
