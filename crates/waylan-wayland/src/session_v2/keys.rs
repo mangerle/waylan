@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use log::debug;
-use waylan_core::{Candidate, CandidateBoxState, ExpandedCardState, InputMode, TextAction};
+use waylan_core::{CandidateBoxState, InputMode, TextAction};
 
 use super::surrounding::{clamp_char_boundary_ceil, clamp_char_boundary_floor};
 use super::WaylanV2Session;
@@ -10,73 +10,14 @@ use crate::input_core::*;
 
 /// 根据当前 V2 会话算法引擎与输入模式构建候选框渲染状态
 pub fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateBoxState {
-    let core_candidates: Vec<Candidate> = session
-        .engine
-        .candidates()
-        .iter()
-        .map(|c| Candidate {
-            text: c.text.clone(),
-            pinyin: c.pinyin.clone(),
-            score: c.score,
-            is_expandable: c.is_expandable,
-            sub_candidates: c.sub_candidates.clone(),
-        })
-        .collect();
-    let grid_candidates: Vec<Candidate> = if session.is_grid_expanded {
-        session
-            .engine
-            .all_candidates()
-            .iter()
-            .take(30)
-            .map(|c| Candidate {
-                text: c.text.clone(),
-                pinyin: c.pinyin.clone(),
-                score: c.score,
-                is_expandable: c.is_expandable,
-                sub_candidates: c.sub_candidates.clone(),
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let expanded_card = if session.engine.is_expanded {
-        ExpandedCardState::Expanded {
-            selected_index: session.engine.expanded_selected_index,
-        }
-    } else {
-        ExpandedCardState::Collapsed
-    };
-
-    // 在拥有内联预编辑（Inline Preedit）时，常规拼音无需在候选框左侧重复显示拼音和模式徽标；
-    // 但当输入以 'v' 引导触发 V模式 时，显式展示 [V模式] 徽标与当前输入表达式
-    let is_dynamic_v_mode = session.engine.raw_input().starts_with('v');
-    let (preedit, mode_badge) = if is_dynamic_v_mode {
-        (session.engine.raw_input().to_string(), "V模式".to_string())
-    } else {
-        match session.mode {
-            InputMode::Chinese => (String::new(), String::new()),
-            InputMode::English => (String::new(), "英".to_string()),
-            InputMode::VMode => (session.engine.formatted_preedit(), "V".to_string()),
-        }
-    };
-
-    let selected_index = if session.is_grid_expanded {
-        session.grid_selected_index
-    } else {
-        session.engine.selected_index
-    };
-
-    CandidateBoxState {
-        visible: session.is_active && !session.engine.raw_input().is_empty(),
-        preedit,
-        candidates: core_candidates,
-        selected_index,
-        expanded_card,
-        mode_badge,
-        is_grid_expanded: session.is_grid_expanded,
-        grid_candidates,
-    }
+    crate::session_common::build_common_candidate_box_state(
+        &session.engine,
+        session.mode,
+        session.is_active,
+        session.is_grid_expanded,
+        session.grid_selected_index,
+        true,
+    )
 }
 
 /// 处理英文模式下的按键输入（所有常规按键不拦截，由席位原生透传以支持 Key Repeat 与系统布局）

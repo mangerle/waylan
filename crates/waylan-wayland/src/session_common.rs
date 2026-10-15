@@ -155,18 +155,249 @@ pub fn is_caps_locked_state(mods_locked: u32) -> bool {
     (mods_locked & crate::input_constants::MOD_CAPS) != 0
 }
 
-/// 提交候选框状态至 Wayland 表面并更新活跃缓冲区
+/// 提交候选框图层所需的 Wayland 目标上下文参数对象
+pub struct CandidateSurfaceCommitParams<'a, S> {
+    /// 共享内存协议句柄
+    pub shm: Option<&'a WlShm>,
+    /// 候选框目标表面句柄
+    pub popup_wl_surface: Option<&'a WlSurface>,
+    /// 事件队列句柄
+    pub qhandle: Option<&'a QueueHandle<S>>,
+    /// 活跃像素缓冲区借用
+    pub active_buffer: &'a mut Option<WlBuffer>,
+}
+
+/// 提交候选框状态至 Wayland 表面并更新活跃缓冲区（采用参数对象收敛入参）
 pub fn commit_candidate_surface<S>(
     surface_manager: &mut CandidateSurfaceManager,
     box_state: &CandidateBoxState,
-    shm: Option<&WlShm>,
-    popup_wl_surface: Option<&WlSurface>,
-    qhandle: Option<&QueueHandle<S>>,
-    active_buffer: &mut Option<WlBuffer>,
+    params: CandidateSurfaceCommitParams<'_, S>,
 ) where
     S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
 {
-    surface_manager.commit_to_wayland(box_state, shm, popup_wl_surface, qhandle, active_buffer);
+    surface_manager.commit_to_wayland(
+        box_state,
+        params.shm,
+        params.popup_wl_surface,
+        params.qhandle,
+        params.active_buffer,
+    );
+}
+
+/// 统一构建候选框渲染状态的核心数据（收敛 V1 和 V2 对 Candidate 与 ExpandedCardState 的转换）
+pub fn build_common_candidate_box_state(
+    engine: &AlgoEngine,
+    mode: InputMode,
+    is_active: bool,
+    is_grid_expanded: bool,
+    grid_selected_index: usize,
+    inline_preedit: bool,
+) -> CandidateBoxState {
+    use waylan_core::{Candidate, ExpandedCardState};
+
+    let core_candidates: Vec<Candidate> = engine
+        .candidates()
+        .iter()
+        .map(|c| Candidate {
+            text: c.text.clone(),
+            pinyin: c.pinyin.clone(),
+            score: c.score,
+            is_expandable: c.is_expandable,
+            sub_candidates: c.sub_candidates.clone(),
+        })
+        .collect();
+
+    let grid_candidates: Vec<Candidate> = if is_grid_expanded {
+        engine
+            .all_candidates()
+            .iter()
+            .take(30)
+            .map(|c| Candidate {
+                text: c.text.clone(),
+                pinyin: c.pinyin.clone(),
+                score: c.score,
+                is_expandable: c.is_expandable,
+                sub_candidates: c.sub_candidates.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let expanded_card = if engine.is_expanded {
+        ExpandedCardState::Expanded {
+            selected_index: engine.expanded_selected_index,
+        }
+    } else {
+        ExpandedCardState::Collapsed
+    };
+
+    let is_dynamic_v_mode = engine.raw_input().starts_with('v');
+    let (preedit, mode_badge) = if inline_preedit {
+        if is_dynamic_v_mode {
+            (engine.raw_input().to_string(), "V模式".to_string())
+        } else {
+            match mode {
+                InputMode::Chinese => (String::new(), String::new()),
+                InputMode::English => (String::new(), "英".to_string()),
+                InputMode::VMode => (engine.formatted_preedit(), "V".to_string()),
+            }
+        }
+    } else {
+        let badge = match mode {
+            InputMode::Chinese => "中".to_string(),
+            InputMode::English => "英".to_string(),
+            InputMode::VMode => "V".to_string(),
+        };
+        (engine.formatted_preedit(), badge)
+    };
+
+    let selected_index = if is_grid_expanded {
+        grid_selected_index
+    } else {
+        engine.selected_index
+    };
+
+    CandidateBoxState {
+        visible: is_active && !engine.raw_input().is_empty(),
+        preedit,
+        candidates: core_candidates,
+        selected_index,
+        expanded_card,
+        mode_badge,
+        is_grid_expanded,
+        grid_candidates,
+    }
+}
+
+/// 为会话实现 7 组通用的基础 Wayland Dispatch trait（消除 V1/V2 重复样板代码）
+#[macro_export]
+macro_rules! impl_common_wayland_dispatch {
+    ($session_type:ty) => {
+        impl wayland_client::Dispatch<wayland_client::protocol::wl_seat::WlSeat, ()>
+            for $session_type
+        {
+            fn event(
+                _state: &mut Self,
+                _proxy: &wayland_client::protocol::wl_seat::WlSeat,
+                _event: <wayland_client::protocol::wl_seat::WlSeat as wayland_client::Proxy>::Event,
+                _data: &(),
+                _conn: &wayland_client::Connection,
+                _qhandle: &wayland_client::QueueHandle<Self>,
+            ) {
+            }
+        }
+
+        impl
+            wayland_client::Dispatch<
+                wayland_client::protocol::wl_compositor::WlCompositor,
+                (),
+            > for $session_type
+        {
+            fn event(
+                _state: &mut Self,
+                _proxy: &wayland_client::protocol::wl_compositor::WlCompositor,
+                _event: <wayland_client::protocol::wl_compositor::WlCompositor as wayland_client::Proxy>::Event,
+                _data: &(),
+                _conn: &wayland_client::Connection,
+                _qhandle: &wayland_client::QueueHandle<Self>,
+            ) {
+            }
+        }
+
+        impl wayland_client::Dispatch<wayland_client::protocol::wl_shm::WlShm, ()>
+            for $session_type
+        {
+            fn event(
+                _state: &mut Self,
+                _proxy: &wayland_client::protocol::wl_shm::WlShm,
+                _event: <wayland_client::protocol::wl_shm::WlShm as wayland_client::Proxy>::Event,
+                _data: &(),
+                _conn: &wayland_client::Connection,
+                _qhandle: &wayland_client::QueueHandle<Self>,
+            ) {
+            }
+        }
+
+        impl
+            wayland_client::Dispatch<
+                wayland_client::protocol::wl_surface::WlSurface,
+                (),
+            > for $session_type
+        {
+            fn event(
+                state: &mut Self,
+                _proxy: &wayland_client::protocol::wl_surface::WlSurface,
+                event: <wayland_client::protocol::wl_surface::WlSurface as wayland_client::Proxy>::Event,
+                _data: &(),
+                _conn: &wayland_client::Connection,
+                _qhandle: &wayland_client::QueueHandle<Self>,
+            ) {
+                if let wayland_client::protocol::wl_surface::Event::PreferredBufferScale { factor } =
+                    event
+                {
+                    state.surface_manager.set_scale(factor);
+                }
+            }
+        }
+
+        impl
+            wayland_client::Dispatch<
+                wayland_client::protocol::wl_shm_pool::WlShmPool,
+                (),
+            > for $session_type
+        {
+            fn event(
+                _state: &mut Self,
+                _proxy: &wayland_client::protocol::wl_shm_pool::WlShmPool,
+                _event: <wayland_client::protocol::wl_shm_pool::WlShmPool as wayland_client::Proxy>::Event,
+                _data: &(),
+                _conn: &wayland_client::Connection,
+                _qhandle: &wayland_client::QueueHandle<Self>,
+            ) {
+            }
+        }
+
+        impl
+            wayland_client::Dispatch<
+                wayland_client::protocol::wl_buffer::WlBuffer,
+                (),
+            > for $session_type
+        {
+            fn event(
+                state: &mut Self,
+                proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
+                event: <wayland_client::protocol::wl_buffer::WlBuffer as wayland_client::Proxy>::Event,
+                _data: &(),
+                _conn: &wayland_client::Connection,
+                _qhandle: &wayland_client::QueueHandle<Self>,
+            ) {
+                if matches!(
+                    event,
+                    wayland_client::protocol::wl_buffer::Event::Release
+                ) {
+                    state.surface_manager.on_buffer_released(proxy);
+                }
+            }
+        }
+
+        impl
+            wayland_client::Dispatch<
+                wayland_client::protocol::wl_registry::WlRegistry,
+                wayland_client::globals::GlobalListContents,
+            > for $session_type
+        {
+            fn event(
+                _state: &mut Self,
+                _proxy: &wayland_client::protocol::wl_registry::WlRegistry,
+                _event: <wayland_client::protocol::wl_registry::WlRegistry as wayland_client::Proxy>::Event,
+                _data: &wayland_client::globals::GlobalListContents,
+                _conn: &wayland_client::Connection,
+                _qhandle: &wayland_client::QueueHandle<Self>,
+            ) {
+            }
+        }
+    };
 }
 
 /// 隐藏候选框并解绑关联的 Wayland 表面缓冲区

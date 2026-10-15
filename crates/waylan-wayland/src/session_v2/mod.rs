@@ -228,14 +228,13 @@ impl WaylanV2Session {
     /// 触发候选框悬浮表面重绘并提交至 Wayland 表面
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
-        commit_candidate_surface(
-            &mut self.surface_manager,
-            &box_state,
-            self.shm.as_ref(),
-            self.popup_wl_surface.as_ref(),
-            self.qhandle.as_ref(),
-            &mut self.active_buffer,
-        );
+        let params = CandidateSurfaceCommitParams {
+            shm: self.shm.as_ref(),
+            popup_wl_surface: self.popup_wl_surface.as_ref(),
+            qhandle: self.qhandle.as_ref(),
+            active_buffer: &mut self.active_buffer,
+        };
+        commit_candidate_surface(&mut self.surface_manager, &box_state, params);
     }
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲

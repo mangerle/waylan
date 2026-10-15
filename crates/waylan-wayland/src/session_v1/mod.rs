@@ -6,7 +6,7 @@ use log::{debug, info};
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
-use waylan_core::{Candidate, CandidateBoxState, ExpandedCardState, InputMode};
+use waylan_core::{CandidateBoxState, InputMode};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_keyboard::WlKeyboard, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -235,52 +235,19 @@ impl WaylanV1Session {
 
     /// 构造当前候选框的渲染状态
     pub fn build_candidate_box_state(&self) -> CandidateBoxState {
-        let candidates = self.engine.candidates();
-        let core_candidates: Vec<Candidate> = candidates
-            .iter()
-            .map(|c| Candidate {
-                text: c.text.clone(),
-                pinyin: c.pinyin.clone(),
-                score: c.score,
-                is_expandable: c.is_expandable,
-                sub_candidates: c.sub_candidates.clone(),
-            })
-            .collect();
-
-        let expanded_card = if self.engine.is_expanded {
-            ExpandedCardState::Expanded {
-                selected_index: self.engine.expanded_selected_index,
-            }
-        } else {
-            ExpandedCardState::Collapsed
-        };
-
-        CandidateBoxState {
-            visible: !self.engine.raw_input().is_empty(),
-            preedit: self.engine.formatted_preedit(),
-            candidates: core_candidates,
-            selected_index: self.engine.selected_index,
-            expanded_card,
-            mode_badge: match self.mode {
-                InputMode::Chinese => "中".to_string(),
-                InputMode::English => "英".to_string(),
-                InputMode::VMode => "V".to_string(),
-            },
-            is_grid_expanded: false,
-            grid_candidates: Vec::new(),
-        }
+        build_common_candidate_box_state(&self.engine, self.mode, true, false, 0, false)
     }
 
     /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
     pub fn refresh_candidate_surface(&mut self) {
         let box_state = self.build_candidate_box_state();
-        self.surface_manager.commit_to_wayland(
-            &box_state,
-            self.shm.as_ref(),
-            self.popup_wl_surface.as_ref(),
-            self.qhandle.as_ref(),
-            &mut self.active_buffer,
-        );
+        let params = CandidateSurfaceCommitParams {
+            shm: self.shm.as_ref(),
+            popup_wl_surface: self.popup_wl_surface.as_ref(),
+            qhandle: self.qhandle.as_ref(),
+            active_buffer: &mut self.active_buffer,
+        };
+        commit_candidate_surface(&mut self.surface_manager, &box_state, params);
 
         if let Some(ref layer_surf) = self.layer_surface {
             let scale = self.surface_manager.scale.max(1) as u32;
