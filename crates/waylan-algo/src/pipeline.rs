@@ -73,17 +73,18 @@ impl CandidatePipeline {
         Self::paginate(candidates, config.page_size, page_index)
     }
 
-    /// 候选词去重：按候选文字去重，保留最高分者
-    fn deduplicate(candidates: Vec<AlgoCandidate>) -> Vec<AlgoCandidate> {
+    /// 候选词去重：按候选文字去重，保留最高分者（基于借用切片与就地保留消除无谓堆内存分配）
+    fn deduplicate(mut candidates: Vec<AlgoCandidate>) -> Vec<AlgoCandidate> {
         let mut seen = HashSet::with_capacity(candidates.len());
-        let mut deduped = Vec::with_capacity(candidates.len());
-
-        for item in candidates {
-            if seen.insert(item.text.clone()) {
-                deduped.push(item);
-            }
+        let mut keep = Vec::with_capacity(candidates.len());
+        for item in &candidates {
+            keep.push(seen.insert(item.text.as_str()));
         }
-        deduped
+        drop(seen);
+
+        let mut keep_iter = keep.into_iter();
+        candidates.retain(|_| keep_iter.next().unwrap_or(false));
+        candidates
     }
 
     /// 检查是否在标准通用汉字字符集内（过滤控制符、替换字符及 Unicode 私用区 PUA 字符，保留 CJK 扩展区汉字）
@@ -208,5 +209,21 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "常用字");
         assert_eq!(result[1].text, "\u{20000}");
+    }
+
+    #[test]
+    fn test_deduplicate_preserves_order_and_highest_score() {
+        let raw = vec![
+            AlgoCandidate::new("测试", "ce'shi", 100),
+            AlgoCandidate::new("其他", "qi'ta", 90),
+            AlgoCandidate::new("测试", "ce'shi", 80), // 重复项，应被剔除
+            AlgoCandidate::new("微澜", "wei'lan", 70),
+        ];
+        let deduped = CandidatePipeline::deduplicate(raw);
+        assert_eq!(deduped.len(), 3);
+        assert_eq!(deduped[0].text, "测试");
+        assert_eq!(deduped[0].score, 100);
+        assert_eq!(deduped[1].text, "其他");
+        assert_eq!(deduped[2].text, "微澜");
     }
 }
