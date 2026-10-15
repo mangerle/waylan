@@ -32,7 +32,7 @@ use waylan_wayland::session_common::{
 };
 use waylan_wayland::{InotifyWatcher, LoopWakeup};
 use zbus::blocking::connection::Builder;
-use zbus::blocking::Connection;
+use zbus::blocking::{Connection, MessageIterator};
 use zbus::zvariant::Value;
 
 use crate::config::env_var_non_empty;
@@ -364,21 +364,156 @@ fn register_or_activate_ibus_engine(
     Ok(())
 }
 
-/// 查询 GNOME / FreeDesktop 屏幕保护与锁屏当前激活状态
-fn query_screen_saver_active(session_conn: Option<&Connection>) -> bool {
-    let Some(conn) = session_conn else {
-        return false;
-    };
-    conn.call_method(
+/// 在会话启动阶段探测初始锁屏状态（优先遵循 FreeDesktop 跨桌面规范，回退至 GNOME 专属规范）
+fn query_initial_screen_saver_active(conn: &Connection) -> bool {
+    // 1. 优先尝试 FreeDesktop 跨桌面统一规范（KDE Plasma、XFCE、Cinnamon 等通用规范）
+    if let Ok(reply) = conn.call_method(
+        Some("org.freedesktop.ScreenSaver"),
+        "/org/freedesktop/ScreenSaver",
+        Some("org.freedesktop.ScreenSaver"),
+        "GetActive",
+        &(),
+    ) {
+        if let Ok(active) = reply.body().deserialize::<bool>() {
+            return active;
+        }
+    }
+
+    // 2. 回退尝试 GNOME 专属规范（GNOME Mutter / gnome-screensaver）
+    if let Ok(reply) = conn.call_method(
         Some("org.gnome.ScreenSaver"),
         "/org/gnome/ScreenSaver",
         Some("org.gnome.ScreenSaver"),
         "GetActive",
         &(),
+    ) {
+        if let Ok(active) = reply.body().deserialize::<bool>() {
+            return active;
+        }
+    }
+
+    false
+}
+
+/// 后台常驻锁屏信号监听器 RAII 句柄，Drop 时自动唤醒并回收工作线程
+struct ScreenSaverListenerHandle {
+    join_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ScreenSaverListenerHandle {
+    fn stop(&mut self) {
+        if let Some(handle) = self.join_handle.take() {
+            // 向总线广播一条 ActiveChanged 信号以即时唤醒阻塞在 iter.next() 的监听线程
+            if let Ok(conn) = Connection::session() {
+                let _ = conn.emit_signal(
+                    None::<&str>,
+                    "/org/waylan/Daemon",
+                    "org.freedesktop.ScreenSaver",
+                    "ActiveChanged",
+                    &(false,),
+                );
+            }
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for ScreenSaverListenerHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// 启动后台常驻 D-Bus 锁屏信号被动监听器
+///
+/// 通过 D-Bus 信号被动订阅（MatchRule）监听桌面锁屏变迁，彻底杜绝在主循环中高频主动轮询同步 RPC。
+fn spawn_screen_saver_listener(
+    initial_locked: bool,
+    loop_wakeup: Option<LoopWakeup>,
+    exit_requested: Arc<AtomicBool>,
+) -> (Arc<AtomicBool>, ScreenSaverListenerHandle) {
+    let screen_locked = Arc::new(AtomicBool::new(initial_locked));
+    let screen_locked_clone = Arc::clone(&screen_locked);
+
+    let handle = std::thread::Builder::new()
+        .name("waylan-screen-saver-listener".to_string())
+        .spawn(move || {
+            let Ok(conn) = Connection::session() else {
+                return;
+            };
+
+            // 注册跨桌面锁屏信号匹配规则（涵盖 GNOME、KDE Plasma、XFCE、systemd-logind 等）
+            let rules = [
+                // 1. GNOME & FreeDesktop (KDE Plasma, XFCE 等) 屏幕保护状态变更信号
+                "type='signal',member='ActiveChanged'",
+                // 2. systemd-logind 会话锁屏与解锁信号
+                "type='signal',interface='org.freedesktop.login1.Session',member='Lock'",
+                "type='signal',interface='org.freedesktop.login1.Session',member='Unlock'",
+            ];
+
+            for rule in rules {
+                let _ = conn.call_method(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    Some("org.freedesktop.DBus"),
+                    "AddMatch",
+                    &rule,
+                );
+            }
+
+            let iter = MessageIterator::from(&conn);
+            for msg_res in iter {
+                if exit_requested.load(Ordering::Acquire) {
+                    break;
+                }
+
+                let Ok(msg) = msg_res else {
+                    break;
+                };
+
+                let header = msg.header();
+                let member = header.member().map(|m| m.as_str());
+                let mut state_changed = false;
+
+                match member {
+                    Some("ActiveChanged") => {
+                        if let Ok(active) = msg.body().deserialize::<bool>() {
+                            let prev = screen_locked_clone.swap(active, Ordering::AcqRel);
+                            if prev != active {
+                                state_changed = true;
+                            }
+                        }
+                    }
+                    Some("Lock") => {
+                        let prev = screen_locked_clone.swap(true, Ordering::AcqRel);
+                        if !prev {
+                            state_changed = true;
+                        }
+                    }
+                    Some("Unlock") => {
+                        let prev = screen_locked_clone.swap(false, Ordering::AcqRel);
+                        if prev {
+                            state_changed = true;
+                        }
+                    }
+                    _ => {}
+                }
+
+                if state_changed {
+                    if let Some(wakeup) = loop_wakeup.as_ref() {
+                        wakeup.wake();
+                    }
+                }
+            }
+        })
+        .ok();
+
+    (
+        screen_locked,
+        ScreenSaverListenerHandle {
+            join_handle: handle,
+        },
     )
-    .ok()
-    .and_then(|reply| reply.body().deserialize::<bool>().ok())
-    .unwrap_or(false)
 }
 
 /// 驱动后台文件热重载与托盘状态同步的阻塞监控循环
@@ -392,15 +527,26 @@ fn run_ibus_monitor_loop(
     // 正常运行阶段绝不定时重复调用 SetGlobalEngine，避免打断用户当前打字状态或触发上下文重置闪退。
     let mut startup_healing_rounds: u32 = 25;
 
-    // 建立用户 D-Bus 会话总线连接以感知桌面锁屏（ScreenSaver）事件
+    // 建立用户 D-Bus 会话总线连接以探测初始桌面锁屏（ScreenSaver）状态（仅启动时单次检测）
     let session_conn = Connection::session().ok();
-    let mut last_screen_locked = query_screen_saver_active(session_conn.as_ref());
-    if last_screen_locked {
+    let initial_screen_locked = session_conn
+        .as_ref()
+        .map(query_initial_screen_saver_active)
+        .unwrap_or(false);
+
+    if initial_screen_locked {
         if let Ok(mut guard) = shared_core.lock() {
             guard.is_screen_locked = true;
         }
         info!("[微澜 IBus] 启动时检测到系统处于锁屏状态，已进入密码直通保护模式。");
     }
+
+    let (screen_locked_flag, mut listener_handle) = spawn_screen_saver_listener(
+        initial_screen_locked,
+        params.loop_wakeup.clone(),
+        Arc::clone(&params.exit_requested),
+    );
+    let mut last_screen_locked = initial_screen_locked;
 
     let mut last_voice_active = false;
 
@@ -415,8 +561,8 @@ fn run_ibus_monitor_loop(
             ensure_global_engine_active(conn);
         }
 
-        // 动态感知锁屏状态变迁：锁屏时直通按键防密码泄露，解锁瞬间自动纠偏切回微澜
-        let current_screen_locked = query_screen_saver_active(session_conn.as_ref());
+        // 动态感知锁屏状态变迁（由被动 D-Bus 信号驱动更新 AtomicBool，零同步 RPC 轮询开销）
+        let current_screen_locked = screen_locked_flag.load(Ordering::Acquire);
         if current_screen_locked != last_screen_locked {
             if current_screen_locked {
                 info!("[微澜 IBus] 检测到系统进入锁屏状态，进入硬件按键直通与密码保护模式。");
@@ -652,6 +798,9 @@ fn run_ibus_monitor_loop(
             }
         }
     }
+
+    // 停止后台锁屏信号监听器并回收线程资源
+    listener_handle.stop();
 }
 
 /// 从 IBus `GetGlobalEngine` 返回的 `IBusEngineDesc` D-Bus 结构体/变体中提取引擎名称
@@ -799,5 +948,22 @@ mod tests {
         let val = Value::Structure(st);
         let extracted = extract_engine_name_from_desc_variant(&val);
         assert_eq!(extracted.as_deref(), Some("waylan"));
+    }
+
+    #[test]
+    fn test_screen_saver_listener_lifecycle() {
+        let wakeup = LoopWakeup::new().ok();
+        let exit_flag = Arc::new(AtomicBool::new(false));
+
+        let (locked_flag, mut listener) =
+            spawn_screen_saver_listener(false, wakeup.clone(), Arc::clone(&exit_flag));
+        assert!(!locked_flag.load(Ordering::Acquire));
+
+        // 稍等 50ms 确保监听线程完成 D-Bus 会话连接与 MatchRule 注册
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        exit_flag.store(true, Ordering::Release);
+
+        // 停止监听器并安全回收线程
+        listener.stop();
     }
 }
