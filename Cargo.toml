@@ -7,6 +7,7 @@ members = [
     "crates/waylan-wayland",
     "crates/waylan-daemon",
     "crates/waylan-settings",
+    "crates/waylan-voice",
 ]
 
 [workspace.package]
@@ -17,6 +18,7 @@ license = "MIT OR Apache-2.0"
 description = "微澜 (WayLan) - 专为 Wayland 打造的现代轻量纯 Rust 中文输入法"
 
 [workspace.dependencies]
+cpal = "0.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 log = "0.4"
@@ -43,4 +45,6 @@ zbus = "4"
 signal-hook = "0.3"
 slint = "1"
 slint-build = "1"
+sherpa-onnx = "1.13.8"
+ureq = { version = "2.12", features = ["json"] }
 
