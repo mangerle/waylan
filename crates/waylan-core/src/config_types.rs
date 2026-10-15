@@ -519,7 +519,7 @@ impl Default for VoiceInteractionConfig {
 impl Default for VoiceConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             toggle_shortcut: "Ctrl + Alt + V".to_string(),
             push_to_talk_shortcut: "F8".to_string(),
             engine_type: VoiceEngineType::default(),
@@ -729,14 +729,20 @@ mod tests {
     #[test]
     fn test_voice_config_effective_dual_shortcuts() {
         let mut cfg = VoiceConfig::default();
+        // 默认状态下语音为关闭状态，所有快捷键均不应生效
+        assert!(cfg.get_effective_toggle_shortcut().is_none());
+        assert!(cfg.get_effective_ptt_shortcut().is_none());
+
+        // 显式开启语音输入功能
+        cfg.enabled = true;
         let toggle = cfg
             .get_effective_toggle_shortcut()
-            .expect("默认开关按键必须生效");
+            .expect("开启后默认开关按键必须生效");
         assert!(toggle.matches(47, false, true, true, false));
 
         let ptt = cfg
             .get_effective_ptt_shortcut()
-            .expect("默认对讲机按键必须生效");
+            .expect("开启后默认对讲机按键必须生效");
         assert!(ptt.matches(66, false, false, false, false));
 
         cfg.toggle_shortcut = "已禁用".to_string();

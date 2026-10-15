@@ -183,6 +183,9 @@ fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSession
     core.full_width_char_shortcut = bundle.full_width_char_shortcut;
     core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
     core.voice_config = bundle.voice.clone();
+    if !core.voice_config.enabled {
+        core.voice_controller.unload_models();
+    }
     bundle.apply_to_engine_and_input(
         &mut core.engine,
         &mut core.shift_sm,
@@ -891,7 +894,7 @@ fn poll_wakeup_and_inotify(
     }
 
     if fds.is_empty() {
-        std::thread::sleep(std::time::Duration::from_millis(timeout_ms.max(50) as u64));
+        std::thread::sleep(Duration::from_millis(timeout_ms.max(50) as u64));
         return;
     }
 
@@ -968,7 +971,7 @@ mod tests {
         assert!(!locked_flag.load(Ordering::Acquire));
 
         // 稍等 50ms 确保监听线程完成 D-Bus 会话连接与 MatchRule 注册
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         exit_flag.store(true, Ordering::Release);
 
         // 停止监听器并安全回收线程

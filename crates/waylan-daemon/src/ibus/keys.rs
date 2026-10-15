@@ -675,7 +675,7 @@ impl IbusSessionCore {
                 }
                 self.last_voice_trigger_time = now;
 
-                if self.voice_controller.is_recording() {
+                return if self.voice_controller.is_recording() {
                     log::info!("[微澜 IBus 语音] 开关模式快捷键触发停止录音并请求提交");
                     self.voice_controller.stop_and_commit();
                     std::thread::sleep(Duration::from_millis(30));
@@ -683,7 +683,7 @@ impl IbusSessionCore {
                     self.voice_display_text = None;
                     self.voice_partial_text = None;
                     self.voice_event_rx = None;
-                    return Some(IbusKeyOutcome {
+                    Some(IbusKeyOutcome {
                         consumed: true,
                         commit_text: if final_text.is_empty() {
                             None
@@ -693,7 +693,7 @@ impl IbusSessionCore {
                         },
                         update_ui: true,
                         ..Default::default()
-                    });
+                    })
                 } else {
                     log::info!("[微澜 IBus 语音] 开关模式快捷键触发开启连续听写录音");
                     self.engine.reset();
@@ -714,12 +714,12 @@ impl IbusSessionCore {
                         self.voice_partial_text = None;
                         self.voice_event_rx = Some(rx);
                     }
-                    return Some(IbusKeyOutcome {
+                    Some(IbusKeyOutcome {
                         consumed: true,
                         update_ui: true,
                         ..Default::default()
-                    });
-                }
+                    })
+                };
             }
         }
 
@@ -1425,12 +1425,38 @@ mod tests {
     }
 
     #[test]
+    fn test_ibus_voice_input_disabled_by_default() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+        // 验证默认情况下 voice_config.enabled 为 false
+        assert!(!core.voice_config.enabled, "语音输入默认应处于关闭状态");
+
+        // 按下 Ctrl + Alt + V 不应被语音功能拦截消费
+        let v_res = core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
+        assert!(!v_res.consumed, "默认关闭时不应拦截快捷键");
+        assert!(
+            !core.voice_controller.is_recording(),
+            "默认关闭时不应启动语音录制"
+        );
+        assert!(core.voice_display_text.is_none());
+
+        // 按下 F8（evdev 扫描码 66）也不应被拦截
+        let f8_res = core.process_key_event(0xffc5, 66, 0);
+        assert!(!f8_res.consumed, "默认关闭时不应拦截对讲机按键");
+        assert!(
+            !core.voice_controller.is_recording(),
+            "默认关闭时不应启动对讲机录制"
+        );
+    }
+
+    #[test]
     fn test_ibus_voice_input_shortcut_and_cancel() {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
+        core.voice_config.enabled = true;
         core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
 
-        // 1. 验证默认配置下按下 Ctrl + Alt + V 触发语音输入激活
+        // 1. 验证开启语音配置下按下 Ctrl + Alt + V 触发语音输入激活
         let start_res =
             core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
         assert!(start_res.consumed, "语音激活按键应被拦截消费");
@@ -1453,6 +1479,7 @@ mod tests {
     fn test_ibus_voice_input_commit_on_enter() {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
+        core.voice_config.enabled = true;
         core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
 
         // 1. 触发语音录音
@@ -1460,7 +1487,7 @@ mod tests {
         assert!(core.voice_controller.is_recording());
 
         // 2. 给予后台仿真录音线程极短时隙产生音频分块
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
 
         // 3. 按下 Enter 键，应停止录音并触发上屏或消费按键
         let enter_res = core.process_key_event(0xff0d, KEY_ENTER, 0);
@@ -1473,6 +1500,7 @@ mod tests {
     fn test_ibus_voice_input_push_to_talk_mode() {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
+        core.voice_config.enabled = true;
         core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
         core.voice_config.push_to_talk_shortcut = "Ctrl + Alt + V".to_string();
 
@@ -1506,6 +1534,7 @@ mod tests {
     fn test_ibus_voice_input_custom_shortcut() {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
+        core.voice_config.enabled = true;
         core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
         core.voice_config.toggle_shortcut = "F8".to_string();
         core.voice_config.push_to_talk_shortcut = "已禁用".to_string();

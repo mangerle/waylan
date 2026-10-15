@@ -697,13 +697,15 @@ mod tests {
         assert_eq!(updated_cfg.tray_icon_zh.as_deref(), Some("custom-zh.svg"));
         assert_eq!(updated_cfg.tray_icon_en.as_deref(), Some("custom-en.svg"));
 
-        // 验证语音双独立快捷键初始同步
+        // 验证语音双独立快捷键与默认开关状态
+        assert!(!window.get_voice_enabled());
         assert_eq!(window.get_toggle_shortcut().as_str(), "Ctrl + Alt + V");
         assert_eq!(window.get_toggle_shortcut_index(), 0);
         assert_eq!(window.get_push_to_talk_shortcut().as_str(), "F8");
         assert_eq!(window.get_ptt_shortcut_index(), 0);
 
-        // 模拟用户在 UI 界面自定义设置：切换长按对讲机为 Super + V，禁用连续听写
+        // 模拟用户在 UI 界面自定义设置：开启语音输入，切换长按对讲机为 Super + V，禁用连续听写
+        window.set_voice_enabled(true);
         window.set_ptt_shortcut_index(3);
         window.set_push_to_talk_shortcut("Super + V".into());
         window.set_toggle_shortcut_index(5);
@@ -712,6 +714,7 @@ mod tests {
         update_config_from_window(&window, &mut updated_cfg);
 
         // 验证语音快捷键修改并持久化成功
+        assert!(updated_cfg.voice.enabled);
         assert_eq!(updated_cfg.voice.push_to_talk_shortcut, "Super + V");
         assert_eq!(updated_cfg.voice.toggle_shortcut, "已禁用");
         assert!(updated_cfg.voice.get_effective_ptt_shortcut().is_some());

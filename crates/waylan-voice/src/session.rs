@@ -61,6 +61,8 @@ enum WorkerCommand {
     StopAndCommit,
     /// 取消当前录音并丢弃
     Cancel,
+    /// 卸载并释放已加载的模型权重，释放系统内存
+    UnloadModels,
     /// 销毁常驻线程平滑退出
     Shutdown,
 }
@@ -111,21 +113,18 @@ impl VoiceSessionController {
     /// 若系统资源紧张导致后台工作线程派生失败，记录错误日志并安全降级为禁用语音功能，
     /// 保证输入法核心守护进程不会意外崩溃。
     pub fn new() -> Self {
-        match Self::try_new() {
-            Ok(controller) => controller,
-            Err(e) => {
-                log::error!(
-                    "[微澜语音] 创建后台常驻语音工作线程失败，已安全降级为禁用语音功能: {}",
-                    e
-                );
-                let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
-                Self {
-                    is_active: Arc::new(AtomicBool::new(false)),
-                    cmd_tx,
-                    worker_handle: None,
-                }
+        Self::try_new().unwrap_or_else(|e| {
+            log::error!(
+                "[微澜语音] 创建后台常驻语音工作线程失败，已安全降级为禁用语音功能: {}",
+                e
+            );
+            let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
+            Self {
+                is_active: Arc::new(AtomicBool::new(false)),
+                cmd_tx,
+                worker_handle: None,
             }
-        }
+        })
     }
 
     /// 当前是否正处于录音识别中
@@ -144,7 +143,7 @@ impl VoiceSessionController {
         event_tx: SyncSender<VoiceEvent>,
     ) -> Result<(), VoiceError> {
         if self.worker_handle.is_none() {
-            log::warn!("[微澜语音] 语音后台工作线程未就绪（已被安全降级禁用），忽略启动录音请求");
+            warn!("[微澜语音] 语音后台工作线程未就绪（已被安全降级禁用），忽略启动录音请求");
             return Err(VoiceError::WorkerThreadSpawnFailed(
                 "语音后台工作线程未就绪（已被安全降级禁用）".to_string(),
             ));
@@ -183,6 +182,13 @@ impl VoiceSessionController {
         if self.worker_handle.is_some() && self.is_recording() {
             self.is_active.store(false, Ordering::Release);
             let _ = self.cmd_tx.send(WorkerCommand::Cancel);
+        }
+    }
+
+    /// 卸载并释放常驻工作线程中已加载的全部模型权重，归还系统内存
+    pub fn unload_models(&self) {
+        if self.worker_handle.is_some() {
+            let _ = self.cmd_tx.send(WorkerCommand::UnloadModels);
         }
     }
 
@@ -263,6 +269,13 @@ impl VoiceSessionController {
                 WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
                     is_active.store(false, Ordering::Release);
                 }
+                WorkerCommand::UnloadModels => {
+                    cached_recognizer = None;
+                    cached_vad = None;
+                    cached_punct = None;
+                    last_asr_fingerprint = None;
+                    info!("[语音会话] 已卸载内存中缓存的语音识别、VAD与标点模型权重，完全释放常驻内存");
+                }
                 WorkerCommand::Shutdown => {
                     info!("[语音会话] 收到销毁指令，后台常驻语音工作线程平滑退出");
                     break;
@@ -329,6 +342,13 @@ impl VoiceSessionController {
                     WorkerCommand::Shutdown => {
                         pre_speech_buffer.clear();
                         recognizer.reset();
+                        break;
+                    }
+                    WorkerCommand::UnloadModels => {
+                        info!("[语音会话] 录音过程中收到卸载指令，中止当前录音并退出");
+                        pre_speech_buffer.clear();
+                        recognizer.reset();
+                        is_active.store(false, Ordering::Release);
                         break;
                     }
                     WorkerCommand::Start { .. } => {
@@ -653,5 +673,21 @@ mod tests {
         let text_no_punct =
             VoiceSessionController::extract_final_text(&mut recognizer2, None, false, &itn_cfg);
         assert_eq!(text_no_punct, "微澜语音输入");
+    }
+
+    #[test]
+    fn test_voice_session_controller_unload_models() {
+        let (cmd_tx, cmd_rx) = sync_channel::<WorkerCommand>(4);
+        let dummy_handle = thread::spawn(|| {});
+        let controller = VoiceSessionController {
+            is_active: Arc::new(AtomicBool::new(false)),
+            cmd_tx,
+            worker_handle: Some(dummy_handle),
+        };
+
+        controller.unload_models();
+        // 验证通道已收到 UnloadModels 指令
+        let received = cmd_rx.try_recv();
+        assert!(matches!(received, Ok(WorkerCommand::UnloadModels)));
     }
 }
