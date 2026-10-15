@@ -87,7 +87,7 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), Box<dyn E
         if session
             .exit_requested
             .as_ref()
-            .map(|f| f.load(Ordering::Relaxed))
+            .map(|f| f.load(Ordering::Acquire))
             .unwrap_or(false)
         {
             info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V1 事件循环。");
@@ -262,7 +262,7 @@ pub fn run_session_v2_loop_fallible(
         if session
             .exit_requested
             .as_ref()
-            .map(|f| f.load(Ordering::Relaxed))
+            .map(|f| f.load(Ordering::Acquire))
             .unwrap_or(false)
         {
             info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V2 事件循环。");

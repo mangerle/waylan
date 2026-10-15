@@ -61,7 +61,7 @@ pub fn check_reload_requested_or_files_changed(
     last_watched_mtime: &mut Option<SystemTime>,
 ) -> bool {
     let mut should_reload = reload_requested
-        .map(|flag| flag.swap(false, Ordering::Relaxed))
+        .map(|flag| flag.swap(false, Ordering::AcqRel))
         .unwrap_or(false);
 
     let changed = if let Some(ref mut watcher) = inotify_watcher {
