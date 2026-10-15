@@ -3,11 +3,93 @@ use chrono::Local;
 use log::LevelFilter;
 use std::error::Error;
 use std::fs;
-use std::io::{stdout, LineWriter};
+use std::io::{stdout, LineWriter, Write};
 use std::path::PathBuf;
 
 /// 单个日志文件最大体积上限（10 MB），超过时自动轮转重命名以防无限膨胀
 const MAX_LOG_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// 支持长生命周期运行中根据体积阈值自动轮转的日志文件写入器
+pub(crate) struct RollingFileWriter {
+    log_path: PathBuf,
+    max_bytes: u64,
+    current_bytes: u64,
+    writer: Option<LineWriter<fs::File>>,
+}
+
+impl RollingFileWriter {
+    /// 打开日志文件并创建常驻自动轮转写入器
+    ///
+    /// # Errors
+    /// 当无法创建或打开目标日志文件时返回 I/O 错误。
+    pub fn open(log_path: PathBuf, max_bytes: u64) -> std::io::Result<Self> {
+        // 启动初期先执行一次预检轮转
+        rotate_log_file_if_needed(&log_path, max_bytes);
+
+        let current_bytes = fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        let file = Self::open_file(&log_path)?;
+        Ok(Self {
+            log_path,
+            max_bytes,
+            current_bytes,
+            writer: Some(LineWriter::new(file)),
+        })
+    }
+
+    fn open_file(path: &std::path::Path) -> std::io::Result<fs::File> {
+        let mut open_opts = fs::OpenOptions::new();
+        open_opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open_opts.mode(0o600);
+        }
+        open_opts.open(path)
+    }
+
+    /// 执行文件轮转并重新打开新的日志文件
+    fn rotate(&mut self) -> std::io::Result<()> {
+        if let Some(mut w) = self.writer.take() {
+            let _ = w.flush();
+        }
+
+        rotate_log_file_if_needed(&self.log_path, 0);
+
+        let file = Self::open_file(&self.log_path)?;
+        self.writer = Some(LineWriter::new(file));
+        self.current_bytes = 0;
+        Ok(())
+    }
+}
+
+impl std::io::Write for RollingFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // 若当前文件已有数据且加上待写入数据将超过上限，立即触发轮转
+        if self.current_bytes > 0
+            && self.current_bytes.saturating_add(buf.len() as u64) > self.max_bytes
+        {
+            self.rotate()?;
+        }
+        if let Some(writer) = self.writer.as_mut() {
+            let n = writer.write(buf)?;
+            self.current_bytes = self.current_bytes.saturating_add(n as u64);
+            Ok(n)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "日志写入器底层文件未就绪",
+            ))
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(writer) = self.writer.as_mut() {
+            writer.flush()
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// 初始化微澜输入法双通道日志系统
 ///
@@ -35,9 +117,6 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         }
     }
 
-    // 若现有日志文件超过最大体积限制，自动多槽位滚动（.log.2 -> 删除, .log.1 -> .log.2, .log -> .log.1）防止磁盘耗尽
-    rotate_log_file_if_needed(&log_path, MAX_LOG_FILE_BYTES);
-
     // 根据环境变量 RUST_LOG 决定日志级别，默认为 Info
     let env_level = env_var_non_empty("RUST_LOG").unwrap_or_else(|| "info".to_string());
     let level_filter = match env_level.to_lowercase().as_str() {
@@ -48,15 +127,8 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         _ => LevelFilter::Info,
     };
 
-    let mut open_opts = fs::OpenOptions::new();
-    open_opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open_opts.mode(0o600);
-    }
-    let log_file = open_opts.open(&log_path)?;
-    let line_writer = LineWriter::new(log_file);
+    // 使用常驻自动轮转写入器（支持在运行中持续检测体积并在超出 10MB 时滚动）
+    let rolling_writer = RollingFileWriter::open(log_path.clone(), MAX_LOG_FILE_BYTES)?;
 
     // 使用 fern 构建多目标日志格式化器，并对嘈杂的第三方底层库限制在 Warn 级别
     fern::Dispatch::new()
@@ -78,8 +150,8 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         .level_for("rustix", LevelFilter::Warn)
         // 终端标准输出通道
         .chain(stdout())
-        // 日志文件持久化通道（按行自动刷盘，防止未捕获异常退出或异常中断时末尾日志丢失）
-        .chain(Box::new(line_writer) as Box<dyn std::io::Write + Send>)
+        // 日志文件持久化通道（按行自动刷盘并在运行中自动体积轮转，防止磁盘耗尽）
+        .chain(Box::new(rolling_writer) as Box<dyn std::io::Write + Send>)
         .apply()?;
 
     Ok(log_path)
@@ -180,5 +252,35 @@ mod tests {
         writer.write_all(b"\n").expect("写入换行符失败");
         let len_after = fs::metadata(&log_file_path).unwrap().len();
         assert!(len_after > 0, "写入换行符后应自动刷盘到文件");
+    }
+
+    #[test]
+    fn test_rolling_file_writer_runtime_rotation() {
+        let temp_dir = tempfile::tempdir().expect("创建测试临时目录失败");
+        let log_file = temp_dir.path().join("rolling_test.log");
+
+        // 阈值设为 20 字节
+        let mut writer = RollingFileWriter::open(log_file.clone(), 20).expect("打开日志写入器");
+
+        // 写入 15 字节（未超限）
+        writer.write_all(b"1234567890\n").expect("写入行1");
+        writer.flush().expect("刷盘");
+        assert!(log_file.exists());
+        assert!(!log_file.with_extension("log.1").exists());
+
+        // 再次写入 15 字节（累积 26 字节，达到阈值触发常驻自动轮转）
+        writer.write_all(b"abcdefghij\n").expect("写入行2");
+        writer.flush().expect("刷盘");
+
+        let backup_1 = log_file.with_extension("log.1");
+        assert!(backup_1.exists(), "运行期超出阈值后必须自动生成 .log.1");
+        assert!(log_file.exists(), "必须自动生成新的日志文件用于后续写入");
+
+        // 验证原文件已被轮转，新文件只包含第二批数据
+        let backup_content = fs::read_to_string(&backup_1).expect("读取备份");
+        assert!(backup_content.contains("1234567890"));
+
+        let current_content = fs::read_to_string(&log_file).expect("读取新日志");
+        assert!(current_content.contains("abcdefghij"));
     }
 }
