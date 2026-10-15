@@ -91,3 +91,35 @@ fn test_custom_phrase_newline_escape_roundtrip() {
 
     let _ = std::fs::remove_file(temp_path);
 }
+
+#[test]
+fn test_custom_phrase_dynamic_macro_expansion() {
+    let mut manager = CustomPhraseManager::new();
+    manager.parse_content(
+        "dt=#date\n\
+         cn_dt=#date(YYYY年MM月DD日)\n\
+         tm=#time(HH:mm)\n\
+         sig=签名：\\n#date\\n#time",
+    );
+
+    let now = chrono::Local::now();
+
+    let dt_cands = manager.lookup("dt");
+    assert_eq!(dt_cands.len(), 1);
+    assert_eq!(dt_cands[0].text, now.format("%Y-%m-%d").to_string());
+
+    let cn_cands = manager.lookup("cn_dt");
+    assert_eq!(cn_cands.len(), 1);
+    assert_eq!(cn_cands[0].text, now.format("%Y年%m月%d日").to_string());
+
+    let tm_cands = manager.lookup("tm");
+    assert_eq!(tm_cands.len(), 1);
+    assert_eq!(tm_cands[0].text, now.format("%H:%M").to_string());
+
+    let sig_cands = manager.lookup("sig");
+    assert_eq!(sig_cands.len(), 1);
+    assert!(sig_cands[0].text.starts_with("签名：\n"));
+    assert!(sig_cands[0]
+        .text
+        .contains(&now.format("%Y-%m-%d").to_string()));
+}

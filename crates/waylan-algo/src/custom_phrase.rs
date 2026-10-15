@@ -1,3 +1,4 @@
+use crate::custom_phrase_macro::expand_dynamic_macros;
 use crate::error::AlgoError;
 use crate::types::{AlgoCandidate, CandidateTier};
 use serde::{Deserialize, Serialize};
@@ -124,14 +125,15 @@ impl CustomPhraseManager {
         }
     }
 
-    /// 依据输入拼音查询自定义短语
+    /// 依据输入拼音查询自定义短语（实时求值并展开其中的动态宏指令）
     pub fn lookup(&self, code: &str) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::new();
         let key = code.to_lowercase();
         if let Some(list) = self.phrases.get(&key) {
             for text in list {
+                let expanded = expand_dynamic_macros(text);
                 candidates.push(
-                    AlgoCandidate::new(text, code, 9_999_999)
+                    AlgoCandidate::new(expanded, code, 9_999_999)
                         .with_comment("自定义短语")
                         .with_tier(CandidateTier::ExactWord),
                 );

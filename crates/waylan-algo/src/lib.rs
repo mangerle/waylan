@@ -5,6 +5,7 @@ pub mod composition;
 pub mod custom_phrase;
 pub(crate) mod custom_phrase_aux;
 mod custom_phrase_data;
+pub(crate) mod custom_phrase_macro;
 pub mod dat;
 pub mod dict_importer;
 pub mod dispatcher;
