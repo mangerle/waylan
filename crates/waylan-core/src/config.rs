@@ -4,10 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::config_types::{
-    CandidateIndexStyle, CandidateOrientation, CloudAsrConfig, CloudProviderType,
-    FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, OfflineAsrConfig,
-    OfflineModelType, PageKeys, ParsedShortcut, SwitchKey, ThemeMode, TraditionalShortcut,
-    TypoCorrectionRules, VadConfig, VadModelType, VoiceConfig, VoiceEngineType,
+    AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
+    CloudProviderType, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules,
+    NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, SwitchKey,
+    ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType, VoiceConfig,
+    VoiceEngineType,
 };
 
 /// 微澜输入法全局配置

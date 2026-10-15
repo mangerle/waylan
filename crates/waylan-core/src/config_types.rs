@@ -361,6 +361,46 @@ impl Default for CloudAsrConfig {
     }
 }
 
+/// 智能降噪引擎类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum NsEngineType {
+    /// 内置极轻量 RNNoise (纯 Rust 静态集成，零外部依赖)
+    #[default]
+    Rnnoise,
+    /// 深度滤波 DeepFilterNet (超强消除机械键盘敲击声)
+    DeepFilterNet,
+    /// 直通禁用降噪
+    Bypass,
+}
+
+/// 音频前端预处理与降噪配置
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioFrontEndConfig {
+    /// 是否开启 80Hz 高通滤波（切除机械低频底噪与电磁交流声）
+    pub high_pass_filter: bool,
+    /// 是否开启人声智能降噪
+    pub noise_suppression: bool,
+    /// 智能降噪引擎模式（轻量 RNNoise 或深度 DeepFilterNet）
+    pub ns_engine: NsEngineType,
+    /// 是否开启数字自动增益控制 (AGC)
+    pub auto_gain_control: bool,
+    /// 自定义降噪模型文件路径（可选，支持从 models/ns/ 导入）
+    pub custom_ns_model_path: Option<String>,
+}
+
+impl Default for AudioFrontEndConfig {
+    fn default() -> Self {
+        Self {
+            high_pass_filter: true,
+            noise_suppression: true,
+            ns_engine: NsEngineType::default(),
+            auto_gain_control: true,
+            custom_ns_model_path: None,
+        }
+    }
+}
+
 /// 语音输入配置
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -381,6 +421,8 @@ pub struct VoiceConfig {
     pub offline: OfflineAsrConfig,
     /// 3. 线上云端识别配置（支持自由切换不同云服务）
     pub cloud: CloudAsrConfig,
+    /// 4. 音频前端预处理与降噪配置 (HPF + NS + AGC)
+    pub afe: AudioFrontEndConfig,
     /// 麦克风音频输入设备名称（为 None 时自动使用系统默认设备）
     pub device_name: Option<String>,
     /// 自定义标点符号预测模型文件路径（为 None 时自动使用系统内置或默认模型）
@@ -398,6 +440,7 @@ impl Default for VoiceConfig {
             vad: VadConfig::default(),
             offline: OfflineAsrConfig::default(),
             cloud: CloudAsrConfig::default(),
+            afe: AudioFrontEndConfig::default(),
             device_name: None,
             punct_model_path: None,
         }
@@ -611,5 +654,27 @@ mod tests {
 
         cfg.enabled = false;
         assert!(cfg.get_effective_ptt_shortcut().is_none());
+    }
+
+    #[test]
+    fn test_audio_front_end_config_defaults_and_serde() {
+        let default_afe = AudioFrontEndConfig::default();
+        assert!(default_afe.high_pass_filter);
+        assert!(default_afe.noise_suppression);
+        assert_eq!(default_afe.ns_engine, NsEngineType::Rnnoise);
+        assert!(default_afe.auto_gain_control);
+        assert!(default_afe.custom_ns_model_path.is_none());
+
+        // 验证空 JSON 反序列化可自动使用全量默认值
+        let json_empty = "{}";
+        let parsed: AudioFrontEndConfig =
+            serde_json::from_str(json_empty).expect("空 JSON 必须成功使用默认值反序列化");
+        assert_eq!(parsed, default_afe);
+
+        // 验证序列化与恢复
+        let serialized = serde_json::to_string(&default_afe).expect("必须成功序列化");
+        let restored: AudioFrontEndConfig =
+            serde_json::from_str(&serialized).expect("必须成功从序列化还原");
+        assert_eq!(restored, default_afe);
     }
 }

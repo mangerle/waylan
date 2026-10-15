@@ -287,6 +287,8 @@ fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         waylan_core::VoiceEngineType::Mock => 0,
     });
     window.set_auto_punctuation(cfg.voice.auto_punctuation);
+    window.set_high_pass_filter(cfg.voice.afe.high_pass_filter);
+    window.set_auto_gain_control(cfg.voice.afe.auto_gain_control);
     window.set_vad_silence_delay_index(match cfg.voice.vad.silence_timeout_ms {
         0..=500 => 0,
         501..=700 => 1,
@@ -302,7 +304,7 @@ fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     sync_voice_models_to_window(window, cfg);
 }
 
-/// 同步语音三大模型（ASR / VAD / 标点）列表与当前选中项至界面
+/// 同步语音四大模型（ASR / VAD / 标点 / NS降噪）列表与当前选中项至界面
 fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let asr_models = waylan_voice::list_asr_models();
     let asr_names: Vec<slint::SharedString> = asr_models
@@ -362,6 +364,33 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         slint::VecModel::from(punct_names),
     )));
     window.set_punct_model_index(punct_idx as i32);
+
+    let ns_models = waylan_voice::list_ns_models();
+    let ns_names: Vec<slint::SharedString> = ns_models
+        .iter()
+        .map(|m| slint::SharedString::from(&m.display_name))
+        .collect();
+    let mut ns_idx = 0;
+    if !cfg.voice.afe.noise_suppression
+        || cfg.voice.afe.ns_engine == waylan_core::NsEngineType::Bypass
+    {
+        ns_idx = 2;
+    } else if cfg.voice.afe.ns_engine == waylan_core::NsEngineType::DeepFilterNet
+        && cfg.voice.afe.custom_ns_model_path.is_none()
+    {
+        ns_idx = 1;
+    } else if let Some(ref path) = cfg.voice.afe.custom_ns_model_path {
+        for (i, m) in ns_models.iter().enumerate() {
+            if m.path.as_deref() == Some(path) {
+                ns_idx = i;
+                break;
+            }
+        }
+    }
+    window.set_ns_model_names(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(ns_names),
+    )));
+    window.set_ns_model_index(ns_idx as i32);
 }
 
 /// 从 Slint 界面属性增量读取语音输入配置
@@ -397,6 +426,8 @@ fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
         _ => waylan_core::VoiceEngineType::Offline,
     };
     cfg.voice.auto_punctuation = window.get_auto_punctuation();
+    cfg.voice.afe.high_pass_filter = window.get_high_pass_filter();
+    cfg.voice.afe.auto_gain_control = window.get_auto_gain_control();
     cfg.voice.vad.silence_timeout_ms = match window.get_vad_silence_delay_index() {
         0 => 400,
         2 => 800,
@@ -443,6 +474,28 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
             cfg.voice.punct_model_path = Some("__rule_only__".to_string());
         } else {
             cfg.voice.punct_model_path = m.path.clone();
+        }
+    }
+
+    let ns_models = waylan_voice::list_ns_models();
+    let ns_idx = window.get_ns_model_index() as usize;
+    if let Some(m) = ns_models.get(ns_idx) {
+        if m.path.as_deref() == Some("__bypass__") {
+            cfg.voice.afe.noise_suppression = false;
+            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Bypass;
+            cfg.voice.afe.custom_ns_model_path = None;
+        } else if m.path.as_deref() == Some("__deepfilternet__") {
+            cfg.voice.afe.noise_suppression = true;
+            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
+            cfg.voice.afe.custom_ns_model_path = None;
+        } else if m.path.is_none() {
+            cfg.voice.afe.noise_suppression = true;
+            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Rnnoise;
+            cfg.voice.afe.custom_ns_model_path = None;
+        } else {
+            cfg.voice.afe.noise_suppression = true;
+            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
+            cfg.voice.afe.custom_ns_model_path = m.path.clone();
         }
     }
 }

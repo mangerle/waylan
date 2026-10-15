@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use log::{info, warn};
 use waylan_core::VoiceConfig;
 
+use crate::afe::AudioFrontEndPipeline;
 use crate::capture::AudioCapture;
 use crate::error::VoiceError;
 use crate::recognizer::{create_recognizer, PunctuationRestorer, VoiceRecognizer};
@@ -252,6 +253,7 @@ impl VoiceSessionController {
         voice_config: &VoiceConfig,
         is_active: &Arc<AtomicBool>,
     ) {
+        let mut afe = AudioFrontEndPipeline::new(&voice_config.afe);
         let mut last_visual_time = Instant::now();
         let mut last_partial_text = String::new();
         let session_start_time = Instant::now();
@@ -294,7 +296,10 @@ impl VoiceSessionController {
 
             // 2. 接收重采样后的 16kHz PCM 音频切片（超时 50ms 防止阻塞）
             match pcm_rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(samples) => {
+                Ok(mut samples) => {
+                    // 执行前端音频增强流水线（80Hz高通滤波 + 人声智能降噪 + 动态数字AGC）
+                    afe.process(&mut samples);
+
                     let now = Instant::now();
                     let rms = calculate_rms(&samples);
 
@@ -356,6 +361,7 @@ impl VoiceSessionController {
                             }
                             recognizer.reset();
                             vad.reset();
+                            afe.reset();
                             last_partial_text.clear();
                             // 注意：不 break，录音循环继续运行，等待下一句说话！
                         }

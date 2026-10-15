@@ -29,7 +29,7 @@ pub fn user_models_dir() -> Option<PathBuf> {
 /// 确保用户模型目录及其三个类型子目录全部创建就绪
 pub fn ensure_user_models_dirs() -> Option<PathBuf> {
     let base = user_models_dir()?;
-    let subdirs = ["vad", "asr", "punct"];
+    let subdirs = ["vad", "asr", "punct", "ns"];
     for sub in &subdirs {
         let p = base.join(sub);
         if !p.exists() {
@@ -161,6 +161,56 @@ pub fn list_punct_models() -> Vec<ModelItem> {
     }
 
     items
+}
+
+/// 扫描并列出所有可用的人声智能降噪 (NS) 模型
+pub fn list_ns_models() -> Vec<ModelItem> {
+    let mut items = vec![
+        ModelItem {
+            display_name: "[内置轻量] RNNoise 智能降噪 (零资源占用)".to_string(),
+            path: None,
+        },
+        ModelItem {
+            display_name: "[内置深度] DeepFilterNet3 深度消音 (强力消除机械键盘)".to_string(),
+            path: Some("__deepfilternet__".to_string()),
+        },
+        ModelItem {
+            display_name: "[直通透传] 关闭人声降噪 (Bypass)".to_string(),
+            path: Some("__bypass__".to_string()),
+        },
+    ];
+
+    // 扫描用户自定义目录: ~/.local/share/waylan/models/ns/*.onnx 或子目录
+    if let Some(user_dir) = user_models_dir() {
+        let ns_dir = user_dir.join("ns");
+        if let Ok(entries) = fs::read_dir(ns_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let file_name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if file_name == "deepfilternet3" {
+                    continue; // 与系统内置同名，保留内置项即可
+                }
+                let is_onnx = p.is_file() && p.extension().map(|e| e == "onnx").unwrap_or(false);
+                if is_onnx || p.is_dir() {
+                    items.push(ModelItem {
+                        display_name: format!("[用户导入] {}", file_name),
+                        path: Some(p.to_string_lossy().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    items
+}
+
+/// 调用系统原生对话框导入人声降噪模型文件至用户 models/ns 目录
+pub fn import_ns_model_dialog() -> Option<PathBuf> {
+    import_onnx_model_dialog("ns", "请选择要导入的人声智能降噪模型文件 (.onnx)")
 }
 
 /// 递归复制目录内容

@@ -112,12 +112,16 @@ export component SettingsWindow inherits Window {
     in-out property <bool> auto_punctuation: true;
     in-out property <int> vad_silence_delay_index: 1;
     in property <string> local_model_status: "已就绪: Paraformer 流式模型、Silero VAD 与 CT-Transformer 标点模型";
+    in-out property <bool> high_pass_filter: true;
+    in-out property <bool> auto_gain_control: true;
     in property <[string]> asr_model_names: ["系统内置: 阿里 Paraformer (中文流式 int8)"];
     in-out property <int> asr_model_index: 0;
     in property <[string]> vad_model_names: ["系统内置: Silero VAD (神经网络模型)", "纯能量门限 (零模型纯数学)"];
     in-out property <int> vad_model_index: 0;
     in property <[string]> punct_model_names: ["系统内置: CT-Transformer 深度标点预测", "基础句末规则兜底 (无模型)"];
     in-out property <int> punct_model_index: 0;
+    in property <[string]> ns_model_names: ["[内置轻量] RNNoise 智能降噪 (零资源占用)", "[内置深度] DeepFilterNet3 深度消音 (强力消除机械键盘)", "[直通透传] 关闭人声降噪 (Bypass)"];
+    in-out property <int> ns_model_index: 0;
     in-out property <string> cloud_endpoint: "https://api.openai.com/v1/audio/transcriptions";
     in-out property <string> cloud_api_key: "";
     in-out property <string> cloud_model: "whisper-1";
@@ -137,6 +141,7 @@ export component SettingsWindow inherits Window {
     callback import_asr_model();
     callback import_vad_model();
     callback import_punct_model();
+    callback import_ns_model();
     callback open_models_directory();
 
     HorizontalLayout {
@@ -399,15 +404,20 @@ export component SettingsWindow inherits Window {
                         auto_punctuation <=> root.auto_punctuation;
                         vad_silence_delay_index <=> root.vad_silence_delay_index;
                         local_model_status: root.local_model_status;
+                        high_pass_filter <=> root.high_pass_filter;
+                        auto_gain_control <=> root.auto_gain_control;
                         asr_model_names: root.asr_model_names;
                         asr_model_index <=> root.asr_model_index;
                         vad_model_names: root.vad_model_names;
                         vad_model_index <=> root.vad_model_index;
                         punct_model_names: root.punct_model_names;
                         punct_model_index <=> root.punct_model_index;
+                        ns_model_names: root.ns_model_names;
+                        ns_model_index <=> root.ns_model_index;
                         import_asr_model => { root.import_asr_model(); }
                         import_vad_model => { root.import_vad_model(); }
                         import_punct_model => { root.import_punct_model(); }
+                        import_ns_model => { root.import_ns_model(); }
                         open_models_directory => { root.open_models_directory(); }
                         cloud_endpoint <=> root.cloud_endpoint;
                         cloud_api_key <=> root.cloud_api_key;

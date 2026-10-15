@@ -16,18 +16,24 @@ export component VoiceTab inherits VerticalLayout {
     in-out property <int> vad_silence_delay_index: 1; // 0: 400ms, 1: 600ms, 2: 800ms, 3: 1000ms
     in property <string> local_model_status: "已检测到阿里 Paraformer 离线流式模型与 Silero VAD";
 
-    // 本地三类模型的枚举列表与当前选中索引
+    in-out property <bool> high_pass_filter: true;
+    in-out property <bool> auto_gain_control: true;
+
+    // 本地四类模型的枚举列表与当前选中索引
     in property <[string]> asr_model_names: ["系统内置: 阿里 Paraformer (中文流式 int8)"];
     in-out property <int> asr_model_index: 0;
     in property <[string]> vad_model_names: ["系统内置: Silero VAD (神经网络模型)", "纯能量门限 (零模型纯数学)"];
     in-out property <int> vad_model_index: 0;
     in property <[string]> punct_model_names: ["系统内置: CT-Transformer 深度标点预测", "基础句末规则兜底 (无模型)"];
     in-out property <int> punct_model_index: 0;
+    in property <[string]> ns_model_names: ["[内置轻量] RNNoise 智能降噪 (零资源占用)", "[内置深度] DeepFilterNet3 深度消音 (强力消除机械键盘)", "[直通透传] 关闭人声降噪 (Bypass)"];
+    in-out property <int> ns_model_index: 0;
 
     // 回调事件
     callback import_asr_model();
     callback import_vad_model();
     callback import_punct_model();
+    callback import_ns_model();
     callback open_models_directory();
 
     // 云端配置属性
@@ -271,7 +277,71 @@ export component VoiceTab inherits VerticalLayout {
         }
     }
 
-    // 3. 本地离线模型选择与导入卡片
+    // 3. 音频前端预处理与人声智能降噪卡片
+    SettingCard {
+        title: "音频前端增强与人声智能降噪 (AFE)";
+        subtitle: "80Hz 机械低频滤波、深度抹除键盘敲击声与自动音量平衡，全方位净化输入声音";
+
+        VerticalLayout {
+            spacing: 16px;
+
+            // 80Hz 高通滤波开关
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "80Hz 二阶高通滤波 (HPF)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "切除 80Hz 以下人耳不敏感但干扰严重的机械低频杂音、桌面物理震动与电磁交流声";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppCheckBox {
+                        text: root.high_pass_filter ? "已开启" : "已关闭";
+                        checked <=> root.high_pass_filter;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 动态数字自动增益控制 (AGC)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "动态数字自动增益控制 (AGC)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "自适应平衡音量至最佳识别区间 (-16 dBFS)，远近场平滑增益，静音冻结防抽吸";
+                        font-size: 12px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    AppCheckBox {
+                        text: root.auto_gain_control ? "已开启" : "已关闭";
+                        checked <=> root.auto_gain_control;
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. 本地离线模型选择与导入卡片
     SettingCard {
         title: "本地离线模型管理与导入";
         subtitle: "切换不同模型架构或自由导入个人私有模型，模型保存在 ~/.local/share/waylan/models/ 绝不丢失";
@@ -346,6 +416,30 @@ export component VoiceTab inherits VerticalLayout {
                 ComboBox {
                     model: root.punct_model_names;
                     current-index <=> root.punct_model_index;
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 人声智能降噪 (NS) 模型
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text { text: "人声智能降噪 (NS) 模型"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    SecondaryButton {
+                        text: "导入降噪模型";
+                        clicked => { root.import_ns_model(); }
+                    }
+                }
+                Text {
+                    text: "负责实时抹除机械键盘敲击、鼠标连击声与机箱风扇白噪音";
+                    font-size: 12px;
+                    color: #64748b;
+                }
+                ComboBox {
+                    model: root.ns_model_names;
+                    current-index <=> root.ns_model_index;
                 }
             }
 
