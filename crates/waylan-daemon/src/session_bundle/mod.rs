@@ -4,18 +4,23 @@
 
 mod config_bundle;
 mod dict_loader;
+mod engine_builder;
+mod ibus_dispatcher;
 mod system_env;
 mod voice_filter;
+mod wayland_dispatcher;
 
-pub use config_bundle::{apply_reload_v1, apply_reload_v2, SessionConfigBundle};
 #[cfg(test)]
-pub use dict_loader::{load_auxiliary_dict, load_opencc_dict};
-pub use dict_loader::{load_auxiliary_managers, load_lexicon_table};
+pub use config_bundle::SessionConfigBundle;
+pub use engine_builder::build_algo_engine;
+pub use ibus_dispatcher::{dispatch_ibus_session, IbusDispatchOptions};
 pub use system_env::{check_wayland_capabilities, trigger_graceful_restart_and_exit};
-pub use voice_filter::build_wayland_voice_filter;
+pub use wayland_dispatcher::{dispatch_wayland_session, WaylandDispatchOptions};
 
 #[cfg(test)]
 mod tests {
+    use super::dict_loader::{load_auxiliary_dict, load_lexicon_table, load_opencc_dict};
+    use super::voice_filter::build_wayland_voice_filter;
     use super::*;
     use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
     use waylan_algo::{AlgoConfig, AlgoEngine};
