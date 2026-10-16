@@ -71,7 +71,8 @@ impl AlgoEngine {
             }
         }
 
-        let mut raw_candidates = Vec::new();
+        let mut raw_candidates = std::mem::take(&mut self.scratch_candidates);
+        raw_candidates.clear();
 
         // 2.0 专名保护机制 (NER 原型)：精确命中受保护实体时注入置顶候选
         if let Some(entity) = self.entity_manager.match_exact(raw_input) {
@@ -85,13 +86,13 @@ impl AlgoEngine {
         let eval_ts = self.user_model.latest_timestamp().max(self.last_timestamp);
 
         // 2.1 聚合 DAG 路径精确匹配与模糊音等价候选
-        raw_candidates.append(&mut self.collect_path_matches(&paths, eval_ts));
+        self.collect_path_matches(&paths, eval_ts, &mut raw_candidates);
 
         // 2.2 聚合长句动态规划与前缀短语合成候选
-        raw_candidates.append(&mut self.collect_sentence_and_prefix_matches(&paths));
+        self.collect_sentence_and_prefix_matches(&paths, &mut raw_candidates);
 
         // 2.3 聚合首字母简拼与首音节单字降级候选
-        raw_candidates.append(&mut self.collect_acronym_and_fallback_matches(raw_input, &paths));
+        self.collect_acronym_and_fallback_matches(raw_input, &paths, &mut raw_candidates);
 
         // 3. 动态应用用户习惯提权与上屏历史上下文亲和度加权
         self.apply_user_and_context_boost(&mut raw_candidates, eval_ts);
@@ -116,18 +117,23 @@ impl AlgoEngine {
             }
         }
 
-        self.all_candidates_cache = candidates;
+        let old_cache = std::mem::replace(&mut self.all_candidates_cache, candidates);
+        self.scratch_candidates = old_cache;
         self.update_page_candidates();
     }
 
     /// 遍历 DAG 音节切分路径，收集词库精确、用户自造词及模糊音匹配候选
-    fn collect_path_matches(&self, paths: &[SegmentPath], eval_ts: u64) -> Vec<AlgoCandidate> {
+    fn collect_path_matches(
+        &self,
+        paths: &[SegmentPath],
+        eval_ts: u64,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
         let Some(best_path) = paths.first() else {
-            return Vec::new();
+            return;
         };
         let best_syl_count = (best_path.syllables.len() as u32).max(1);
         let best_cost = best_path.cost;
-        let mut results = Vec::new();
 
         for path in paths {
             let key = path.to_key_string();
@@ -170,15 +176,15 @@ impl AlgoEngine {
 
             // 模糊音等价查询键联合检索
             if self.config.fuzzy.has_active_rules() && !path.is_typo {
-                results.append(&mut self.collect_fuzzy_path_matches(
+                self.collect_fuzzy_path_matches(
                     path,
                     eval_ts,
                     best_syl_count,
                     cost_penalty,
-                ));
+                    results,
+                );
             }
         }
-        results
     }
 
     /// 收集单条非容错切分路径在模糊音扩展下的词库与用户自造词候选
@@ -188,8 +194,8 @@ impl AlgoEngine {
         eval_ts: u64,
         best_syl_count: u32,
         cost_penalty: u32,
-    ) -> Vec<AlgoCandidate> {
-        let mut results = Vec::new();
+        results: &mut Vec<AlgoCandidate>,
+    ) {
         let key_len = path.to_key_string().len();
         let is_suboptimal = cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count;
 
@@ -222,7 +228,6 @@ impl AlgoEngine {
             }
             results.append(&mut fuzzy_user_matches);
         }
-        results
     }
 
     /// 校准次优音节切分路径的词库候选得分：
@@ -243,16 +248,19 @@ impl AlgoEngine {
     }
 
     /// 求解 Viterbi 最佳长句路径并合成前缀扩展短语候选
-    fn collect_sentence_and_prefix_matches(&self, paths: &[SegmentPath]) -> Vec<AlgoCandidate> {
-        let mut results = Vec::new();
+    fn collect_sentence_and_prefix_matches(
+        &self,
+        paths: &[SegmentPath],
+        results: &mut Vec<AlgoCandidate>,
+    ) {
         let Some(best_path) = paths.first() else {
-            return results;
+            return;
         };
 
         // 若最优非容错路径属于拼写误触导致的断流碎切路径（如 ying'x'ai'n'g），
         // 禁止在该残破路径上运行 Viterbi 拼句与跨词前缀合成，避免产出“应先爱能够”等生造词挤占纠错候选
         if best_path.is_broken_typo_fallback(&self.config.fuzzy) {
-            return results;
+            return;
         }
 
         let min_units = if self.last_commit_context.is_some() {
@@ -311,8 +319,6 @@ impl AlgoEngine {
                 results.append(&mut base_matches);
             }
         }
-
-        results
     }
 
     /// 检索首字母缩写简拼与首音节单字降级备选候选
@@ -320,9 +326,8 @@ impl AlgoEngine {
         &self,
         raw_input: &str,
         paths: &[SegmentPath],
-    ) -> Vec<AlgoCandidate> {
-        let mut results = Vec::new();
-
+        results: &mut Vec<AlgoCandidate>,
+    ) {
         // 简拼检索
         let acronym_query = if raw_input.contains('\'') {
             raw_input.replace('\'', "")
@@ -372,8 +377,6 @@ impl AlgoEngine {
                 results.append(&mut first_matches);
             }
         }
-
-        results
     }
 
     /// 应用自适应词频提权与上屏历史二元语言模型亲和度加权

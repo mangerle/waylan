@@ -76,6 +76,8 @@ pub struct AlgoEngine {
     pub(crate) last_timestamp: u64,
     /// 当前输入缓冲区经 Prism 切分后的格式化预编辑文本缓存（避免渲染与光标定位重复执行 DAG 搜索）
     pub(crate) cached_preedit: String,
+    /// 候选词收集复用工作区缓冲（预分配容量，避免高频击键时数十次 Vec 分配与重新扩容）
+    pub(crate) scratch_candidates: Vec<AlgoCandidate>,
 }
 
 impl AlgoEngine {
@@ -102,6 +104,7 @@ impl AlgoEngine {
             partial_commit_segments: Vec::new(),
             last_timestamp: 0,
             cached_preedit: String::new(),
+            scratch_candidates: Vec::with_capacity(128),
         }
     }
 
