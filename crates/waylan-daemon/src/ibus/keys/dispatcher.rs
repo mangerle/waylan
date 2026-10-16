@@ -3,18 +3,18 @@
 //! # 设计原理
 //! - **实现初衷**：将归一化后的 evdev 扫描码分发给密码模式过滤、CapsLock、快捷键、组词中输入与标点处理器。
 //! - **核心优势**：职责高度分离，每个按键处理分支单一清晰，遵循“微秒级纯内存处理”准则。
-//! - **代价与局限**：对多修饰键组合需统一通过 update_session_modifiers 状态跟踪。
+//! - **代价与局限**：对多修饰键组合需统一通过 update_modifier_masks 状态跟踪。
 
 use log::info;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use waylan_core::input::*;
-use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
-use waylan_wayland::input_core::{
+use waylan_algo::composition::{
     handle_composition_key_with_params, CompositionKeyParams, KeyProcessAction,
 };
-use waylan_wayland::session_common::update_session_modifiers;
+use waylan_core::input::modifiers::update_modifier_masks;
+use waylan_core::input::*;
+use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
 
 use super::core::{IbusKeyOutcome, IbusSessionCore};
 use super::keyval::{
@@ -154,7 +154,7 @@ impl IbusSessionCore {
         self.sync_shared_settings();
         let is_press = (state & IBUS_RELEASE_MASK) == 0;
         let evdev_key = ibus_keyval_to_evdev(keyval, keycode);
-        update_session_modifiers(
+        update_modifier_masks(
             &mut self.mods_depressed,
             &mut self.phys_mods,
             evdev_key,

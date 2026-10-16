@@ -36,6 +36,10 @@ pub mod viterbi;
 pub mod vocab;
 
 pub use bigram::CompactMmapBigram;
+pub use composition::{
+    handle_composition_key, handle_composition_key_with_params, Composition, CompositionKeyParams,
+    KeyProcessAction,
+};
 pub use custom_phrase::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
