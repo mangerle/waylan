@@ -237,7 +237,13 @@ pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
                                     _ => false,
                                 };
                             if needs_copy {
-                                let _ = fs::copy(&src_file, &dst_file);
+                                if let Err(e) = fs::copy(&src_file, &dst_file) {
+                                    log::warn!(
+                                        "[微澜 IBus 警告] 同步 GNOME 扩展文件 {:?} 失败: {}",
+                                        src_file,
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
@@ -358,7 +364,13 @@ fn ensure_environment_d_config(home_path: &Path, comp_dir: &Path) {
         .map(|old| old != expected)
         .unwrap_or(true);
     if needs_write {
-        let _ = fs::write(&conf_path, expected);
+        if let Err(e) = fs::write(&conf_path, expected) {
+            log::warn!(
+                "[微澜 IBus 警告] 写入 IBus environment.d 配置文件 {:?} 失败: {}",
+                conf_path,
+                e
+            );
+        }
     }
 }
 

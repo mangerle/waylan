@@ -300,7 +300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 log::error!("[微澜守护进程 错误] IBus 输入法会话异常退出: {}", e);
-                Err(e)
+                std::process::exit(1);
             }
         };
     }
@@ -418,7 +418,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "[微澜守护进程 错误] Wayland 输入法事件循环异常退出或无法启动: {}，准备终止进程并释放资源。",
                 e
             );
-            return Err(e.into());
+            std::process::exit(1);
         }
     }
 

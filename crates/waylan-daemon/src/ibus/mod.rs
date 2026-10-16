@@ -275,8 +275,11 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
 /// 会话退出时平滑落盘保存用户自学习词库
 fn cleanup_ibus_session(shared_core: &Arc<Mutex<IbusSessionCore>>) {
     if let Ok(mut guard) = shared_core.lock() {
-        let _ = guard.engine.persist_user_dict();
-        info!("[微澜 IBus] 已安全完成用户自适应历史词库落盘。");
+        if let Err(e) = guard.engine.persist_user_dict() {
+            log::error!("[微澜 IBus 错误] 用户自学习词库落盘失败: {}", e);
+        } else {
+            info!("[微澜 IBus] 已安全完成用户自适应历史词库落盘。");
+        }
     }
 }
 
@@ -328,8 +331,14 @@ fn register_or_activate_ibus_engine(
         .unwrap_or_else(|| "waylan".to_string());
 
     if is_ibus_child_mode {
-        let _ = conn.request_name("org.freedesktop.IBus.Waylan");
-        info!("[微澜 IBus] 已在子进程模式下成功申请总线名称 org.freedesktop.IBus.Waylan");
+        if let Err(e) = conn.request_name("org.freedesktop.IBus.Waylan") {
+            log::warn!(
+                "[微澜 IBus 警告] 子进程模式下申请总线名称 org.freedesktop.IBus.Waylan 失败: {}",
+                e
+            );
+        } else {
+            info!("[微澜 IBus] 已在子进程模式下成功申请总线名称 org.freedesktop.IBus.Waylan");
+        }
     } else {
         ensure_ibus_and_gnome_integration(&exe_path, exclusive);
 
@@ -347,7 +356,12 @@ fn register_or_activate_ibus_engine(
         }
     }
 
-    let _ = conn.request_name("org.freedesktop.IBus.Waylan");
+    if let Err(e) = conn.request_name("org.freedesktop.IBus.Waylan") {
+        log::warn!(
+            "[微澜 IBus 警告] 申请独占总线名称 org.freedesktop.IBus.Waylan 失败: {}",
+            e
+        );
+    }
 
     if let Err(e) = conn.call_method(
         Some("org.freedesktop.IBus"),

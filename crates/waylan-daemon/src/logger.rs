@@ -109,11 +109,15 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
             use std::os::unix::fs::DirBuilderExt;
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true).mode(0o700);
-            let _ = builder.create(parent);
+            if let Err(e) = builder.create(parent) {
+                eprintln!("[微澜日志 警告] 创建日志存储目录 {:?} 失败: {}", parent, e);
+            }
         }
         #[cfg(not(unix))]
         {
-            let _ = fs::create_dir_all(parent);
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("[微澜日志 警告] 创建日志存储目录 {:?} 失败: {}", parent, e);
+            }
         }
     }
 
