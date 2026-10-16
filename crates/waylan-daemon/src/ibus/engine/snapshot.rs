@@ -25,7 +25,7 @@ impl UiSnapshot {
         let candidates = if let Some(ref voice_text) = core.voice_display_text {
             vec![Candidate {
                 text: voice_text.clone(),
-                pinyin: String::new(),
+                pinyin: core.voice_waveform.clone().unwrap_or_default(),
                 score: 1000,
                 is_expandable: false,
                 sub_candidates: Vec::new(),
@@ -111,8 +111,9 @@ mod tests {
         assert_eq!(normal_snap.preedit, "n");
         assert!(!normal_snap.candidates.is_empty());
 
-        // 模拟语音激活状态：正在聆听中... ▏▎▍
-        core.voice_display_text = Some("正在聆听中... ▏▎▍".to_string());
+        // 模拟语音激活状态：正在聆听中...
+        core.voice_display_text = Some("正在聆听中...".to_string());
+        core.voice_waveform = Some(" ▂▃▄▅".to_string());
         let voice_snap = UiSnapshot::capture(&core);
 
         // 核心断言：输入框预编辑必须完全为空，严禁将波形塞入输入框光标处
@@ -120,9 +121,10 @@ mod tests {
             voice_snap.preedit, "",
             "录音期间预编辑必须为空以防污染输入框"
         );
-        // 核心断言：波形状态必须呈现在候选框中且不带数字序号
+        // 核心断言：语音状态必须呈现在候选框中且不带数字序号
         assert_eq!(voice_snap.candidates.len(), 1);
-        assert_eq!(voice_snap.candidates[0].text, "正在聆听中... ▏▎▍");
+        assert_eq!(voice_snap.candidates[0].text, "正在聆听中...");
+        assert_eq!(voice_snap.candidates[0].pinyin, " ▂▃▄▅");
         assert_eq!(voice_snap.index_style, CandidateIndexStyle::None);
     }
 }

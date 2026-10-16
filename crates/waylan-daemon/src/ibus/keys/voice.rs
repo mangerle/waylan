@@ -26,9 +26,11 @@ impl IbusSessionCore {
                 match event {
                     VoiceEvent::WaveformUpdated { waveform, .. } => {
                         if self.voice_config.interaction.show_floating_bar {
-                            self.voice_display_text = Some(format!("正在聆听中... {}", waveform));
+                            self.voice_display_text = Some("正在聆听中...".to_string());
+                            self.voice_waveform = Some(waveform);
                         } else {
                             self.voice_display_text = None;
+                            self.voice_waveform = None;
                         }
                     }
                     VoiceEvent::PartialText(text) => {
@@ -68,6 +70,7 @@ impl IbusSessionCore {
         self.is_push_to_talk_active = false;
         self.push_to_talk_key = None;
         self.voice_display_text = None;
+        self.voice_waveform = None;
         self.voice_partial_text = None;
         self.voice_event_rx = None;
     }

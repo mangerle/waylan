@@ -121,10 +121,20 @@ pub fn build_ibus_lookup_table(
     let mut label_vec = Vec::with_capacity(candidates.len());
 
     for (idx, cand) in candidates.iter().enumerate() {
-        let display_text = format_candidate_display(index_style, idx, &cand.text, None);
+        let mut display_text = format_candidate_display(index_style, idx, &cand.text, None);
+        if cand.is_expandable && orientation != IBUS_ORIENTATION_VERTICAL {
+            display_text.push_str(" ⇥ Tab");
+        }
         cand_vec.push(build_ibus_text(&display_text)?);
-        // 使用零宽空格 (\u{200B}) 填充原生 label，既阻断 GNOME Shell 内部对空串回退默认数字标签，又不占用任何视觉空间
-        label_vec.push(build_ibus_text("\u{200B}")?);
+        // 关键隔离防护：仅在语音录入单条目状态下，允许通过 label 传递波形元数据；
+        // 普通键盘组词打字时，100% 严禁暴露拼音到 label 中，必须使用零宽空格 (\u{200B}) 阻断原生序号
+        let is_voice_session = candidates.len() == 1 && candidates[0].text.starts_with("正在聆听");
+        let label_text = if is_voice_session && !cand.pinyin.is_empty() {
+            cand.pinyin.as_str()
+        } else {
+            "\u{200B}"
+        };
+        label_vec.push(build_ibus_text(label_text)?);
     }
 
     let clamped_page_size = page_size.clamp(1, 10) as u32;

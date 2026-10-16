@@ -63,6 +63,7 @@ pub struct IbusSessionCore {
     pub voice_controller: VoiceSessionController,
     pub voice_config: VoiceConfig,
     pub voice_display_text: Option<String>,
+    pub voice_waveform: Option<String>,
     pub voice_partial_text: Option<String>,
     pub voice_event_rx: Option<Receiver<VoiceEvent>>,
     pub last_voice_trigger_time: Instant,
@@ -104,6 +105,7 @@ impl IbusSessionCore {
             voice_controller: VoiceSessionController::new(),
             voice_config: VoiceConfig::default(),
             voice_display_text: None,
+            voice_waveform: None,
             voice_partial_text: None,
             voice_event_rx: None,
             last_voice_trigger_time: Instant::now()
@@ -151,6 +153,7 @@ impl IbusSessionCore {
         self.is_push_to_talk_active = false;
         self.push_to_talk_key = None;
         self.voice_display_text = None;
+        self.voice_waveform = None;
         self.voice_partial_text = None;
         self.voice_event_rx = None;
         self.engine.reset();

@@ -167,7 +167,12 @@ impl IbusSessionCore {
                 self.is_push_to_talk_active = true;
                 self.push_to_talk_key = Some(evdev_key);
                 self.voice_display_text = if self.voice_config.interaction.show_floating_bar {
-                    Some("正在聆听中... ▏▎▍".to_string())
+                    Some("正在聆听中...".to_string())
+                } else {
+                    None
+                };
+                self.voice_waveform = if self.voice_config.interaction.show_floating_bar {
+                    Some("     ".to_string())
                 } else {
                     None
                 };
@@ -239,7 +244,12 @@ impl IbusSessionCore {
                 self.is_push_to_talk_active = false;
                 self.push_to_talk_key = None;
                 self.voice_display_text = if self.voice_config.interaction.show_floating_bar {
-                    Some("正在聆听中... ▏▎▍".to_string())
+                    Some("正在聆听中...".to_string())
+                } else {
+                    None
+                };
+                self.voice_waveform = if self.voice_config.interaction.show_floating_bar {
+                    Some("     ".to_string())
                 } else {
                     None
                 };
