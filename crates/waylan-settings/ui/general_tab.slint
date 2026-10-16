@@ -11,12 +11,6 @@ export component GeneralTab inherits VerticalLayout {
     in-out property <int> init_punct_width_index: 0;// 0: 全角标点, 1: 半角标点
     in-out property <int> init_simp_trad_index: 0;  // 0: 简体中文, 1: 繁体中文
 
-    // 候选框外观
-    in-out property <float> page_size_val: 5;
-    in-out property <float> font_size_val: 15;
-    in-out property <int> orientation_index: 0;     // 0: 水平横排, 1: 垂直竖排
-    in-out property <int> index_style_index: 0;     // 0: 现代风, 1: 经典点号, 2: 圆圈序号, 3: 方括号, 4: 圆括号, 5: 极简标点, 6: 纯文本
-
     // 候选词与打字行为
     in-out property <bool> dynamic_adjust_freq: true;
     in-out property <bool> shift_select_second: false;
@@ -31,6 +25,12 @@ export component GeneralTab inherits VerticalLayout {
     // 系统托盘与指示器
     in-out property <int> enable_tray_index: 0;         // 0: 自动检测, 1: 强制启用彩色托盘, 2: 强制关闭独立托盘
     in-out property <bool> exclusive_input_source: false;
+
+    // 候选框基础排版与容量习惯
+    in-out property <int> orientation_index: 0;         // 0: 水平横排, 1: 垂直竖排
+    in-out property <int> index_style_index: 0;         // 0: 现代风, 1: 经典点号, 2: 圆圈序号, 3: 方括号, 4: 圆括号, 5: 极简标点, 6: 纯文本
+    in-out property <float> page_size_val: 5;
+    in-out property <float> font_size_val: 15;
 
     SettingCard {
         title: "初始输入状态";
@@ -88,8 +88,30 @@ export component GeneralTab inherits VerticalLayout {
     }
 
     SettingCard {
-        title: "候选框外观与排版";
-        subtitle: "定制候选框排列方向、字体大小、候选容量与主题色彩";
+        title: "候选词与输入行为";
+        subtitle: "根据个人击键习惯优化选词效率与排版细节";
+
+        AppCheckBox {
+            text: "动态调整候选词词频（基于用户击键自适应学习）";
+            checked <=> root.dynamic_adjust_freq;
+        }
+        AppCheckBox {
+            text: "使用 Shift 键选择第二候选词";
+            checked <=> root.shift_select_second;
+        }
+        AppCheckBox {
+            text: "中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）";
+            checked <=> root.auto_pangu_spacing;
+        }
+        AppCheckBox {
+            text: "启用 V 模式（支持快速四则运算计算器与快捷符号转换）";
+            checked <=> root.v_mode;
+        }
+    }
+
+    SettingCard {
+        title: "字体尺寸与候选容量";
+        subtitle: "定制单页候选词容量、字体大小、排列方向与序号展示符号";
 
         HorizontalLayout {
             spacing: 28px;
@@ -102,7 +124,7 @@ export component GeneralTab inherits VerticalLayout {
                     ComboBox {
                         model: ["水平横向排列", "垂直纵向排列"];
                         current-index <=> root.orientation_index;
-                        width: 150px;
+                        width: 170px;
                     }
                 }
                 HorizontalLayout {
@@ -112,7 +134,7 @@ export component GeneralTab inherits VerticalLayout {
                     ComboBox {
                         model: ["现代 (1 词)", "经典点号 (1. 词)", "圆圈序号 (① 词)", "方括号 ([1] 词)", "圆括号 ((1) 词)", "极简标点 (• 词)", "纯文本 (无序号)"];
                         current-index <=> root.index_style_index;
-                        width: 150px;
+                        width: 170px;
                     }
                 }
             }
@@ -141,28 +163,6 @@ export component GeneralTab inherits VerticalLayout {
                     }
                 }
             }
-        }
-    }
-
-    SettingCard {
-        title: "候选词与输入行为";
-        subtitle: "根据个人击键习惯优化选词效率与排版细节";
-
-        AppCheckBox {
-            text: "动态调整候选词词频（基于用户击键自适应学习）";
-            checked <=> root.dynamic_adjust_freq;
-        }
-        AppCheckBox {
-            text: "使用 Shift 键选择第二候选词";
-            checked <=> root.shift_select_second;
-        }
-        AppCheckBox {
-            text: "中西文智能空格（盘古之白，自动在中英文与数字交界处插入半角空格）";
-            checked <=> root.auto_pangu_spacing;
-        }
-        AppCheckBox {
-            text: "启用 V 模式（支持快速四则运算计算器与快捷符号转换）";
-            checked <=> root.v_mode;
         }
     }
 

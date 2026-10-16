@@ -21,6 +21,7 @@ use crate::voice_handlers::register_voice_callbacks;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::error::Error;
 use std::fs;
+use std::path::PathBuf;
 use std::rc::Rc;
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
@@ -40,10 +41,10 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
     // 从而使桌面环境 Dock 栏、Alt-Tab 任务切换器即刻匹配并显示微澜专属矢量应用图标，消除默认灰色齿轮。
     let _ = slint::set_xdg_app_id("waylan-settings");
 
-    // 显式预设窗口初始逻辑尺寸，避免 Wayland 合成器在初次 configure 阶段因尺寸未就绪产生 0x0 断言阻塞
+    // 显式预设窗口初始逻辑尺寸（920x640），为多列自适应卡片与紧凑主题微调提供舒展视口，避免产生横向挤压与不必要滚动条
     window
         .window()
-        .set_size(slint::LogicalSize::new(860.0, 600.0));
+        .set_size(slint::LogicalSize::new(920.0, 640.0));
 
     window.set_app_version(SharedString::from(env!("CARGO_PKG_VERSION")));
 
@@ -144,66 +145,100 @@ pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    // 5. 注册拼音词库导入回调
+    // 5. 注册拼音词库选择并导入回调
     let window_weak = window.as_weak();
-    window.on_import_pinyin_dict(move |path| {
+    window.on_pick_and_import_pinyin(move || {
         if let Some(win) = window_weak.upgrade() {
-            match import_pinyin_dict_file(path.as_str()) {
-                Ok(msg) => {
-                    win.set_pinyin_import_status(SharedString::from(msg));
-                    let count = UserAdaptiveModel::load_or_replay_wal(AppConfig::user_dict_path())
-                        .map(|m| m.total_entries())
-                        .unwrap_or(0);
-                    win.set_user_model_info(SharedString::from(format!(
-                        "自适应个性化历史词模型: {} 条记忆",
-                        count
-                    )));
-                }
-                Err(err) => {
-                    win.set_pinyin_import_status(SharedString::from(format!("导入失败: {}", err)));
+            if let Some(path) = pick_file_dialog(
+                "请选择要导入的拼音词库文件",
+                "词库文本与字典 (*.txt, *.dict.yaml)",
+                "*.txt *.dict.yaml",
+            ) {
+                let path_str = path.to_string_lossy().to_string();
+                win.set_pinyin_import_path(SharedString::from(&path_str));
+                match import_pinyin_dict_file(&path_str) {
+                    Ok(msg) => {
+                        win.set_pinyin_import_status(SharedString::from(msg));
+                        let count =
+                            UserAdaptiveModel::load_or_replay_wal(AppConfig::user_dict_path())
+                                .map(|m| m.total_entries())
+                                .unwrap_or(0);
+                        win.set_user_model_info(SharedString::from(format!(
+                            "自适应个性化历史词模型: {} 条记忆",
+                            count
+                        )));
+                    }
+                    Err(err) => {
+                        win.set_pinyin_import_status(SharedString::from(format!(
+                            "导入失败: {}",
+                            err
+                        )));
+                    }
                 }
             }
         }
     });
 
-    // 6. 注册英文词库导入回调
+    // 6. 注册英文词库选择并导入回调
     let window_weak = window.as_weak();
     let aux_dict_cell = Rc::new(std::cell::RefCell::new(aux_dict));
     let aux_for_en = aux_dict_cell.clone();
-    window.on_import_english_dict(move |path| {
+    window.on_pick_and_import_english(move || {
         if let Some(win) = window_weak.upgrade() {
-            let mut aux = aux_for_en.borrow_mut();
-            match import_english_dict_file(path.as_str(), &mut aux) {
-                Ok((msg, total)) => {
-                    win.set_english_import_status(SharedString::from(msg));
-                    win.set_english_dict_info(SharedString::from(format!(
-                        "已就绪常用英文单词: {} 词",
-                        total
-                    )));
-                }
-                Err(err) => {
-                    win.set_english_import_status(SharedString::from(format!("导入失败: {}", err)));
+            if let Some(path) = pick_file_dialog(
+                "请选择要导入的英文词库文件",
+                "英文词汇与词频文件 (*.txt, *.dict.yaml)",
+                "*.txt *.dict.yaml",
+            ) {
+                let path_str = path.to_string_lossy().to_string();
+                win.set_english_import_path(SharedString::from(&path_str));
+                let mut aux = aux_for_en.borrow_mut();
+                match import_english_dict_file(&path_str, &mut aux) {
+                    Ok((msg, total)) => {
+                        win.set_english_import_status(SharedString::from(msg));
+                        win.set_english_dict_info(SharedString::from(format!(
+                            "已就绪常用英文单词: {} 词",
+                            total
+                        )));
+                    }
+                    Err(err) => {
+                        win.set_english_import_status(SharedString::from(format!(
+                            "导入失败: {}",
+                            err
+                        )));
+                    }
                 }
             }
         }
     });
 
-    // 7. 注册符号词库导入回调
+    // 7. 注册符号词库选择并导入回调
     let window_weak = window.as_weak();
     let aux_for_sym = aux_dict_cell;
-    window.on_import_symbols_dict(move |path| {
+    window.on_pick_and_import_symbols(move || {
         if let Some(win) = window_weak.upgrade() {
-            let mut aux = aux_for_sym.borrow_mut();
-            match import_symbols_dict_file(path.as_str(), &mut aux) {
-                Ok((msg, total)) => {
-                    win.set_symbols_import_status(SharedString::from(msg));
-                    win.set_symbols_dict_info(SharedString::from(format!(
-                        "已收录语义符号与表情: {} 项",
-                        total
-                    )));
-                }
-                Err(err) => {
-                    win.set_symbols_import_status(SharedString::from(format!("导入失败: {}", err)));
+            if let Some(path) = pick_file_dialog(
+                "请选择要导入的特殊符号库文件",
+                "符号定义文件 (*.txt, *.dict.yaml)",
+                "*.txt *.dict.yaml",
+            ) {
+                let path_str = path.to_string_lossy().to_string();
+                win.set_symbols_import_path(SharedString::from(&path_str));
+                let mut aux = aux_for_sym.borrow_mut();
+                match import_symbols_dict_file(&path_str, &mut aux) {
+                    Ok((msg, total)) => {
+                        win.set_symbols_import_status(SharedString::from(msg));
+                        win.set_symbols_dict_info(SharedString::from(format!(
+                            "已收录语义符号与表情: {} 项",
+                            total
+                        )));
+                    }
+                    Err(err) => {
+                        win.set_symbols_import_status(SharedString::from(format!(
+                            "导入失败: {}",
+                            err
+                        )));
+                    }
                 }
             }
         }
@@ -312,12 +347,48 @@ fn sync_gnome_indicator_mode(exclusive: bool) {
         .output();
 }
 
+/// 调用系统原生对话框 (zenity) 选择外部词库文件
+///
+/// # 设计原理
+/// - **实现初衷**：在 Linux/Wayland 图形界面下，通过调用桌面通用的 zenity 工具弹出文件选择器，无需引入庞大的 GTK/Qt 运行时绑定。
+/// - **核心优势**：零额外重型 C 依赖，保持 waylan-settings 轻量启动与快速响应，支持取消与扩展名动态过滤。
+/// - **代价与局限**：依赖宿主机安装了 zenity（主流桌面 GNOME、KDE 等均标配）。若 zenity 不可用或用户主动取消，返回 None。
+fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -> Option<PathBuf> {
+    let output = std::process::Command::new("zenity")
+        .arg("--file-selection")
+        .arg(format!(
+            "--file-filter={} | {}",
+            filter_desc, filter_patterns
+        ))
+        .arg("--file-filter=所有文件 (*.*) | *")
+        .arg(format!("--title={}", title))
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let selected_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if selected_str.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(&selected_str);
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use waylan_core::config::{
-        CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut, FullWidthPunctShortcut,
-        FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules,
+        CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
+        CandidateWindowMode, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules,
+        PageKeys, SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules,
     };
 
     #[test]
@@ -340,6 +411,14 @@ mod tests {
             theme: ThemeMode::Dark,
             candidate_orientation: CandidateOrientation::Vertical,
             candidate_index_style: CandidateIndexStyle::Circled,
+            candidate_window_mode: CandidateWindowMode::WaylanCustom,
+            candidate_density: CandidateDensity::Normal,
+            candidate_theme: CandidateThemePreset::Emerald,
+            candidate_item_spacing: 10.0,
+            candidate_padding_v: 6.0,
+            candidate_padding_h: 12.0,
+            candidate_corner_radius: 10.0,
+            candidate_opacity: 90,
             dynamic_adjust_freq: true,
             enable_acronym: true,
             shift_select_second: true,
@@ -388,6 +467,11 @@ mod tests {
         assert_eq!(cfg.theme, ThemeMode::Dark);
         assert_eq!(cfg.candidate_orientation, CandidateOrientation::Vertical);
         assert_eq!(cfg.candidate_index_style, CandidateIndexStyle::Circled);
+        assert_eq!(cfg.candidate_item_spacing, 10.0);
+        assert_eq!(cfg.candidate_padding_v, 6.0);
+        assert_eq!(cfg.candidate_padding_h, 12.0);
+        assert_eq!(cfg.candidate_corner_radius, 10.0);
+        assert_eq!(cfg.candidate_opacity, 90);
         assert!(cfg.fuzzy_rules.g_k);
         assert!(cfg.typo_rules.gn_ng);
         assert!(cfg.auto_pangu_spacing);

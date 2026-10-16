@@ -309,13 +309,17 @@ export component AppSwitch inherits Rectangle {
     in-out property <bool> checked: false;
     in property <string> text: "";
     in property <bool> enabled: true;
+    callback toggled();
 
     height: 24px;
     width: layout.preferred-width;
 
     touch := TouchArea {
         enabled: root.enabled;
-        clicked => { root.checked = !root.checked; }
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled();
+        }
     }
 
     layout := HorizontalLayout {

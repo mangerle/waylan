@@ -124,6 +124,45 @@ pub enum CandidateIndexStyle {
     None,
 }
 
+/// 候选框渲染引擎模式（适用于 GNOME / IBus 桌面环境）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateWindowMode {
+    /// 微澜现代专属候选框（默认推荐，支持精致胶囊、色彩主题与排版密度）
+    #[default]
+    WaylanCustom,
+    /// 桌面系统原生候选框（完全交由桌面环境与系统主题原生渲染，保留同基线与隐藏多余序号修复）
+    Native,
+}
+
+/// 候选框排版空间密度
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateDensity {
+    /// 紧凑极简模式：极小留白，专为编码与小屏幕设计
+    Compact,
+    /// 标准平衡模式：舒适呼吸感（默认）
+    #[default]
+    Normal,
+    /// 宽松舒缓模式：较大留白与圆角，适合高分大屏
+    Spacious,
+}
+
+/// 候选框色彩主题预设
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateThemePreset {
+    /// 微澜翡翠绿（经典官方主题，浅色/深色自适应，默认）
+    #[default]
+    Emerald,
+    /// 极简黑白墨韵（纯高对比黑白灰）
+    Monochrome,
+    /// 极客暗夜冰蓝（霓虹冰蓝高亮）
+    IceBlue,
+    /// 暖阳奶茶（温润暖色米杏与焦糖橙）
+    WarmLatte,
+}
+
 /// 模糊音细分规则配置（对应模糊音设置页面 10 项开关）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -497,6 +536,19 @@ impl Default for VoiceItnConfig {
     }
 }
 
+/// 语音输入浮层视觉动效风格
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceVisualEffect {
+    /// 现代多频律动声浪胶囊（彩色声柱平滑起伏，默认推荐）
+    #[default]
+    DynamicWaveform,
+    /// 流光呼吸光环微卡片（微澜青绿呼吸式脉冲微光）
+    BreathingPulse,
+    /// 经典文本提示（平滑回退至传统的“正在聆听中... ▏▎▍”文字形态）
+    ClassicText,
+}
+
 /// 阶段六：交互展现与流式上屏配置
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -505,6 +557,8 @@ pub struct VoiceInteractionConfig {
     pub real_time_preview: bool,
     /// 是否显示录音浮动波形条
     pub show_floating_bar: bool,
+    /// 语音浮动提示视觉风格
+    pub visual_effect: VoiceVisualEffect,
 }
 
 impl Default for VoiceInteractionConfig {
@@ -512,6 +566,7 @@ impl Default for VoiceInteractionConfig {
         Self {
             real_time_preview: true,
             show_floating_bar: true,
+            visual_effect: VoiceVisualEffect::default(),
         }
     }
 }

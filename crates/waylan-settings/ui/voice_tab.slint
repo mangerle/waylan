@@ -46,8 +46,10 @@ export component VoiceTab inherits VerticalLayout {
     in-out property <bool> itn_pangu_spacing: true;
 
     // 阶段六：交互展现与流式上屏
+    in property <bool> custom_theme_enabled: true;
     in-out property <bool> voice_real_time_preview: true;
     in-out property <bool> voice_show_floating_bar: true;
+    in-out property <int> voice_visual_effect_index: 0;
 
     // 云端服务配置列表与编辑状态
     in property <[CloudProfileItem]> cloud_profiles: [];
@@ -179,8 +181,10 @@ export component VoiceTab inherits VerticalLayout {
         itn_filter_filler_words <=> root.itn_filter_filler_words;
         itn_pangu_spacing <=> root.itn_pangu_spacing;
 
+        custom_theme_enabled: root.custom_theme_enabled;
         voice_real_time_preview <=> root.voice_real_time_preview;
         voice_show_floating_bar <=> root.voice_show_floating_bar;
+        voice_visual_effect_index <=> root.voice_visual_effect_index;
 
         switch_to_cloud_tab => { root.active_sub_tab = 1; }
         import_asr_model => { root.import_asr_model(); }

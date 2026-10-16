@@ -4,11 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::config_types::{
-    AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig, CloudProfile,
-    CloudProviderType, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules,
-    NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, SwitchKey,
-    ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType, VoiceConfig,
-    VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig,
+    AudioFrontEndConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation,
+    CandidateThemePreset, CandidateWindowMode, CloudAsrConfig, CloudProfile, CloudProviderType,
+    FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, NsEngineType,
+    OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, SwitchKey, ThemeMode,
+    TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType, VoiceConfig,
+    VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
 };
 
 /// 微澜输入法全局配置
@@ -41,6 +42,27 @@ pub struct AppConfig {
     pub candidate_orientation: CandidateOrientation,
     /// 候选词序号展示风格（默认现代空白风）
     pub candidate_index_style: CandidateIndexStyle,
+    /// 候选框渲染模式（微澜现代专属 / 桌面原生系统）
+    pub candidate_window_mode: CandidateWindowMode,
+    /// 候选框排版留白密度（紧凑 / 标准 / 宽松）
+    pub candidate_density: CandidateDensity,
+    /// 候选框色彩主题预设（微澜翡翠绿 / 极简黑白 / 极客暗夜冰蓝 / 暖阳奶茶）
+    pub candidate_theme: CandidateThemePreset,
+    /// 候选词项间距（像素，范围 2.0 ~ 24.0，默认 8.0）
+    #[serde(default = "default_candidate_item_spacing")]
+    pub candidate_item_spacing: f32,
+    /// 候选框上下内边距（像素，范围 2.0 ~ 16.0，默认 4.0）
+    #[serde(default = "default_candidate_padding_v")]
+    pub candidate_padding_v: f32,
+    /// 候选框左右内边距（像素，范围 4.0 ~ 24.0，默认 8.0）
+    #[serde(default = "default_candidate_padding_h")]
+    pub candidate_padding_h: f32,
+    /// 候选框圆角曲率半径（像素，范围 0.0 ~ 20.0，默认 8.0）
+    #[serde(default = "default_candidate_corner_radius")]
+    pub candidate_corner_radius: f32,
+    /// 候选框背景不透明度百分比（范围 70 ~ 100，默认 95）
+    #[serde(default = "default_candidate_opacity")]
+    pub candidate_opacity: u32,
     /// 是否动态调整候选词序（自适应词频学习）
     pub dynamic_adjust_freq: bool,
     /// 是否启用简拼（声母缩写检索）
@@ -105,6 +127,14 @@ impl Default for AppConfig {
             theme: ThemeMode::Light,
             candidate_orientation: CandidateOrientation::Horizontal,
             candidate_index_style: CandidateIndexStyle::ModernSpace,
+            candidate_window_mode: CandidateWindowMode::default(),
+            candidate_density: CandidateDensity::default(),
+            candidate_theme: CandidateThemePreset::default(),
+            candidate_item_spacing: default_candidate_item_spacing(),
+            candidate_padding_v: default_candidate_padding_v(),
+            candidate_padding_h: default_candidate_padding_h(),
+            candidate_corner_radius: default_candidate_corner_radius(),
+            candidate_opacity: default_candidate_opacity(),
             dynamic_adjust_freq: true,
             enable_acronym: true,
             shift_select_second: false,
@@ -132,6 +162,26 @@ impl Default for AppConfig {
     }
 }
 
+fn default_candidate_item_spacing() -> f32 {
+    8.0
+}
+
+fn default_candidate_padding_v() -> f32 {
+    4.0
+}
+
+fn default_candidate_padding_h() -> f32 {
+    8.0
+}
+
+fn default_candidate_corner_radius() -> f32 {
+    8.0
+}
+
+fn default_candidate_opacity() -> u32 {
+    95
+}
+
 /// 读取非空环境变量（自动过滤空白字符串与未设置变量）
 pub fn env_var_non_empty(key: &str) -> Option<String> {
     env::var(key).ok().and_then(|v| {
@@ -153,6 +203,27 @@ impl AppConfig {
         } else {
             self.font_size = self.font_size.clamp(12.0, 24.0);
         }
+        if !self.candidate_item_spacing.is_finite() {
+            self.candidate_item_spacing = default_candidate_item_spacing();
+        } else {
+            self.candidate_item_spacing = self.candidate_item_spacing.clamp(2.0, 24.0);
+        }
+        if !self.candidate_padding_v.is_finite() {
+            self.candidate_padding_v = default_candidate_padding_v();
+        } else {
+            self.candidate_padding_v = self.candidate_padding_v.clamp(2.0, 16.0);
+        }
+        if !self.candidate_padding_h.is_finite() {
+            self.candidate_padding_h = default_candidate_padding_h();
+        } else {
+            self.candidate_padding_h = self.candidate_padding_h.clamp(4.0, 24.0);
+        }
+        if !self.candidate_corner_radius.is_finite() {
+            self.candidate_corner_radius = default_candidate_corner_radius();
+        } else {
+            self.candidate_corner_radius = self.candidate_corner_radius.clamp(0.0, 20.0);
+        }
+        self.candidate_opacity = self.candidate_opacity.clamp(70, 100);
         self.voice.vad.silence_timeout_ms = self.voice.vad.silence_timeout_ms.clamp(200, 5000);
         self.voice.vad.speech_threshold = self.voice.vad.speech_threshold.clamp(0.01, 0.99);
     }

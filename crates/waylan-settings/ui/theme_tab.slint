@@ -1,0 +1,483 @@
+import { ComboBox } from "std-widgets.slint";
+import { SettingCard, AppSlider, AppSwitch } from "common.slint";
+
+export component ThemeTab inherits VerticalLayout {
+    spacing: 16px;
+    padding-right: 8px;
+
+    // 候选框渲染模式 (0: 微澜现代专属, 1: 桌面系统原生)
+    in-out property <int> window_mode_index: 0;
+
+    // 主题色彩预设 (0: 微澜翡翠绿, 1: 极简黑白墨韵, 2: 极客暗夜冰蓝, 3: 暖阳奶茶焦糖)
+    in-out property <int> theme_preset_index: 0;
+
+    // 排版留白密度 (0: 紧凑极简, 1: 标准平衡, 2: 宽松舒缓)
+    in-out property <int> density_index: 1;
+
+    // 候选框高级尺寸与排版微调
+    in-out property <float> candidate_item_spacing: 8;
+    in-out property <float> candidate_padding_v: 4;
+    in-out property <float> candidate_padding_h: 8;
+    in-out property <float> candidate_corner_radius: 8;
+    in-out property <float> candidate_opacity_val: 95;
+
+    // 候选框外观排版只读联动参数（由常规设置传入，仅供所见即所得候选框预览联动呈现）
+    in property <int> orientation_index: 0;     // 0: 水平横排, 1: 垂直竖排
+    in property <int> index_style_index: 0;     // 0: 现代风, 1: 经典点号, 2: 圆圈序号, 3: 方括号, 4: 圆括号, 5: 极简标点, 6: 纯文本
+    in property <float> page_size_val: 5;
+    in property <float> font_size_val: 15;
+
+    // 辅助计算当前主题色
+    property <color> current_accent_color:
+        root.theme_preset_index == 1 ? #18181b :
+        root.theme_preset_index == 2 ? #0284c7 :
+        root.theme_preset_index == 3 ? #d97706 : #07c160;
+
+    // ==========================================
+    // 1. 顶部总控卡片：微澜专属候选框（开关）与主题色彩风格（下拉框）同在一行
+    // ==========================================
+    SettingCard {
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+
+            // 左半部分：微澜专属候选框总开关
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    Text {
+                        text: "微澜现代专属候选框";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #0f172a;
+                    }
+                    Text {
+                        text: root.window_mode_index == 0 ? "已开启专属现代胶囊" : "已切换为系统原生模式";
+                        font-size: 11px;
+                        color: #64748b;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    AppSwitch {
+                        checked: root.window_mode_index == 0;
+                        text: root.window_mode_index == 0 ? "已开启" : "系统原生";
+                        toggled => {
+                            root.window_mode_index = self.checked ? 0 : 1;
+                        }
+                    }
+                }
+            }
+
+            // 中间垂直微弱分割线
+            Rectangle {
+                width: 1px;
+                background: #e2e8f0;
+            }
+
+            // 右半部分：主题色彩风格下拉选择
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                horizontal-stretch: 1;
+                opacity: root.window_mode_index == 0 ? 1.0 : 0.4;
+
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    Text {
+                        text: "主题色彩风格";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: root.window_mode_index == 0 ? #0f172a : #94a3b8;
+                    }
+                    Text {
+                        text: "自适应系统深浅色";
+                        font-size: 11px;
+                        color: #64748b;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        enabled: root.window_mode_index == 0;
+                        model: [
+                            "微澜翡翠绿",
+                            "极简黑白墨韵",
+                            "极客暗夜冰蓝",
+                            "暖阳奶茶焦糖"
+                        ];
+                        current-index <=> root.theme_preset_index;
+                        width: 150px;
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // 2. 实时候选框高保真效果预览卡片 (所见即所得)
+    // ==========================================
+    SettingCard {
+        title: "实时候选框视觉预览 (Live Preview)";
+        subtitle: root.window_mode_index == 0 ?
+            "所见即所得：当前选中的主题色彩、排版留白密度、排列方向与字号将实时在此呈现" :
+            "当前处于系统原生模式，候选框由桌面环境（GNOME/KDE）原生接管；同基线垂直对齐与重复序号隐藏依然持续生效";
+
+        opacity: root.window_mode_index == 0 ? 1.0 : 0.55;
+
+        VerticalLayout {
+            spacing: 8px;
+
+            Rectangle {
+                background: #f1f5f9;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #e2e8f0;
+                min-height: 96px;
+
+                VerticalLayout {
+                    padding: 12px;
+                    alignment: center;
+                    spacing: 8px;
+
+                    // 居中自适应容器：确保悬浮候选框胶囊紧凑包裹候选内容，杜绝被横向拉伸撑满产生前后多余空白
+                    HorizontalLayout {
+                        alignment: center;
+
+                        // 模拟微澜悬浮候选框
+                        Rectangle {
+                            background: rgba(255, 255, 255, root.candidate_opacity_val / 100.0);
+                        border-radius: root.candidate_corner_radius * 1px;
+                        border-width: 1px;
+                        border-color: #cbd5e1;
+                        drop-shadow-blur: 16px;
+                        drop-shadow-color: rgba(0, 0, 0, 0.08);
+
+                        HorizontalLayout {
+                            padding-top: root.candidate_padding_v * 1px;
+                            padding-bottom: root.candidate_padding_v * 1px;
+                            padding-left: root.candidate_padding_h * 1px;
+                            padding-right: root.candidate_padding_h * 1px;
+                            alignment: center;
+
+                            // 候选词行或纵列（根据横排/竖排动态切换）
+                            if root.orientation_index == 0: HorizontalLayout {
+                                spacing: root.candidate_item_spacing * 1px;
+                                alignment: center;
+
+                                // 候选 1 (选中高亮胶囊)
+                                Rectangle {
+                                    background: root.window_mode_index == 0 ? root.current_accent_color : #334155;
+                                    border-radius: Math.max(3px, (root.candidate_corner_radius - 2.0) * 1px);
+                                    HorizontalLayout {
+                                        padding-top: 3px;
+                                        padding-bottom: 3px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 4px;
+                                        Text { text: root.index_style_index == 6 ? "" : "1"; font-size: 11px; color: rgba(255, 255, 255, 0.85); vertical-alignment: center; }
+                                        Text { text: "时间"; font-size: Math.max(12px, root.font_size_val * 1px); font-weight: 600; color: #ffffff; vertical-alignment: center; }
+                                    }
+                                }
+
+                                // 候选 2
+                                Rectangle {
+                                    border-radius: 4px;
+                                    HorizontalLayout {
+                                        padding-top: 3px;
+                                        padding-bottom: 3px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 4px;
+                                        Text { text: root.index_style_index == 6 ? "" : "2"; font-size: 11px; color: #94a3b8; vertical-alignment: center; }
+                                        Text { text: "实践"; font-size: Math.max(12px, root.font_size_val * 1px); color: #1e293b; vertical-alignment: center; }
+                                    }
+                                }
+
+                                // 候选 3
+                                Rectangle {
+                                    border-radius: 4px;
+                                    HorizontalLayout {
+                                        padding-top: 3px;
+                                        padding-bottom: 3px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 4px;
+                                        Text { text: root.index_style_index == 6 ? "" : "3"; font-size: 11px; color: #94a3b8; vertical-alignment: center; }
+                                        Text { text: "事件"; font-size: Math.max(12px, root.font_size_val * 1px); color: #1e293b; vertical-alignment: center; }
+                                    }
+                                }
+
+                                // 候选 4 (可按 Tab 展开的带精致轻量键帽条目)
+                                Rectangle {
+                                    border-radius: 4px;
+                                    HorizontalLayout {
+                                        padding-top: 3px;
+                                        padding-bottom: 3px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 5px;
+                                        Text { text: root.index_style_index == 6 ? "" : "4"; font-size: 11px; color: #94a3b8; vertical-alignment: center; }
+                                        Text { text: "2026-10-16"; font-size: Math.max(12px, root.font_size_val * 1px); color: #1e293b; vertical-alignment: center; }
+                                        Rectangle {
+                                            background: rgba(0, 0, 0, 0.05);
+                                            border-radius: 3px;
+                                            border-width: 1px;
+                                            border-color: rgba(0, 0, 0, 0.08);
+                                            HorizontalLayout {
+                                                padding-left: 4px;
+                                                padding-right: 4px;
+                                                padding-top: 1px;
+                                                padding-bottom: 1px;
+                                                Text { text: "Tab ⇥"; font-size: 9px; font-weight: 700; color: #64748b; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 竖向排列时的模拟
+                            if root.orientation_index == 1: VerticalLayout {
+                                spacing: 2px;
+                                Rectangle {
+                                    background: root.window_mode_index == 0 ? root.current_accent_color : #334155;
+                                    border-radius: 4px;
+                                    HorizontalLayout {
+                                        padding-top: 2px;
+                                        padding-bottom: 2px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 6px;
+                                        Text { text: "1"; font-size: 11px; color: rgba(255, 255, 255, 0.85); vertical-alignment: center; }
+                                        Text { text: "时间"; font-size: Math.max(12px, root.font_size_val * 1px); font-weight: 600; color: #ffffff; vertical-alignment: center; }
+                                    }
+                                }
+                                Rectangle {
+                                    HorizontalLayout {
+                                        padding-top: 2px;
+                                        padding-bottom: 2px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 6px;
+                                        Text { text: "2"; font-size: 11px; color: #94a3b8; vertical-alignment: center; }
+                                        Text { text: "实践"; font-size: Math.max(12px, root.font_size_val * 1px); color: #1e293b; vertical-alignment: center; }
+                                    }
+                                }
+                                Rectangle {
+                                    HorizontalLayout {
+                                        padding-top: 2px;
+                                        padding-bottom: 2px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 6px;
+                                        Text { text: "3"; font-size: 11px; color: #94a3b8; vertical-alignment: center; }
+                                        Text { text: "事件"; font-size: Math.max(12px, root.font_size_val * 1px); color: #1e293b; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                    // 底部交互与渲染提示文本
+                    Text {
+                        text: root.window_mode_index == 0 ?
+                            "提示：微澜现代专属悬浮胶囊，按 Tab 键可平滑展开二级候选大卡片面板" :
+                            "提示：当前为系统原生渲染模式，外观由桌面主题接管，微澜仅负责同基线排版与序号去重";
+                        font-size: 11px;
+                        color: #94a3b8;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // 3. 空间密度与尺寸微调卡片
+    // ==========================================
+    SettingCard {
+        title: "空间密度与尺寸微调";
+        subtitle: root.window_mode_index == 0 ?
+            "调节候选词之间的间距、候选框内边距、圆角弧度以及毛玻璃透明度（拖动滑块可在上方实时预览）" :
+            "当前处于系统原生模式，尺寸与主题由桌面系统原生接管，无法在此自定义专属微调（开启上方专属模式后生效）";
+
+        opacity: root.window_mode_index == 0 ? 1.0 : 0.35;
+
+        VerticalLayout {
+            spacing: 10px;
+
+            // 预设模式选择
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: space-between;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    alignment: center;
+                    Text { text: "排版留白预设"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text {
+                        text: "选择预设密度可一键套用推荐搭配，下方亦可自由微调";
+                        font-size: 12px;
+                        color: #64748b;
+                    }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    ComboBox {
+                        enabled: root.window_mode_index == 0;
+                        model: [
+                            "紧凑极简",
+                            "标准平衡 (推荐)",
+                            "宽松舒缓"
+                        ];
+                        current-index <=> root.density_index;
+                        width: 150px;
+                        selected(idx) => {
+                            if idx == 0 {
+                                root.candidate_item_spacing = 4;
+                                root.candidate_padding_v = 2;
+                                root.candidate_padding_h = 6;
+                                root.candidate_corner_radius = 4;
+                            }
+                            if idx == 1 {
+                                root.candidate_item_spacing = 8;
+                                root.candidate_padding_v = 4;
+                                root.candidate_padding_h = 8;
+                                root.candidate_corner_radius = 8;
+                            }
+                            if idx == 2 {
+                                root.candidate_item_spacing = 14;
+                                root.candidate_padding_v = 8;
+                                root.candidate_padding_h = 16;
+                                root.candidate_corner_radius = 12;
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: #f1f5f9; }
+
+            // 尺寸微调滑块区域（两列弹性自适应布局）
+            HorizontalLayout {
+                spacing: 16px;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "候选词间距 (" + Math.round(root.candidate_item_spacing) + "px):";
+                            vertical-alignment: center;
+                            width: 110px;
+                            font-size: 12px;
+                            color: root.window_mode_index == 0 ? #334155 : #94a3b8;
+                        }
+                        AppSlider {
+                            enabled: root.window_mode_index == 0;
+                            minimum: 2;
+                            maximum: 24;
+                            value <=> root.candidate_item_spacing;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "上下内边距 (" + Math.round(root.candidate_padding_v) + "px):";
+                            vertical-alignment: center;
+                            width: 110px;
+                            font-size: 12px;
+                            color: root.window_mode_index == 0 ? #334155 : #94a3b8;
+                        }
+                        AppSlider {
+                            enabled: root.window_mode_index == 0;
+                            minimum: 2;
+                            maximum: 16;
+                            value <=> root.candidate_padding_v;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "左右内边距 (" + Math.round(root.candidate_padding_h) + "px):";
+                            vertical-alignment: center;
+                            width: 110px;
+                            font-size: 12px;
+                            color: root.window_mode_index == 0 ? #334155 : #94a3b8;
+                        }
+                        AppSlider {
+                            enabled: root.window_mode_index == 0;
+                            minimum: 4;
+                            maximum: 24;
+                            value <=> root.candidate_padding_h;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "圆角曲率 (" + Math.round(root.candidate_corner_radius) + "px):";
+                            vertical-alignment: center;
+                            width: 110px;
+                            font-size: 12px;
+                            color: root.window_mode_index == 0 ? #334155 : #94a3b8;
+                        }
+                        AppSlider {
+                            enabled: root.window_mode_index == 0;
+                            minimum: 0;
+                            maximum: 20;
+                            value <=> root.candidate_corner_radius;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "不透明度 (" + Math.round(root.candidate_opacity_val) + "%):";
+                            vertical-alignment: center;
+                            width: 110px;
+                            font-size: 12px;
+                            color: root.window_mode_index == 0 ? #334155 : #94a3b8;
+                        }
+                        AppSlider {
+                            enabled: root.window_mode_index == 0;
+                            minimum: 70;
+                            maximum: 100;
+                            value <=> root.candidate_opacity_val;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

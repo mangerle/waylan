@@ -7,7 +7,7 @@ pub use config::{
     CloudProfile, CloudProviderType, FullWidthCharShortcut, FullWidthPunctShortcut,
     FuzzyPinyinRules, NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut,
     SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType,
-    VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig,
+    VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
 };
 
 use serde::{Deserialize, Serialize};

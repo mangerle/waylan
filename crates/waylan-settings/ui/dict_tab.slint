@@ -1,5 +1,189 @@
-import { Button, LineEdit } from "std-widgets.slint";
-import { SettingCard } from "common.slint";
+import { SettingCard, SecondaryButton } from "common.slint";
+
+/// 词库健康状态与规模指标展示微卡片
+component DictMetricCard inherits Rectangle {
+    in property <string> title;
+    in property <string> badge_text;
+    in property <color> badge_color;
+    in property <color> badge_bg;
+    in property <color> border_color_val;
+    in property <color> bg_color_val;
+    in property <string> value_text;
+    in property <string> desc_text;
+
+    horizontal-stretch: 1;
+    background: root.bg_color_val;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.border_color_val;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            alignment: space-between;
+            Text {
+                text: root.title;
+                font-size: 12px;
+                font-weight: 600;
+                color: root.badge_color;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                background: root.badge_bg;
+                border-radius: 10px;
+                HorizontalLayout {
+                    alignment: center;
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    padding-top: 2px;
+                    padding-bottom: 2px;
+                    spacing: 4px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: root.badge_color;
+                        }
+                    }
+                    Text {
+                        text: root.badge_text;
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: root.badge_color;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: root.value_text;
+            font-size: 13px;
+            font-weight: 700;
+            color: #0f172a;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: root.desc_text;
+            font-size: 11px;
+            color: #64748b;
+            wrap: word-wrap;
+        }
+    }
+}
+
+/// 外部扩展词库导入资源槽位行组件
+component DictImportRow inherits Rectangle {
+    in property <string> badge_icon;
+    in property <color> badge_bg;
+    in property <color> badge_border;
+    in property <color> badge_color;
+    in property <string> title;
+    in property <string> format_hint;
+    in property <string> file_path;
+    in property <string> empty_hint;
+    in property <string> status_text;
+    callback pick_file();
+
+    background: #f8fafc;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: #e2e8f0;
+
+    HorizontalLayout {
+        padding: 14px;
+        spacing: 16px;
+
+        // 左侧类型徽标方块（固定宽度容器垂直居中，杜绝因父级布局拉伸或压缩产生位移）
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 8px;
+                background: root.badge_bg;
+                border-width: 1px;
+                border-color: root.badge_border;
+
+                Text {
+                    text: root.badge_icon;
+                    font-size: 15px;
+                    font-weight: 800;
+                    color: root.badge_color;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // 中间文本描述与路径状态（弹性拉伸容器，无 space-between 负间距，左边缘严格统一对齐）
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: root.title;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #0f172a;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    background: #e2e8f0;
+                    border-radius: 4px;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        padding-top: 1px;
+                        padding-bottom: 1px;
+                        Text {
+                            text: root.format_hint;
+                            font-size: 11px;
+                            color: #475569;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: root.file_path != "" ? ("已选文件: " + root.file_path) : root.empty_hint;
+                font-size: 12px;
+                color: root.file_path != "" ? #0284c7 : #64748b;
+                wrap: word-wrap;
+            }
+
+            if root.status_text != "": Text {
+                text: root.status_text;
+                font-size: 12px;
+                font-weight: 600;
+                color: #059669;
+            }
+        }
+
+        // 右侧操作按钮（固定尺寸并垂直居中，由中间弹性区域自然推至右侧）
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+
+            SecondaryButton {
+                text: "选择文件并导入...";
+                clicked => { root.pick_file(); }
+            }
+        }
+    }
+}
 
 export component DictTab inherits VerticalLayout {
     spacing: 16px;
@@ -16,104 +200,148 @@ export component DictTab inherits VerticalLayout {
     in-out property <string> symbols_import_path: "";
     in property <string> symbols_import_status: "";
 
-    callback import_pinyin_dict(string);
-    callback import_english_dict(string);
-    callback import_symbols_dict(string);
+    callback pick_and_import_pinyin();
+    callback pick_and_import_english();
+    callback pick_and_import_symbols();
 
+    // ==========================================
+    // 1. 词库就绪状态与规模看板 (3 列并排指标)
+    // ==========================================
     SettingCard {
-        title: "系统词库状态";
-        subtitle: "微澜预编译高性能拼音索引词典";
+        title: "词库就绪状态与规模看板";
+        subtitle: "微澜系统预编译词典与增量辅助词库实时规模及运行状态总览";
 
-        Text {
-            text: root.base_dict_info;
-            font-size: 13px;
-            font-weight: 600;
-            color: #1e293b;
-        }
-        Text {
-            text: "涵盖通用规范汉字表、现代汉语核心高频词汇与计算机专业词汇。";
-            font-size: 12px;
-            color: #64748b;
+        HorizontalLayout {
+            spacing: 12px;
+
+            DictMetricCard {
+                title: "中文核心预编译主库";
+                badge_text: "运行就绪";
+                badge_color: #166534;
+                badge_bg: #dcfce7;
+                border_color_val: #bbf7d0;
+                bg_color_val: #f0fdf4;
+                value_text: root.base_dict_info;
+                desc_text: "高性能只读内存映射，零延迟毫秒级候选检索";
+            }
+
+            DictMetricCard {
+                title: "常用英文辅助词库";
+                badge_text: "混输就绪";
+                badge_color: #1e40af;
+                badge_bg: #dbeafe;
+                border_color_val: #bfdbfe;
+                bg_color_val: #eff6ff;
+                value_text: root.english_dict_info;
+                desc_text: "支持中英混输自动联想与高频词频加权推荐";
+            }
+
+            DictMetricCard {
+                title: "语义特殊符号库";
+                badge_text: "语义映射";
+                badge_color: #6b21a8;
+                badge_bg: #f3e8ff;
+                border_color_val: #e9d5ff;
+                bg_color_val: #faf5ff;
+                value_text: root.symbols_dict_info;
+                desc_text: "拼音快捷联想数学符号、希腊字母与常用特殊符号";
+            }
         }
     }
 
+    // ==========================================
+    // 2. 外部扩展词库导入中心
+    // ==========================================
     SettingCard {
-        title: "导入外部拼音词库 (.txt / .dict.yaml)";
-        subtitle: "扩展自定词汇，格式: 词条 [拼音] [词频]";
+        title: "外部扩展词库导入";
+        subtitle: "点击右侧按钮调出系统原生文件选择对话框，自动合入并去重（支持 .txt 及 Rime 字典 .dict.yaml 格式）";
 
-        HorizontalLayout {
-            spacing: 8px;
-            LineEdit {
-                placeholder-text: "请输入词库文件绝对路径";
-                text <=> root.pinyin_import_path;
+        VerticalLayout {
+            spacing: 12px;
+
+            DictImportRow {
+                badge_icon: "拼";
+                badge_bg: #ecfdf5;
+                badge_border: #a7f3d0;
+                badge_color: #059669;
+                title: "扩展外部拼音词库";
+                format_hint: "格式: 词条 [拼音] [词频]";
+                file_path: root.pinyin_import_path;
+                empty_hint: "扩展领域专业术语或行业生僻词汇，合入后自动进入自适应学习模型";
+                status_text: root.pinyin_import_status;
+                pick_file => { root.pick_and_import_pinyin(); }
             }
-            Button {
-                text: "开始导入";
-                clicked => { root.import_pinyin_dict(root.pinyin_import_path); }
+
+            DictImportRow {
+                badge_icon: "En";
+                badge_bg: #eff6ff;
+                badge_border: #bfdbfe;
+                badge_color: #2563eb;
+                title: "扩展外部英文词库";
+                format_hint: "格式: 单词 [词频]";
+                file_path: root.english_import_path;
+                empty_hint: "支持纯英文生词表与加权词频扩展，助您在中文拼音输入中实现流畅中英混输";
+                status_text: root.english_import_status;
+                pick_file => { root.pick_and_import_english(); }
             }
-        }
-        if root.pinyin_import_status != "": Text {
-            text: root.pinyin_import_status;
-            font-size: 12px;
-            color: #059669;
+
+            DictImportRow {
+                badge_icon: "Ω";
+                badge_bg: #fffbeb;
+                badge_border: #fde68a;
+                badge_color: #d97706;
+                title: "自定义特殊符号映射";
+                format_hint: "格式: 符号 拼音 [语义说明]";
+                file_path: root.symbols_import_path;
+                empty_hint: "输入拼音即可快速触发匹配的特殊数学符号、科技符号、箭头及特殊表情字符";
+                status_text: root.symbols_import_status;
+                pick_file => { root.pick_and_import_symbols(); }
+            }
         }
     }
 
+    // ==========================================
+    // 3. 导入规范与格式兼容说明
+    // ==========================================
     SettingCard {
-        title: "导入外部英文词库 (.txt / .dict.yaml)";
-        subtitle: "支持中英混输联想，格式: 单词 [词频]";
-
-        Text {
-            text: root.english_dict_info;
-            font-size: 13px;
-            font-weight: 600;
-            color: #2563eb;
-        }
-
         HorizontalLayout {
-            spacing: 8px;
-            LineEdit {
-                placeholder-text: "请输入英文词库文件绝对路径";
-                text <=> root.english_import_path;
-            }
-            Button {
-                text: "导入英文词库";
-                clicked => { root.import_english_dict(root.english_import_path); }
-            }
-        }
-        if root.english_import_status != "": Text {
-            text: root.english_import_status;
-            font-size: 12px;
-            color: #059669;
-        }
-    }
+            spacing: 14px;
+            alignment: start;
 
-    SettingCard {
-        title: "导入自定义特殊符号库";
-        subtitle: "支持语义拼音快速联想，格式: 符号 拼音 语义说明";
-
-        Text {
-            text: root.symbols_dict_info;
-            font-size: 13px;
-            font-weight: 600;
-            color: #2563eb;
-        }
-
-        HorizontalLayout {
-            spacing: 8px;
-            LineEdit {
-                placeholder-text: "请输入符号文件绝对路径";
-                text <=> root.symbols_import_path;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 14px;
+                    background: #eff6ff;
+                    Text {
+                        text: "i";
+                        font-size: 14px;
+                        font-weight: 800;
+                        color: #2563eb;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
-            Button {
-                text: "导入符号库";
-                clicked => { root.import_symbols_dict(root.symbols_import_path); }
+
+            VerticalLayout {
+                spacing: 3px;
+                alignment: center;
+                Text {
+                    text: "导入安全机制与格式兼容保障";
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: #1e293b;
+                }
+                Text {
+                    text: "1. 自动兼容标准制表符/空格分隔格式与 Rime .dict.yaml 文件头；2. 单个导入文件限制 64MB 以内保障系统内存纯净；3. 导入数据采用 WAL 增量紧凑化日志存储，断电不丢失。";
+                    font-size: 11px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
             }
-        }
-        if root.symbols_import_status != "": Text {
-            text: root.symbols_import_status;
-            font-size: 12px;
-            color: #059669;
         }
     }
 }

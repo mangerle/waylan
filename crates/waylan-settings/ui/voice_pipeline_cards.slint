@@ -167,10 +167,12 @@ export component VoiceStageFiveCard inherits SettingCard {
 
 export component VoiceStageSixCard inherits SettingCard {
     title: "阶段六：交互展现与流式上屏";
-    subtitle: "控制语音识别过程中的视觉反馈方式，支持光标处实时出字与跟随光标的浮动波形条";
+    subtitle: "控制语音识别过程中的视觉反馈方式，支持光标处实时出字与现代化动态声浪";
 
+    in property <bool> custom_theme_enabled: true;
     in-out property <bool> real_time_preview: true;
     in-out property <bool> show_floating_bar: true;
+    in-out property <int> voice_visual_effect_index: 0;
 
     VerticalLayout {
         spacing: 14px;
@@ -225,6 +227,109 @@ export component VoiceStageSixCard inherits SettingCard {
                 AppSwitch {
                     checked <=> root.show_floating_bar;
                     text: root.show_floating_bar ? "已开启" : "已隐藏";
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: #f1f5f9; }
+
+        // 开关 3：语音动效视觉风格
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: space-between;
+            opacity: (root.custom_theme_enabled && root.show_floating_bar) ? 1.0 : 0.4;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text { text: "3. 语音浮层动效风格 (Visual Effect)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                Text {
+                    text: !root.show_floating_bar ?
+                        "当前已关闭上方【录音浮动波形条】（静默录音模式），光标处不显示悬浮条，动效设置已锁定" :
+                        (!root.custom_theme_enabled ?
+                            "当前处于桌面系统原生渲染模式，仅支持经典纯文本；需在【外观与主题】中开启微澜现代专属模式后方可解锁多频声浪与呼吸光环" :
+                            "选择录音时的视觉呈现形态（跳动多频律动声浪柱、流光呼吸光环微卡片或经典纯文字提示）");
+                    font-size: 12px;
+                    color: #64748b;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                alignment: end;
+                ComboBox {
+                    enabled: root.custom_theme_enabled && root.show_floating_bar;
+                    model: root.custom_theme_enabled ?
+                        ["现代多频律动声浪胶囊 (推荐)", "流光呼吸光环微卡片", "经典文本提示 (正在聆听)"] :
+                        ["系统原生经典文本提示 (锁定)"];
+                    current-index <=> root.voice_visual_effect_index;
+                    width: 230px;
+                }
+            }
+        }
+
+        // 语音浮层独立实时视觉效果预览卡片
+        if root.show_floating_bar && root.custom_theme_enabled: Rectangle {
+            background: #f8fafc;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: #e2e8f0;
+            HorizontalLayout {
+                padding-top: 8px;
+                padding-bottom: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: center;
+                spacing: 12px;
+
+                Text { text: "录音浮层实机效果预览:"; font-size: 11px; color: #64748b; vertical-alignment: center; }
+
+                // 悬浮胶囊外形
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: #cbd5e1;
+                    drop-shadow-blur: 8px;
+                    drop-shadow-color: rgba(0, 0, 0, 0.06);
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 12px;
+                        padding-top: 5px;
+                        padding-bottom: 5px;
+                        spacing: 8px;
+                        alignment: center;
+
+                        // 律动声浪胶囊
+                        if root.voice_visual_effect_index == 0: HorizontalLayout {
+                            spacing: 3px;
+                            alignment: center;
+                            Rectangle { width: 3px; height: 8px; border-radius: 2px; background: #07c160; }
+                            Rectangle { width: 3px; height: 16px; border-radius: 2px; background: #07c160; }
+                            Rectangle { width: 3px; height: 12px; border-radius: 2px; background: #07c160; }
+                            Rectangle { width: 3px; height: 18px; border-radius: 2px; background: #07c160; }
+                            Rectangle { width: 3px; height: 9px; border-radius: 2px; background: #07c160; }
+                        }
+
+                        // 流光呼吸光环微卡片
+                        if root.voice_visual_effect_index == 1: Rectangle {
+                            width: 10px;
+                            height: 10px;
+                            border-radius: 5px;
+                            background: #07c160;
+                            drop-shadow-blur: 6px;
+                            drop-shadow-color: rgba(7, 193, 96, 0.6);
+                        }
+
+                        Text {
+                            text: "正在聆听...";
+                            font-size: 12px;
+                            font-weight: 500;
+                            color: #1e293b;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
         }

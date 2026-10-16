@@ -9,9 +9,9 @@
 
 use crate::{CloudProfileItem, SettingsWindow};
 use waylan_core::config::{
-    AppConfig, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
-    FullWidthPunctShortcut, FuzzyPinyinRules, PageKeys, SwitchKey, TraditionalShortcut,
-    TypoCorrectionRules,
+    AppConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
+    CandidateWindowMode, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, PageKeys,
+    SwitchKey, TraditionalShortcut, TypoCorrectionRules, VoiceVisualEffect,
 };
 
 /// 将 AppConfig 数据应用到 Slint 界面属性
@@ -22,7 +22,27 @@ pub fn sync_config_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_init_punct_width_index(if cfg.full_width_punct { 0 } else { 1 });
     window.set_init_simp_trad_index(if cfg.traditional_chinese { 1 } else { 0 });
 
-    // 候选框外观
+    // 候选框外观与渲染模式
+    window.set_window_mode_index(match cfg.candidate_window_mode {
+        CandidateWindowMode::WaylanCustom => 0,
+        CandidateWindowMode::Native => 1,
+    });
+    window.set_density_index(match cfg.candidate_density {
+        CandidateDensity::Compact => 0,
+        CandidateDensity::Normal => 1,
+        CandidateDensity::Spacious => 2,
+    });
+    window.set_candidate_item_spacing(cfg.candidate_item_spacing);
+    window.set_candidate_padding_v(cfg.candidate_padding_v);
+    window.set_candidate_padding_h(cfg.candidate_padding_h);
+    window.set_candidate_corner_radius(cfg.candidate_corner_radius);
+    window.set_candidate_opacity(cfg.candidate_opacity as f32);
+    window.set_theme_preset_index(match cfg.candidate_theme {
+        CandidateThemePreset::Emerald => 0,
+        CandidateThemePreset::Monochrome => 1,
+        CandidateThemePreset::IceBlue => 2,
+        CandidateThemePreset::WarmLatte => 3,
+    });
     window.set_page_size_val(cfg.page_size as f32);
     window.set_font_size_val(cfg.font_size);
     window.set_orientation_index(match cfg.candidate_orientation {
@@ -147,6 +167,26 @@ pub fn update_config_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
         2 => FullWidthPunctShortcut::Disabled,
         _ => FullWidthPunctShortcut::CtrlPeriod,
     };
+    cfg.candidate_window_mode = match window.get_window_mode_index() {
+        1 => CandidateWindowMode::Native,
+        _ => CandidateWindowMode::WaylanCustom,
+    };
+    cfg.candidate_density = match window.get_density_index() {
+        0 => CandidateDensity::Compact,
+        2 => CandidateDensity::Spacious,
+        _ => CandidateDensity::Normal,
+    };
+    cfg.candidate_theme = match window.get_theme_preset_index() {
+        1 => CandidateThemePreset::Monochrome,
+        2 => CandidateThemePreset::IceBlue,
+        3 => CandidateThemePreset::WarmLatte,
+        _ => CandidateThemePreset::Emerald,
+    };
+    cfg.candidate_item_spacing = window.get_candidate_item_spacing();
+    cfg.candidate_padding_v = window.get_candidate_padding_v();
+    cfg.candidate_padding_h = window.get_candidate_padding_h();
+    cfg.candidate_corner_radius = window.get_candidate_corner_radius();
+    cfg.candidate_opacity = window.get_candidate_opacity().round() as u32;
     cfg.page_size = window.get_page_size_val().round() as usize;
     cfg.font_size = window.get_font_size_val().round();
     cfg.candidate_orientation = match window.get_orientation_index() {
@@ -306,6 +346,11 @@ fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     // 阶段六 交互展现与流式上屏
     window.set_voice_real_time_preview(cfg.voice.interaction.real_time_preview);
     window.set_voice_show_floating_bar(cfg.voice.interaction.show_floating_bar);
+    window.set_voice_visual_effect_index(match cfg.voice.interaction.visual_effect {
+        VoiceVisualEffect::DynamicWaveform => 0,
+        VoiceVisualEffect::BreathingPulse => 1,
+        VoiceVisualEffect::ClassicText => 2,
+    });
 
     // 云端服务 Profile 列表装载
     let active_cloud_id = if let Some(ref sel) = cfg.voice.selected_asr {
@@ -549,6 +594,11 @@ fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     // 阶段六 交互展现与流式上屏
     cfg.voice.interaction.real_time_preview = window.get_voice_real_time_preview();
     cfg.voice.interaction.show_floating_bar = window.get_voice_show_floating_bar();
+    cfg.voice.interaction.visual_effect = match window.get_voice_visual_effect_index() {
+        1 => VoiceVisualEffect::BreathingPulse,
+        2 => VoiceVisualEffect::ClassicText,
+        _ => VoiceVisualEffect::DynamicWaveform,
+    };
 
     update_voice_models_from_window(window, cfg);
 }
@@ -656,12 +706,30 @@ mod tests {
         assert_eq!(window.get_traditional_shortcut_index(), 0);
         assert_eq!(window.get_full_width_char_shortcut_index(), 0);
         assert_eq!(window.get_full_width_punct_shortcut_index(), 0);
+        assert_eq!(window.get_window_mode_index(), 0); // 默认 WaylanCustom
+        assert_eq!(window.get_density_index(), 1); // 默认 Normal
+        assert_eq!(window.get_theme_preset_index(), 0); // 默认 Emerald
+        assert_eq!(window.get_candidate_item_spacing(), 8.0);
+        assert_eq!(window.get_candidate_padding_v(), 4.0);
+        assert_eq!(window.get_candidate_padding_h(), 8.0);
+        assert_eq!(window.get_candidate_corner_radius(), 8.0);
+        assert_eq!(window.get_candidate_opacity(), 95.0);
+        assert_eq!(window.get_voice_visual_effect_index(), 0); // 默认 DynamicWaveform
 
-        // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标，索引 2: 圆圈序号，修改快捷键）
+        // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标，索引 2: 圆圈序号，修改快捷键，切为原生候选框模式）
         assert_eq!(window.get_index_style_index(), 0);
         window.set_page_size_val(8.0);
         window.set_enable_tray_index(1);
         window.set_index_style_index(2);
+        window.set_window_mode_index(1); // Native 模式
+        window.set_density_index(0); // Compact 紧凑
+        window.set_theme_preset_index(2); // IceBlue
+        window.set_candidate_item_spacing(12.0);
+        window.set_candidate_padding_v(6.0);
+        window.set_candidate_padding_h(14.0);
+        window.set_candidate_corner_radius(10.0);
+        window.set_candidate_opacity(90.0);
+        window.set_voice_visual_effect_index(1); // BreathingPulse
         window.set_traditional_shortcut_index(1); // CtrlAltF
         window.set_full_width_char_shortcut_index(1); // CtrlShiftSpace
         window.set_full_width_punct_shortcut_index(1); // AltPeriod
@@ -671,6 +739,21 @@ mod tests {
 
         // 验证修改生效
         assert_eq!(updated_cfg.page_size, 8);
+        assert_eq!(
+            updated_cfg.candidate_window_mode,
+            CandidateWindowMode::Native
+        );
+        assert_eq!(updated_cfg.candidate_density, CandidateDensity::Compact);
+        assert_eq!(updated_cfg.candidate_theme, CandidateThemePreset::IceBlue);
+        assert_eq!(updated_cfg.candidate_item_spacing, 12.0);
+        assert_eq!(updated_cfg.candidate_padding_v, 6.0);
+        assert_eq!(updated_cfg.candidate_padding_h, 14.0);
+        assert_eq!(updated_cfg.candidate_corner_radius, 10.0);
+        assert_eq!(updated_cfg.candidate_opacity, 90);
+        assert_eq!(
+            updated_cfg.voice.interaction.visual_effect,
+            VoiceVisualEffect::BreathingPulse
+        );
         assert_eq!(
             updated_cfg.candidate_index_style,
             CandidateIndexStyle::Circled

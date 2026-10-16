@@ -1,6 +1,7 @@
 import { Button, ScrollView } from "std-widgets.slint";
 import { PhraseItem, NavItem, PrimaryButton, CloudProfileItem } from "common.slint";
 import { GeneralTab } from "general_tab.slint";
+import { ThemeTab } from "theme_tab.slint";
 import { PinyinTab } from "pinyin_tab.slint";
 import { FuzzyTab } from "fuzzy_tab.slint";
 import { DictTab } from "dict_tab.slint";
@@ -20,7 +21,7 @@ export component SettingsWindow inherits Window {
     preferred-height: 620px;
     background: #f8fafc;
 
-    // 导航项索引 (0: 常规, 1: 拼音模式, 2: 模糊音, 3: 词典, 4: 用户数据, 5: 快捷键, 6: 语音输入, 7: 关于)
+    // 导航项索引 (0: 常规, 1: 外观与主题, 2: 拼音模式, 3: 模糊音, 4: 词典, 5: 用户数据, 6: 快捷键, 7: 语音输入, 8: 关于)
     in-out property <int> active_tab: 0;
 
     // 应用程序版本（由 Rust 在启动时通过 env!("CARGO_PKG_VERSION") 动态注入）
@@ -31,6 +32,14 @@ export component SettingsWindow inherits Window {
     in-out property <int> init_char_width_index: 0;
     in-out property <int> init_punct_width_index: 0;
     in-out property <int> init_simp_trad_index: 0;
+    in-out property <int> window_mode_index: 0;
+    in-out property <int> density_index: 1;
+    in-out property <int> theme_preset_index: 0;
+    in-out property <float> candidate_item_spacing: 8;
+    in-out property <float> candidate_padding_v: 4;
+    in-out property <float> candidate_padding_h: 8;
+    in-out property <float> candidate_corner_radius: 8;
+    in-out property <float> candidate_opacity: 95;
     in-out property <float> page_size_val: 5;
     in-out property <float> font_size_val: 15;
     in-out property <int> orientation_index: 0;
@@ -133,6 +142,7 @@ export component SettingsWindow inherits Window {
     // 阶段六：交互展现与流式上屏
     in-out property <bool> voice_real_time_preview: true;
     in-out property <bool> voice_show_floating_bar: true;
+    in-out property <int> voice_visual_effect_index: 0;
 
     // 语音二级 Tab 与云端管理
     in-out property <int> voice_sub_tab: 0;
@@ -150,9 +160,9 @@ export component SettingsWindow inherits Window {
     // 回调事件
     callback save_settings();
     callback reset_defaults();
-    callback import_pinyin_dict(string);
-    callback import_english_dict(string);
-    callback import_symbols_dict(string);
+    callback pick_and_import_pinyin();
+    callback pick_and_import_english();
+    callback pick_and_import_symbols();
     callback add_custom_phrase(string, string);
     callback delete_custom_phrase(int);
     callback clear_user_model();
@@ -214,7 +224,7 @@ export component SettingsWindow inherits Window {
                     background: #e2e8f0;
                 }
 
-                // 侧边栏 7 项导航菜单
+                // 侧边栏 8 项导航菜单
                 NavItem {
                     icon: @image-url("../../../assets/icons/nav_general.svg");
                     title: "常规";
@@ -222,16 +232,22 @@ export component SettingsWindow inherits Window {
                     clicked => { root.active_tab = 0; }
                 }
                 NavItem {
-                    icon: @image-url("../../../assets/icons/nav_pinyin.svg");
-                    title: "拼音模式";
+                    icon: @image-url("../../../assets/icons/nav_theme.svg");
+                    title: "外观与主题";
                     active: root.active_tab == 1;
                     clicked => { root.active_tab = 1; }
                 }
                 NavItem {
-                    icon: @image-url("../../../assets/icons/nav_fuzzy.svg");
-                    title: "模糊音";
+                    icon: @image-url("../../../assets/icons/nav_pinyin.svg");
+                    title: "拼音模式";
                     active: root.active_tab == 2;
                     clicked => { root.active_tab = 2; }
+                }
+                NavItem {
+                    icon: @image-url("../../../assets/icons/nav_fuzzy.svg");
+                    title: "模糊音";
+                    active: root.active_tab == 3;
+                    clicked => { root.active_tab = 3; }
                 }
 
                 Rectangle {
@@ -242,14 +258,14 @@ export component SettingsWindow inherits Window {
                 NavItem {
                     icon: @image-url("../../../assets/icons/nav_dict.svg");
                     title: "词典";
-                    active: root.active_tab == 3;
-                    clicked => { root.active_tab = 3; }
+                    active: root.active_tab == 4;
+                    clicked => { root.active_tab = 4; }
                 }
                 NavItem {
                     icon: @image-url("../../../assets/icons/nav_user_data.svg");
                     title: "用户数据";
-                    active: root.active_tab == 4;
-                    clicked => { root.active_tab = 4; }
+                    active: root.active_tab == 5;
+                    clicked => { root.active_tab = 5; }
                 }
 
                 Rectangle {
@@ -260,20 +276,20 @@ export component SettingsWindow inherits Window {
                 NavItem {
                     icon: @image-url("../../../assets/icons/nav_shortcuts.svg");
                     title: "快捷键";
-                    active: root.active_tab == 5;
-                    clicked => { root.active_tab = 5; }
-                }
-                NavItem {
-                    icon: @image-url("../../../assets/icons/nav_voice.svg");
-                    title: "语音输入";
                     active: root.active_tab == 6;
                     clicked => { root.active_tab = 6; }
                 }
                 NavItem {
-                    icon: @image-url("../../../assets/icons/nav_about.svg");
-                    title: "关于";
+                    icon: @image-url("../../../assets/icons/nav_voice.svg");
+                    title: "语音输入";
                     active: root.active_tab == 7;
                     clicked => { root.active_tab = 7; }
+                }
+                NavItem {
+                    icon: @image-url("../../../assets/icons/nav_about.svg");
+                    title: "关于";
+                    active: root.active_tab == 8;
+                    clicked => { root.active_tab = 8; }
                 }
 
                 Rectangle { } // 弹性占位
@@ -297,24 +313,26 @@ export component SettingsWindow inherits Window {
                 spacing: 4px;
                 Text {
                     text: root.active_tab == 0 ? "常规" :
-                          root.active_tab == 1 ? "拼音模式" :
-                          root.active_tab == 2 ? "模糊音" :
-                          root.active_tab == 3 ? "词典" :
-                          root.active_tab == 4 ? "用户数据" :
-                          root.active_tab == 5 ? "快捷键" :
-                          root.active_tab == 6 ? "语音输入" : "关于";
+                          root.active_tab == 1 ? "外观与主题" :
+                          root.active_tab == 2 ? "拼音模式" :
+                          root.active_tab == 3 ? "模糊音" :
+                          root.active_tab == 4 ? "词典" :
+                          root.active_tab == 5 ? "用户数据" :
+                          root.active_tab == 6 ? "快捷键" :
+                          root.active_tab == 7 ? "语音输入" : "关于";
                     font-size: 20px;
                     font-weight: 700;
                     color: #0f172a;
                 }
                 Text {
-                    text: root.active_tab == 0 ? "配置初始语言、全半角、候选框外观尺寸与标点补全特性" :
-                          root.active_tab == 1 ? "配置拼音检索模式、翻页键及拼音纠错选项" :
-                          root.active_tab == 2 ? "配置平翘舌、前后鼻音与易混淆音节模糊匹配规则" :
-                          root.active_tab == 3 ? "查看系统词库状态，导入外部拼音、英文与符号词库" :
-                          root.active_tab == 4 ? "管理用户快捷短语展开规则与自适应历史自造词记忆" :
-                          root.active_tab == 5 ? "配置中英切换键，查看输入法预设快捷键映射指南" :
-                          root.active_tab == 6 ? "配置语音输入快捷按键、端侧离线 Paraformer 模型、标点预测与云端服务" : "微澜输入法版本信息、技术架构与开源许可声明";
+                    text: root.active_tab == 0 ? "配置输入法初始语言、字符全半角、候选排版容量、中西文智能空格与系统顶栏指示器" :
+                          root.active_tab == 1 ? "定制微澜现代候选框渲染引擎、预设色彩风格与空间排版留白密度" :
+                          root.active_tab == 2 ? "配置拼音检索模式、翻页快捷键及拼音智能纠错选项" :
+                          root.active_tab == 3 ? "配置平翘舌、前后鼻音与易混淆音节模糊匹配规则" :
+                          root.active_tab == 4 ? "查看系统词库状态，导入外部拼音、英文与符号词库" :
+                          root.active_tab == 5 ? "管理用户快捷短语展开规则与自适应历史自造词记忆" :
+                          root.active_tab == 6 ? "配置中英切换键，查看输入法预设快捷键映射指南" :
+                          root.active_tab == 7 ? "配置语音输入快捷按键、端侧离线 Paraformer 模型、标点预测与云端服务" : "微澜输入法版本信息、技术架构与开源许可声明";
                     font-size: 12px;
                     color: #64748b;
                 }
@@ -336,10 +354,6 @@ export component SettingsWindow inherits Window {
                         init_char_width_index <=> root.init_char_width_index;
                         init_punct_width_index <=> root.init_punct_width_index;
                         init_simp_trad_index <=> root.init_simp_trad_index;
-                        page_size_val <=> root.page_size_val;
-                        font_size_val <=> root.font_size_val;
-                        orientation_index <=> root.orientation_index;
-                        index_style_index <=> root.index_style_index;
                         dynamic_adjust_freq <=> root.dynamic_adjust_freq;
                         shift_select_second <=> root.shift_select_second;
                         auto_pangu_spacing <=> root.auto_pangu_spacing;
@@ -349,9 +363,28 @@ export component SettingsWindow inherits Window {
                         auto_complete_pairs <=> root.auto_complete_pairs;
                         enable_tray_index <=> root.enable_tray_index;
                         exclusive_input_source <=> root.exclusive_input_source;
+                        orientation_index <=> root.orientation_index;
+                        index_style_index <=> root.index_style_index;
+                        page_size_val <=> root.page_size_val;
+                        font_size_val <=> root.font_size_val;
                     }
 
-                    if root.active_tab == 1: PinyinTab {
+                    if root.active_tab == 1: ThemeTab {
+                        window_mode_index <=> root.window_mode_index;
+                        theme_preset_index <=> root.theme_preset_index;
+                        density_index <=> root.density_index;
+                        candidate_item_spacing <=> root.candidate_item_spacing;
+                        candidate_padding_v <=> root.candidate_padding_v;
+                        candidate_padding_h <=> root.candidate_padding_h;
+                        candidate_corner_radius <=> root.candidate_corner_radius;
+                        candidate_opacity_val <=> root.candidate_opacity;
+                        orientation_index: root.orientation_index;
+                        index_style_index: root.index_style_index;
+                        page_size_val: root.page_size_val;
+                        font_size_val: root.font_size_val;
+                    }
+
+                    if root.active_tab == 2: PinyinTab {
                         enable_acronym <=> root.enable_acronym;
                         typo_enable <=> root.typo_enable;
                         typo_gn_ng <=> root.typo_gn_ng;
@@ -369,7 +402,7 @@ export component SettingsWindow inherits Window {
                         auto_dedup <=> root.auto_dedup;
                     }
 
-                    if root.active_tab == 2: FuzzyTab {
+                    if root.active_tab == 3: FuzzyTab {
                         fuzzy_pinyin <=> root.fuzzy_pinyin;
                         fuzzy_c_ch <=> root.fuzzy_c_ch;
                         fuzzy_z_zh <=> root.fuzzy_z_zh;
@@ -383,7 +416,7 @@ export component SettingsWindow inherits Window {
                         fuzzy_g_k <=> root.fuzzy_g_k;
                     }
 
-                    if root.active_tab == 3: DictTab {
+                    if root.active_tab == 4: DictTab {
                         base_dict_info: root.base_dict_info;
                         english_dict_info: root.english_dict_info;
                         symbols_dict_info: root.symbols_dict_info;
@@ -393,12 +426,12 @@ export component SettingsWindow inherits Window {
                         english_import_status: root.english_import_status;
                         symbols_import_path <=> root.symbols_import_path;
                         symbols_import_status: root.symbols_import_status;
-                        import_pinyin_dict(path) => { root.import_pinyin_dict(path); }
-                        import_english_dict(path) => { root.import_english_dict(path); }
-                        import_symbols_dict(path) => { root.import_symbols_dict(path); }
+                        pick_and_import_pinyin => { root.pick_and_import_pinyin(); }
+                        pick_and_import_english => { root.pick_and_import_english(); }
+                        pick_and_import_symbols => { root.pick_and_import_symbols(); }
                     }
 
-                    if root.active_tab == 4: UserDataTab {
+                    if root.active_tab == 5: UserDataTab {
                         user_model_info: root.user_model_info;
                         new_phrase_code <=> root.new_phrase_code;
                         new_phrase_text <=> root.new_phrase_text;
@@ -409,7 +442,7 @@ export component SettingsWindow inherits Window {
                         delete_custom_phrase(idx) => { root.delete_custom_phrase(idx); }
                     }
 
-                    if root.active_tab == 5: ShortcutsTab {
+                    if root.active_tab == 6: ShortcutsTab {
                         switch_key_index <=> root.switch_key_index;
                         page_keys_minus_equal <=> root.page_keys_minus_equal;
                         page_keys_bracket <=> root.page_keys_bracket;
@@ -419,7 +452,7 @@ export component SettingsWindow inherits Window {
                         full_width_punct_shortcut_index <=> root.full_width_punct_shortcut_index;
                     }
 
-                    if root.active_tab == 6: VoiceTab {
+                    if root.active_tab == 7: VoiceTab {
                         active_sub_tab <=> root.voice_sub_tab;
                         voice_enabled <=> root.voice_enabled;
                         toggle_shortcut_index <=> root.toggle_shortcut_index;
@@ -451,8 +484,10 @@ export component SettingsWindow inherits Window {
                         itn_filter_filler_words <=> root.itn_filter_filler_words;
                         itn_pangu_spacing <=> root.itn_pangu_spacing;
 
+                        custom_theme_enabled: root.window_mode_index == 0;
                         voice_real_time_preview <=> root.voice_real_time_preview;
                         voice_show_floating_bar <=> root.voice_show_floating_bar;
+                        voice_visual_effect_index <=> root.voice_visual_effect_index;
 
                         cloud_profiles: root.cloud_profiles;
                         is_editing_cloud: root.is_editing_cloud;
@@ -476,7 +511,7 @@ export component SettingsWindow inherits Window {
                         test_cloud_profile(idx) => { root.test_cloud_profile(idx); }
                     }
 
-                    if root.active_tab == 7: AboutTab {
+                    if root.active_tab == 8: AboutTab {
                         app_version: root.app_version;
                     }
                 }
