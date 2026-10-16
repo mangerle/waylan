@@ -12,8 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex};
 
 use log::{debug, info};
-use waylan_wayland::session_common::init_session_inotify_watcher;
-use waylan_wayland::InotifyWatcher;
+use waylan_core::fs_watcher::{init_session_inotify_watcher, InotifyWatcher};
 use zbus::blocking::connection::Builder;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
@@ -28,24 +27,6 @@ use super::keys::IbusSessionCore;
 use super::monitor::{run_ibus_monitor_loop, IbusMonitorParams};
 use super::types::build_waylan_ibus_component;
 use super::IbusSessionOptions;
-use crate::session_bundle::SessionConfigBundle;
-use crate::system::SubprocessManager;
-
-/// 将 `SessionConfigBundle` 应用到 `IbusSessionCore` 中（初始化与热重载共用）
-pub(crate) fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSessionCore) {
-    core.candidate_index_style = bundle.candidate_index_style;
-    core.candidate_orientation = bundle.candidate_orientation;
-    core.traditional_shortcut = bundle.traditional_shortcut;
-    core.full_width_char_shortcut = bundle.full_width_char_shortcut;
-    core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
-    core.voice_manager.update_config(bundle.voice.clone());
-    bundle.apply_to_engine_and_input(
-        &mut core.engine,
-        &mut core.shift_sm,
-        &mut core.punct_processor,
-        &mut core.page_keys,
-    );
-}
 
 /// 基于外部参数装配并初始化 IBus 共享状态、服务实例与循环参数
 fn assemble_ibus_services(
@@ -57,21 +38,13 @@ fn assemble_ibus_services(
     bool,
     bool,
 ) {
-    let mut session_core = IbusSessionCore::new(opts.engine);
-    session_core.shared_is_chinese = opts.shared_is_chinese;
-    session_core.shared_is_caps_locked = opts.shared_is_caps_locked;
-    session_core.shared_traditional_chinese = opts.shared_traditional_chinese;
-    session_core.shared_full_width_punct = opts.shared_full_width_punct;
-    session_core.shared_full_width_char = opts.shared_full_width_char;
-    session_core.mode_notify_tx = opts.mode_notify_tx;
-    apply_bundle_to_ibus_core(SessionConfigBundle::load_current(), &mut session_core);
-
-    let shared_core = Arc::new(Mutex::new(session_core));
+    let loop_wakeup = opts.coordinator.loop_wakeup().cloned();
+    let shared_core = Arc::new(Mutex::new(opts.session_core));
     let engine_srv = IbusEngineService {
         core: Arc::clone(&shared_core),
         reload_requested: opts.reload_requested.clone(),
-        loop_wakeup: opts.coordinator.loop_wakeup(),
-        subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),
+        loop_wakeup,
+        menu_handler: opts.menu_handler,
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: opts.suppress_properties,
         is_password: Arc::new(AtomicBool::new(false)),
@@ -82,7 +55,7 @@ fn assemble_ibus_services(
         last_mtime: opts.initial_mtime,
         reload_requested: opts.reload_requested,
         coordinator: opts.coordinator,
-        exclusive_input_source: opts.exclusive_input_source,
+        config_reloader: opts.config_reloader,
     };
 
     (

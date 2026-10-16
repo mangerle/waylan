@@ -6,7 +6,6 @@
 //! - **核心优势**：通过 poll 机制实现零忙轮询，兼顾流式语音的低延迟刷新（60ms 轮询窗口）与空闲时极低 CPU 消耗。
 //! - **代价与局限**：主线程常驻阻塞于 poll 调用。
 
-use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,31 +15,28 @@ use std::time::{Duration, Instant, SystemTime};
 
 use log::{debug, info};
 use rustix::event::{poll, PollFd, PollFlags};
+use waylan_core::fs_watcher::{check_reload_requested_or_files_changed, InotifyWatcher};
 use waylan_core::CandidateIndexStyle;
-use waylan_wayland::session_common::check_reload_requested_or_files_changed;
-use waylan_wayland::{InotifyWatcher, LoopWakeup};
+use waylan_core::LoopWakeup;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
-use super::desktop_integration;
 use super::engine::{UiSnapshot, WAYLAN_ENGINE_OBJECT_PATH};
 use super::keys::IbusSessionCore;
 use super::screensaver::{query_initial_screen_saver_active, spawn_screen_saver_listener};
-use super::session::apply_bundle_to_ibus_core;
 use super::types::{
     build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_text, build_input_mode_property,
     IBUS_ENGINE_PREEDIT_CLEAR, IBUS_ORIENTATION_HORIZONTAL,
 };
-use crate::session_bundle::SessionConfigBundle;
-use crate::system::ShutdownCoordinator;
+use crate::{IbusConfigReloader, IbusShutdownCoordinator};
 
 /// 后台监控循环参数结构体
 pub(crate) struct IbusMonitorParams {
     pub(crate) watched_paths: Vec<PathBuf>,
     pub(crate) last_mtime: Option<SystemTime>,
     pub(crate) reload_requested: Option<Arc<AtomicBool>>,
-    pub(crate) coordinator: ShutdownCoordinator,
-    pub(crate) exclusive_input_source: bool,
+    pub(crate) coordinator: IbusShutdownCoordinator,
+    pub(crate) config_reloader: Option<Arc<dyn IbusConfigReloader>>,
 }
 
 /// 处理锁屏状态变迁与输入法状态同步
@@ -217,35 +213,19 @@ fn handle_config_reload_event(
         return false;
     }
     *last_reload_instant = now;
-    let bundle = SessionConfigBundle::load_current();
-    let hide_ext = bundle.exclusive_input_source;
-    let current_has_tray = shared_core
-        .lock()
-        .map(|g| g.shared_is_chinese.is_some())
-        .unwrap_or(false);
-    let new_cfg = crate::config::AppConfig::load_or_create();
-    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_uppercase().contains("GNOME"))
-        .unwrap_or(false);
-    let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
 
-    if expected_tray != current_has_tray {
-        info!(
-            "[微澜 IBus] 检测到指示器形态变更 (当前托盘: {}, 期望托盘: {})，正在触发平滑自重启...",
-            current_has_tray, expected_tray
-        );
-        params.coordinator.trigger_graceful_restart();
-        return true;
+    if let Some(ref reloader) = params.config_reloader {
+        let should_restart = {
+            let mut guard = shared_core.lock().unwrap_or_else(|e| e.into_inner());
+            reloader.reload(&mut guard)
+        };
+        if should_restart {
+            info!("[微澜 IBus] 热重载检测到指示器形态变更，正在触发平滑自重启...");
+            params.coordinator.trigger_graceful_restart();
+            return true;
+        }
     }
 
-    if let Ok(mut guard) = shared_core.lock() {
-        apply_bundle_to_ibus_core(bundle, &mut guard);
-    }
-    if hide_ext != params.exclusive_input_source {
-        params.exclusive_input_source = hide_ext;
-        desktop_integration::ensure_gnome_input_source_registered(hide_ext);
-        desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
-    }
     info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
     false
 }
@@ -317,7 +297,7 @@ pub(crate) fn run_ibus_monitor_loop(
         let poll_timeout_ms = if is_voice_active { 60 } else { 1000 };
         poll_wakeup_and_inotify(
             inotify_watcher.as_ref(),
-            params.coordinator.loop_wakeup().as_ref(),
+            params.coordinator.loop_wakeup(),
             poll_timeout_ms,
         );
 

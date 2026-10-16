@@ -5,7 +5,7 @@
 //! - **核心优势**：通过 D-Bus 信号被动订阅（MatchRule）监听锁屏变迁，彻底杜绝在主循环中高频主动轮询同步 RPC。
 //! - **代价与局限**：监听线程在 Drop 时通过向总线发射本地信号唤醒以安全回收线程。
 
-use crate::system::ShutdownCoordinator;
+use crate::IbusShutdownCoordinator;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
@@ -117,7 +117,7 @@ fn handle_screen_saver_signal(msg: &Message, screen_locked: &AtomicBool) -> bool
 /// 通过 D-Bus 信号被动订阅（MatchRule）监听桌面锁屏变迁，彻底杜绝在主循环中高频主动轮询同步 RPC。
 pub(crate) fn spawn_screen_saver_listener(
     initial_locked: bool,
-    coordinator: ShutdownCoordinator,
+    coordinator: IbusShutdownCoordinator,
 ) -> (Arc<AtomicBool>, ScreenSaverListenerHandle) {
     let screen_locked = Arc::new(AtomicBool::new(initial_locked));
     let screen_locked_clone = Arc::clone(&screen_locked);
@@ -169,13 +169,13 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
-    use waylan_wayland::LoopWakeup;
+    use waylan_core::LoopWakeup;
 
     #[test]
     fn test_screen_saver_listener_lifecycle() {
         let wakeup = LoopWakeup::new().ok();
         let exit_flag = Arc::new(AtomicBool::new(false));
-        let coordinator = ShutdownCoordinator::from_parts(Arc::clone(&exit_flag), wakeup);
+        let coordinator = IbusShutdownCoordinator::new(Arc::clone(&exit_flag), wakeup, None);
 
         let (locked_flag, mut listener) = spawn_screen_saver_listener(false, coordinator);
         assert!(!locked_flag.load(Ordering::Acquire));

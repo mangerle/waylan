@@ -1,7 +1,6 @@
 use crate::config::{env_var_non_empty, AppConfig};
 use log::{info, warn};
-use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
@@ -13,74 +12,7 @@ use zbus::zvariant::OwnedObjectPath;
 /// 提示文本结构类型别名
 type ToolTipData = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 
-/// 自动探测微澜默认矢量图标资源目录并验证关键图标文件是否存在
-pub(crate) fn detect_default_assets_path() -> Option<String> {
-    let mut candidates: Vec<PathBuf> = Vec::with_capacity(6);
-
-    candidates.push(PathBuf::from("assets"));
-    candidates.push(PathBuf::from("../assets"));
-    candidates.push(PathBuf::from("../../assets"));
-
-    if let Ok(exe) = env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("assets"));
-            candidates.push(parent.join("../assets"));
-            candidates.push(parent.join("../../assets"));
-            candidates.push(parent.join("../../../assets"));
-            candidates.push(parent.join("../share/waylan/assets"));
-        }
-    }
-
-    candidates.push(PathBuf::from("/usr/share/waylan/assets"));
-    candidates.push(PathBuf::from("/usr/local/share/waylan/assets"));
-
-    if let Ok(home) = env::var("HOME") {
-        candidates.push(PathBuf::from(home).join(".local/share/waylan/assets"));
-    }
-
-    for dir in candidates {
-        if dir.is_dir() && dir.join("tray-en-caps.svg").is_file() {
-            if let Ok(canonical) = dir.canonicalize() {
-                return Some(canonical.to_string_lossy().into_owned());
-            }
-            return Some(dir.to_string_lossy().into_owned());
-        }
-    }
-
-    None
-}
-
-/// 解析图标目标：若在指定目录存在该名称对应文件（或附带 .svg/.png），则优先返回规范绝对路径以保证系统各托盘直接加载；否则回退为图标名
-pub(crate) fn resolve_icon_path_or_name(theme_dir: &str, base_name: &str) -> String {
-    if !theme_dir.is_empty() {
-        let dir = Path::new(theme_dir);
-        let direct = dir.join(base_name);
-        if direct.is_file() {
-            return direct
-                .canonicalize()
-                .unwrap_or(direct)
-                .to_string_lossy()
-                .into_owned();
-        }
-        let svg = dir.join(format!("{}.svg", base_name));
-        if svg.is_file() {
-            return svg
-                .canonicalize()
-                .unwrap_or(svg)
-                .to_string_lossy()
-                .into_owned();
-        }
-        let png = dir.join(format!("{}.png", base_name));
-        if png.is_file() {
-            return png
-                .canonicalize()
-                .unwrap_or(png)
-                .to_string_lossy()
-                .into_owned();
-        }
-    }
-    base_name.to_string()
-}
+pub use waylan_core::assets::{detect_default_assets_path, resolve_icon_path_or_name};
 
 /// 系统托盘状态项实现 (StatusNotifierItem)
 #[derive(Clone)]

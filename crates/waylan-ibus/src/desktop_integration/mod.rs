@@ -25,8 +25,8 @@ pub fn ensure_ibus_and_gnome_integration(exe_path: &str, exclusive: bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::gnome_shell::prioritize_waylan_in_gsettings_sources;
     use super::*;
-    use crate::ibus::desktop_integration::gnome_shell::prioritize_waylan_in_gsettings_sources;
 
     #[test]
     fn test_prioritize_waylan_in_gsettings_sources() {

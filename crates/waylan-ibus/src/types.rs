@@ -167,8 +167,8 @@ pub fn resolve_mode_icon(mode: InputMode, is_caps_locked: bool) -> String {
     } else {
         "tray-en"
     };
-    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
-        crate::tray::item::resolve_icon_path_or_name(&assets, base_name)
+    if let Some(assets) = waylan_core::assets::detect_default_assets_path() {
+        waylan_core::assets::resolve_icon_path_or_name(&assets, base_name)
     } else {
         base_name.to_string()
     }
@@ -176,8 +176,8 @@ pub fn resolve_mode_icon(mode: InputMode, is_caps_locked: bool) -> String {
 
 /// 解析微澜引擎主图标（优先规范绝对路径）
 pub fn resolve_engine_icon() -> String {
-    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
-        crate::tray::item::resolve_icon_path_or_name(&assets, "waylan")
+    if let Some(assets) = waylan_core::assets::detect_default_assets_path() {
+        waylan_core::assets::resolve_icon_path_or_name(&assets, "waylan")
     } else {
         "waylan".to_string()
     }

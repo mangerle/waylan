@@ -12,12 +12,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::env_var_non_empty;
+use waylan_core::assets::{detect_default_assets_path, resolve_icon_path_or_name};
+use waylan_core::config::env_var_non_empty;
 
 /// 解析微澜 IBus 引擎注册所使用的图标路径（优先绝对路径以确保 GNOME 原生顶栏准确渲染）
 pub(crate) fn resolve_engine_icon_path() -> String {
-    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
-        crate::tray::item::resolve_icon_path_or_name(&assets, "waylan")
+    if let Some(assets) = detect_default_assets_path() {
+        resolve_icon_path_or_name(&assets, "waylan")
     } else {
         "waylan".to_string()
     }
@@ -25,7 +26,7 @@ pub(crate) fn resolve_engine_icon_path() -> String {
 
 /// 自动将微澜矢量图标同步注册至用户级 XDG 图标目录 `~/.local/share/icons/hicolor/scalable/apps/`
 pub(crate) fn ensure_user_icons_registered(home_path: &Path) {
-    let Some(assets_path) = crate::tray::item::detect_default_assets_path() else {
+    let Some(assets_path) = detect_default_assets_path() else {
         return;
     };
     let assets_dir = Path::new(&assets_path);

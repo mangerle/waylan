@@ -12,7 +12,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::env_var_non_empty;
+use waylan_core::assets::detect_default_assets_path;
+use waylan_core::config::env_var_non_empty;
 
 /// 安装或更新 GNOME Shell 隐藏原生指示器扩展文件至用户扩展目录
 pub(crate) fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
@@ -22,7 +23,7 @@ pub(crate) fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
             .join(extension_uuid)
     });
 
-    let Some(assets) = crate::tray::item::detect_default_assets_path() else {
+    let Some(assets) = detect_default_assets_path() else {
         return;
     };
     let src_dir = Path::new(&assets)

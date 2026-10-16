@@ -6146,6 +6146,7 @@ name = "waylan-core"
 version = "1.2.0"
 dependencies = [
  "log",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "tempfile",
@@ -6167,9 +6168,25 @@ dependencies = [
  "toml 0.8.23",
  "waylan-algo",
  "waylan-core",
+ "waylan-ibus",
  "waylan-ui",
  "waylan-voice",
  "waylan-wayland",
+ "zbus 4.4.0",
+]
+
+[[package]]
+name = "waylan-ibus"
+version = "1.2.0"
+dependencies = [
+ "log",
+ "rustix 0.38.44",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "waylan-algo",
+ "waylan-core",
+ "waylan-voice",
  "zbus 4.4.0",
 ]
 

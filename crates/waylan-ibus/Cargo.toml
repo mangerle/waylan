@@ -1,0 +1,17 @@
+[package]
+name = "waylan-ibus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "微澜 (WayLan) IBus 协议客户端与 D-Bus 输入法引擎服务模块"
+
+[dependencies]
+waylan-core = { path = "../waylan-core" }
+waylan-algo = { path = "../waylan-algo" }
+waylan-voice = { path = "../waylan-voice" }
+zbus.workspace = true
+log.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+rustix.workspace = true
+tempfile.workspace = true

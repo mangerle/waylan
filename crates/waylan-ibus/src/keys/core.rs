@@ -11,13 +11,13 @@ use std::sync::Arc;
 
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
+use waylan_core::input::sync_mode_from_shared_flag;
 use waylan_core::input::{ConsumedKeyTracker, PageKeyConfig};
 use waylan_core::{
     Candidate, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
     FullWidthPunctShortcut, InputMode, TraditionalShortcut, VoiceConfig,
 };
 use waylan_voice::VoiceInteractionManager;
-use waylan_wayland::session_common::sync_mode_from_shared_flag;
 
 /// 单次 IBus 按键或交互事件的决策输出
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

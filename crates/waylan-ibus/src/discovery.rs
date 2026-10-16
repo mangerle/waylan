@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::config::env_var_non_empty;
+use waylan_core::config::env_var_non_empty;
 
 /// 探测当前用户会话中的活跃 IBus D-Bus 总线地址
 pub fn discover_ibus_address() -> Option<String> {

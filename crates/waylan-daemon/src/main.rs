@@ -1,5 +1,4 @@
 mod cli;
-mod ibus;
 mod logger;
 mod session_bundle;
 mod system;
@@ -8,16 +7,18 @@ mod tray;
 use log::{info, warn};
 use session_bundle::{
     apply_reload_v1, apply_reload_v2, build_wayland_voice_filter, check_wayland_capabilities,
-    load_auxiliary_managers, load_lexicon_table,
+    load_auxiliary_managers, load_lexicon_table, SessionConfigBundle,
 };
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::SystemTime;
 use system::{
     check_another_instance_running, collect_watched_paths, determine_tray_and_exclusive,
-    launch_settings_gui, try_acquire_single_instance_lock, ShutdownCoordinator,
+    launch_settings_gui, try_acquire_single_instance_lock, ShutdownCoordinator, SubprocessManager,
 };
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
@@ -25,6 +26,11 @@ use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::AlgoEngine;
 pub use waylan_core::config;
 use waylan_core::config::{AppConfig, SwitchKey, ThemeMode};
+use waylan_ibus::keys::IbusSessionCore;
+use waylan_ibus::{
+    print_ibus_component_xml, print_ibus_engines_xml, run_ibus_session, IbusConfigReloader,
+    IbusMenuActionHandler, IbusSessionOptions, IbusShutdownCoordinator,
+};
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 use waylan_wayland::session_v1::WaylanV1Session;
 use waylan_wayland::session_v2::WaylanV2Session;
@@ -39,11 +45,11 @@ fn handle_early_cli(args: &[String]) -> Result<Option<()>, Box<dyn Error>> {
         return Ok(Some(()));
     }
     if args.len() >= 2 && (args[1] == "--xml" || args[1] == "--ibus-xml") {
-        ibus::print_ibus_engines_xml();
+        print_ibus_engines_xml();
         return Ok(Some(()));
     }
     if args.len() >= 2 && (args[1] == "--ibus-component-xml" || args[1] == "--component-xml") {
-        ibus::print_ibus_component_xml();
+        print_ibus_component_xml();
         return Ok(Some(()));
     }
     if args.len() >= 2 && (args[1] == "settings" || args[1] == "--settings") {
@@ -126,6 +132,63 @@ struct IbusDispatchOptions<'a> {
     coordinator: ShutdownCoordinator,
 }
 
+struct DaemonIbusMenuHandler {
+    subprocess_manager: Arc<SubprocessManager>,
+}
+
+impl IbusMenuActionHandler for DaemonIbusMenuHandler {
+    fn open_settings(&self, settings_running: &Arc<AtomicBool>) {
+        self.subprocess_manager.launch_settings(settings_running);
+    }
+    fn view_log(&self) {
+        self.subprocess_manager.launch_view_log();
+    }
+}
+
+struct DaemonIbusConfigReloader {
+    exclusive_input_source: AtomicBool,
+}
+
+impl IbusConfigReloader for DaemonIbusConfigReloader {
+    fn reload(&self, core: &mut IbusSessionCore) -> bool {
+        let bundle = SessionConfigBundle::load_current();
+        let hide_ext = bundle.exclusive_input_source;
+        let current_has_tray = core.shared_is_chinese.is_some();
+        let new_cfg = AppConfig::load_or_create();
+        let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+            .map(|d| d.to_uppercase().contains("GNOME"))
+            .unwrap_or(false);
+        let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
+
+        if expected_tray != current_has_tray {
+            return true;
+        }
+
+        apply_bundle_to_ibus_core(bundle, core);
+        let old_exclusive = self.exclusive_input_source.swap(hide_ext, Ordering::AcqRel);
+        if hide_ext != old_exclusive {
+            waylan_ibus::desktop_integration::ensure_gnome_input_source_registered(hide_ext);
+            waylan_ibus::desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
+        }
+        false
+    }
+}
+
+fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSessionCore) {
+    core.candidate_index_style = bundle.candidate_index_style;
+    core.candidate_orientation = bundle.candidate_orientation;
+    core.traditional_shortcut = bundle.traditional_shortcut;
+    core.full_width_char_shortcut = bundle.full_width_char_shortcut;
+    core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
+    core.voice_manager.update_config(bundle.voice.clone());
+    bundle.apply_to_engine_and_input(
+        &mut core.engine,
+        &mut core.shift_sm,
+        &mut core.punct_processor,
+        &mut core.page_keys,
+    );
+}
+
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
 fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Box<dyn Error>> {
     info!(
@@ -136,21 +199,44 @@ fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Box<dyn Er
             "形态 A 原生顶栏"
         }
     );
-    let ibus_res = ibus::run_ibus_session(ibus::IbusSessionOptions {
-        engine: opts.engine,
+
+    let mut session_core = IbusSessionCore::new(opts.engine);
+    session_core.shared_is_chinese = opts.tray.as_ref().map(|t| t.mode_flag());
+    session_core.shared_is_caps_locked = opts.tray.as_ref().map(|t| t.caps_lock_flag());
+    session_core.shared_traditional_chinese =
+        opts.tray.as_ref().map(|t| t.traditional_chinese_flag());
+    session_core.shared_full_width_punct = opts.tray.as_ref().map(|t| t.full_width_punct_flag());
+    session_core.shared_full_width_char = opts.tray.as_ref().map(|t| t.full_width_char_flag());
+    session_core.mode_notify_tx = opts.tray.as_ref().map(|t| t.icon_notifier());
+    let initial_bundle = SessionConfigBundle::load_current();
+    apply_bundle_to_ibus_core(initial_bundle, &mut session_core);
+
+    let menu_handler = Arc::new(DaemonIbusMenuHandler {
+        subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),
+    });
+    let config_reloader = Arc::new(DaemonIbusConfigReloader {
+        exclusive_input_source: AtomicBool::new(opts.exclusive_source),
+    });
+    let ibus_coordinator = IbusShutdownCoordinator::new(
+        opts.coordinator.flag(),
+        opts.coordinator.loop_wakeup(),
+        Some(Arc::new({
+            let coord = opts.coordinator.clone();
+            move || coord.trigger_graceful_restart()
+        })),
+    );
+
+    let ibus_res = run_ibus_session(IbusSessionOptions {
+        session_core,
         is_ibus_child_mode: opts.is_ibus_arg,
         watched_paths: opts.watched_paths,
         initial_mtime: opts.initial_mtime,
-        shared_is_chinese: opts.tray.as_ref().map(|t| t.mode_flag()),
-        shared_is_caps_locked: opts.tray.as_ref().map(|t| t.caps_lock_flag()),
-        shared_traditional_chinese: opts.tray.as_ref().map(|t| t.traditional_chinese_flag()),
-        shared_full_width_punct: opts.tray.as_ref().map(|t| t.full_width_punct_flag()),
-        shared_full_width_char: opts.tray.as_ref().map(|t| t.full_width_char_flag()),
-        mode_notify_tx: opts.tray.as_ref().map(|t| t.icon_notifier()),
         reload_requested: opts.tray.as_ref().map(|t| t.reload_flag()),
-        coordinator: opts.coordinator.clone(),
+        coordinator: ibus_coordinator,
         suppress_properties: false,
         exclusive_input_source: opts.exclusive_source,
+        menu_handler: Some(menu_handler),
+        config_reloader: Some(config_reloader),
     });
     match ibus_res {
         Ok(_) => {

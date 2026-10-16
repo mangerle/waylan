@@ -9,7 +9,7 @@ use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use waylan_wayland::LoopWakeup;
+use waylan_core::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
@@ -17,7 +17,7 @@ use zbus::zvariant::Value;
 use super::super::keys::{IbusKeyOutcome, IbusSessionCore};
 use super::super::types::{build_ibus_prop_list, extract_text_from_ibus_variant};
 use super::snapshot::UiSnapshot;
-use crate::system::SubprocessManager;
+use crate::IbusMenuActionHandler;
 
 /// IBus 输入框用途常量：密码框 (`IBUS_INPUT_PURPOSE_PASSWORD`)
 pub(crate) const IBUS_INPUT_PURPOSE_PASSWORD: u32 = 2;
@@ -31,7 +31,7 @@ pub struct IbusEngineService {
     pub(crate) core: Arc<Mutex<IbusSessionCore>>,
     pub(crate) reload_requested: Option<Arc<AtomicBool>>,
     pub(crate) loop_wakeup: Option<LoopWakeup>,
-    pub(crate) subprocess_manager: Arc<SubprocessManager>,
+    pub(crate) menu_handler: Option<Arc<dyn IbusMenuActionHandler>>,
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) suppress_properties: bool,
     pub(crate) is_password: Arc<AtomicBool>,
@@ -103,11 +103,14 @@ impl IbusEngineService {
             "FullWidthChar" => self.on_prop_full_width_char(&ctxt).await,
             "ReloadConfig" => self.on_prop_reload_config(),
             "Setup" => {
-                self.subprocess_manager
-                    .launch_settings(&self.settings_running);
+                if let Some(ref handler) = self.menu_handler {
+                    handler.open_settings(&self.settings_running);
+                }
             }
             "ViewLog" => {
-                self.subprocess_manager.launch_view_log();
+                if let Some(ref handler) = self.menu_handler {
+                    handler.view_log();
+                }
             }
             _ => {}
         }

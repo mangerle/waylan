@@ -6,8 +6,7 @@ use std::sync::{Arc, Mutex};
 use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
 
-use crate::ibus::keys::IbusSessionCore;
-use crate::system::SubprocessManager;
+use crate::keys::IbusSessionCore;
 
 #[test]
 fn test_password_capabilities_and_reset_lifecycle() {
@@ -18,7 +17,7 @@ fn test_password_capabilities_and_reset_lifecycle() {
         core: Arc::clone(&core),
         reload_requested: None,
         loop_wakeup: None,
-        subprocess_manager: Arc::new(SubprocessManager::new(Arc::new(AtomicBool::new(false)))),
+        menu_handler: None,
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: false,
         is_password: Arc::clone(&is_password),

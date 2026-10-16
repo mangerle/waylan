@@ -1,7 +1,10 @@
+pub mod assets;
 pub mod candidate_format;
 pub mod config;
 pub mod config_types;
+pub mod fs_watcher;
 pub mod input;
+pub mod loop_wakeup;
 pub use candidate_format::{format_candidate_display, CIRCLED_NUMBERS};
 pub use config::{
     AppConfig, AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
@@ -10,7 +13,12 @@ pub use config::{
     SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType,
     VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
 };
+pub use fs_watcher::{
+    check_reload_requested_or_files_changed, check_watched_paths_changed,
+    init_session_inotify_watcher, InotifyWatcher,
+};
 pub use input::*;
+pub use loop_wakeup::LoopWakeup;
 
 use serde::{Deserialize, Serialize};
 
