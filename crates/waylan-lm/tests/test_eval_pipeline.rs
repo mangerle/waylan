@@ -91,7 +91,8 @@ fn build_test_reranker() -> NeuralReranker {
     NeuralReranker {
         model,
         tokenizer,
-        alpha: 0.35,
+        alpha: 0.12,
+        margin_threshold: 0.15,
     }
 }
 

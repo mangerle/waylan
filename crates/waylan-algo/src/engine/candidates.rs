@@ -263,8 +263,12 @@ impl AlgoEngine {
         let total_units =
             best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
         if total_units >= min_units {
-            // 当连续音节数达到长句阈值（>= 3）时，触发 Top-5 多路径解码与语言模型重排序
-            let k = if total_units >= 3 { 5 } else { 1 };
+            // 提速与防卡顿优化策略：
+            // 1. 仅当音节完全闭合 (remaining 为空) 且达到长句门槛 (>= 3) 时，才触发神经模型重排序；
+            //    击键中途带有残缺声母/韵母时，仅执行单路径解码保底，坚决不运行高昂的前向推理。
+            // 2. 候选规模收敛至 Top-2，削减 60% 重排推理计算量。
+            let can_rerank = total_units >= 3 && best_path.remaining.is_empty();
+            let k = if can_rerank { 2 } else { 1 };
             let mut sentences = ViterbiDecoder::decode_k_best_with_context(
                 &best_path.syllables,
                 &best_path.remaining,
@@ -272,9 +276,14 @@ impl AlgoEngine {
                 self.last_commit_context.as_deref(),
                 k,
             );
-            if sentences.len() > 1 {
-                self.reranker
-                    .rerank(&mut sentences, self.last_commit_context.as_deref());
+            if can_rerank && sentences.len() > 1 {
+                // 高分短路 (Fast Path)：若 Top-1 与 Top-2 分差已拉开绝对优势 (>= 50,000)，
+                // 词典基线置信度极高，无需动用神经模型介入增加耗时与误伤风险。
+                let score_diff = sentences[0].score.saturating_sub(sentences[1].score);
+                if score_diff < 50_000 {
+                    self.reranker
+                        .rerank(&mut sentences, self.last_commit_context.as_deref());
+                }
             }
             for mut sentence in sentences {
                 sentence.score = sentence

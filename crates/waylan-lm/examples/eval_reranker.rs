@@ -42,6 +42,8 @@ struct EvalOptions {
     pub model_path: Option<PathBuf>,
     pub tokenizer_path: Option<PathBuf>,
     pub threads: Option<usize>,
+    pub alpha: Option<f32>,
+    pub margin: Option<f32>,
 }
 
 fn parse_options() -> EvalOptions {
@@ -53,6 +55,8 @@ fn parse_options() -> EvalOptions {
     let mut model_path = None;
     let mut tokenizer_path = None;
     let mut threads = None;
+    let mut alpha = None;
+    let mut margin = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -85,6 +89,14 @@ fn parse_options() -> EvalOptions {
                 threads = args[i + 1].parse::<usize>().ok();
                 i += 2;
             }
+            "--alpha" if i + 1 < args.len() => {
+                alpha = args[i + 1].parse::<f32>().ok();
+                i += 2;
+            }
+            "--margin" if i + 1 < args.len() => {
+                margin = args[i + 1].parse::<f32>().ok();
+                i += 2;
+            }
             _ => {
                 i += 1;
             }
@@ -99,6 +111,8 @@ fn parse_options() -> EvalOptions {
         model_path,
         tokenizer_path,
         threads,
+        alpha,
+        margin,
     }
 }
 
@@ -325,7 +339,8 @@ fn create_synthetic_mock_reranker() -> NeuralReranker {
     NeuralReranker {
         model,
         tokenizer,
-        alpha: 0.35,
+        alpha: 0.12,
+        margin_threshold: 0.15,
     }
 }
 
@@ -518,6 +533,8 @@ fn run_baseline_evaluation(dataset: &[SampleEntry], explicit_split: bool, thread
 struct ComparativeMetrics {
     baseline_hits: usize,
     neural_hits: usize,
+    total_corrected: usize,
+    total_degraded: usize,
     corrected_cases: Vec<(String, String, String)>,
     degraded_cases: Vec<(String, String, String)>,
 }
@@ -526,6 +543,8 @@ impl ComparativeMetrics {
     fn merge(&mut self, other: ComparativeMetrics) {
         self.baseline_hits += other.baseline_hits;
         self.neural_hits += other.neural_hits;
+        self.total_corrected += other.total_corrected;
+        self.total_degraded += other.total_degraded;
         if self.corrected_cases.len() < 5 {
             for c in other.corrected_cases {
                 if self.corrected_cases.len() < 5 {
@@ -585,18 +604,24 @@ fn run_comparative_evaluation(
                     batch.neural_hits += 1;
                 }
 
-                if !base_correct && neural_correct && batch.corrected_cases.len() < 5 {
-                    batch.corrected_cases.push((
-                        sample.target.clone(),
-                        base_res.clone(),
-                        neural_res.clone(),
-                    ));
-                } else if base_correct && !neural_correct && batch.degraded_cases.len() < 5 {
-                    batch.degraded_cases.push((
-                        sample.target.clone(),
-                        base_res.clone(),
-                        neural_res.clone(),
-                    ));
+                if !base_correct && neural_correct {
+                    batch.total_corrected += 1;
+                    if batch.corrected_cases.len() < 5 {
+                        batch.corrected_cases.push((
+                            sample.target.clone(),
+                            base_res.clone(),
+                            neural_res.clone(),
+                        ));
+                    }
+                } else if base_correct && !neural_correct {
+                    batch.total_degraded += 1;
+                    if batch.degraded_cases.len() < 5 {
+                        batch.degraded_cases.push((
+                            sample.target.clone(),
+                            base_res.clone(),
+                            neural_res.clone(),
+                        ));
+                    }
                 }
             }
             batch
@@ -626,6 +651,18 @@ fn run_comparative_evaluation(
         n_acc, final_metrics.neural_hits, total_samples
     );
     println!("  - 净准确率提升幅度:   {:+.2}%", n_acc - b_acc);
+    println!(
+        "  - 纠偏成功总条数:     {} 条 [基线打错 -> 模型纠正]",
+        final_metrics.total_corrected
+    );
+    println!(
+        "  - 退化误伤总条数:     {} 条 [基线打对 -> 模型误伤]",
+        final_metrics.total_degraded
+    );
+    println!(
+        "  - 净挽回正向收益:     {:+} 条",
+        (final_metrics.total_corrected as i64) - (final_metrics.total_degraded as i64)
+    );
     println!("  - 整体处理吞吐量:     {:.1} 句/秒", qps);
     println!("  - 总运行时间:         {:.2} 秒", total_time_sec);
     println!("============================================================");
@@ -695,8 +732,20 @@ fn main() {
             (create_synthetic_mock_reranker(), true)
         }
     };
+    let mut reranker = reranker;
+    if let Some(a) = opts.alpha {
+        println!("[超参微调] 自定义神经重排插值权重 alpha: {:.2}", a);
+        reranker = reranker.with_alpha(a);
+    }
+    if let Some(m) = opts.margin {
+        println!("[超参微调] 自定义置信度门控门槛 margin: {:.2}", m);
+        reranker = reranker.with_margin_threshold(m);
+    }
 
-    println!("[评测模式] 纯词频基线 VS 神经网络重排序 全量对比模式");
+    println!(
+        "[评测模式] 纯词频基线 VS 神经网络重排序 全量对比模式 (alpha={:.2}, margin={:.2})",
+        reranker.alpha, reranker.margin_threshold
+    );
     if is_mock {
         println!("[模型状态] 合成轻量对比模型");
     } else {
