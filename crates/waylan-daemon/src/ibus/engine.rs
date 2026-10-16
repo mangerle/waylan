@@ -16,6 +16,7 @@ use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMod
 use waylan_wayland::input_constants::{KEY_LEFT, KEY_RIGHT};
 use waylan_wayland::LoopWakeup;
 use zbus::blocking::Connection;
+use zbus::fdo;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::{OwnedObjectPath, Value};
@@ -133,7 +134,7 @@ pub struct IbusFactoryService {
 #[interface(name = "org.freedesktop.IBus.Factory")]
 impl IbusFactoryService {
     /// 响应 `ibus-daemon` 的引擎实例创建请求，返回动态创建并注册的微澜引擎对象路径
-    fn create_engine(&self, name: &str) -> zbus::fdo::Result<OwnedObjectPath> {
+    fn create_engine(&self, name: &str) -> fdo::Result<OwnedObjectPath> {
         debug!("[微澜 IBus] 收到 CreateEngine 请求，引擎名: {}", name);
         {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
@@ -143,7 +144,7 @@ impl IbusFactoryService {
         let id = self.next_engine_id.fetch_add(1, Ordering::SeqCst);
         let path_str = format!("/org/freedesktop/IBus/Engine/{}", id);
         let obj_path = OwnedObjectPath::try_from(path_str.as_str())
-            .map_err(|e| zbus::fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
+            .map_err(|e| fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
 
         let conn_registered = if let Ok(slot) = self.conn_slot.lock() {
             if let Some(ref conn) = *slot {
@@ -181,7 +182,7 @@ impl IbusFactoryService {
                 "[微澜 IBus 警告] D-Bus 宿主连接未就绪或锁中毒，无法为动态路径 {} 注册接口",
                 path_str
             );
-            return Err(zbus::fdo::Error::Failed(
+            return Err(fdo::Error::Failed(
                 "D-Bus 宿主连接尚未就绪，无法创建引擎实例".to_string(),
             ));
         }

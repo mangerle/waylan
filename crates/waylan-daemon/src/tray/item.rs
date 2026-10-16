@@ -1,5 +1,6 @@
 use crate::config::{env_var_non_empty, AppConfig};
 use log::{info, warn};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -20,7 +21,7 @@ pub(crate) fn detect_default_assets_path() -> Option<String> {
     candidates.push(PathBuf::from("../assets"));
     candidates.push(PathBuf::from("../../assets"));
 
-    if let Ok(exe) = std::env::current_exe() {
+    if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
             candidates.push(parent.join("assets"));
             candidates.push(parent.join("../assets"));
@@ -33,7 +34,7 @@ pub(crate) fn detect_default_assets_path() -> Option<String> {
     candidates.push(PathBuf::from("/usr/share/waylan/assets"));
     candidates.push(PathBuf::from("/usr/local/share/waylan/assets"));
 
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = env::var("HOME") {
         candidates.push(PathBuf::from(home).join(".local/share/waylan/assets"));
     }
 

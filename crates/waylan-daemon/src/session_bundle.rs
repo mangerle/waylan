@@ -1,6 +1,14 @@
 //! 输入法守护进程词库加载、环境探测与会话配置热重载管理
 
+use std::env;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+use std::process::{self, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 
@@ -10,6 +18,7 @@ use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, T
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::user_adaptive::UserAdaptiveModel;
+use waylan_algo::AlgoEngine;
 #[cfg(test)]
 use waylan_algo::OpenCcDict;
 use waylan_algo::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
@@ -17,7 +26,7 @@ use waylan_ui::UiTheme;
 use waylan_wayland::probe_wayland_environment;
 use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
 use waylan_wayland::session_v2::WaylanV2Session;
-use waylan_wayland::WaylandCapabilities;
+use waylan_wayland::{LoopWakeup, WaylandCapabilities};
 
 use crate::config::{
     AppConfig, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
@@ -26,11 +35,11 @@ use crate::config::{
 
 /// 自动建立用户数据目录 (~/.local/share/waylan/) 与外部全量词库的符号链接
 pub fn ensure_user_dictionaries_linked() {
-    let Some(home) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) else {
+    let Some(home) = env::var("HOME").ok().filter(|s| !s.is_empty()) else {
         return;
     };
     let user_data_dir = PathBuf::from(home).join(".local/share/waylan");
-    if std::fs::create_dir_all(&user_data_dir).is_err() {
+    if fs::create_dir_all(&user_data_dir).is_err() {
         return;
     }
 
@@ -46,9 +55,9 @@ pub fn ensure_user_dictionaries_linked() {
             for cand in candidates {
                 if cand.is_file() && cand != user_file {
                     #[cfg(unix)]
-                    let link_res = std::os::unix::fs::symlink(&cand, &user_file);
+                    let link_res = symlink(&cand, &user_file);
                     #[cfg(not(unix))]
-                    let link_res = std::fs::copy(&cand, &user_file).map(|_| ());
+                    let link_res = fs::copy(&cand, &user_file).map(|_| ());
                     if link_res.is_ok() {
                         info!(
                             "[字库引擎] 已自动关联词库至用户数据目录: {:?} -> {:?}",
@@ -137,9 +146,7 @@ static CACHED_AUX_MANAGERS: OnceLock<Mutex<AuxManagerCache>> = OnceLock::new();
 fn probe_active_aux_dict_meta() -> (Option<PathBuf>, Option<SystemTime>) {
     for path in AppConfig::aux_dict_search_paths() {
         if path.exists() {
-            let mtime = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok());
+            let mtime = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
             return (Some(path), mtime);
         }
     }
@@ -153,9 +160,7 @@ fn build_auxiliary_managers() -> AuxManagerCache {
 
     for path in search_paths {
         if path.exists() {
-            let mtime = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok());
+            let mtime = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
             let load_start = Instant::now();
             match AuxiliaryDict::load_from_file(&path) {
                 Ok(dict) => {
@@ -311,7 +316,7 @@ impl SessionConfigBundle {
     /// 将配置包原子应用到算法引擎与按键/标点状态机中（完整保留标点上下文与未变更的按键跟踪状态）
     pub fn apply_to_engine_and_input(
         self,
-        engine: &mut waylan_algo::AlgoEngine,
+        engine: &mut AlgoEngine,
         shift_sm: &mut ShiftToggleStateMachine,
         punct_processor: &mut PunctuationProcessor,
         page_keys: &mut PageKeyConfig,
@@ -322,7 +327,7 @@ impl SessionConfigBundle {
         *page_keys = self.page_keys;
         engine.custom_phrases = self.custom_phrases;
         if self.user_dict_path.exists() {
-            if let Ok(m) = std::fs::metadata(&self.user_dict_path) {
+            if let Ok(m) = fs::metadata(&self.user_dict_path) {
                 if m.len() == 0 {
                     info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
                     engine.user_model = UserAdaptiveModel::new();
@@ -407,10 +412,10 @@ pub fn check_wayland_capabilities() -> WaylandCapabilities {
 ///   全力保障用户词库数据完整性，通过位置参数安全传参杜绝 Shell 命令注入。
 /// - **代价与局限**：重启过程伴随约 150ms 缓冲，保证进程与连接清理的时序隔离。
 pub fn trigger_graceful_restart_and_exit(
-    exit_requested: &std::sync::atomic::AtomicBool,
-    loop_wakeup: Option<&waylan_wayland::LoopWakeup>,
+    exit_requested: &AtomicBool,
+    loop_wakeup: Option<&LoopWakeup>,
 ) {
-    let exe = match std::env::current_exe() {
+    let exe = match env::current_exe() {
         Ok(e) => e,
         Err(e) => {
             log::error!(
@@ -421,8 +426,8 @@ pub fn trigger_graceful_restart_and_exit(
         }
     };
 
-    let pid = std::process::id();
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let pid = process::id();
+    let args = env::args().skip(1).collect::<Vec<_>>();
 
     // 采用固定脚本并通过位置参数 ($1, $2, "$@") 传参，由内核保证参数原子性，100% 杜绝 Shell 注入
     // 严禁对旧进程执行 kill -9，超时未退出则看门狗直接退出，绝对不破坏正在原子落盘的用户个性化词库
@@ -431,7 +436,7 @@ pub fn trigger_graceful_restart_and_exit(
         if kill -0 \"$pid\" 2>/dev/null; then exit 1; fi; \
         sleep 0.15; exec \"$exe\" \"$@\"";
 
-    let mut cmd = std::process::Command::new("sh");
+    let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(shell_script);
     cmd.arg("waylan-restart-helper");
     cmd.arg(pid.to_string());
@@ -439,16 +444,16 @@ pub fn trigger_graceful_restart_and_exit(
     for arg in args {
         cmd.arg(arg);
     }
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
     #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    cmd.process_group(0);
 
     match cmd.spawn() {
         Ok(_) => {
             log::info!("[系统环境] 已成功派生自重启看门狗子进程，正在向旧实例发送优雅停机信号...");
-            exit_requested.store(true, std::sync::atomic::Ordering::Release);
+            exit_requested.store(true, Ordering::Release);
             if let Some(wakeup) = loop_wakeup {
                 wakeup.wake();
             }
@@ -491,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_reload_preserves_punctuation_context() {
-        let mut engine = waylan_algo::AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut shift_sm = ShiftToggleStateMachine::with_toggle_key(ToggleKeyMode::Shift);
         let mut punct = PunctuationProcessor::with_options(true, true, false);
         let mut page_keys = PageKeyConfig::default();

@@ -12,13 +12,25 @@ use session_bundle::{
     load_lexicon_table,
 };
 use std::env;
+use std::error::Error;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::process::{self, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::AlgoEngine;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
+use waylan_wayland::session_v1::WaylanV1Session;
+use waylan_wayland::session_v2::WaylanV2Session;
+use waylan_wayland::{run_session_v1_loop, run_session_v2_loop_fallible, LoopWakeup};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
     // 0. 处理版本查询参数与 IBus XML 引擎描述查询（需在日志输出至 stdout 前完成）
@@ -69,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() >= 2 && args[1] != "--check" && !is_ibus_arg {
         eprintln!("错误: 未知的命令行参数 '{}'", args[1]);
         cli::print_main_usage();
-        std::process::exit(2);
+        process::exit(2);
     }
 
     // 5. 单例防多开检测：若无参数启动且检测到后台已有活跃微澜输入法守护进程，直接唤起偏好设置中心
@@ -84,32 +96,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 注册进程系统退出信号拦截 (SIGINT / SIGTERM)：
     // 首次收到信号时将 term_now 置为 true 请求平滑退出；若再次收到相同退出信号则立即退出 (exit 0) 避免进程陷入无法中断的僵死状态
-    let term_now = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let term_now = Arc::new(AtomicBool::new(false));
     if let Err(e) = signal_hook::flag::register_conditional_shutdown(
         signal_hook::consts::SIGTERM,
         1,
-        std::sync::Arc::clone(&term_now),
+        Arc::clone(&term_now),
     ) {
         warn!("[微澜守护进程] 注册 SIGTERM 信号拦截失败: {}", e);
     }
-    if let Err(e) = signal_hook::flag::register(
-        signal_hook::consts::SIGTERM,
-        std::sync::Arc::clone(&term_now),
-    ) {
+    if let Err(e) = signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_now))
+    {
         warn!("[微澜守护进程] 注册 SIGTERM 标志置位失败: {}", e);
     }
 
     if let Err(e) = signal_hook::flag::register_conditional_shutdown(
         signal_hook::consts::SIGINT,
         1,
-        std::sync::Arc::clone(&term_now),
+        Arc::clone(&term_now),
     ) {
         warn!("[微澜守护进程] 注册 SIGINT 信号拦截失败: {}", e);
     }
-    if let Err(e) = signal_hook::flag::register(
-        signal_hook::consts::SIGINT,
-        std::sync::Arc::clone(&term_now),
-    ) {
+    if let Err(e) = signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term_now))
+    {
         warn!("[微澜守护进程] 注册 SIGINT 标志置位失败: {}", e);
     }
 
@@ -147,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. 加载全量汉字库与词库
     let table = load_lexicon_table();
-    if term_now.load(std::sync::atomic::Ordering::Relaxed) {
+    if term_now.load(Ordering::Relaxed) {
         info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
         return Ok(());
     }
@@ -200,7 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if term_now.load(std::sync::atomic::Ordering::Relaxed) {
+    if term_now.load(Ordering::Relaxed) {
         info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
         return Ok(());
     }
@@ -208,13 +216,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. 探测 Wayland 环境与合成器协议能力
     let caps = check_wayland_capabilities();
 
-    if term_now.load(std::sync::atomic::Ordering::Relaxed) {
+    if term_now.load(Ordering::Relaxed) {
         info!("[微澜守护进程] 探测环境期间收到终止信号，立即安全退场。");
         return Ok(());
     }
 
     // 8. 启动事件循环跨线程唤醒通道
-    let loop_wakeup = waylan_wayland::LoopWakeup::new().ok();
+    let loop_wakeup = LoopWakeup::new().ok();
     let use_ibus_backend = is_ibus_arg || (!caps.has_input_method_v2 && !caps.has_input_method_v1);
 
     info!("------------------------------------------------------------");
@@ -230,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let initial_mtime = watched_paths
         .iter()
-        .filter_map(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()))
+        .filter_map(|p| fs::metadata(p).ok().and_then(|m| m.modified().ok()))
         .max();
 
     // 9. 智能判定是否需要拉起独立的 StatusNotifierItem 托盘：
@@ -255,7 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tray = if should_spawn_tray {
         Some(tray::TrayService::spawn(
-            std::sync::Arc::clone(&term_now),
+            Arc::clone(&term_now),
             loop_wakeup.clone(),
         ))
     } else {
@@ -284,7 +292,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             shared_full_width_char: tray.as_ref().map(|t| t.full_width_char_flag()),
             mode_notify_tx: tray.as_ref().map(|t| t.icon_notifier()),
             reload_requested: tray.as_ref().map(|t| t.reload_flag()),
-            exit_requested: std::sync::Arc::clone(&term_now),
+            exit_requested: Arc::clone(&term_now),
             loop_wakeup,
             suppress_properties,
             exclusive_input_source: exclusive_source,
@@ -294,20 +302,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("[微澜守护进程] IBus 输入法事件循环已正常退出，所有资源已安全释放。");
                 Ok(())
             }
-            Err(_) if term_now.load(std::sync::atomic::Ordering::Relaxed) => {
+            Err(_) if term_now.load(Ordering::Relaxed) => {
                 info!("[微澜守护进程] 收到退出信号，IBus 服务安全退场。");
                 Ok(())
             }
             Err(e) => {
                 log::error!("[微澜守护进程 错误] IBus 输入法会话异常退出: {}", e);
-                std::process::exit(1);
+                process::exit(1);
             }
         };
     }
 
     let loop_result = if caps.has_input_method_v2 && caps.has_seat {
         info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
-        let mut session_v2 = waylan_wayland::session_v2::WaylanV2Session::new(engine);
+        let mut session_v2 = WaylanV2Session::new(engine);
         session_v2.surface_manager.renderer = renderer;
         session_v2.watched_paths = watched_paths;
         session_v2.last_watched_mtime = initial_mtime;
@@ -330,7 +338,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_v2.exit_requested = tray.as_ref().map(|t| t.exit_flag());
         session_v2.loop_wakeup = loop_wakeup.clone();
         session_v2.reload_callback = Some(Box::new(apply_reload_v2));
-        let v2_result = waylan_wayland::run_session_v2_loop_fallible(session_v2);
+        let v2_result = run_session_v2_loop_fallible(session_v2);
         match v2_result {
             Ok(()) => Ok(()),
             Err((e, returned_session)) => {
@@ -357,7 +365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let punctuation_processor = returned_session.punctuation_processor;
                 let page_keys = returned_session.page_keys;
 
-                let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
+                let mut session = WaylanV1Session::with_engine(engine);
                 session.surface_manager = surface_manager;
                 session.keymap_layout = keymap_layout;
                 session.watched_paths = watched_paths;
@@ -372,11 +380,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 session.exit_requested = tray.as_ref().map(|t| t.exit_flag());
                 session.loop_wakeup = loop_wakeup.clone();
                 session.reload_callback = Some(Box::new(apply_reload_v1));
-                waylan_wayland::run_session_v1_loop(session)
+                run_session_v1_loop(session)
             }
         }
     } else {
-        let mut session = waylan_wayland::session_v1::WaylanV1Session::with_engine(engine);
+        let mut session = WaylanV1Session::with_engine(engine);
         session.surface_manager.renderer = renderer;
         session.watched_paths = watched_paths;
         session.last_watched_mtime = initial_mtime;
@@ -397,7 +405,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session.exit_requested = tray.as_ref().map(|t| t.exit_flag());
         session.loop_wakeup = loop_wakeup;
         session.reload_callback = Some(Box::new(apply_reload_v1));
-        waylan_wayland::run_session_v1_loop(session)
+        run_session_v1_loop(session)
     };
 
     match loop_result {
@@ -409,7 +417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .as_ref()
                 .map(|t| t.is_exit_requested())
                 .unwrap_or(false)
-                || term_now.load(std::sync::atomic::Ordering::Relaxed)
+                || term_now.load(Ordering::Relaxed)
             {
                 info!("[微澜守护进程] 收到退出信号或托盘退出请求，服务安全退场。");
                 return Ok(());
@@ -418,7 +426,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "[微澜守护进程 错误] Wayland 输入法事件循环异常退出或无法启动: {}，准备终止进程并释放资源。",
                 e
             );
-            std::process::exit(1);
+            process::exit(1);
         }
     }
 
@@ -431,7 +439,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// - **实现初衷**：统一 CLI `settings` 子命令与桌面单例防多开时的偏好设置界面唤起逻辑。
 /// - **核心优势**：自动继承当前 Wayland/X11 会话与 D-Bus 上下文，无缝拉起 Slint 设置中心。
 /// - **代价与局限**：若目标可执行文件缺失则返回对应 I/O 错误。
-fn launch_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
+fn launch_settings_gui() -> Result<(), Box<dyn Error>> {
     info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
     let current_exe = env::current_exe().ok();
     let sibling_settings = current_exe
@@ -441,9 +449,9 @@ fn launch_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|p| p.is_file());
 
     let mut cmd = if let Some(ref path) = sibling_settings {
-        std::process::Command::new(path)
+        Command::new(path)
     } else {
-        std::process::Command::new("waylan-settings")
+        Command::new("waylan-settings")
     };
 
     for var in [
@@ -458,9 +466,9 @@ fn launch_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    cmd.stdin(std::process::Stdio::null());
+    cmd.stdin(Stdio::null());
     #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    cmd.process_group(0);
 
     let _child = cmd.spawn()?;
     Ok(())
@@ -475,9 +483,9 @@ fn launch_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
 fn check_another_instance_running() -> bool {
     #[cfg(target_os = "linux")]
     {
-        let current_pid = std::process::id();
+        let current_pid = process::id();
         let current_uid = rustix::process::getuid().as_raw();
-        if let Ok(entries) = std::fs::read_dir("/proc") {
+        if let Ok(entries) = fs::read_dir("/proc") {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if !path.is_dir() {
@@ -494,12 +502,11 @@ fn check_another_instance_running() -> bool {
                 }
                 // 仅匹配同属当前用户的实例，杜绝 Linux 多用户环境下的误判拦截
                 if let Ok(meta) = entry.metadata() {
-                    use std::os::unix::fs::MetadataExt;
                     if meta.uid() != current_uid {
                         continue;
                     }
                 }
-                if let Ok(comm) = std::fs::read_to_string(path.join("comm")) {
+                if let Ok(comm) = fs::read_to_string(path.join("comm")) {
                     if comm.trim() == "waylan" {
                         return true;
                     }

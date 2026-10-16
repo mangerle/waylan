@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use waylan_core::{format_candidate_display, Candidate, CandidateIndexStyle, InputMode};
-use zbus::zvariant::{OwnedValue, StructureBuilder, Value};
+use zbus::zvariant::{Error as VariantError, OwnedValue, StructureBuilder, Value};
 
 /// IBus 文本属性类型：下划线 (`IBUS_ATTR_TYPE_UNDERLINE`)
 pub const IBUS_ATTR_TYPE_UNDERLINE: u32 = 1;
@@ -47,7 +47,7 @@ fn empty_variant_vec() -> Vec<OwnedValue> {
 ///
 /// # Errors
 /// 当 `zvariant` 序列化转换失败时返回错误。
-pub fn build_empty_attr_list() -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_empty_attr_list() -> Result<OwnedValue, VariantError> {
     let s = StructureBuilder::new()
         .add_field("IBusAttrList")
         .add_field(empty_attachments())
@@ -60,7 +60,7 @@ pub fn build_empty_attr_list() -> Result<OwnedValue, zbus::zvariant::Error> {
 ///
 /// # Errors
 /// 当 `zvariant` 序列化转换失败时返回错误。
-pub fn build_ibus_text(text: &str) -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_ibus_text(text: &str) -> Result<OwnedValue, VariantError> {
     let attr_list = build_empty_attr_list()?;
     let s = StructureBuilder::new()
         .add_field("IBusText")
@@ -75,7 +75,7 @@ pub fn build_ibus_text(text: &str) -> Result<OwnedValue, zbus::zvariant::Error> 
 ///
 /// # Errors
 /// 当 `zvariant` 序列化转换失败时返回错误。
-pub fn build_ibus_preedit_text(text: &str) -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_ibus_preedit_text(text: &str) -> Result<OwnedValue, VariantError> {
     let char_len = text.chars().count() as u32;
     let mut attrs = Vec::with_capacity(1);
     if char_len > 0 {
@@ -116,7 +116,7 @@ pub fn build_ibus_lookup_table(
     selected_index: usize,
     orientation: i32,
     index_style: CandidateIndexStyle,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+) -> Result<OwnedValue, VariantError> {
     let mut cand_vec = Vec::with_capacity(candidates.len());
     let mut label_vec = Vec::with_capacity(candidates.len());
 
@@ -183,7 +183,7 @@ pub fn build_action_property(
     icon: &str,
     tooltip: &str,
     symbol: &str,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+) -> Result<OwnedValue, VariantError> {
     let empty_sub_struct = StructureBuilder::new()
         .add_field("IBusPropList")
         .add_field(empty_attachments())
@@ -215,7 +215,7 @@ pub fn build_action_property(
 pub fn build_input_mode_property(
     mode: InputMode,
     is_caps_locked: bool,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+) -> Result<OwnedValue, VariantError> {
     let is_zh = matches!(mode, InputMode::Chinese | InputMode::VMode);
     let symbol_str = if is_caps_locked {
         "A"
@@ -242,9 +242,7 @@ pub fn build_input_mode_property(
 }
 
 /// 构造简繁切换状态属性 (`TraditionalChinese`) 的 `IBusProperty` 变体对象
-pub fn build_traditional_property(
-    traditional_chinese: bool,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_traditional_property(traditional_chinese: bool) -> Result<OwnedValue, VariantError> {
     let label = if traditional_chinese {
         "简繁切换: 繁体"
     } else {
@@ -260,9 +258,7 @@ pub fn build_traditional_property(
 }
 
 /// 构造标点全角/半角属性 (`FullWidthPunct`) 的 `IBusProperty` 变体对象
-pub fn build_full_width_punct_property(
-    full_width_punct: bool,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_full_width_punct_property(full_width_punct: bool) -> Result<OwnedValue, VariantError> {
     let label = if full_width_punct {
         "标点切换: 全角 (中文标点)"
     } else {
@@ -278,9 +274,7 @@ pub fn build_full_width_punct_property(
 }
 
 /// 构造英文字符全角/半角属性 (`FullWidthChar`) 的 `IBusProperty` 变体对象
-pub fn build_full_width_char_property(
-    full_width_char: bool,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+pub fn build_full_width_char_property(full_width_char: bool) -> Result<OwnedValue, VariantError> {
     let label = if full_width_char {
         "字符切换: 全角 (英文字母)"
     } else {
@@ -305,7 +299,7 @@ pub fn build_ibus_prop_list(
     traditional_chinese: bool,
     full_width_punct: bool,
     full_width_char: bool,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+) -> Result<OwnedValue, VariantError> {
     let props = vec![
         build_input_mode_property(mode, is_caps_locked)?,
         build_traditional_property(traditional_chinese)?,
@@ -348,7 +342,7 @@ pub fn build_ibus_prop_list(
 pub fn build_waylan_ibus_component(
     exec_cmd: &str,
     setup_cmd: &str,
-) -> Result<OwnedValue, zbus::zvariant::Error> {
+) -> Result<OwnedValue, VariantError> {
     let version = env!("CARGO_PKG_VERSION");
     let engine_icon = resolve_engine_icon();
     let engine_desc = StructureBuilder::new()

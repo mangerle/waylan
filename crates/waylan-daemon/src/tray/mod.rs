@@ -3,14 +3,18 @@ pub(crate) mod menu;
 
 use crate::config::AppConfig;
 use log::{debug, info, warn};
+use std::collections::HashMap;
+use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 #[cfg(test)]
 use waylan_core::InputMode;
 use waylan_wayland::LoopWakeup;
 use zbus::blocking::connection::Builder;
+use zbus::zvariant::Value;
 
 pub use item::StatusNotifierItem;
 pub use menu::DBusMenu;
@@ -181,7 +185,7 @@ impl TrayService {
         );
 
         // 尝试连接用户 DBus 会话总线（依据 FreeDesktop/KDE 规范，使用基于当前 PID 的唯一名称以避免重启或多实例时的总线名抢占冲突）
-        let pid = std::process::id();
+        let pid = process::id();
         let item_service = format!("org.kde.StatusNotifierItem-{}-1", pid);
 
         let conn = match Builder::session() {
@@ -251,7 +255,7 @@ impl TrayService {
                 if registered {
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(50));
             }
         }
 
@@ -272,7 +276,7 @@ impl TrayService {
             }
 
             // 使用带超时的阻塞接收：在收到通道通知时即时响应，若无事件则每 500ms 检查一次原子标志以提供自愈兜底
-            let received = icon_update_rx.recv_timeout(std::time::Duration::from_millis(500));
+            let received = icon_update_rx.recv_timeout(Duration::from_millis(500));
             if exit_requested.load(Ordering::Acquire) {
                 break;
             }
@@ -313,8 +317,8 @@ impl TrayService {
                 );
 
                 // 发射标准 D-Bus PropertiesChanged 信号，强制让 GNOME AppIndicator 扩展刷新本地属性缓存
-                let mut changed_props = std::collections::HashMap::with_capacity(1);
-                changed_props.insert("IconName", zbus::zvariant::Value::from(current_icon));
+                let mut changed_props = HashMap::with_capacity(1);
+                changed_props.insert("IconName", Value::from(current_icon));
                 let invalidated_props: Vec<&str> = Vec::new();
                 let _ = conn.emit_signal(
                     Option::<&str>::None,

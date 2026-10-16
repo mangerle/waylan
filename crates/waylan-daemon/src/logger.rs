@@ -3,8 +3,10 @@ use chrono::Local;
 use log::LevelFilter;
 use std::error::Error;
 use std::fs;
-use std::io::{stdout, LineWriter, Write};
-use std::path::PathBuf;
+use std::io::{self, stdout, LineWriter, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 
 /// 单个日志文件最大体积上限（10 MB），超过时自动轮转重命名以防无限膨胀
 const MAX_LOG_FILE_BYTES: u64 = 10 * 1024 * 1024;
@@ -22,7 +24,7 @@ impl RollingFileWriter {
     ///
     /// # Errors
     /// 当无法创建或打开目标日志文件时返回 I/O 错误。
-    pub fn open(log_path: PathBuf, max_bytes: u64) -> std::io::Result<Self> {
+    pub fn open(log_path: PathBuf, max_bytes: u64) -> io::Result<Self> {
         // 启动初期先执行一次预检轮转
         rotate_log_file_if_needed(&log_path, max_bytes);
 
@@ -36,19 +38,16 @@ impl RollingFileWriter {
         })
     }
 
-    fn open_file(path: &std::path::Path) -> std::io::Result<fs::File> {
+    fn open_file(path: &Path) -> io::Result<fs::File> {
         let mut open_opts = fs::OpenOptions::new();
         open_opts.create(true).append(true);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            open_opts.mode(0o600);
-        }
+        open_opts.mode(0o600);
         open_opts.open(path)
     }
 
     /// 执行文件轮转并重新打开新的日志文件
-    fn rotate(&mut self) -> std::io::Result<()> {
+    fn rotate(&mut self) -> io::Result<()> {
         if let Some(mut w) = self.writer.take() {
             let _ = w.flush();
         }
@@ -62,8 +61,8 @@ impl RollingFileWriter {
     }
 }
 
-impl std::io::Write for RollingFileWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+impl Write for RollingFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         // 若当前文件已有数据且加上待写入数据将超过上限，立即触发轮转
         if self.current_bytes > 0
             && self.current_bytes.saturating_add(buf.len() as u64) > self.max_bytes
@@ -75,14 +74,14 @@ impl std::io::Write for RollingFileWriter {
             self.current_bytes = self.current_bytes.saturating_add(n as u64);
             Ok(n)
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
+            Err(io::Error::new(
+                io::ErrorKind::NotConnected,
                 "日志写入器底层文件未就绪",
             ))
         }
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> io::Result<()> {
         if let Some(writer) = self.writer.as_mut() {
             writer.flush()
         } else {
@@ -106,7 +105,6 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(parent) = log_path.parent() {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::DirBuilderExt;
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true).mode(0o700);
             if let Err(e) = builder.create(parent) {
@@ -155,14 +153,14 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         // 终端标准输出通道
         .chain(stdout())
         // 日志文件持久化通道（按行自动刷盘并在运行中自动体积轮转，防止磁盘耗尽）
-        .chain(Box::new(rolling_writer) as Box<dyn std::io::Write + Send>)
+        .chain(Box::new(rolling_writer) as Box<dyn Write + Send>)
         .apply()?;
 
     Ok(log_path)
 }
 
 /// 检查并执行日志文件轮转（若超过指定体积上限）
-pub(crate) fn rotate_log_file_if_needed(log_path: &std::path::Path, max_bytes: u64) {
+pub(crate) fn rotate_log_file_if_needed(log_path: &Path, max_bytes: u64) {
     if let Ok(meta) = fs::metadata(log_path) {
         if meta.len() > max_bytes {
             let backup_2 = log_path.with_extension("log.2");

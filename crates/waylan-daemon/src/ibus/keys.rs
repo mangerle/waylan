@@ -9,15 +9,16 @@
 //! - **代价与局限**：成对标点补全的光标回退需通过 `ForwardKeyEvent` 模拟左方向键完成。
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::{
-    Candidate, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
-    FullWidthPunctShortcut, InputMode, TextAction, TraditionalShortcut, VoiceConfig,
+    to_full_width_char, to_full_width_string, Candidate, CandidateIndexStyle, CandidateOrientation,
+    FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TextAction, TraditionalShortcut,
+    VoiceConfig,
 };
 use waylan_voice::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 use waylan_wayland::input_constants::*;
@@ -99,7 +100,7 @@ pub struct IbusSessionCore {
     pub voice_config: VoiceConfig,
     pub voice_display_text: Option<String>,
     pub voice_partial_text: Option<String>,
-    pub voice_event_rx: Option<std::sync::mpsc::Receiver<VoiceEvent>>,
+    pub voice_event_rx: Option<Receiver<VoiceEvent>>,
     pub last_voice_trigger_time: Instant,
     /// 是否处于长按对讲机 (Push-to-Talk) 语音触发中
     pub is_push_to_talk_active: bool,
@@ -323,8 +324,8 @@ impl IbusSessionCore {
                     break;
                 }
                 Ok(_) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
                     break;
                 }
             }
@@ -580,7 +581,7 @@ impl IbusSessionCore {
             self.handle_key_press(evdev_key, shift_active, ctrl_or_alt, self.is_caps_locked);
         if self.is_full_width_char() {
             if let Some(ref text) = outcome.commit_text {
-                outcome.commit_text = Some(waylan_core::to_full_width_string(text));
+                outcome.commit_text = Some(to_full_width_string(text));
             }
         }
         self.consumed_keys.record_press(evdev_key, outcome.consumed);
@@ -701,7 +702,7 @@ impl IbusSessionCore {
                     // 首次按压触发启动对讲机录音
                     log::info!("[微澜 IBus 语音] 对讲机模式快捷键按下，开始捕获语音");
                     self.engine.reset();
-                    let (tx, rx) = std::sync::mpsc::sync_channel(32);
+                    let (tx, rx) = sync_channel(32);
                     let opts = VoiceSessionOptions {
                         voice_config: self.voice_config.clone(),
                     };
@@ -763,7 +764,7 @@ impl IbusSessionCore {
                 } else {
                     log::info!("[微澜 IBus 语音] 开关模式快捷键触发开启连续听写录音");
                     self.engine.reset();
-                    let (tx, rx) = std::sync::mpsc::sync_channel(32);
+                    let (tx, rx) = sync_channel(32);
                     let opts = VoiceSessionOptions {
                         voice_config: self.voice_config.clone(),
                     };
@@ -842,7 +843,7 @@ impl IbusSessionCore {
         if self.mode == InputMode::English {
             if self.is_full_width_char() && !shift_active {
                 if let Some(ch) = keycode_to_char(evdev_key) {
-                    let full = waylan_core::to_full_width_char(ch);
+                    let full = to_full_width_char(ch);
                     return IbusKeyOutcome {
                         consumed: true,
                         commit_text: Some(full.to_string()),
@@ -1097,7 +1098,9 @@ fn map_punct_or_control_keyval(keyval: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use waylan_algo::types::AlgoConfig;
+    use waylan_core::VoiceEngineType;
 
     const KEY_V: u32 = 47;
 
@@ -1520,7 +1523,7 @@ mod tests {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
         core.voice_config.enabled = true;
-        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.engine_type = VoiceEngineType::Mock;
 
         // 1. 验证开启语音配置下按下 Ctrl + Alt + V 触发语音输入激活
         let start_res =
@@ -1546,14 +1549,14 @@ mod tests {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
         core.voice_config.enabled = true;
-        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.engine_type = VoiceEngineType::Mock;
 
         // 1. 触发语音录音
         let _ = core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
         assert!(core.voice_controller.is_recording());
 
         // 2. 给予后台仿真录音线程极短时隙产生音频分块
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
 
         // 3. 按下 Enter 键，应停止录音并触发上屏或消费按键
         let enter_res = core.process_key_event(0xff0d, KEY_ENTER, 0);
@@ -1567,7 +1570,7 @@ mod tests {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
         core.voice_config.enabled = true;
-        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.engine_type = VoiceEngineType::Mock;
         core.voice_config.push_to_talk_shortcut = "Ctrl + Alt + V".to_string();
 
         // 1. 按下快捷键 Ctrl + Alt + V 开始录音
@@ -1579,7 +1582,7 @@ mod tests {
         assert!(core.voice_controller.is_recording());
 
         // 2. 长按过程中的 Auto-Repeat 连发应被直接消费，不重复启动也不停止；给予后台仿真录音线程极短时隙产生音频分块
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
         let repeat_res =
             core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
         assert!(repeat_res.consumed);
@@ -1606,7 +1609,7 @@ mod tests {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
         core.voice_config.enabled = true;
-        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.engine_type = VoiceEngineType::Mock;
         core.voice_config.push_to_talk_shortcut = "F8".to_string();
 
         // 1. 按下 F8（evdev 扫描码 66）触发对讲机录音
@@ -1636,7 +1639,7 @@ mod tests {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         let mut core = IbusSessionCore::new(engine);
         core.voice_config.enabled = true;
-        core.voice_config.engine_type = waylan_core::VoiceEngineType::Mock;
+        core.voice_config.engine_type = VoiceEngineType::Mock;
         core.voice_config.toggle_shortcut = "F8".to_string();
         core.voice_config.push_to_talk_shortcut = "已禁用".to_string();
 

@@ -19,14 +19,17 @@ use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
+use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use log::{debug, info};
 use rustix::event::{poll, PollFd, PollFlags};
 use waylan_algo::AlgoEngine;
+use waylan_core::CandidateIndexStyle;
 use waylan_wayland::session_common::{
     check_reload_requested_or_files_changed, init_session_inotify_watcher,
 };
@@ -289,7 +292,7 @@ fn build_ibus_connection(
     shared_core: &Arc<Mutex<IbusSessionCore>>,
     engine: IbusEngineService,
 ) -> Result<Connection, Box<dyn Error>> {
-    let factory_next_id = Arc::new(std::sync::atomic::AtomicU32::new(2));
+    let factory_next_id = Arc::new(AtomicU32::new(2));
     let factory_conn_slot = Arc::new(Mutex::new(None::<Connection>));
 
     let factory = IbusFactoryService {
@@ -414,7 +417,7 @@ fn query_initial_screen_saver_active(conn: &Connection) -> bool {
 
 /// 后台常驻锁屏信号监听器 RAII 句柄，Drop 时自动唤醒并回收工作线程
 struct ScreenSaverListenerHandle {
-    join_handle: Option<std::thread::JoinHandle<()>>,
+    join_handle: Option<JoinHandle<()>>,
 }
 
 impl ScreenSaverListenerHandle {
@@ -452,7 +455,7 @@ fn spawn_screen_saver_listener(
     let screen_locked = Arc::new(AtomicBool::new(initial_locked));
     let screen_locked_clone = Arc::clone(&screen_locked);
 
-    let handle = std::thread::Builder::new()
+    let handle = ThreadBuilder::new()
         .name("waylan-screen-saver-listener".to_string())
         .spawn(move || {
             let Ok(conn) = Connection::session() else {
@@ -595,7 +598,7 @@ fn run_ibus_monitor_loop(
                     guard.is_screen_locked = false;
                 }
                 ensure_global_engine_active(conn);
-                let _ = std::process::Command::new("gsettings")
+                let _ = Command::new("gsettings")
                     .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
                     .output();
             }
@@ -683,7 +686,7 @@ fn run_ibus_monitor_loop(
                         1,
                         0,
                         types::IBUS_ORIENTATION_HORIZONTAL,
-                        waylan_core::CandidateIndexStyle::None,
+                        CandidateIndexStyle::None,
                     ) {
                         let _ = conn.emit_signal(
                             None::<&str>,
@@ -726,7 +729,7 @@ fn run_ibus_monitor_loop(
                 1,
                 0,
                 types::IBUS_ORIENTATION_HORIZONTAL,
-                waylan_core::CandidateIndexStyle::None,
+                CandidateIndexStyle::None,
             ) {
                 let _ = conn.emit_signal(
                     None::<&str>,
@@ -878,7 +881,7 @@ fn ensure_global_engine_active(conn: &Connection) {
             debug!("[微澜 IBus] 自愈激活全局引擎 waylan 重试提示: {}", e);
         } else {
             info!("[微澜 IBus] 开机自愈完成：成功将全局引擎激活为 waylan (微澜)");
-            let _ = std::process::Command::new("gsettings")
+            let _ = Command::new("gsettings")
                 .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
                 .output();
         }
@@ -908,7 +911,7 @@ fn poll_wakeup_and_inotify(
     }
 
     if fds.is_empty() {
-        std::thread::sleep(Duration::from_millis(timeout_ms.max(50) as u64));
+        thread::sleep(Duration::from_millis(timeout_ms.max(50) as u64));
         return;
     }
 
@@ -949,6 +952,8 @@ pub fn print_ibus_component_xml() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use zbus::zvariant::StructureBuilder;
 
     #[test]
     fn test_is_ibus_socket_reachable() {
@@ -962,12 +967,9 @@ mod tests {
 
     #[test]
     fn test_extract_engine_name_from_desc_variant() {
-        use zbus::zvariant::StructureBuilder;
         let mut builder = StructureBuilder::new();
         builder.push_value(Value::from("IBusEngineDesc"));
-        builder.push_value(Value::from(
-            std::collections::HashMap::<String, Value>::new(),
-        ));
+        builder.push_value(Value::from(HashMap::<String, Value>::new()));
         builder.push_value(Value::from("waylan"));
         let st = builder.build();
         let val = Value::Structure(st);
@@ -985,7 +987,7 @@ mod tests {
         assert!(!locked_flag.load(Ordering::Acquire));
 
         // 稍等 50ms 确保监听线程完成 D-Bus 会话连接与 MatchRule 注册
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
         exit_flag.store(true, Ordering::Release);
 
         // 停止监听器并安全回收线程

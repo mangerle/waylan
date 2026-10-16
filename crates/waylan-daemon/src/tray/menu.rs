@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use crate::logger::log_file_path;
 use log::info;
 use std::collections::HashMap;
+use std::env;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -10,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use waylan_wayland::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
@@ -58,7 +60,7 @@ impl SubprocessManager {
         let reaper_handle = thread::spawn(move || {
             while !shutdown_clone.load(Ordering::Acquire) && !exit_requested.load(Ordering::Acquire)
             {
-                thread::sleep(std::time::Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(200));
                 if let Ok(mut lock) = children_clone.lock() {
                     lock.retain_mut(|tracked| match tracked.child.try_wait() {
                         Ok(Some(status)) => {
@@ -138,7 +140,7 @@ impl SubprocessManager {
             return;
         }
         info!("[系统托盘] 唤起微澜偏好设置界面...");
-        let current_exe = std::env::current_exe().ok();
+        let current_exe = env::current_exe().ok();
         let sibling_settings = current_exe
             .as_ref()
             .and_then(|p| p.parent())
@@ -160,7 +162,7 @@ impl SubprocessManager {
             "DBUS_SESSION_BUS_ADDRESS",
             "XDG_CURRENT_DESKTOP",
         ] {
-            if let Ok(val) = std::env::var(var) {
+            if let Ok(val) = env::var(var) {
                 cmd.env(var, &val);
             }
         }
@@ -206,7 +208,7 @@ fn spawn_file_viewer(path: &Path, tracker: &SubprocessManager, desc: &'static st
             "XDG_CURRENT_DESKTOP",
             "DESKTOP_SESSION",
         ] {
-            if let Ok(val) = std::env::var(var) {
+            if let Ok(val) = env::var(var) {
                 cmd.env(var, &val);
             }
         }
@@ -567,7 +569,7 @@ mod tests {
         manager.track(child, Some(Arc::clone(&running)), "测试短进程");
 
         // 等待轮询周期收割子进程
-        thread::sleep(std::time::Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(500));
         assert!(
             !running.load(Ordering::Acquire),
             "子进程退出后 running_guard 应被自动收割置为 false"
