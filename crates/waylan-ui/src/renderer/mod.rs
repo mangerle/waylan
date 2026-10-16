@@ -107,7 +107,7 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 获取当前字形缓存条目总数（用于诊断与测试）
+    /// 获取当前字体数据库中已加载的字体变体条目总数（用于诊断与测试）
     pub fn glyph_cache_len(&self) -> usize {
         self.text_engine
             .lock()
@@ -130,12 +130,14 @@ impl CandidateBoxRenderer {
         };
         let engine = &mut *engine;
         engine.buffer.set_metrics(Metrics::new(size, size * 1.2));
-        engine.buffer.set_text(
-            text,
-            &Attrs::new().family(Family::SansSerif),
-            Shaping::Advanced,
-            None,
-        );
+        let shaping = if text.is_ascii() {
+            Shaping::Basic
+        } else {
+            Shaping::Advanced
+        };
+        engine
+            .buffer
+            .set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
         engine
             .buffer
             .shape_until_scroll(&mut engine.font_system, false);
@@ -161,12 +163,14 @@ impl CandidateBoxRenderer {
         };
         let engine = &mut *engine;
         engine.buffer.set_metrics(Metrics::new(size, size * 1.2));
-        engine.buffer.set_text(
-            text,
-            &Attrs::new().family(Family::SansSerif),
-            Shaping::Advanced,
-            None,
-        );
+        let shaping = if text.is_ascii() {
+            Shaping::Basic
+        } else {
+            Shaping::Advanced
+        };
+        engine
+            .buffer
+            .set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
         engine
             .buffer
             .shape_until_scroll(&mut engine.font_system, false);
