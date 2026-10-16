@@ -4,6 +4,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::mem;
@@ -322,16 +323,31 @@ fn main() {
     println!("=================================================================");
 
     let start_total = Instant::now();
-    let pretrain_path = Path::new("/mnt/d/data/modelscope/minimind_dataset/pretrain_t2t.jsonl");
-    let sft_path = Path::new("/mnt/d/data/modelscope/minimind_dataset/sft_t2t.jsonl");
-    let dict_dir = Path::new("/home/wsl/waylan/data/dicts");
-    let vocab_bin_path = Path::new("/home/wsl/waylan/data/vocab.bin");
-    let out_16mb_path = Path::new("/home/wsl/waylan/data/bigram_csr_16mb.bin");
-    let out_32mb_path = Path::new("/home/wsl/waylan/data/bigram_csr_32mb.bin");
-    let temp_chunk_dir = Path::new("/home/wsl/waylan/data/temp_chunks");
+    let data_dir = env::var("WAYLAN_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            manifest
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.join("data"))
+                .unwrap_or_else(|| PathBuf::from("data"))
+        });
 
-    let _ = fs::remove_dir_all(temp_chunk_dir);
-    fs::create_dir_all(temp_chunk_dir).expect("创建分片临时目录成功");
+    let pretrain_path = env::var("WAYLAN_PRETRAIN_DATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| data_dir.join("corpus/pretrain_t2t.jsonl"));
+    let sft_path = env::var("WAYLAN_SFT_DATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| data_dir.join("corpus/sft_t2t.jsonl"));
+    let dict_dir = data_dir.join("dicts");
+    let vocab_bin_path = data_dir.join("vocab.bin");
+    let out_16mb_path = data_dir.join("bigram_csr_16mb.bin");
+    let out_32mb_path = data_dir.join("bigram_csr_32mb.bin");
+    let temp_chunk_dir = data_dir.join("temp_chunks");
+
+    let _ = fs::remove_dir_all(&temp_chunk_dir);
+    fs::create_dir_all(&temp_chunk_dir).expect("创建分片临时目录成功");
 
     println!("\n[1/5] 构建基础统一词表 (Vocabulary)...");
     let yaml_files = vec![
@@ -343,7 +359,7 @@ fn main() {
 
     let vocab = Vocabulary::load_from_dict_yamls(&yaml_files).expect("解析词典YAML失败");
     let jieba = Arc::new(Jieba::new());
-    vocab.save_binary(vocab_bin_path).expect("持久化词表成功");
+    vocab.save_binary(&vocab_bin_path).expect("持久化词表成功");
 
     let tools = (Arc::new(Cleaner::new()), jieba);
     let mut acc = CorpusAccumulator {
@@ -357,12 +373,8 @@ fn main() {
     let batch_lines_limit = 50_000;
     let chunk_flush_pairs_limit = 4_000_000;
     let datasets = [
-        (
-            pretrain_path,
-            false,
-            "预训练语料 (pretrain_t2t.jsonl 7.7GB)",
-        ),
-        (sft_path, true, "指令对话语料 (sft_t2t.jsonl 13.1GB)"),
+        (&pretrain_path, false, "预训练语料 (pretrain_t2t.jsonl)"),
+        (&sft_path, true, "指令对话语料 (sft_t2t.jsonl)"),
     ];
 
     println!("\n[2/5] 启动流式多线程分词与二元统计...");
@@ -391,7 +403,7 @@ fn main() {
                     acc.vocab.len()
                 );
                 let _ = io::stdout().flush();
-                acc.maybe_flush_chunk(temp_chunk_dir, chunk_flush_pairs_limit);
+                acc.maybe_flush_chunk(&temp_chunk_dir, chunk_flush_pairs_limit);
             }
         }
 
@@ -400,14 +412,14 @@ fn main() {
             processed_lines = processed_lines.saturating_add(batch_buffer.len());
             acc.consume_batch(&batch_buffer, is_sft, &tools);
             batch_buffer.clear();
-            acc.maybe_flush_chunk(temp_chunk_dir, chunk_flush_pairs_limit);
+            acc.maybe_flush_chunk(&temp_chunk_dir, chunk_flush_pairs_limit);
         }
         println!("\n   -> 当前语料完成，累计行数: {}", processed_lines);
     }
 
     if !acc.current_chunk_map.is_empty() {
         let chunk_path =
-            flush_chunk_to_disk(temp_chunk_dir, acc.chunk_index, &mut acc.current_chunk_map)
+            flush_chunk_to_disk(&temp_chunk_dir, acc.chunk_index, &mut acc.current_chunk_map)
                 .expect("刷写最终临时分片文件失败");
         acc.chunk_files.push(chunk_path);
     }
@@ -462,8 +474,8 @@ fn main() {
     aggregated_pairs.par_sort_unstable_by(|a, b| b.3.cmp(&a.3));
 
     for (cap, path, msg) in [
-        (3_800_000, out_16mb_path, "生成16MB模型失败"),
-        (7_800_000, out_32mb_path, "生成32MB模型失败"),
+        (3_800_000, &out_16mb_path, "生成16MB模型失败"),
+        (7_800_000, &out_32mb_path, "生成32MB模型失败"),
     ] {
         let take = cap.min(aggregated_pairs.len());
         let mut sub_pairs = aggregated_pairs[..take].to_vec();
@@ -471,8 +483,10 @@ fn main() {
         export_csr_model(path, acc.vocab.len(), take, &sub_pairs).expect(msg);
     }
 
-    let _ = fs::remove_dir_all(temp_chunk_dir);
-    acc.vocab.save_binary(vocab_bin_path).expect("更新词表成功");
+    let _ = fs::remove_dir_all(&temp_chunk_dir);
+    acc.vocab
+        .save_binary(&vocab_bin_path)
+        .expect("更新词表成功");
     let elapsed_total = start_total.elapsed();
     println!(
         "\n[5/5] 构建结束！词表: {} 条 | 总耗时: {:.2} 秒",
