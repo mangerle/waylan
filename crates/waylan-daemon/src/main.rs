@@ -19,7 +19,7 @@ use std::process;
 use std::time::SystemTime;
 use system::{
     check_another_instance_running, collect_watched_paths, determine_tray_and_exclusive,
-    launch_settings_gui, ShutdownCoordinator,
+    launch_settings_gui, try_acquire_single_instance_lock, ShutdownCoordinator,
 };
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
@@ -334,14 +334,33 @@ fn main() -> Result<(), Box<dyn Error>> {
         process::exit(2);
     }
 
-    if !is_ibus_arg
-        && (args.len() == 1 || (args.len() == 2 && args[1] != "--check"))
-        && check_another_instance_running()
-    {
-        info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心...");
-        let _ = launch_settings_gui();
-        return Ok(());
-    }
+    let _single_instance_lock = match try_acquire_single_instance_lock() {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            if !is_ibus_arg && (args.len() == 1 || (args.len() == 2 && args[1] != "--check")) {
+                info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心...");
+                let _ = launch_settings_gui();
+            } else {
+                warn!("[微澜] 检测到已有另一个活跃的输入法守护进程正在运行，当前进程将安全退出。");
+            }
+            return Ok(());
+        }
+        Err(e) => {
+            warn!(
+                "[微澜] 获取单例运行文件锁遇到异常 ({})，回退至进程扫描校验...",
+                e
+            );
+            if !is_ibus_arg
+                && (args.len() == 1 || (args.len() == 2 && args[1] != "--check"))
+                && check_another_instance_running()
+            {
+                info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心...");
+                let _ = launch_settings_gui();
+                return Ok(());
+            }
+            None
+        }
+    };
 
     let loop_wakeup = LoopWakeup::new().ok();
     let coordinator = ShutdownCoordinator::new(loop_wakeup);

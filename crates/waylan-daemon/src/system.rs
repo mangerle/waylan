@@ -7,9 +7,11 @@
 //! - **代价与局限**：进程遍历依赖 Linux `/proc` 文件系统。
 
 use log::{info, warn};
+use rustix::fs::{flock, FlockOperation};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -181,6 +183,65 @@ pub fn launch_settings_gui() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// 单实例运行互斥锁守护对象 (RAII)
+///
+/// # 设计原理
+/// - **实现初衷**：消除基于 `/proc` 扫描的 TOCTOU 竞态条件，保证并发启动时仅有一个实例存活。
+/// - **核心优势**：基于 Linux 内核级 `flock(2)` 独占锁，进程崩溃或正常退出时内核自动释放锁，避免死锁与脏锁文件残留。
+/// - **代价与局限**：必须在守护进程整个运行生命周期内持有该守护对象。
+pub struct SingleInstanceLock {
+    _file: fs::File,
+    path: PathBuf,
+}
+
+impl Drop for SingleInstanceLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// 尝试获取微澜守护进程的全局单例锁
+///
+/// 若成功获取，返回 `Ok(Some(lock))`；
+/// 若锁已被其他运行中的实例独占持有，返回 `Ok(None)`；
+/// 若遇到底层 IO 异常，返回 `Err(...)`。
+pub fn try_acquire_single_instance_lock() -> std::io::Result<Option<SingleInstanceLock>> {
+    let lock_dir = env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir);
+    let lock_path = lock_dir.join(format!(
+        "waylan_{}.lock",
+        rustix::process::getuid().as_raw()
+    ));
+    try_acquire_lock_at_path(&lock_path)
+}
+
+/// 在指定路径尝试获取独占文件锁（供单元测试与主入口复用）
+pub fn try_acquire_lock_at_path(
+    lock_path: &std::path::Path,
+) -> std::io::Result<Option<SingleInstanceLock>> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+
+    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => {
+            let mut file_clone = file.try_clone()?;
+            let _ = file_clone.set_len(0);
+            let _ = writeln!(file_clone, "{}", process::id());
+            Ok(Some(SingleInstanceLock {
+                _file: file,
+                path: lock_path.to_path_buf(),
+            }))
+        }
+        Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
+        Err(e) => Err(std::io::Error::from(e)),
+    }
+}
+
 /// 检查当前系统桌面会话中是否已有活跃的微澜输入法守护进程正在运行
 pub fn check_another_instance_running() -> bool {
     #[cfg(target_os = "linux")]
@@ -245,5 +306,28 @@ mod tests {
         coordinator.request_shutdown();
         assert!(coordinator.is_shutting_down());
         assert!(flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_single_instance_lock_mutex() {
+        let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
+        let lock_path = temp_dir.path().join("test_waylan.lock");
+
+        let lock1 = try_acquire_lock_at_path(&lock_path)
+            .expect("第一次获取锁失败")
+            .expect("第一次应当成功获取锁");
+
+        // 同一路径再次获取应被拦截返回 None
+        let lock2 = try_acquire_lock_at_path(&lock_path).expect("探测锁状态失败");
+        assert!(lock2.is_none(), "已有锁持有时，不应重复获取锁");
+
+        // 释放第一个锁
+        drop(lock1);
+
+        // 释放后再次获取应重新成功
+        let lock3 = try_acquire_lock_at_path(&lock_path)
+            .expect("重新获取锁失败")
+            .expect("释放后应当重新获取锁");
+        assert!(lock3.path.exists());
     }
 }
