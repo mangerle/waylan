@@ -7,6 +7,7 @@
 //!   严格杜绝跨 `.await` 持有互斥锁，保证高并发按键流下的极低延迟。
 //! - **代价与局限**：依赖 `ibus-daemon` 转发键盘与候选面板事件。
 
+pub mod emitter;
 pub mod factory;
 pub mod properties;
 pub mod service;

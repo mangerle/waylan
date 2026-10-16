@@ -9,27 +9,21 @@ use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use waylan_wayland::input_constants::{KEY_LEFT, KEY_RIGHT};
 use waylan_wayland::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
 
-use super::super::keys::{
-    IbusKeyOutcome, IbusSessionCore, IBUS_KEYVAL_LEFT, IBUS_KEYVAL_RIGHT, IBUS_RELEASE_MASK,
-};
-use super::super::types::{
-    build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_prop_list, build_ibus_text,
-    build_input_mode_property, extract_text_from_ibus_variant, IBUS_ENGINE_PREEDIT_CLEAR,
-};
+use super::super::keys::{IbusKeyOutcome, IbusSessionCore};
+use super::super::types::{build_ibus_prop_list, extract_text_from_ibus_variant};
 use super::snapshot::UiSnapshot;
 use crate::tray::menu::SubprocessManager;
 
 /// IBus 输入框用途常量：密码框 (`IBUS_INPUT_PURPOSE_PASSWORD`)
-const IBUS_INPUT_PURPOSE_PASSWORD: u32 = 2;
+pub(crate) const IBUS_INPUT_PURPOSE_PASSWORD: u32 = 2;
 
 /// IBus 输入框用途常量：PIN 码框 (`IBUS_INPUT_PURPOSE_PIN`)
-const IBUS_INPUT_PURPOSE_PIN: u32 = 3;
+pub(crate) const IBUS_INPUT_PURPOSE_PIN: u32 = 3;
 
 /// `org.freedesktop.IBus.Engine` 核心接口实现
 #[derive(Clone)]
@@ -41,94 +35,6 @@ pub struct IbusEngineService {
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) suppress_properties: bool,
     pub(crate) is_password: Arc<AtomicBool>,
-}
-
-impl IbusEngineService {
-    /// 在锁作用域之外根据快照向 `ibus-daemon` 发射预编辑与候选词表更新信号
-    async fn emit_ui_snapshot(ctxt: &SignalContext<'_>, snap: &UiSnapshot) {
-        let preedit_visible = !snap.preedit.is_empty();
-        if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
-            let char_len = snap.preedit.chars().count() as u32;
-            let _ = Self::update_preedit_text(
-                ctxt,
-                Value::from(preedit_val),
-                char_len,
-                preedit_visible,
-                IBUS_ENGINE_PREEDIT_CLEAR,
-            )
-            .await;
-        }
-        if !preedit_visible {
-            let _ = Self::hide_preedit_text(ctxt).await;
-        }
-
-        let table_visible = !snap.candidates.is_empty();
-        if let Ok(table_val) = build_ibus_lookup_table(
-            &snap.candidates,
-            snap.page_size,
-            snap.selected_index,
-            snap.orientation,
-            snap.index_style,
-        ) {
-            let _ = Self::update_lookup_table(ctxt, Value::from(table_val), table_visible).await;
-        }
-        if !table_visible {
-            let _ = Self::hide_lookup_table(ctxt).await;
-        }
-    }
-
-    /// 在锁作用域之外统一派发 `IbusKeyOutcome` 包含的所有 D-Bus 信号
-    async fn dispatch_outcome(
-        &self,
-        ctxt: &SignalContext<'_>,
-        outcome: IbusKeyOutcome,
-        snap: Option<UiSnapshot>,
-        is_caps_locked: bool,
-    ) {
-        if let Some(ref text) = outcome.commit_text {
-            if let Ok(text_val) = build_ibus_text(text) {
-                let _ = Self::commit_text(ctxt, Value::from(text_val)).await;
-            }
-        }
-
-        if outcome.cursor_offset != 0 {
-            let (keyval, keycode) = if outcome.cursor_offset < 0 {
-                (IBUS_KEYVAL_LEFT, KEY_LEFT)
-            } else {
-                (IBUS_KEYVAL_RIGHT, KEY_RIGHT)
-            };
-            for _ in 0..outcome.cursor_offset.unsigned_abs() {
-                let _ = Self::forward_key_event(ctxt, keyval, keycode, 0).await;
-                let _ = Self::forward_key_event(ctxt, keyval, keycode, IBUS_RELEASE_MASK).await;
-            }
-        }
-
-        if let Some(ref s) = snap {
-            Self::emit_ui_snapshot(ctxt, s).await;
-        }
-
-        if !self.suppress_properties {
-            if let Some(new_mode) = outcome.mode_changed {
-                if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps_locked) {
-                    let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-                }
-            }
-        }
-    }
-
-    /// 重置会话并向 `ibus-daemon` 发送隐藏预编辑与候选面板信号
-    async fn reset_and_hide_ui(&self, ctxt: &SignalContext<'_>) {
-        self.is_password.store(false, Ordering::Release);
-        let snap = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            guard.is_password_context = false;
-            guard.reset_context();
-            UiSnapshot::capture(&guard)
-        };
-        Self::emit_ui_snapshot(ctxt, &snap).await;
-        let _ = Self::hide_preedit_text(ctxt).await;
-        let _ = Self::hide_lookup_table(ctxt).await;
-    }
 }
 
 #[interface(name = "org.freedesktop.IBus.Engine")]
@@ -172,7 +78,7 @@ impl IbusEngineService {
     fn cancel_hand_writing(&self, _n_strokes: u32) {}
 
     /// 设置客户端支持的输入法能力位掩码（同步更新密码框感知标记并清除非密码态残留）
-    fn set_capabilities(&self, caps: u32) {
+    pub(crate) fn set_capabilities(&self, caps: u32) {
         const IBUS_CAP_PASSWORD: u32 = 1 << 4;
         let is_pwd = (caps & IBUS_CAP_PASSWORD) != 0;
         self.is_password.store(is_pwd, Ordering::Release);
@@ -395,7 +301,7 @@ impl IbusEngineService {
 
     /// 接收客户端输入框内容类型（自动识别密码与 PIN 输入框并直通按键）
     #[zbus(property)]
-    fn set_content_type(&self, content_type: (u32, u32)) {
+    pub(crate) fn set_content_type(&self, content_type: (u32, u32)) {
         let (purpose, _hints) = content_type;
         let is_pwd = purpose == IBUS_INPUT_PURPOSE_PASSWORD || purpose == IBUS_INPUT_PURPOSE_PIN;
         self.is_password.store(is_pwd, Ordering::Release);
@@ -469,45 +375,5 @@ impl IbusEngineService {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use waylan_algo::types::AlgoConfig;
-    use waylan_algo::AlgoEngine;
-
-    #[test]
-    fn test_password_capabilities_and_reset_lifecycle() {
-        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-        let core = Arc::new(Mutex::new(IbusSessionCore::new(engine)));
-        let is_password = Arc::new(AtomicBool::new(false));
-        let service = IbusEngineService {
-            core: Arc::clone(&core),
-            reload_requested: None,
-            loop_wakeup: None,
-            subprocess_manager: Arc::new(SubprocessManager::new(Arc::new(AtomicBool::new(false)))),
-            settings_running: Arc::new(AtomicBool::new(false)),
-            suppress_properties: false,
-            is_password: Arc::clone(&is_password),
-        };
-
-        // 1. 模拟进入密码框，设置密码能力位
-        const IBUS_CAP_PASSWORD: u32 = 1 << 4;
-        service.set_capabilities(IBUS_CAP_PASSWORD);
-        assert!(is_password.load(Ordering::Acquire));
-        assert!(core.lock().unwrap().is_password_context);
-
-        // 2. 模拟切回普通窗口，设置非密码能力位（必须成功复位）
-        service.set_capabilities(0);
-        assert!(!is_password.load(Ordering::Acquire));
-        assert!(!core.lock().unwrap().is_password_context);
-
-        // 3. 再次通过 set_content_type 进入密码框
-        service.set_content_type((IBUS_INPUT_PURPOSE_PASSWORD, 0));
-        assert!(is_password.load(Ordering::Acquire));
-        assert!(core.lock().unwrap().is_password_context);
-
-        // 4. 普通内容类型复位
-        service.set_content_type((0, 0));
-        assert!(!is_password.load(Ordering::Acquire));
-        assert!(!core.lock().unwrap().is_password_context);
-    }
-}
+#[path = "service_tests.rs"]
+mod tests;
