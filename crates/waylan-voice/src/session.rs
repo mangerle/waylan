@@ -26,6 +26,9 @@ use crate::vad::{calculate_rms, create_vad, VadProcessor, WaveformVisualizer};
 /// 用于在 VAD 判定为说话前的静音抑制期间暂存最近 300ms 音频，确保起音瞬间不被切断微弱辅音声母
 const PRE_SPEECH_BUFFER_CAPACITY: usize = 16_000 * 300 / 1000;
 
+/// 语音模型空闲自动卸载超时阈值（5 分钟无录音活动自动释放权重，归还 250MB+ 系统内存）
+const IDLE_MODEL_UNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// 语音输入会话对外发出的交互事件
 #[derive(Debug, Clone, PartialEq)]
 pub enum VoiceEvent {
@@ -216,7 +219,34 @@ impl VoiceSessionController {
 
         info!("[语音会话] 后台常驻语音工作线程启动完成，进入就绪待命状态");
 
-        while let Ok(cmd) = cmd_rx.recv() {
+        let mut last_activity_time = Instant::now();
+
+        loop {
+            let timeout = if cached_recognizer.is_some() || cached_vad.is_some() {
+                let elapsed = last_activity_time.elapsed();
+                if elapsed >= IDLE_MODEL_UNLOAD_TIMEOUT {
+                    cached_recognizer = None;
+                    cached_vad = None;
+                    cached_punct = None;
+                    last_asr_fingerprint = None;
+                    info!(
+                        "[语音会话] 语音模块已持续空闲超过 5 分钟，自动卸载模型权重以释放常驻内存"
+                    );
+                    Duration::from_secs(3600)
+                } else {
+                    IDLE_MODEL_UNLOAD_TIMEOUT.saturating_sub(elapsed)
+                }
+            } else {
+                Duration::from_secs(3600)
+            };
+
+            let cmd = match cmd_rx.recv_timeout(timeout) {
+                Ok(c) => c,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            last_activity_time = Instant::now();
             match cmd {
                 WorkerCommand::Start { options, event_tx } => {
                     // 1. 若配置中引擎类型、目标服务、云端凭据或离线模型目录发生变更，主动失效识别器缓存以实现热切换
