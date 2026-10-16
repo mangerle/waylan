@@ -31,6 +31,14 @@ pub struct UserEntry {
 /// - **实现初衷**：根据用户个人输入历史实现智能词频调优与自造新词记忆，使输入法越用越懂用户。
 /// - **核心优势**：结合使用频次与时间半衰期衰减算法，既能快速置顶常用词，又避免一次误选终身置顶。
 /// - **代价与局限**：需要定期落盘持久化，但通过内存缓存结合退出/定时写盘可消除 I/O 阻塞。
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn default_last_compact_ms() -> Arc<AtomicU64> {
+    Arc::new(AtomicU64::new(0))
+}
+
 fn default_wal_file() -> std::sync::Mutex<Option<(PathBuf, File)>> {
     std::sync::Mutex::new(None)
 }
@@ -51,6 +59,9 @@ pub struct UserAdaptiveModel {
     /// 常驻保持的 WAL 日志追加写入文件句柄（消除每次选词时的重复 open/stat/close 系统调用）
     #[serde(skip, default = "default_wal_file")]
     wal_file: std::sync::Mutex<Option<(PathBuf, File)>>,
+    /// 最近一次内部 WAL 归并压缩落盘完成的时间戳（毫秒级 UNIX 时间）
+    #[serde(skip, default = "default_last_compact_ms")]
+    last_compact_ms: Arc<AtomicU64>,
 }
 
 impl Clone for UserAdaptiveModel {
@@ -61,6 +72,7 @@ impl Clone for UserAdaptiveModel {
             wal_append_counter: self.wal_append_counter,
             compact_threshold: self.compact_threshold,
             wal_file: std::sync::Mutex::new(None),
+            last_compact_ms: Arc::clone(&self.last_compact_ms),
         }
     }
 }
@@ -83,7 +95,36 @@ impl UserAdaptiveModel {
             wal_append_counter: 0,
             compact_threshold: Self::DEFAULT_COMPACT_THRESHOLD,
             wal_file: std::sync::Mutex::new(None),
+            last_compact_ms: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// 获取当前模型绑定的归并落盘时间戳共享原子句柄
+    pub fn last_compact_time(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.last_compact_ms)
+    }
+
+    /// 查询当前模型是否处于刚刚完成 WAL 归并落盘的防重保护窗口内（毫秒）
+    pub fn is_recent_compact(&self, window_ms: u64) -> bool {
+        let last = self.last_compact_ms.load(Ordering::Acquire);
+        if last == 0 {
+            return false;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        now.saturating_sub(last) <= window_ms
+    }
+
+    /// 标记当前模型完成内部 WAL 归并压缩落盘
+    pub fn mark_internal_compact(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.last_compact_ms.store(now, Ordering::Release);
+        wal::mark_internal_compact();
     }
 
     /// 设置运行期触发自动压缩的 WAL 追加流水阈值

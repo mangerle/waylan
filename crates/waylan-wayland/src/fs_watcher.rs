@@ -12,17 +12,33 @@ use std::io;
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 针对同目录下关联文件变更的判定规则过滤器
 pub type DirEventFilter = Arc<dyn Fn(&Path, &OsStr, ReadFlags) -> Option<bool> + Send + Sync>;
 
-/// 构造默认的用户词库过滤回调，解耦硬编码文件名与算法状态依赖
-pub fn default_user_dict_filter() -> DirEventFilter {
-    Arc::new(|_dir, file_name, flags| {
+/// 构造附带专用落盘时间戳跟踪器的用户词库过滤回调
+pub fn user_dict_filter_with_tracker(tracker: Option<Arc<AtomicU64>>) -> DirEventFilter {
+    Arc::new(move |_dir, file_name, flags| {
         if file_name == "user_dict.bin" {
-            if waylan_algo::user_adaptive::is_recent_internal_compact(2000) {
+            let is_recent = if let Some(ref t) = tracker {
+                let last = t.load(Ordering::Acquire);
+                if last != 0 {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    now.saturating_sub(last) <= 2000
+                } else {
+                    false
+                }
+            } else {
+                waylan_algo::user_adaptive::is_recent_internal_compact(2000)
+            };
+
+            if is_recent {
                 return Some(false);
             }
             if flags.intersects(ReadFlags::DELETE | ReadFlags::MOVED_TO) {
@@ -31,6 +47,11 @@ pub fn default_user_dict_filter() -> DirEventFilter {
         }
         None
     })
+}
+
+/// 构造默认的用户词库过滤回调，解耦硬编码文件名与算法状态依赖
+pub fn default_user_dict_filter() -> DirEventFilter {
+    user_dict_filter_with_tracker(None)
 }
 
 /// 基于 Linux inotify 的词库与配置变更监控器

@@ -458,7 +458,7 @@ impl UserAdaptiveModel {
         }
 
         // 在原子重命名前即刻激活内部归并标记，防止内核派发重命名/删除事件与落盘标记产生竞态
-        mark_internal_compact();
+        self.mark_internal_compact();
 
         std::fs::rename(&temp_path, path_ref).map_err(|e| AlgoError::UserDictPersistFailed {
             path: PathBuf::from(path_ref),
@@ -467,7 +467,7 @@ impl UserAdaptiveModel {
 
         // 成功完成原子重命名后解除守卫删除并刷新内部落盘完成时间戳
         guard.1 = true;
-        mark_internal_compact();
+        self.mark_internal_compact();
 
         if let Some(f) = orig_lock_file {
             let _ = flock(&f, FlockOperation::Unlock);

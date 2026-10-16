@@ -223,4 +223,3 @@ fn test_measure_text_cache_hit_and_clear() {
     let w3 = renderer.measure_text("测试", 15.0);
     assert_eq!(w1, w3, "清空缓存后重新计算的测量宽度必须保持完全一致");
 }
-
