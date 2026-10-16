@@ -173,9 +173,142 @@ impl PrismFuzzy {
             .collect()
     }
 
-    /// 模糊音等价性判定
+    /// 模糊音等价性判定（快速短路，零堆分配）
     pub fn is_fuzzy_valid(slice: &str, fuzzy: &FuzzyConfig) -> bool {
-        !Self::expand_fuzzy_syllables(slice, fuzzy).is_empty()
+        if !fuzzy.has_active_rules() || slice.is_empty() || slice.len() > 7 || !slice.is_ascii() {
+            return false;
+        }
+
+        let mut init_variants: [(&str, &str); 2] = [("", ""); 2];
+        let mut init_count = 0;
+
+        init_variants[init_count] = ("", slice);
+        init_count += 1;
+
+        if fuzzy.z_zh {
+            if let Some(rest) = slice.strip_prefix("zh") {
+                init_variants[init_count] = ("z", rest);
+                init_count += 1;
+            } else if let Some(rest) = slice.strip_prefix('z') {
+                init_variants[init_count] = ("zh", rest);
+                init_count += 1;
+            }
+        }
+        if init_count < 2 && fuzzy.c_ch {
+            if let Some(rest) = slice.strip_prefix("ch") {
+                init_variants[init_count] = ("c", rest);
+                init_count += 1;
+            } else if let Some(rest) = slice.strip_prefix('c') {
+                init_variants[init_count] = ("ch", rest);
+                init_count += 1;
+            }
+        }
+        if init_count < 2 && fuzzy.s_sh {
+            if let Some(rest) = slice.strip_prefix("sh") {
+                init_variants[init_count] = ("s", rest);
+                init_count += 1;
+            } else if let Some(rest) = slice.strip_prefix('s') {
+                init_variants[init_count] = ("sh", rest);
+                init_count += 1;
+            }
+        }
+        if init_count < 2 && fuzzy.l_n {
+            if let Some(rest) = slice.strip_prefix('l') {
+                init_variants[init_count] = ("n", rest);
+                init_count += 1;
+            } else if let Some(rest) = slice.strip_prefix('n') {
+                init_variants[init_count] = ("l", rest);
+                init_count += 1;
+            }
+        }
+        if init_count < 2 && fuzzy.f_h {
+            if let Some(rest) = slice.strip_prefix('f') {
+                init_variants[init_count] = ("h", rest);
+                init_count += 1;
+            } else if let Some(rest) = slice.strip_prefix('h') {
+                init_variants[init_count] = ("f", rest);
+                init_count += 1;
+            }
+        }
+        if init_count < 2 && fuzzy.r_l {
+            if let Some(rest) = slice.strip_prefix('r') {
+                init_variants[init_count] = ("l", rest);
+                init_count += 1;
+            } else if let Some(rest) = slice.strip_prefix('l') {
+                init_variants[init_count] = ("r", rest);
+                init_count += 1;
+            }
+        }
+        if init_count < 2 && fuzzy.g_k {
+            if let Some(rest) = slice.strip_prefix('g') {
+                init_variants[init_count] = ("k", rest);
+                init_count += 1;
+            } else if let Some(rest) = slice.strip_prefix('k') {
+                init_variants[init_count] = ("g", rest);
+                init_count += 1;
+            }
+        }
+
+        let check_stack = |prefix: &str, stem: &str, suffix: &str| -> bool {
+            let mut buf = [0u8; 16];
+            let p_bytes = prefix.as_bytes();
+            let st_bytes = stem.as_bytes();
+            let sf_bytes = suffix.as_bytes();
+            let total = p_bytes.len() + st_bytes.len() + sf_bytes.len();
+            if total > buf.len() {
+                return false;
+            }
+            buf[..p_bytes.len()].copy_from_slice(p_bytes);
+            buf[p_bytes.len()..p_bytes.len() + st_bytes.len()].copy_from_slice(st_bytes);
+            buf[p_bytes.len() + st_bytes.len()..total].copy_from_slice(sf_bytes);
+            if let Ok(s) = std::str::from_utf8(&buf[..total]) {
+                s != slice && is_valid_syllable(s)
+            } else {
+                false
+            }
+        };
+
+        for &(init, rest) in &init_variants[..init_count] {
+            if !init.is_empty() && check_stack(init, rest, "") {
+                return true;
+            }
+
+            if fuzzy.an_ang {
+                if let Some(stem) = rest.strip_suffix("ang") {
+                    if check_stack(init, stem, "an") {
+                        return true;
+                    }
+                } else if let Some(stem) = rest.strip_suffix("an") {
+                    if check_stack(init, stem, "ang") {
+                        return true;
+                    }
+                }
+            }
+            if fuzzy.en_eng {
+                if let Some(stem) = rest.strip_suffix("eng") {
+                    if check_stack(init, stem, "en") {
+                        return true;
+                    }
+                } else if let Some(stem) = rest.strip_suffix("en") {
+                    if check_stack(init, stem, "eng") {
+                        return true;
+                    }
+                }
+            }
+            if fuzzy.in_ing {
+                if let Some(stem) = rest.strip_suffix("ing") {
+                    if check_stack(init, stem, "in") {
+                        return true;
+                    }
+                } else if let Some(stem) = rest.strip_suffix("in") {
+                    if check_stack(init, stem, "ing") {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// 零声母与特殊单辅音音节集合（以 a, o, e 开头，或特殊叹词音节 n, ng, m）
