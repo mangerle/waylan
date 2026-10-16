@@ -14,7 +14,6 @@ use std::thread;
 use std::time::Duration;
 #[cfg(test)]
 use waylan_core::InputMode;
-use waylan_wayland::LoopWakeup;
 use zbus::blocking::connection::Builder;
 use zbus::zvariant::Value;
 
@@ -41,7 +40,6 @@ struct TrayLoopParams {
 /// - **代价与局限**：依赖 D-Bus 用户会话总线，若当前环境无 DBus 则自动优雅降级。
 pub struct TrayService {
     is_chinese: Arc<AtomicBool>,
-    #[allow(dead_code)]
     is_caps_locked: Arc<AtomicBool>,
     traditional_chinese: Arc<AtomicBool>,
     full_width_punct: Arc<AtomicBool>,
@@ -93,22 +91,12 @@ impl TrayService {
         }
     }
 
-    /// 使用退出标志与唤醒器构建托盘常驻服务（兼容旧入口与单元测试）
-    #[allow(dead_code)]
-    pub fn spawn_with_parts(
-        exit_requested: Arc<AtomicBool>,
-        loop_wakeup: Option<LoopWakeup>,
-    ) -> Self {
-        Self::spawn(ShutdownCoordinator::from_parts(exit_requested, loop_wakeup))
-    }
-
     /// 获取中英文模式共享原子标志句柄
     pub fn mode_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.is_chinese)
     }
 
     /// 获取 CapsLock 大写锁定状态共享原子标志句柄
-    #[allow(dead_code)]
     pub fn caps_lock_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.is_caps_locked)
     }
@@ -133,27 +121,15 @@ impl TrayService {
         Arc::clone(&self.reload_requested)
     }
 
-    /// 获取优雅退出请求共享原子标志句柄
-    #[allow(dead_code)]
-    pub fn exit_flag(&self) -> Arc<AtomicBool> {
-        self.coordinator.flag()
-    }
-
     /// 获取托盘图标与菜单状态刷新通知发送端句柄
     pub fn icon_notifier(&self) -> SyncSender<()> {
         self.icon_update_tx.clone()
     }
 
-    /// 查询是否已收到优雅退出请求
-    #[allow(dead_code)]
+    /// 查询是否已收到优雅退出请求（仅供测试断言使用）
+    #[cfg(test)]
     pub fn is_exit_requested(&self) -> bool {
         self.coordinator.is_shutting_down()
-    }
-
-    /// 获取停机协调器引用
-    #[allow(dead_code)]
-    pub fn coordinator(&self) -> &ShutdownCoordinator {
-        &self.coordinator
     }
 
     /// 获取当前是否处于中文模式（供单元测试断言使用）

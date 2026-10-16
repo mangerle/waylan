@@ -85,7 +85,6 @@ pub fn config_path() -> Option<PathBuf> {
 }
 
 /// 获取符合 XDG 规范的用户词库文件存储路径 (~/.local/share/waylan/user_dict.bin)
-#[allow(dead_code)]
 pub fn user_dict_path() -> PathBuf {
     if let Some(custom) = env_var_non_empty("WAYLAN_USER_DICT") {
         return PathBuf::from(custom);
@@ -106,7 +105,6 @@ pub fn user_dict_path() -> PathBuf {
 }
 
 /// 获取默认系统基础词库的多级查找路径（环境变量 -> 用户数据目录 -> 系统公共目录 -> 相对路径）
-#[allow(dead_code)]
 pub fn base_dict_search_paths() -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(16);
     if let Some(custom) = env_var_non_empty("WAYLAN_DICT_PATH") {
@@ -140,7 +138,6 @@ pub fn base_dict_search_paths() -> Vec<PathBuf> {
 }
 
 /// 获取符合 XDG 规范的用户辅助与混输词库存储路径 (~/.local/share/waylan/aux.dict.bin)
-#[allow(dead_code)]
 pub fn user_aux_dict_path() -> PathBuf {
     if let Some(custom) = env_var_non_empty("WAYLAN_AUX_DICT_PATH") {
         return PathBuf::from(custom);
@@ -159,7 +156,6 @@ pub fn user_aux_dict_path() -> PathBuf {
 }
 
 /// 获取辅助与混输词库（英文与符号表情）的多级查找路径
-#[allow(dead_code)]
 pub fn aux_dict_search_paths() -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(16);
     paths.push(user_aux_dict_path());
@@ -175,7 +171,6 @@ pub fn aux_dict_search_paths() -> Vec<PathBuf> {
 }
 
 /// 获取简繁转换词库（STPhrases + STCharacters）的多级查找路径
-#[allow(dead_code)]
 pub fn opencc_dict_search_paths() -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(16);
     if let Some(custom) = env_var_non_empty("WAYLAN_OPENCC_DICT_PATH") {

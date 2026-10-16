@@ -52,8 +52,8 @@ impl ShutdownCoordinator {
         }
     }
 
-    /// 使用现有的原子标志句柄与唤醒器构建（供测试或向下兼容）
-    #[allow(dead_code)]
+    /// 使用现有的原子标志句柄与唤醒器构建（仅供测试）
+    #[cfg(test)]
     pub fn from_parts(exit_requested: Arc<AtomicBool>, loop_wakeup: Option<LoopWakeup>) -> Self {
         Self {
             exit_requested,
