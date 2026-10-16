@@ -94,6 +94,8 @@ pub struct WaylanV1Session {
     pub inotify_watcher: Option<InotifyWatcher>,
     /// 事件循环跨线程唤醒器
     pub loop_wakeup: Option<LoopWakeup>,
+    /// 外部按键事件拦截回调（用于语音听写快捷键等扩展）
+    pub key_filter: Option<KeyFilterCallback>,
 }
 
 impl Default for WaylanV1Session {
@@ -130,6 +132,7 @@ impl Default for WaylanV1Session {
             exit_requested: None,
             inotify_watcher: None,
             loop_wakeup: None,
+            key_filter: None,
         }
     }
 }

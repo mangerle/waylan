@@ -9,8 +9,8 @@ mod tray;
 use config::{AppConfig, SwitchKey, ThemeMode};
 use log::{info, warn};
 use session_bundle::{
-    apply_reload_v1, apply_reload_v2, check_wayland_capabilities, load_auxiliary_managers,
-    load_lexicon_table,
+    apply_reload_v1, apply_reload_v2, build_wayland_voice_filter, check_wayland_capabilities,
+    load_auxiliary_managers, load_lexicon_table,
 };
 use std::env;
 use std::error::Error;
@@ -202,6 +202,7 @@ fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), Box<dyn Error>
     session.exit_requested = Some(params.coordinator.flag());
     session.loop_wakeup = params.coordinator.loop_wakeup();
     session.reload_callback = Some(Box::new(apply_reload_v1));
+    session.key_filter = build_wayland_voice_filter(&params.cfg.voice);
     run_session_v1_loop(session).map_err(Into::into)
 }
 
@@ -232,6 +233,7 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
     session_v2.exit_requested = Some(params.coordinator.flag());
     session_v2.loop_wakeup = params.coordinator.loop_wakeup();
     session_v2.reload_callback = Some(Box::new(apply_reload_v2));
+    session_v2.key_filter = build_wayland_voice_filter(&params.cfg.voice);
     let v2_result = run_session_v2_loop_fallible(session_v2);
     match v2_result {
         Ok(()) => Ok(()),
@@ -262,6 +264,7 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
             session.exit_requested = Some(params.coordinator.flag());
             session.loop_wakeup = params.coordinator.loop_wakeup();
             session.reload_callback = Some(Box::new(apply_reload_v1));
+            session.key_filter = build_wayland_voice_filter(&params.cfg.voice);
             run_session_v1_loop(session).map_err(Into::into)
         }
     }

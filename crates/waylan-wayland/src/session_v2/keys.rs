@@ -360,6 +360,34 @@ pub(crate) fn process_key_event(
 ) -> (bool, Option<String>) {
     session.update_modifier_by_key(key, is_press);
 
+    // 外部快捷键拦截器（如语音听写）优先捕获
+    if let Some(mut filter) = session.key_filter.take() {
+        let filter_outcome = filter(key, is_press, session.mods_depressed);
+        session.key_filter = Some(filter);
+        match filter_outcome {
+            crate::session_common::KeyFilterResult::Consumed => {
+                if is_press {
+                    session.consumed_keys.record_press(key, true);
+                } else {
+                    session.consumed_keys.take_release(key);
+                }
+                return (true, None);
+            }
+            crate::session_common::KeyFilterResult::Commit(text) => {
+                session.commit_text(&text);
+                session.punctuation_processor.record_commit(&text);
+                session.refresh_candidate_surface();
+                if is_press {
+                    session.consumed_keys.record_press(key, true);
+                } else {
+                    session.consumed_keys.take_release(key);
+                }
+                return (true, Some(text));
+            }
+            crate::session_common::KeyFilterResult::PassThrough => {}
+        }
+    }
+
     // 密码或 PIN 码输入框自动规避拼音拦截，全量直通按键
     if session.is_password_context {
         session.repeat_state = None;
