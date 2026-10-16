@@ -363,9 +363,9 @@ pub fn run_session_v2_loop_fallible(
                 Ok(res) => res,
                 Err(e) => return Err((e, Box::new(session))),
             };
+            session.drive_key_repeat();
             match outcome {
                 PollEventOutcome::TimedOut => {
-                    session.drive_key_repeat();
                     if session.inotify_watcher.is_none() {
                         session.sync_external_state();
                     }
