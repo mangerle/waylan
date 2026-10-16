@@ -10,9 +10,9 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::sync_channel;
 use std::time::{Duration, Instant};
 
+use waylan_core::input::*;
 use waylan_core::{FullWidthCharShortcut, FullWidthPunctShortcut, TraditionalShortcut};
 use waylan_voice::VoiceSessionOptions;
-use waylan_wayland::input_constants::*;
 
 use super::core::{IbusKeyOutcome, IbusSessionCore};
 use super::keyval::{KEY_F, KEY_T};

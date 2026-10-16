@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
 
-use waylan_wayland::input_constants::{KEY_LEFT, KEY_RIGHT};
+use waylan_core::input::{KEY_LEFT, KEY_RIGHT};
 
 use super::super::keys::{IbusKeyOutcome, IBUS_KEYVAL_LEFT, IBUS_KEYVAL_RIGHT, IBUS_RELEASE_MASK};
 use super::super::types::{

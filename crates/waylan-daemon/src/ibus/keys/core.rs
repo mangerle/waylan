@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
+use waylan_core::input::{ConsumedKeyTracker, PageKeyConfig};
 use waylan_core::{
     Candidate, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
     FullWidthPunctShortcut, InputMode, TraditionalShortcut, VoiceConfig,
 };
 use waylan_voice::{VoiceEvent, VoiceSessionController};
-use waylan_wayland::input_core::{ConsumedKeyTracker, PageKeyConfig};
 use waylan_wayland::session_common::sync_mode_from_shared_flag;
 
 /// 单次 IBus 按键或交互事件的决策输出

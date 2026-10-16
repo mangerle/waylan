@@ -1,6 +1,7 @@
 pub mod candidate_format;
 pub mod config;
 pub mod config_types;
+pub mod input;
 pub use candidate_format::{format_candidate_display, CIRCLED_NUMBERS};
 pub use config::{
     AppConfig, AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
@@ -9,6 +10,7 @@ pub use config::{
     SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType,
     VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
 };
+pub use input::*;
 
 use serde::{Deserialize, Serialize};
 

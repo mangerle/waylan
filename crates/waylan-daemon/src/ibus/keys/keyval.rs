@@ -6,7 +6,7 @@
 //! - **核心优势**：优先基于 keyval 进行字母与标点映射，自动适配非 QWERTY 键盘布局与 XWayland 窗口。
 //! - **代价与局限**：非常规特殊多媒体键需要保留 fallback_keycode 回退。
 
-use waylan_wayland::input_constants::*;
+use waylan_core::input::*;
 
 /// 字母 F 的 evdev 扫描码 (33)
 pub const KEY_F: u32 = 33;

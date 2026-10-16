@@ -9,10 +9,10 @@ use std::thread;
 use std::time::Duration;
 use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
+use waylan_core::input::*;
 use waylan_core::{
     FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TraditionalShortcut, VoiceEngineType,
 };
-use waylan_wayland::input_constants::*;
 
 const KEY_V: u32 = 47;
 

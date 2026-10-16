@@ -9,11 +9,10 @@ use log::info;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use waylan_core::input::*;
 use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
-use waylan_wayland::input_constants::*;
 use waylan_wayland::input_core::{
-    handle_composition_key_with_params, keycode_to_ascii_digit_char, keycode_to_char,
-    keycode_to_punctuation_with_shift, CompositionKeyParams, KeyProcessAction,
+    handle_composition_key_with_params, CompositionKeyParams, KeyProcessAction,
 };
 use waylan_wayland::session_common::update_session_modifiers;
 
