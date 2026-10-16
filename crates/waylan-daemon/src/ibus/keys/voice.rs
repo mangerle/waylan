@@ -151,7 +151,8 @@ impl IbusSessionCore {
 
         let mut final_text = self.poll_voice_events();
         if final_text.is_none() {
-            let deadline = Instant::now() + Duration::from_millis(350);
+            // 将持锁阻塞时长严格限制在 30ms 以内，既能捕获快速完成的识别，又彻底杜绝主事件循环与 D-Bus 卡死
+            let deadline = Instant::now() + Duration::from_millis(30);
             final_text = self.wait_for_voice_completion(deadline);
         }
         if final_text.is_none() {
