@@ -6,7 +6,9 @@
 //! - **核心优势**：在音频中断回调中采用非阻塞有界同步通道（`try_send`），彻底杜绝音频线程卡顿与爆内存。
 //! - **代价与局限**：线性重采样相比高阶带通 sinc 插值开销更低，但高频部分有轻微滤波失真，完全满足语音识别需求。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
@@ -94,6 +96,8 @@ impl LinearResampler {
 pub struct AudioCapture {
     /// 活动音频输入流句柄（RAII 管理，Drop 时自动停止音频捕获）
     _stream: Stream,
+    /// 音频流是否已因底层硬件断开或错误而异常中止
+    is_stream_dead: Arc<AtomicBool>,
     /// 当前所选用的音频设备名称
     device_name: String,
     /// 硬件原始采样率
@@ -103,6 +107,11 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
+    /// 检查底层麦克风硬件音频流是否已因设备拔出或严重错误而异常中断
+    pub fn is_stream_dead(&self) -> bool {
+        self.is_stream_dead.load(Ordering::Acquire)
+    }
+
     /// 启动默认麦克风音频捕获，将重采样后的 16kHz PCM 音频数据块发送至 `pcm_sender`
     pub fn start(pcm_sender: SyncSender<Vec<f32>>) -> Result<Self, VoiceError> {
         Self::start_with_device(pcm_sender, None)
@@ -167,8 +176,11 @@ impl AudioCapture {
         let mut mono_buf = Vec::with_capacity(1024);
         let mut resampled_buf = Vec::with_capacity(1024);
 
-        let err_fn = |err| {
+        let is_stream_dead = Arc::new(AtomicBool::new(false));
+        let dead_flag = is_stream_dead.clone();
+        let err_fn = move |err| {
             error!("[语音采集 错误] 麦克风音频捕获流异常: {}", err);
+            dead_flag.store(true, Ordering::Release);
         };
 
         // 根据不同底层采样格式分流处理
@@ -291,6 +303,7 @@ impl AudioCapture {
 
         Ok(Self {
             _stream: stream,
+            is_stream_dead,
             device_name,
             native_sample_rate,
             channels,

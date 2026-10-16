@@ -454,7 +454,17 @@ impl VoiceSessionController {
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // 空闲时继续监听控制命令
+                    // 空闲时检查底层硬件流是否因设备拔出或严重错误而死亡
+                    if capture_opt
+                        .as_ref()
+                        .map(|c| c.is_stream_dead())
+                        .unwrap_or(false)
+                    {
+                        warn!("[语音会话] 检测到底层麦克风音频流已异常中断（设备可能已拔出），立即终止会话");
+                        let _ =
+                            event_tx.send(VoiceEvent::Error("麦克风音频设备已断开".to_string()));
+                        break;
+                    }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     info!("[语音会话] 麦克风音频流已断开");
