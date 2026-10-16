@@ -63,9 +63,24 @@
   - **I 模式**：常用特殊符号、罗马数字与数学单位快捷输入；
   - **动态时间日期**：输入 `riqi`、`shijian`、`rq` 动态展开全量中文日期、时间戳与农历干支纪年格式。
 
-### 5. 图形化偏好设置中心与桌面托盘
+### 5. 高性能智能语音输入系统
+- **端到端流式语音识别**：
+  - 支持基于 `sherpa-onnx` 与 Zipformer 架构的离线端侧语音大模型，纳秒级首字出字延迟，零隐私泄露；
+  - 弹性支持云端 ASR 识别（兼容各大厂商标准云端语音接口）。
+- **专业级音频前端处理 (AFE) 与环境降噪**：
+  - 级联 80Hz 高通滤波 (HPF) 与宽动态自动增益控制 (AGC)；
+  - 支持多档 AI 神经降噪器（RNNoise 轻量降噪、GTCRN 复杂背景分离与 DeepFilterNet3 高保真语音增强），强噪环境下仍保持高识别率。
+- **智能端点检测 (VAD) 与标点断句**：
+  - 搭载 Silero VAD 深度神经网络，精准切除静音段与呼吸杂音，支持动态预语音缓冲（Pre-speech Buffer）杜绝吞字；
+  - 内置基于 CT-Transformer 的标点恢复与逆文本正则化 (ITN)，数字、度量衡与中英混排智能排版规范化。
+- **双模交互与内存自适应管理**：
+  - **F8 对讲机模式**：按住说话、松开自动识别并即时上屏；
+  - **Ctrl+Alt+V 连续听写模式**：单击开始听写，静音停顿或再次击键自动完成识别并上屏；
+  - 常驻后台内置空闲超时感知机制，长久不用自动释放推理模型实例，内存占用降至最低。
+
+### 6. 图形化偏好设置中心与桌面托盘
 - **Slint 现代化设置中心**：
-  - 提供分栏式图形配置界面（`waylan-settings`），支持快捷键绑定、界面主题、候选词排版风格与外部词库导入；
+  - 提供分栏式图形配置界面（`waylan-settings`），支持快捷键绑定、界面主题、候选词排版风格、语音模型配置与外部词库导入；
   - 外部词库解析与合并迁移至后台异步线程执行，界面操作完全无阻塞。
 - **跨桌面系统托盘集成**：
   - 基于 DBusMenu / StatusNotifierItem (SNI) 规范常驻系统顶栏/托盘，实时双向同步中英文与大写锁定状态；
@@ -81,6 +96,7 @@
 | :--- | :--- |
 | `crates/waylan-core` | 核心数据模型、配置定义、按键事件抽象与候选词一体化排版模块 |
 | `crates/waylan-algo` | 拼音分词切分、Viterbi解码、CSR Bigram转移矩阵、DAT词典与WAL自适应模型 |
+| `crates/waylan-voice` | 音频采集 (cpal)、AFE 前端降噪、Silero VAD、Sherpa-onnx 语音识别、标点恢复与 ITN 模块 |
 | `crates/waylan-ui` | tiny-skia 离屏矢量渲染器、cosmic-text 排版、HiDPI缩放与多形态候选框面板 |
 | `crates/waylan-wayland` | Wayland 双协议实现（input-method v1/v2、virtual-keyboard 与 shm 共享内存） |
 | `crates/waylan-daemon` | 守护进程服务、IBus 引擎集成、DBusMenu/SNI 系统托盘与热重载调度 |
@@ -102,7 +118,8 @@ sudo apt-get install -y \
     libxkbcommon-dev \
     libfontconfig1-dev \
     libfreetype6-dev \
-    libdbus-1-dev
+    libdbus-1-dev \
+    libasound2-dev
 ```
 
 ### 2. 源码编译与本地运行
@@ -160,7 +177,9 @@ journalctl --user -u waylan.service -f
 
 ## 常用操作与使用技巧
 
-- **中英文切换**：单击 `Shift` 键（或通过设置中心绑定为 `Caps Lock`）；
+- **中英文切换**：单击 `Shift` 键（或通过设置中心配置为 `Ctrl` 或 `Caps Lock`）；
+- **语音对讲机输入**：长按 `F8` 键说话，松开按键即刻自动识别并上屏；
+- **语音连续听写输入**：按下 `Ctrl+Alt+V` 开启听写，说完停顿或再次击键自动完成识别并上屏；
 - **候选词选择**：数字键 `1` ~ `9`（第 10 项为 `0`），或使用空格键确认当前高亮项；
 - **候选词翻页**：使用 `-` / `=`、`[` / `]`、`PageUp` / `PageDown` 或方向键 `上` / `下`；
 - **展开大网格面板**：候选状态下按方向键 `下`（或鼠标点击候选框右侧倒三角展开按钮）；
