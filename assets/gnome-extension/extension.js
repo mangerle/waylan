@@ -2,86 +2,777 @@ import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import Clutter from 'gi://Clutter';
+import St from 'gi://St';
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 
-export default class WaylanHideInputExtension extends Extension {
-    enable() {
-        this._indicator = Main.panel.statusArea['keyboard'];
-        if (!this._indicator) {
-            return;
+/**
+ * 读取微澜输入法配置文件 (~/.config/waylan/config.toml)
+ *
+ * 轻量提取候选框渲染模式、排版密度、主题预设与语音交互风格
+ */
+function readWaylanConfig() {
+    const configDir = GLib.get_user_config_dir();
+    const configPath = GLib.build_filenamev([configDir, 'waylan', 'config.toml']);
+    const file = Gio.File.new_for_path(configPath);
+
+    const defaultConfig = {
+        windowMode: 'waylan_custom',
+        density: 'normal',
+        theme: 'emerald',
+        voiceVisual: 'dynamic_waveform',
+        itemSpacing: 8,
+        paddingV: 4,
+        paddingH: 8,
+        cornerRadius: 8,
+        opacity: 95,
+    };
+
+    if (!file.query_exists(null)) {
+        return defaultConfig;
+    }
+
+    try {
+        const [ok, bytes] = file.load_contents(null);
+        if (!ok || !bytes) {
+            return defaultConfig;
+        }
+        const text = new TextDecoder().decode(bytes);
+
+        let windowMode = defaultConfig.windowMode;
+        let density = defaultConfig.density;
+        let theme = defaultConfig.theme;
+        let voiceVisual = defaultConfig.voiceVisual;
+        let itemSpacing = defaultConfig.itemSpacing;
+        let paddingV = defaultConfig.paddingV;
+        let paddingH = defaultConfig.paddingH;
+        let cornerRadius = defaultConfig.cornerRadius;
+        let opacity = defaultConfig.opacity;
+
+        const modeMatch = text.match(/^\s*candidate_window_mode\s*=\s*"([^"]+)"/m);
+        if (modeMatch) {
+            windowMode = modeMatch[1];
         }
 
-        // 保存原始 show 方法以便在扩展禁用时完美还原
-        this._origShow = this._indicator.show;
-        this._indicator.show = () => {
-            // 拦截 GNOME Shell 内部 _currentSourceChanged 对 show() 的调用
+        const densityMatch = text.match(/^\s*candidate_density\s*=\s*"([^"]+)"/m);
+        if (densityMatch) {
+            density = densityMatch[1];
+        }
+
+        const themeMatch = text.match(/^\s*candidate_theme\s*=\s*"([^"]+)"/m);
+        if (themeMatch) {
+            theme = themeMatch[1];
+        }
+
+        const voiceMatch = text.match(/^\s*visual_effect\s*=\s*"([^"]+)"/m);
+        if (voiceMatch) {
+            voiceVisual = voiceMatch[1];
+        }
+
+        const spacingMatch = text.match(/^\s*candidate_item_spacing\s*=\s*([0-9.]+)/m);
+        if (spacingMatch) {
+            itemSpacing = parseFloat(spacingMatch[1]);
+        }
+
+        const padVMatch = text.match(/^\s*candidate_padding_v\s*=\s*([0-9.]+)/m);
+        if (padVMatch) {
+            paddingV = parseFloat(padVMatch[1]);
+        }
+
+        const padHMatch = text.match(/^\s*candidate_padding_h\s*=\s*([0-9.]+)/m);
+        if (padHMatch) {
+            paddingH = parseFloat(padHMatch[1]);
+        }
+
+        const radiusMatch = text.match(/^\s*candidate_corner_radius\s*=\s*([0-9.]+)/m);
+        if (radiusMatch) {
+            cornerRadius = parseFloat(radiusMatch[1]);
+        }
+
+        const opacityMatch = text.match(/^\s*candidate_opacity\s*=\s*([0-9]+)/m);
+        if (opacityMatch) {
+            opacity = parseInt(opacityMatch[1], 10);
+        }
+
+        return { windowMode, density, theme, voiceVisual, itemSpacing, paddingV, paddingH, cornerRadius, opacity };
+    } catch (e) {
+        console.error('[WaylanExtension] 读取微澜配置文件异常:', e);
+        return defaultConfig;
+    }
+}
+
+/**
+ * 微澜拼音输入法专属现代胶囊候选框组件
+ *
+ * # 设计原理
+ * - 实现初衷：替代 GNOME 原生粗糙臃肿的 IBus 候选黑白框，以统一的翡翠绿高亮与紧凑微排版呈现微澜视觉风格。
+ * - 核心优势：原生接入 GNOME Shell Clutter/St 顶层 Chrome 渲染管线，零焦点竞争、零跨进程延迟，天然获得精密的光标吸附与防屏幕溢出能力。
+ * - 代价与局限：通过纳管 IBusCandidatePopup 的子节点与 setCandidates 实现非侵入式替换，在禁用扩展或切换为原生模式时可无损还原原生 UI。
+ */
+class WaylanCandidateView {
+    constructor(getPanelService, initialConfig) {
+        this._getPanelService = getPanelService;
+        this._config = initialConfig || {
+            density: 'normal',
+            theme: 'emerald',
+            voiceVisual: 'dynamic_waveform',
         };
-        this._indicator.hide();
 
-        if (this._indicator.container) {
-            this._origContainerShow = this._indicator.container.show;
-            this._indicator.container.show = () => {};
-            this._indicator.container.hide();
+        // 主容器：纵向排布（上方拼音预编辑，下方候选词与翻页）
+        this.actor = new St.BoxLayout({
+            style_class: 'waylan-candidate-container',
+            vertical: true,
+            reactive: true,
+        });
+
+        // 顶部拼音预编辑栏
+        this._preeditBar = new St.BoxLayout({
+            style_class: 'waylan-preedit-bar',
+            vertical: false,
+            visible: false,
+        });
+        this._badge = new St.Label({
+            style_class: 'waylan-badge',
+            text: '微澜',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._preeditLabel = new St.Label({
+            style_class: 'waylan-preedit-text',
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._preeditBar.add_child(this._badge);
+        this._preeditBar.add_child(this._preeditLabel);
+        this.actor.add_child(this._preeditBar);
+
+        // 主候选词展示行（横向流）
+        this._mainRow = new St.BoxLayout({
+            style_class: 'waylan-candidates-bar',
+            vertical: false,
+        });
+        this.actor.add_child(this._mainRow);
+
+        // 预先创建 10 个候选条目胶囊
+        this._items = [];
+        for (let i = 0; i < 10; i++) {
+            const idx = i;
+            const item = new St.Button({
+                style_class: 'waylan-cand-item',
+                reactive: true,
+                track_hover: true,
+                visible: false,
+                x_align: Clutter.ActorAlign.FILL,
+                x_expand: true,
+            });
+            const content = new St.BoxLayout({
+                style_class: 'waylan-cand-content',
+                vertical: false,
+                x_align: Clutter.ActorAlign.START,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+            });
+            const indexLabel = new St.Label({
+                style_class: 'waylan-cand-index',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            const textLabel = new St.Label({
+                style_class: 'waylan-cand-text',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            const tabBadge = new St.Label({
+                style_class: 'waylan-tab-badge',
+                text: 'Tab ⇥',
+                visible: false,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            content.add_child(indexLabel);
+            content.add_child(textLabel);
+            content.add_child(tabBadge);
+            item.set_child(content);
+
+            item.connect('clicked', () => {
+                const ps = this._getPanelService();
+                if (ps) {
+                    ps.candidate_clicked(idx, 1, 0);
+                }
+            });
+
+            item._indexLabel = indexLabel;
+            item._textLabel = textLabel;
+            item._tabBadge = tabBadge;
+            this._items.push(item);
+            this._mainRow.add_child(item);
         }
 
-        // 监听 visible 属性变更，防止 GNOME 内部直接通过 visible = true 绕过 show()
-        this._visibleWatchId = this._indicator.connect('notify::visible', () => {
-            if (this._indicator && this._indicator.visible) {
-                this._indicator.visible = false;
+        // 翻页操作区
+        this._pageBar = new St.BoxLayout({
+            style_class: 'waylan-page-bar',
+            vertical: false,
+            visible: false,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._prevBtn = new St.Button({
+            style_class: 'waylan-page-btn',
+            label: '◀',
+            reactive: true,
+            track_hover: true,
+        });
+        this._pageLabel = new St.Label({
+            style_class: 'waylan-page-label',
+            text: '1/1',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._nextBtn = new St.Button({
+            style_class: 'waylan-page-btn',
+            label: '▶',
+            reactive: true,
+            track_hover: true,
+        });
+
+        this._prevBtn.connect('clicked', () => {
+            const ps = this._getPanelService();
+            if (ps) {
+                ps.page_up();
+            }
+        });
+        this._nextBtn.connect('clicked', () => {
+            const ps = this._getPanelService();
+            if (ps) {
+                ps.page_down();
             }
         });
 
-        if (this._indicator.container) {
-            this._containerVisibleWatchId = this._indicator.container.connect('notify::visible', () => {
-                if (this._indicator && this._indicator.container && this._indicator.container.visible) {
-                    this._indicator.container.visible = false;
-                }
-            });
-        }
+        this._pageBar.add_child(this._prevBtn);
+        this._pageBar.add_child(this._pageLabel);
+        this._pageBar.add_child(this._nextBtn);
+        this._mainRow.add_child(this._pageBar);
 
-        // 自动激活微澜为首选活跃输入源（解决开机/重启时 GNOME Shell 因 IBus 注册时差自动回退到 xkb 英文布局的问题）
-        this._manager = this._indicator._inputSourceManager;
-        if (this._manager) {
-            this._activateWaylanIfAvailable();
-            this._sourcesChangedId = this._manager.connect('sources-changed', () => {
-                this._activateWaylanIfAvailable();
-            });
-        }
+        // ---------------- 现代语音输入动效卡片 ----------------
+        this._voiceCapsule = new St.BoxLayout({
+            style_class: 'waylan-voice-capsule',
+            vertical: false,
+            visible: false,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
 
-        // 探测并纳管 GNOME 原生候选框组件：彻底根治纯英文（如 women）与 Emoji 悬空浮动问题
+
+        // 律动声浪容器（5 根声浪柱）
+        this._waveContainer = new St.BoxLayout({
+            style_class: 'waylan-wave-container',
+            vertical: false,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._waveBars = [];
+        this._currentHeights = [4, 4, 4, 4, 4];
+        this._targetHeights = [4, 4, 4, 4, 4];
+        for (let b = 0; b < 5; b++) {
+            const bar = new St.Bin({
+                style_class: 'waylan-wave-bar',
+                height: 4,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            this._waveBars.push(bar);
+            this._waveContainer.add_child(bar);
+        }
+        this._voiceCapsule.add_child(this._waveContainer);
+
+        // 流光呼吸圆点
+        this._pulseDot = new St.Bin({
+            style_class: 'waylan-pulse-dot',
+            visible: false,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._voiceCapsule.add_child(this._pulseDot);
+
+        // 语音提示文字标签
+        this._voiceLabel = new St.Label({
+            style_class: 'waylan-voice-label',
+            text: '正在聆听中...',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._voiceCapsule.add_child(this._voiceLabel);
+
+        this.actor.add_child(this._voiceCapsule);
+
+        // 应用排版密度与色彩主题
+        this.applyConfig(this._config);
+
+        // 监听并动态同步系统深色/浅色外观模式
         try {
-            const ibusManager = IBusManager.getIBusManager();
-            if (ibusManager && ibusManager._candidatePopup) {
-                const area = ibusManager._candidatePopup._candidateArea;
-                if (area && area._candidateBoxes) {
-                    this._candidateArea = area;
-                    this._origSetCandidates = area.setCandidates;
+            this._settings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+            this._syncDarkTheme();
+            this._settingsWatchId = this._settings.connect('changed::color-scheme', () => {
+                this._syncDarkTheme();
+            });
+        } catch (e) {
+            // 降级忽略
+        }
+    }
 
-                    // 统一锁定所有条目与其内部文本的纵向对齐策略为 FILL（填满高度），杜绝垂直居中浮动
-                    const enforceAlignment = () => {
-                        for (let i = 0; i < area._candidateBoxes.length; i++) {
-                            const b = area._candidateBoxes[i];
-                            b.y_align = Clutter.ActorAlign.FILL;
-                            if (b._candidateLabel) {
-                                b._candidateLabel.y_align = Clutter.ActorAlign.FILL;
-                                if (b._candidateLabel.clutter_text) {
-                                    b._candidateLabel.clutter_text.y_align = Clutter.ActorAlign.FILL;
-                                }
-                            }
-                        }
-                    };
+    applyConfig(config) {
+        this._config = config;
 
-                    enforceAlignment();
+        // 1. 密度类切换 (density-compact / density-normal / density-spacious)
+        this.actor.remove_style_class_name('density-compact');
+        this.actor.remove_style_class_name('density-normal');
+        this.actor.remove_style_class_name('density-spacious');
 
-                    const self = this;
-                    area.setCandidates = function(indexes, candidates, cursorPosition, cursorVisible) {
-                        self._origSetCandidates.call(this, indexes, candidates, cursorPosition, cursorVisible);
-                        enforceAlignment();
-                    };
+        if (config.density === 'compact') {
+            this.actor.add_style_class_name('density-compact');
+        } else if (config.density === 'spacious') {
+            this.actor.add_style_class_name('density-spacious');
+        } else {
+            this.actor.add_style_class_name('density-normal');
+        }
+
+        // 2. 主题类切换 (theme-emerald / theme-monochrome / theme-ice-blue / theme-warm-latte)
+        this.actor.remove_style_class_name('theme-emerald');
+        this.actor.remove_style_class_name('theme-monochrome');
+        this.actor.remove_style_class_name('theme-ice-blue');
+        this.actor.remove_style_class_name('theme-warm-latte');
+
+        if (config.theme === 'monochrome') {
+            this.actor.add_style_class_name('theme-monochrome');
+        } else if (config.theme === 'ice_blue') {
+            this.actor.add_style_class_name('theme-ice-blue');
+        } else if (config.theme === 'warm_latte') {
+            this.actor.add_style_class_name('theme-warm-latte');
+        } else {
+            this.actor.add_style_class_name('theme-emerald');
+        }
+
+        // 3. 高级尺寸微调 (以 inline style 形式动态应用至外层容器与主候选流)
+        const padV = config.paddingV !== undefined ? config.paddingV : 4;
+        const padH = config.paddingH !== undefined ? config.paddingH : 8;
+        const radius = config.cornerRadius !== undefined ? config.cornerRadius : 8;
+        const opacity = config.opacity !== undefined ? config.opacity : 95;
+        const itemSpacing = config.itemSpacing !== undefined ? config.itemSpacing : 8;
+
+        this.actor.style = `padding: ${padV}px ${padH}px !important; border-radius: ${radius}px !important; opacity: ${opacity / 100.0} !important;`;
+        const itemRadius = Math.max(3, Math.round(radius - 2));
+        if (this._items) {
+            for (const item of this._items) {
+                item.style = `border-radius: ${itemRadius}px !important;`;
+            }
+        }
+        if (this._mainRow) {
+            this._mainRow.spacing = Math.round(itemSpacing);
+        }
+    }
+
+    _syncDarkTheme() {
+        if (!this._settings) {
+            return;
+        }
+        const scheme = this._settings.get_string('color-scheme');
+        if (scheme === 'prefer-dark') {
+            this.actor.add_style_class_name('dark');
+        } else {
+            this.actor.remove_style_class_name('dark');
+        }
+    }
+
+    updatePreedit(text, visible) {
+        const hasText = !!(text && text.trim().length > 0);
+        this._preeditLabel.text = hasText ? text : '';
+        this._preeditBar.visible = visible && hasText;
+    }
+
+    updateCandidates(indexes, candidates, cursorPosition, cursorVisible) {
+        // 判断是否为语音录入状态（候选词以“正在聆听”开头）
+        const isVoiceState = candidates.length > 0 &&
+            candidates[0] &&
+            candidates[0].includes('正在聆听');
+
+        if (isVoiceState && this._config.voiceVisual !== 'classic_text') {
+            const waveform = (indexes && indexes.length > 0) ? indexes[0] : '';
+            this._showVoiceVisual(candidates[0], waveform);
+            return;
+        }
+
+        // 退出语音动效，还原普通候选词
+        this._hideVoiceVisual();
+
+        for (let i = 0; i < this._items.length; i++) {
+            const item = this._items[i];
+            if (i < candidates.length) {
+                const hasCustomIndex = indexes && indexes[i] && indexes[i] !== '\u200B';
+                if (hasCustomIndex) {
+                    item._indexLabel.text = indexes[i];
+                    item._indexLabel.visible = true;
+                } else {
+                    item._indexLabel.text = '';
+                    item._indexLabel.visible = false;
+                }
+                let rawText = candidates[i] || '';
+                const isExpandable = rawText.includes('⇥') || rawText.includes('Tab');
+                if (isExpandable) {
+                    rawText = rawText.replace(/\s*⇥\s*Tab/, '').replace(/⇥/, '').trim();
+                    item.add_style_class_name('is-expandable');
+                    item._tabBadge.visible = true;
+                } else {
+                    item.remove_style_class_name('is-expandable');
+                    item._tabBadge.visible = false;
+                }
+                item._textLabel.text = rawText;
+                if (cursorVisible && i === cursorPosition) {
+                    item.add_style_class_name('selected');
+                } else {
+                    item.remove_style_class_name('selected');
+                }
+                item.visible = true;
+            } else {
+                item.visible = false;
+                item.remove_style_class_name('selected');
+                item.remove_style_class_name('is-expandable');
+                item._tabBadge.visible = false;
+            }
+        }
+    }
+
+    _showVoiceVisual(candidateText, waveform) {
+        this._mainRow.visible = false;
+        this._voiceCapsule.visible = true;
+
+        // 彻底清洗过滤可能附带的字符，文字标题永远保持纯净
+        const cleanText = candidateText.replace(/[\u2580-\u259f\u2500-\u257f\s\-_—~]+$/, '').trim();
+
+        // 从 waveform (优先) 或 candidateText 提取 5 根音波柱的真实声音能量
+        const waveSource = (waveform && waveform.length > 0) ? waveform : candidateText;
+        const levels = [];
+        for (let i = 0; i < waveSource.length; i++) {
+            const code = waveSource.charCodeAt(i);
+            // Unicode 块元素 \u2581 (' ') ~ \u2588 ('█')
+            if (code >= 0x2581 && code <= 0x2588) {
+                levels.push(code - 0x2581);
+            }
+        }
+
+        if (levels.length > 0) {
+            const lastLevels = levels.slice(-5);
+            while (lastLevels.length < 5) {
+                lastLevels.unshift(0);
+            }
+            let anyVoice = false;
+            for (let i = 0; i < 5; i++) {
+                const lvl = lastLevels[i];
+                if (lvl > 0) {
+                    anyVoice = true;
+                    // 真实能量高度映射：从 7px 到 24px 动态起伏
+                    this._targetHeights[i] = Math.round(4 + lvl * 2.8);
+                } else {
+                    // 静音基线：4px 静态平直
+                    this._targetHeights[i] = 4;
                 }
             }
-        } catch (e) {
-            console.error('[WaylanExtension] 纳管候选框对齐策略失败:', e);
+            this._isSpeaking = anyVoice;
+        } else {
+            this._targetHeights = [4, 4, 4, 4, 4];
+            this._isSpeaking = false;
         }
+
+        if (this._config.voiceVisual === 'breathing_pulse') {
+            // 模式 B：流光呼吸光环微卡片
+            this._waveContainer.visible = false;
+            this._pulseDot.visible = true;
+            this._voiceLabel.text = cleanText || '微澜语音输入中...';
+            this._startPulseAnimation();
+        } else {
+            // 模式 A：现代多频律动声浪胶囊 (默认)
+            this._waveContainer.visible = true;
+            this._pulseDot.visible = false;
+            this._voiceLabel.text = cleanText || '正在聆听中...';
+            this._startWaveAnimation();
+        }
+    }
+
+    _hideVoiceVisual() {
+        this._stopVoiceAnimation();
+        this._targetHeights = [4, 4, 4, 4, 4];
+        this._currentHeights = [4, 4, 4, 4, 4];
+        for (let i = 0; i < this._waveBars.length; i++) {
+            this._waveBars[i].height = 4;
+        }
+        this._voiceCapsule.visible = false;
+        this._mainRow.visible = true;
+    }
+
+    _startWaveAnimation() {
+        if (this._waveTimerId) {
+            return;
+        }
+        // 30ms 弹性平滑收敛插值循环 (~33 FPS)
+        this._waveTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30, () => {
+            for (let i = 0; i < this._waveBars.length; i++) {
+                const target = this._targetHeights[i] || 4;
+                const current = this._currentHeights[i] || 4;
+                // 上升迅速跟手（冲量 0.55），下降平滑收敛（阻尼 0.2）
+                const factor = target > current ? 0.55 : 0.2;
+                const next = current + (target - current) * factor;
+                const diff = Math.abs(next - target);
+                if (diff > 0.15) {
+                    this._currentHeights[i] = next;
+                    this._waveBars[i].height = Math.round(next);
+                } else {
+                    this._currentHeights[i] = target;
+                    this._waveBars[i].height = target;
+                }
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _startPulseAnimation() {
+        if (this._pulseTimerId) {
+            return;
+        }
+        let pulseOn = false;
+        this._pulseTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+            pulseOn = !pulseOn;
+            this._pulseDot.opacity = pulseOn ? 255 : 120;
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopVoiceAnimation() {
+        if (this._waveTimerId) {
+            GLib.source_remove(this._waveTimerId);
+            this._waveTimerId = 0;
+        }
+        if (this._pulseTimerId) {
+            GLib.source_remove(this._pulseTimerId);
+            this._pulseTimerId = 0;
+        }
+    }
+
+    updatePages(page, nPages) {
+        if (nPages > 1) {
+            this._pageBar.visible = true;
+            this._pageLabel.text = `${page + 1}/${nPages}`;
+        } else {
+            this._pageBar.visible = false;
+        }
+    }
+
+    setOrientation(orientation) {
+        this._orientation = orientation;
+        // 1 为 IBus.Orientation.VERTICAL（微澜按 TAB 展开二级日期时间/多格式卡片时主动发射该模式）
+        const isVertical = (orientation === 1);
+        this._mainRow.vertical = isVertical;
+        for (const item of this._items) {
+            item.x_align = isVertical ? Clutter.ActorAlign.FILL : Clutter.ActorAlign.CENTER;
+            if (item.child) {
+                item.child.x_align = isVertical ? Clutter.ActorAlign.START : Clutter.ActorAlign.CENTER;
+                item.child.x_expand = isVertical;
+            }
+        }
+        if (isVertical) {
+            this.actor.add_style_class_name('vertical-mode');
+            this.actor.remove_style_class_name('horizontal-mode');
+        } else {
+            this.actor.add_style_class_name('horizontal-mode');
+            this.actor.remove_style_class_name('vertical-mode');
+        }
+    }
+
+    destroy() {
+        this._stopVoiceAnimation();
+        if (this._settings && this._settingsWatchId) {
+            this._settings.disconnect(this._settingsWatchId);
+            this._settingsWatchId = 0;
+            this._settings = null;
+        }
+        this.actor.destroy();
+    }
+}
+
+export default class WaylanHideInputExtension extends Extension {
+    enable() {
+        // 1. 隐藏系统原生顶栏键盘指示器（单输入源体验）
+        this._indicator = Main.panel.statusArea['keyboard'];
+        if (this._indicator) {
+            this._origShow = this._indicator.show;
+            this._indicator.show = () => {};
+            this._indicator.hide();
+
+            if (this._indicator.container) {
+                this._origContainerShow = this._indicator.container.show;
+                this._indicator.container.show = () => {};
+                this._indicator.container.hide();
+            }
+
+            this._visibleWatchId = this._indicator.connect('notify::visible', () => {
+                if (this._indicator && this._indicator.visible) {
+                    this._indicator.visible = false;
+                }
+            });
+
+            if (this._indicator.container) {
+                this._containerVisibleWatchId = this._indicator.container.connect('notify::visible', () => {
+                    if (this._indicator && this._indicator.container && this._indicator.container.visible) {
+                        this._indicator.container.visible = false;
+                    }
+                });
+            }
+
+            this._manager = this._indicator._inputSourceManager;
+            if (this._manager) {
+                this._activateWaylanIfAvailable();
+                this._sourcesChangedId = this._manager.connect('sources-changed', () => {
+                    this._activateWaylanIfAvailable();
+                });
+            }
+        }
+
+        // 2. 监听微澜配置文件变动，实现专属模式与桌面原生模式的热切换
+        this._setupConfigWatcher();
+
+        // 3. 应用当前配置
+        this._applyCurrentConfig();
+    }
+
+    _setupConfigWatcher() {
+        const configDir = GLib.get_user_config_dir();
+        const waylanDir = GLib.build_filenamev([configDir, 'waylan']);
+        const dirFile = Gio.File.new_for_path(waylanDir);
+
+        try {
+            // 目录级监听：可靠捕获文件内容修改、新创建以及原子 rename 替换事件
+            this._configMonitor = dirFile.monitor_directory(Gio.FileMonitorFlags.NONE, null);
+            this._configMonitorId = this._configMonitor.connect('changed', (mon, f, of, eventType) => {
+                const basename = f ? f.get_basename() : '';
+                if (basename && basename.startsWith('config.toml')) {
+                    if (this._configDebounceTimer) {
+                        GLib.source_remove(this._configDebounceTimer);
+                    }
+                    this._configDebounceTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                        this._configDebounceTimer = 0;
+                        this._applyCurrentConfig();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            });
+        } catch (e) {
+            console.error('[WaylanExtension] 创建配置文件目录监听失败:', e);
+        }
+    }
+
+    _applyCurrentConfig() {
+        const config = readWaylanConfig();
+        this._currentConfig = config;
+
+        if (config.windowMode === 'native') {
+            // 桌面系统原生模式：卸载微澜自定义视图，保留底层隐藏重复序号与指示器修复
+            this._unmountWaylanView();
+        } else {
+            // 微澜现代专属模式：接管候选弹窗或热更新样式
+            if (!this._waylanView) {
+                this._mountWaylanView(config);
+            } else {
+                this._waylanView.applyConfig(config);
+            }
+        }
+    }
+
+    _mountWaylanView(config) {
+        try {
+            const ibusManager = IBusManager.getIBusManager();
+            if (!ibusManager || !ibusManager._candidatePopup) {
+                return;
+            }
+            const popup = ibusManager._candidatePopup;
+            this._candidatePopup = popup;
+
+            const getPs = () => popup._panelService || ibusManager._panelService;
+            this._waylanView = new WaylanCandidateView(getPs, config);
+
+            // 保存原始子控件并将弹窗内容替换为微澜胶囊组件
+            this._origPopupChild = popup.bin.get_child();
+            popup.bin.set_child(this._waylanView.actor);
+
+            const area = popup._candidateArea;
+            if (area) {
+                this._candidateArea = area;
+                this._origSetCandidates = area.setCandidates;
+                const view = this._waylanView;
+
+                area.setCandidates = function(indexes, candidates, cursorPosition, cursorVisible) {
+                    view.updateCandidates(indexes, candidates, cursorPosition, cursorVisible);
+                };
+
+                this._origUpdateButtons = area.updateButtons;
+                area.updateButtons = function(wrapsAround, page, nPages) {
+                    view.updatePages(page, nPages);
+                };
+
+                this._origSetOrientation = area.setOrientation;
+                area.setOrientation = function(orientation) {
+                    view.setOrientation(orientation);
+                };
+            }
+
+            // 监听预编辑文字与可见性更新
+            if (popup._preeditText) {
+                const view = this._waylanView;
+                this._preeditNotifyTextId = popup._preeditText.connect('notify::text', () => {
+                    view.updatePreedit(popup._preeditText.text, popup._preeditText.visible);
+                });
+                this._preeditNotifyVisibleId = popup._preeditText.connect('notify::visible', () => {
+                    view.updatePreedit(popup._preeditText.text, popup._preeditText.visible);
+                });
+            }
+        } catch (e) {
+            console.error('[WaylanExtension] 挂载微澜专属候选框失败:', e);
+        }
+    }
+
+    _unmountWaylanView() {
+        if (!this._candidatePopup) {
+            return;
+        }
+
+        // 还原弹窗原始子节点
+        if (this._origPopupChild) {
+            this._candidatePopup.bin.set_child(this._origPopupChild);
+            this._origPopupChild = null;
+        }
+
+        // 还原 CandidateArea 方法
+        if (this._candidateArea) {
+            if (this._origSetCandidates) {
+                this._candidateArea.setCandidates = this._origSetCandidates;
+                this._origSetCandidates = null;
+            }
+            if (this._origUpdateButtons) {
+                this._candidateArea.updateButtons = this._origUpdateButtons;
+                this._origUpdateButtons = null;
+            }
+            if (this._origSetOrientation) {
+                this._candidateArea.setOrientation = this._origSetOrientation;
+                this._origSetOrientation = null;
+            }
+            this._candidateArea = null;
+        }
+
+        // 断开 preeditText 信号
+        if (this._candidatePopup._preeditText) {
+            if (this._preeditNotifyTextId) {
+                this._candidatePopup._preeditText.disconnect(this._preeditNotifyTextId);
+                this._preeditNotifyTextId = 0;
+            }
+            if (this._preeditNotifyVisibleId) {
+                this._candidatePopup._preeditText.disconnect(this._preeditNotifyVisibleId);
+                this._preeditNotifyVisibleId = 0;
+            }
+        }
+
+        // 销毁微澜自定义视图
+        if (this._waylanView) {
+            this._waylanView.destroy();
+            this._waylanView = null;
+        }
+
+        this._candidatePopup = null;
     }
 
     _activateWaylanIfAvailable() {
@@ -103,6 +794,17 @@ export default class WaylanHideInputExtension extends Extension {
     }
 
     disable() {
+        if (this._configDebounceTimer) {
+            GLib.source_remove(this._configDebounceTimer);
+            this._configDebounceTimer = 0;
+        }
+
+        if (this._configMonitor && this._configMonitorId) {
+            this._configMonitor.disconnect(this._configMonitorId);
+            this._configMonitorId = 0;
+            this._configMonitor = null;
+        }
+
         if (this._manager && this._sourcesChangedId) {
             this._manager.disconnect(this._sourcesChangedId);
             this._sourcesChangedId = 0;
@@ -112,40 +814,30 @@ export default class WaylanHideInputExtension extends Extension {
         if (!this._indicator) {
             this._indicator = Main.panel.statusArea['keyboard'];
         }
-        if (!this._indicator) {
-            return;
+        if (this._indicator) {
+            if (this._visibleWatchId) {
+                this._indicator.disconnect(this._visibleWatchId);
+                this._visibleWatchId = 0;
+            }
+            if (this._containerVisibleWatchId && this._indicator.container) {
+                this._indicator.container.disconnect(this._containerVisibleWatchId);
+                this._containerVisibleWatchId = 0;
+            }
+            if (this._origShow) {
+                this._indicator.show = this._origShow;
+                this._origShow = null;
+            }
+            if (this._origContainerShow && this._indicator.container) {
+                this._indicator.container.show = this._origContainerShow;
+                this._origContainerShow = null;
+            }
+            this._indicator.visible = true;
+            if (this._indicator.container) {
+                this._indicator.container.visible = true;
+            }
+            this._indicator = null;
         }
 
-        // 断开属性变动监听信号
-        if (this._visibleWatchId) {
-            this._indicator.disconnect(this._visibleWatchId);
-            this._visibleWatchId = 0;
-        }
-        if (this._containerVisibleWatchId && this._indicator.container) {
-            this._indicator.container.disconnect(this._containerVisibleWatchId);
-            this._containerVisibleWatchId = 0;
-        }
-
-        // 恢复原始方法与面板展示
-        if (this._origShow) {
-            this._indicator.show = this._origShow;
-            this._origShow = null;
-        }
-        if (this._origContainerShow && this._indicator.container) {
-            this._indicator.container.show = this._origContainerShow;
-            this._origContainerShow = null;
-        }
-
-        if (this._candidateArea && this._origSetCandidates) {
-            this._candidateArea.setCandidates = this._origSetCandidates;
-            this._origSetCandidates = null;
-            this._candidateArea = null;
-        }
-
-        this._indicator.visible = true;
-        if (this._indicator.container) {
-            this._indicator.container.visible = true;
-        }
-        this._indicator = null;
+        this._unmountWaylanView();
     }
 }

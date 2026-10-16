@@ -1,8 +1,8 @@
 /* 微澜拼音输入法 GNOME Shell 候选框紧凑化与同基线排版样式 */
 
-/* 候选框外层弹窗容器：压缩上下内边距，统一设置中文字体族保证 Metrics 一致 */
+/* 候选框外层弹窗容器：压缩上下内边距，统一设置字体保证 Metrics 一致 */
 .candidate-popup-content {
-    font-family: "Noto Sans CJK SC", "Source Han Sans CN", "PingFang SC", sans-serif !important;
+    font-family: sans-serif !important;
     padding: 3px 6px !important;
     border-radius: 8px !important;
     spacing: 4px !important;
@@ -10,7 +10,7 @@
 
 /* 单个候选条目盒模型：紧凑化间距与内边距，统一高度确保所有条目物理高度一致 */
 .candidate-box {
-    font-family: "Noto Sans CJK SC", "Source Han Sans CN", "PingFang SC", sans-serif !important;
+    font-family: sans-serif !important;
     padding: 3px 8px !important;
     margin: 1px 3px !important;
     border-radius: 6px !important;
@@ -34,7 +34,7 @@
 
 /* 候选词标签：统一中文字体，保证纯英文（如 women）与汉字条目基于同一度量排版 */
 .candidate-box .candidate-label {
-    font-family: "Noto Sans CJK SC", "Source Han Sans CN", "PingFang SC", sans-serif !important;
+    font-family: sans-serif !important;
     margin-right: 0px !important;
     padding-right: 0px !important;
 }
@@ -49,3 +49,485 @@
     margin: 1px !important;
     border-radius: 4px !important;
 }
+
+/* ========================================================
+   微澜专属现代胶囊候选框样式 (Waylan Custom Candidate View)
+   ======================================================== */
+
+/* 消除 GNOME 原生 BoxPointer 厚重箭头与多余留白 */
+.candidate-popup-boxpointer {
+    -arrow-border-radius: 8px !important;
+    -arrow-base: 0px !important;
+    -arrow-rise: 0px !important;
+}
+
+/* 微澜主容器：悬浮胶囊底板、高雅内边距与阴影 */
+.waylan-candidate-container {
+    background-color: #ffffff !important;
+    color: #1e293b !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12) !important;
+    padding: 4px 6px !important;
+    font-family: sans-serif !important;
+    overflow: hidden !important;
+}
+
+.waylan-candidate-container.dark {
+    background-color: #18181b !important;
+    color: #e4e4e7 !important;
+    border: 1px solid #27272a !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+    overflow: hidden !important;
+}
+
+/* 拼音预编辑条 */
+.waylan-preedit-bar {
+    padding: 2px 4px 4px 4px !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+    margin-bottom: 4px !important;
+}
+
+.waylan-candidate-container.dark .waylan-preedit-bar {
+    border-bottom: 1px solid #27272a !important;
+}
+
+/* 微澜翡翠绿品牌徽标 */
+.waylan-badge {
+    background-color: #07c160 !important;
+    color: #ffffff !important;
+    font-size: 10px !important;
+    font-weight: bold !important;
+    border-radius: 4px !important;
+    padding: 1px 4px !important;
+    margin-right: 6px !important;
+}
+
+/* 拼音字符 */
+.waylan-preedit-text {
+    font-size: 13px !important;
+    color: #0f172a !important;
+    font-weight: 500 !important;
+}
+
+.waylan-candidate-container.dark .waylan-preedit-text {
+    color: #f4f4f5 !important;
+}
+
+/* 候选词横向流 */
+.waylan-candidates-bar {
+    spacing: 2px !important;
+}
+
+/* 单个候选条目胶囊 */
+.waylan-cand-item {
+    padding: 2px 8px !important;
+    border-radius: 6px !important;
+    border: 1px solid transparent !important;
+}
+
+.waylan-cand-item:hover {
+    background-color: #f1f5f9 !important;
+}
+
+.waylan-candidate-container.dark .waylan-cand-item:hover {
+    background-color: #27272a !important;
+}
+
+/* 选中项：微澜活力翡翠绿高亮徽章（清晰通透、锐利易读） */
+.waylan-cand-item.selected {
+    background-color: #0ea668 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.dark .waylan-cand-item.selected {
+    background-color: #0b8d58 !important;
+    color: #ffffff !important;
+}
+
+/* 可按 TAB 展开的二级候选着色与微光提示 */
+.waylan-cand-item.is-expandable {
+    border: 1px solid rgba(7, 193, 96, 0.45) !important;
+    background-color: rgba(7, 193, 96, 0.08) !important;
+}
+
+.waylan-candidate-container.dark .waylan-cand-item.is-expandable {
+    border: 1px solid rgba(5, 150, 105, 0.55) !important;
+    background-color: rgba(5, 150, 105, 0.15) !important;
+}
+
+.waylan-cand-item.is-expandable.selected {
+    border: 1px solid transparent !important;
+    background-color: #07c160 !important;
+}
+
+.waylan-candidate-container.dark .waylan-cand-item.is-expandable.selected {
+    background-color: #059669 !important;
+}
+
+/* TAB 键盘提示小徽标 (Keycap Badge) */
+.waylan-tab-badge {
+    font-size: 10px !important;
+    font-weight: bold !important;
+    padding: 1px 4px !important;
+    margin-left: 5px !important;
+    border-radius: 4px !important;
+    background-color: rgba(0, 0, 0, 0.07) !important;
+    color: #07c160 !important;
+    border: 1px solid rgba(7, 193, 96, 0.25) !important;
+}
+
+.waylan-cand-item.selected .waylan-tab-badge {
+    background-color: rgba(255, 255, 255, 0.22) !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+}
+
+.waylan-candidate-container.dark .waylan-tab-badge {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    color: #34d399 !important;
+    border: 1px solid rgba(52, 211, 153, 0.3) !important;
+}
+
+/* 序号标签 */
+.waylan-cand-index {
+    font-size: 11px !important;
+    color: #94a3b8 !important;
+    margin-right: 4px !important;
+}
+
+.waylan-candidate-container.dark .waylan-cand-index {
+    color: #71717a !important;
+}
+
+.waylan-cand-item.selected .waylan-cand-index {
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25) !important;
+}
+
+/* 候选词正文 */
+.waylan-cand-text {
+    font-size: 13px !important;
+    color: #1e293b !important;
+}
+
+.waylan-candidate-container.dark .waylan-cand-text {
+    color: #e4e4e7 !important;
+}
+
+.waylan-cand-item.selected .waylan-cand-text {
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25) !important;
+}
+
+/* 候选条目内容容器，默认靠左起始 */
+.waylan-cand-content {
+    x-align: start !important;
+}
+
+/* 翻页栏 */
+.waylan-page-bar {
+    padding-left: 6px !important;
+    spacing: 2px !important;
+}
+
+.waylan-page-label {
+    font-size: 11px !important;
+    color: #94a3b8 !important;
+    padding: 0 4px !important;
+}
+
+.waylan-page-btn {
+    padding: 1px 5px !important;
+    border-radius: 4px !important;
+    font-size: 10px !important;
+    color: #64748b !important;
+}
+
+.waylan-page-btn:hover {
+    background-color: #e2e8f0 !important;
+    color: #0f172a !important;
+}
+
+.waylan-candidate-container.dark .waylan-page-btn:hover {
+    background-color: #3f3f46 !important;
+    color: #f4f4f5 !important;
+}
+
+/* 垂直纵向模式（按 TAB 展开二级日期时间多格式、大写金额等卡片时自适应竖排） */
+.waylan-candidate-container.vertical-mode {
+    min-width: 200px !important;
+}
+
+.waylan-candidate-container.vertical-mode .waylan-candidates-bar {
+    spacing: 3px !important;
+    x-align: start !important;
+}
+
+.waylan-candidate-container.vertical-mode .waylan-cand-item {
+    padding: 4px 10px !important;
+    x-align: start !important;
+    text-align: left !important;
+}
+
+.waylan-candidate-container.vertical-mode .waylan-cand-content {
+    x-align: start !important;
+    text-align: left !important;
+}
+
+.waylan-candidate-container.vertical-mode .waylan-cand-index {
+    min-width: 18px !important;
+    text-align: left !important;
+    margin-right: 8px !important;
+}
+
+.waylan-candidate-container.vertical-mode .waylan-cand-text {
+    text-align: left !important;
+}
+
+/* ========================================================
+   排版留白密度预设 (Density: Compact / Normal / Spacious)
+   ======================================================== */
+
+/* 紧凑极简模式：小屏幕与编码场景 */
+.waylan-candidate-container.density-compact {
+    padding: 2px 4px !important;
+}
+
+.waylan-candidate-container.density-compact .waylan-cand-item {
+    padding: 1px 5px !important;
+    margin: 0px 1px !important;
+}
+
+.waylan-candidate-container.density-compact .waylan-candidates-bar {
+    spacing: 1px !important;
+}
+
+.waylan-candidate-container.density-compact .waylan-cand-text {
+    font-size: 12px !important;
+}
+
+/* 宽松舒缓模式：高分大屏与舒适阅读场景 */
+.waylan-candidate-container.density-spacious {
+    padding: 6px 10px !important;
+}
+
+.waylan-candidate-container.density-spacious .waylan-cand-item {
+    padding: 4px 12px !important;
+    margin: 0px 2px !important;
+    border-radius: 8px !important;
+}
+
+.waylan-candidate-container.density-spacious .waylan-candidates-bar {
+    spacing: 4px !important;
+}
+
+.waylan-candidate-container.density-spacious .waylan-cand-text {
+    font-size: 14px !important;
+}
+
+/* ========================================================
+   色彩主题预设 (Theme Presets: Emerald / Monochrome / IceBlue / WarmLatte)
+   ======================================================== */
+
+/* 1. 微澜翡翠绿 (默认主题，已经在前面基础类中生效) */
+
+/* 2. 极简黑白墨韵 (Monochrome) */
+.waylan-candidate-container.theme-monochrome .waylan-badge {
+    background-color: #334155 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-monochrome.dark .waylan-badge {
+    background-color: #52525b !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-monochrome .waylan-cand-item.selected {
+    background-color: #18181b !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-monochrome.dark .waylan-cand-item.selected {
+    background-color: #f4f4f5 !important;
+    color: #18181b !important;
+}
+
+.waylan-candidate-container.theme-monochrome.dark .waylan-cand-item.selected .waylan-cand-text {
+    color: #18181b !important;
+}
+
+.waylan-candidate-container.theme-monochrome.dark .waylan-cand-item.selected .waylan-cand-index {
+    color: #52525b !important;
+}
+
+.waylan-candidate-container.theme-monochrome .waylan-cand-item.is-expandable {
+    border: 1px solid rgba(100, 116, 139, 0.4) !important;
+    background-color: rgba(100, 116, 139, 0.08) !important;
+}
+
+.waylan-candidate-container.theme-monochrome .waylan-tab-badge {
+    color: #334155 !important;
+    border: 1px solid rgba(51, 65, 85, 0.3) !important;
+}
+
+/* 3. 极客暗夜冰蓝 (Ice Blue) */
+.waylan-candidate-container.theme-ice-blue .waylan-badge {
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-ice-blue .waylan-cand-item.selected {
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-ice-blue.dark .waylan-cand-item.selected {
+    background-color: #0369a1 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-ice-blue .waylan-cand-item.is-expandable {
+    border: 1px solid rgba(14, 165, 233, 0.45) !important;
+    background-color: rgba(14, 165, 233, 0.08) !important;
+}
+
+.waylan-candidate-container.theme-ice-blue .waylan-tab-badge {
+    color: #0284c7 !important;
+    border: 1px solid rgba(2, 132, 199, 0.3) !important;
+}
+
+.waylan-candidate-container.theme-ice-blue.dark .waylan-tab-badge {
+    color: #38bdf8 !important;
+    border: 1px solid rgba(56, 189, 248, 0.3) !important;
+}
+
+/* 4. 暖阳奶茶焦糖 (Warm Latte) */
+.waylan-candidate-container.theme-warm-latte .waylan-badge {
+    background-color: #d97706 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-warm-latte .waylan-cand-item.selected {
+    background-color: #d97706 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-warm-latte.dark .waylan-cand-item.selected {
+    background-color: #b45309 !important;
+    color: #ffffff !important;
+}
+
+.waylan-candidate-container.theme-warm-latte .waylan-cand-item.is-expandable {
+    border: 1px solid rgba(217, 119, 6, 0.45) !important;
+    background-color: rgba(217, 119, 6, 0.08) !important;
+}
+
+.waylan-candidate-container.theme-warm-latte .waylan-tab-badge {
+    color: #d97706 !important;
+    border: 1px solid rgba(217, 119, 6, 0.3) !important;
+}
+
+.waylan-candidate-container.theme-warm-latte.dark .waylan-tab-badge {
+    color: #fbbf24 !important;
+    border: 1px solid rgba(251, 191, 36, 0.3) !important;
+}
+
+/* ========================================================
+   语音输入现代化视觉呈现 (Voice Waveform & Breathing Pulse)
+   ======================================================== */
+
+/* 1. 多频律动声浪胶囊 */
+.waylan-voice-capsule {
+    padding: 3px 10px !important;
+    border-radius: 6px !important;
+    spacing: 6px !important;
+    background-color: rgba(7, 193, 96, 0.08) !important;
+    border: 1px solid rgba(7, 193, 96, 0.3) !important;
+}
+
+.waylan-candidate-container.dark .waylan-voice-capsule {
+    background-color: rgba(5, 150, 105, 0.15) !important;
+    border: 1px solid rgba(5, 150, 105, 0.4) !important;
+}
+
+/* 彻底隐形语音胶囊内的旧式语音文字标签（双保险即时消除） */
+.waylan-voice-capsule .waylan-badge {
+    width: 0px !important;
+    min-width: 0px !important;
+    height: 0px !important;
+    margin: 0px !important;
+    padding: 0px !important;
+    font-size: 0px !important;
+    opacity: 0 !important;
+    border: none !important;
+}
+
+.waylan-wave-container {
+    spacing: 3px !important;
+    padding: 0 4px !important;
+}
+
+.waylan-wave-bar {
+    width: 3px !important;
+    border-radius: 2px !important;
+    background-color: #07c160 !important;
+}
+
+.waylan-candidate-container.dark .waylan-wave-bar {
+    background-color: #34d399 !important;
+}
+
+.waylan-candidate-container.theme-ice-blue .waylan-wave-bar {
+    background-color: #0284c7 !important;
+}
+
+.waylan-candidate-container.theme-ice-blue.dark .waylan-wave-bar {
+    background-color: #38bdf8 !important;
+}
+
+.waylan-candidate-container.theme-warm-latte .waylan-wave-bar {
+    background-color: #d97706 !important;
+}
+
+.waylan-candidate-container.theme-warm-latte.dark .waylan-wave-bar {
+    background-color: #fbbf24 !important;
+}
+
+.waylan-candidate-container.theme-monochrome .waylan-wave-bar {
+    background-color: #18181b !important;
+}
+
+.waylan-candidate-container.theme-monochrome.dark .waylan-wave-bar {
+    background-color: #f4f4f5 !important;
+}
+
+/* 2. 流光呼吸光环微卡片 */
+.waylan-pulse-dot {
+    width: 8px !important;
+    height: 8px !important;
+    border-radius: 4px !important;
+    background-color: #07c160 !important;
+    margin-right: 6px !important;
+    box-shadow: 0 0 6px rgba(7, 193, 96, 0.6) !important;
+}
+
+.waylan-candidate-container.dark .waylan-pulse-dot {
+    background-color: #34d399 !important;
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.8) !important;
+}
+
+.waylan-voice-label {
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #07c160 !important;
+}
+
+.waylan-candidate-container.dark .waylan-voice-label {
+    color: #34d399 !important;
+}
+
+
+
