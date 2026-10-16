@@ -6500,6 +6500,7 @@ dependencies = [
  "bytemuck",
  "log",
  "memmap2",
+ "rayon",
  "safetensors",
  "serde",
  "serde_json",
