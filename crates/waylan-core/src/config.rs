@@ -87,6 +87,8 @@ pub struct AppConfig {
     pub exclusive_input_source: bool,
     /// 语音输入功能配置
     pub voice: VoiceConfig,
+    /// 是否启用神经网络语言模型进行候选句重排序与联想（默认 true，若本地无模型文件则平滑保底跳过）
+    pub enable_neural_lm: bool,
 }
 
 impl Default for AppConfig {
@@ -128,6 +130,7 @@ impl Default for AppConfig {
             enable_tray: None,
             exclusive_input_source: false,
             voice: VoiceConfig::default(),
+            enable_neural_lm: true,
         }
     }
 }
@@ -348,6 +351,88 @@ impl AppConfig {
         Self::push_exe_relative_candidates(&mut paths, "opencc.dict.bin");
         paths.push(PathBuf::from("data/opencc.dict.bin"));
         paths.push(PathBuf::from("opencc.dict.bin"));
+        paths
+    }
+
+    /// 获取神经网络语言模型权重文件（waylan_lm_16m.safetensors）的多级查找路径
+    #[allow(dead_code)]
+    pub fn lm_model_search_paths() -> Vec<PathBuf> {
+        let mut paths = Vec::with_capacity(16);
+        if let Some(custom) = env_var_non_empty("WAYLAN_LM_MODEL_PATH") {
+            paths.push(PathBuf::from(custom));
+        }
+        if let Some(data_home) = env_var_non_empty("XDG_DATA_HOME") {
+            paths.push(
+                PathBuf::from(data_home)
+                    .join("waylan")
+                    .join("waylan_lm_16m.safetensors"),
+            );
+        }
+        if let Some(home) = env_var_non_empty("HOME") {
+            paths.push(
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("waylan")
+                    .join("waylan_lm_16m.safetensors"),
+            );
+        }
+        paths.push(PathBuf::from(
+            "/usr/share/waylan/data/waylan_lm_16m.safetensors",
+        ));
+        paths.push(PathBuf::from("/usr/share/waylan/waylan_lm_16m.safetensors"));
+        paths.push(PathBuf::from(
+            "/usr/local/share/waylan/data/waylan_lm_16m.safetensors",
+        ));
+        paths.push(PathBuf::from(
+            "/usr/local/share/waylan/waylan_lm_16m.safetensors",
+        ));
+        Self::push_exe_relative_candidates(&mut paths, "data/waylan_lm_16m.safetensors");
+        Self::push_exe_relative_candidates(&mut paths, "assets/waylan_lm_16m.safetensors");
+        Self::push_exe_relative_candidates(&mut paths, "BuildIn/waylan_lm_16m.safetensors");
+        Self::push_exe_relative_candidates(&mut paths, "waylan_lm_16m.safetensors");
+        paths.push(PathBuf::from("data/waylan_lm_16m.safetensors"));
+        paths.push(PathBuf::from("assets/waylan_lm_16m.safetensors"));
+        paths.push(PathBuf::from("BuildIn/waylan_lm_16m.safetensors"));
+        paths.push(PathBuf::from("waylan_lm_16m.safetensors"));
+        paths
+    }
+
+    /// 获取神经网络语言模型分词器（tokenizer.json）的多级查找路径
+    #[allow(dead_code)]
+    pub fn lm_tokenizer_search_paths() -> Vec<PathBuf> {
+        let mut paths = Vec::with_capacity(16);
+        if let Some(custom) = env_var_non_empty("WAYLAN_LM_TOKENIZER_PATH") {
+            paths.push(PathBuf::from(custom));
+        }
+        if let Some(data_home) = env_var_non_empty("XDG_DATA_HOME") {
+            paths.push(
+                PathBuf::from(data_home)
+                    .join("waylan")
+                    .join("tokenizer.json"),
+            );
+        }
+        if let Some(home) = env_var_non_empty("HOME") {
+            paths.push(
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("waylan")
+                    .join("tokenizer.json"),
+            );
+        }
+        paths.push(PathBuf::from("/usr/share/waylan/data/tokenizer.json"));
+        paths.push(PathBuf::from("/usr/share/waylan/tokenizer.json"));
+        paths.push(PathBuf::from("/usr/local/share/waylan/data/tokenizer.json"));
+        paths.push(PathBuf::from("/usr/local/share/waylan/tokenizer.json"));
+        Self::push_exe_relative_candidates(&mut paths, "data/tokenizer.json");
+        Self::push_exe_relative_candidates(&mut paths, "assets/tokenizer.json");
+        Self::push_exe_relative_candidates(&mut paths, "BuildIn/tokenizer.json");
+        Self::push_exe_relative_candidates(&mut paths, "tokenizer.json");
+        paths.push(PathBuf::from("data/tokenizer.json"));
+        paths.push(PathBuf::from("assets/tokenizer.json"));
+        paths.push(PathBuf::from("BuildIn/tokenizer.json"));
+        paths.push(PathBuf::from("tokenizer.json"));
         paths
     }
 

@@ -16,6 +16,7 @@ waylan-algo = { path = "../waylan-algo" }
 waylan-ui = { path = "../waylan-ui" }
 waylan-wayland = { path = "../waylan-wayland" }
 waylan-voice = { path = "../waylan-voice" }
+waylan-lm = { path = "../waylan-lm" }
 toml.workspace = true
 serde.workspace = true
 log.workspace = true

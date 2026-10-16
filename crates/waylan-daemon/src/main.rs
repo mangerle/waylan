@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod ibus;
 mod logger;
+mod neural_lm;
 mod session_bundle;
 mod system;
 mod tray;

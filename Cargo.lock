@@ -6486,6 +6486,7 @@ dependencies = [
  "toml 0.8.23",
  "waylan-algo",
  "waylan-core",
+ "waylan-lm",
  "waylan-ui",
  "waylan-voice",
  "waylan-wayland",

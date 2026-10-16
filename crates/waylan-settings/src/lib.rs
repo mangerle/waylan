@@ -371,6 +371,7 @@ mod tests {
             tray_icon_zh: Some("custom-zh".into()),
             tray_icon_en: Some("custom-en".into()),
             voice: waylan_core::VoiceConfig::default(),
+            enable_neural_lm: true,
         };
         cfg.sanitize();
 

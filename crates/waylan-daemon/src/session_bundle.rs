@@ -21,7 +21,9 @@ use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AlgoEngine;
 #[cfg(test)]
 use waylan_algo::OpenCcDict;
-use waylan_algo::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
+use waylan_algo::{
+    AuxiliaryDict, EnglishSuggestionManager, SentenceReranker, SymbolSuggestionManager,
+};
 use waylan_ui::UiTheme;
 use waylan_wayland::probe_wayland_environment;
 use waylan_wayland::session_v1::{PageKeyConfig, WaylanV1Session};
@@ -32,6 +34,7 @@ use crate::config::{
     AppConfig, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
     FullWidthPunctShortcut, SwitchKey, ThemeMode, TraditionalShortcut, VoiceConfig,
 };
+use crate::neural_lm::load_neural_reranker;
 
 /// 自动建立用户数据目录 (~/.local/share/waylan/) 与外部全量词库的符号链接
 pub fn ensure_user_dictionaries_linked() {
@@ -47,6 +50,11 @@ pub fn ensure_user_dictionaries_linked() {
         ("base.dict.bin", AppConfig::base_dict_search_paths()),
         ("aux.dict.bin", AppConfig::aux_dict_search_paths()),
         ("opencc.dict.bin", AppConfig::opencc_dict_search_paths()),
+        (
+            "waylan_lm_16m.safetensors",
+            AppConfig::lm_model_search_paths(),
+        ),
+        ("tokenizer.json", AppConfig::lm_tokenizer_search_paths()),
     ];
 
     for (file_name, candidates) in pairs {
@@ -234,6 +242,7 @@ pub struct SessionConfigBundle {
     pub user_dict_path: PathBuf,
     pub english_suggester: Arc<EnglishSuggestionManager>,
     pub symbol_suggester: Arc<SymbolSuggestionManager>,
+    pub reranker: Arc<dyn SentenceReranker>,
     pub exclusive_input_source: bool,
     pub candidate_index_style: CandidateIndexStyle,
     pub candidate_orientation: CandidateOrientation,
@@ -292,6 +301,7 @@ impl SessionConfigBundle {
         let custom_phrases = CustomPhraseManager::load_or_init(&p_path);
         let user_dict_path = AppConfig::user_dict_path();
         let (english_suggester, symbol_suggester) = load_auxiliary_managers();
+        let reranker = load_neural_reranker(new_cfg.enable_neural_lm);
         Self {
             algo_config,
             theme,
@@ -303,6 +313,7 @@ impl SessionConfigBundle {
             user_dict_path,
             english_suggester,
             symbol_suggester,
+            reranker,
             exclusive_input_source: new_cfg.exclusive_input_source,
             candidate_index_style: new_cfg.candidate_index_style,
             candidate_orientation: new_cfg.candidate_orientation,
@@ -343,6 +354,7 @@ impl SessionConfigBundle {
         }
         engine.english_suggester = self.english_suggester;
         engine.symbol_suggester = self.symbol_suggester;
+        engine.reranker = self.reranker;
     }
 }
 
