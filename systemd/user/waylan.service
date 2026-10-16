@@ -5,6 +5,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 ConditionEnvironment=!XDG_CURRENT_DESKTOP=ubuntu:GNOME
 ConditionEnvironment=!XDG_CURRENT_DESKTOP=GNOME
+ConditionEnvironment=!XDG_CURRENT_DESKTOP=pop:GNOME
 
 [Service]
 Type=simple
@@ -14,6 +15,7 @@ RestartSec=2s
 KillMode=control-group
 TimeoutStopSec=5s
 Slice=session.slice
+NoNewPrivileges=true
 
 [Install]
 WantedBy=graphical-session.target

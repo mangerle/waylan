@@ -54,9 +54,20 @@ mkdir -p "${PROJECT_ROOT}/target/generated/ibus"
 "${PROJECT_ROOT}/target/release/waylan" --ibus-component-xml > "${PROJECT_ROOT}/target/generated/ibus/waylan.xml"
 
 echo "[微澜打包] 步骤 4/4: 调用 cargo-deb 构建原生 Debian 软件包..."
+rm -f "${OUTPUT_DEB}"
 cargo deb -p waylan-daemon --no-build --deb-revision ""
 
-LATEST_DEB="$(ls -t "${PROJECT_ROOT}/target/debian/"*.deb 2>/dev/null | head -n1 || true)"
+if [ -f "${OUTPUT_DEB}" ]; then
+    LATEST_DEB="${OUTPUT_DEB}"
+else
+    LATEST_DEB="$(ls -t "${PROJECT_ROOT}/target/debian/"*.deb 2>/dev/null | head -n1 || true)"
+fi
+
+if [ -z "${LATEST_DEB}" ] || [ ! -f "${LATEST_DEB}" ]; then
+    echo "[打包失败] 未找到生成的 Debian 软件包！" >&2
+    exit 1
+fi
+
 DEB_SIZE="$(du -h "${LATEST_DEB}" 2>/dev/null | cut -f1 || echo "未知")"
 
 echo "============================================================"
