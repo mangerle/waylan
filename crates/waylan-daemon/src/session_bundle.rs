@@ -403,40 +403,62 @@ pub fn check_wayland_capabilities() -> WaylandCapabilities {
 /// # 设计原理
 /// - **实现初衷**：Linux 桌面环境下多实例共享同一 D-Bus 总线名（如 `org.freedesktop.IBus.Waylan`）
 ///   与 StatusNotifierItem 托盘通道。旧实例未释放 D-Bus 节点前直接启动新实例会触发冲突退化。
-/// - **核心优势**：通过脱钩的后台子进程轮询等待旧进程 PID 消亡并在 1 秒超时后保底强杀，确保总线名称彻底释放后再无缝拉起新实例。
+/// - **核心优势**：通过脱钩的后台看门狗轮询等待旧进程 PID 自然消亡，彻底杜绝 `kill -9` 暴力截断，
+///   全力保障用户词库数据完整性，通过位置参数安全传参杜绝 Shell 命令注入。
 /// - **代价与局限**：重启过程伴随约 150ms 缓冲，保证进程与连接清理的时序隔离。
 pub fn trigger_graceful_restart_and_exit(
     exit_requested: &std::sync::atomic::AtomicBool,
     loop_wakeup: Option<&waylan_wayland::LoopWakeup>,
 ) {
-    if let Ok(exe) = std::env::current_exe() {
-        let pid = std::process::id();
-        let args = std::env::args().skip(1).collect::<Vec<_>>();
-        let args_str = args
-            .iter()
-            .map(|a| format!("\"{}\"", a))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let shell_cmd = format!(
-            "trap '' HUP; for _ in $(seq 1 30); do if ! kill -0 {pid} 2>/dev/null; then break; fi; sleep 0.05; done; \
-             if kill -0 {pid} 2>/dev/null; then kill -9 {pid} 2>/dev/null; fi; \
-             sleep 0.35; exec \"{exe}\" {args} >/dev/null 2>&1",
-            pid = pid,
-            exe = exe.display(),
-            args = args_str
-        );
-        let mut cmd = std::process::Command::new("sh");
-        cmd.arg("-c").arg(shell_cmd);
-        cmd.stdin(std::process::Stdio::null());
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-        let _ = cmd.spawn();
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            log::error!(
+                "[系统环境 错误] 无法获取当前程序可执行路径，取消自重启: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let pid = std::process::id();
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+
+    // 采用固定脚本并通过位置参数 ($1, $2, "$@") 传参，由内核保证参数原子性，100% 杜绝 Shell 注入
+    // 严禁对旧进程执行 kill -9，超时未退出则看门狗直接退出，绝对不破坏正在原子落盘的用户个性化词库
+    let shell_script = "trap '' HUP; pid=\"$1\"; exe=\"$2\"; shift 2; \
+        for _ in $(seq 1 50); do if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.1; done; \
+        if kill -0 \"$pid\" 2>/dev/null; then exit 1; fi; \
+        sleep 0.15; exec \"$exe\" \"$@\"";
+
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c").arg(shell_script);
+    cmd.arg("waylan-restart-helper");
+    cmd.arg(pid.to_string());
+    cmd.arg(&exe);
+    for arg in args {
+        cmd.arg(arg);
     }
-    exit_requested.store(true, std::sync::atomic::Ordering::Release);
-    if let Some(wakeup) = loop_wakeup {
-        wakeup.wake();
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+
+    match cmd.spawn() {
+        Ok(_) => {
+            log::info!("[系统环境] 已成功派生自重启看门狗子进程，正在向旧实例发送优雅停机信号...");
+            exit_requested.store(true, std::sync::atomic::Ordering::Release);
+            if let Some(wakeup) = loop_wakeup {
+                wakeup.wake();
+            }
+        }
+        Err(e) => {
+            log::error!(
+                "[系统环境 错误] 派生自重启看门狗子进程失败: {}，取消退出以保持当前服务存活",
+                e
+            );
+        }
     }
 }
 

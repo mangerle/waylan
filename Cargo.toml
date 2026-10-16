@@ -38,7 +38,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-scanner = "0.31"
 wayland-backend = "0.3"
 tempfile = "3"
-rustix = { version = "0.38", features = ["event", "fs", "shm"] }
+rustix = { version = "0.38", features = ["event", "fs", "shm", "process"] }
 toml = "0.8"
 fern = "0.7"
 zbus = "4"

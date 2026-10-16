@@ -458,7 +458,11 @@ fn launch_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    cmd.spawn()?;
+    cmd.stdin(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+
+    let _child = cmd.spawn()?;
     Ok(())
 }
 
@@ -466,12 +470,13 @@ fn launch_settings_gui() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// # 设计原理
 /// - **实现初衷**：防止用户从桌面应用菜单重复点击“微澜输入法”导致多实例冲突与托盘抢占失败。
-/// - **核心优势**：通过 Linux 原生 `/proc` 文件系统快速遍历 `comm`，微秒级判定，不依赖特定总线连接。
+/// - **核心优势**：通过 Linux 原生 `/proc` 文件系统快速遍历 `comm` 并比对属主 UID，微秒级判定且杜绝多用户误判。
 /// - **代价与局限**：仅适用于 Linux 操作系统环境。
 fn check_another_instance_running() -> bool {
     #[cfg(target_os = "linux")]
     {
         let current_pid = std::process::id();
+        let current_uid = rustix::process::getuid().as_raw();
         if let Ok(entries) = std::fs::read_dir("/proc") {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -486,6 +491,13 @@ fn check_another_instance_running() -> bool {
                 };
                 if pid == current_pid {
                     continue;
+                }
+                // 仅匹配同属当前用户的实例，杜绝 Linux 多用户环境下的误判拦截
+                if let Ok(meta) = entry.metadata() {
+                    use std::os::unix::fs::MetadataExt;
+                    if meta.uid() != current_uid {
+                        continue;
+                    }
                 }
                 if let Ok(comm) = std::fs::read_to_string(path.join("comm")) {
                     if comm.trim() == "waylan" {
