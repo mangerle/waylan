@@ -12,6 +12,7 @@ use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_core::{CloudAsrConfig, CloudProfile, CloudProviderType};
 
+use crate::callbacks::{pick_directory_dialog, pick_file_dialog};
 use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::SettingsWindow;
 
@@ -27,31 +28,35 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     let current_cfg_cell = loaded_config.clone();
     window.on_import_asr_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_asr_model_dialog() {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let mut cfg = current_cfg_cell.borrow().clone();
-                update_config_from_window(&win, &mut cfg);
-                cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
-                match cfg.save_default() {
-                    Ok(()) => {
-                        *current_cfg_cell.borrow_mut() = cfg.clone();
-                        sync_config_to_window(&win, &cfg);
-                        win.set_global_status_is_error(false);
-                        win.set_global_status(SharedString::from(format!(
-                            "成功导入 ASR 模型: {}",
-                            name
-                        )));
-                    }
-                    Err(e) => {
-                        win.set_global_status_is_error(true);
-                        win.set_global_status(SharedString::from(format!(
-                            "保存 ASR 模型配置失败: {}",
-                            e
-                        )));
+            if let Some(src_path) =
+                pick_directory_dialog("请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)")
+            {
+                if let Some(imported_path) = waylan_voice::import_asr_model_from_dir(&src_path) {
+                    let name = imported_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let mut cfg = current_cfg_cell.borrow().clone();
+                    update_config_from_window(&win, &mut cfg);
+                    cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
+                    match cfg.save_default() {
+                        Ok(()) => {
+                            *current_cfg_cell.borrow_mut() = cfg.clone();
+                            sync_config_to_window(&win, &cfg);
+                            win.set_global_status_is_error(false);
+                            win.set_global_status(SharedString::from(format!(
+                                "成功导入 ASR 模型: {}",
+                                name
+                            )));
+                        }
+                        Err(e) => {
+                            win.set_global_status_is_error(true);
+                            win.set_global_status(SharedString::from(format!(
+                                "保存 ASR 模型配置失败: {}",
+                                e
+                            )));
+                        }
                     }
                 }
             }
@@ -62,35 +67,40 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     let current_cfg_cell = loaded_config.clone();
     window.on_import_vad_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_onnx_model_dialog(
-                "vad",
+            if let Some(src_path) = pick_file_dialog(
                 "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
+                "ONNX 神经网络模型 (*.onnx)",
+                "*.onnx",
             ) {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let mut cfg = current_cfg_cell.borrow().clone();
-                update_config_from_window(&win, &mut cfg);
-                cfg.voice.vad.model_path = Some(imported_path.to_string_lossy().to_string());
-                cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
-                match cfg.save_default() {
-                    Ok(()) => {
-                        *current_cfg_cell.borrow_mut() = cfg.clone();
-                        sync_config_to_window(&win, &cfg);
-                        win.set_global_status_is_error(false);
-                        win.set_global_status(SharedString::from(format!(
-                            "成功导入 VAD 模型: {}",
-                            name
-                        )));
-                    }
-                    Err(e) => {
-                        win.set_global_status_is_error(true);
-                        win.set_global_status(SharedString::from(format!(
-                            "保存 VAD 模型配置失败: {}",
-                            e
-                        )));
+                if let Some(imported_path) =
+                    waylan_voice::import_onnx_model_from_file("vad", &src_path)
+                {
+                    let name = imported_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let mut cfg = current_cfg_cell.borrow().clone();
+                    update_config_from_window(&win, &mut cfg);
+                    cfg.voice.vad.model_path = Some(imported_path.to_string_lossy().to_string());
+                    cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
+                    match cfg.save_default() {
+                        Ok(()) => {
+                            *current_cfg_cell.borrow_mut() = cfg.clone();
+                            sync_config_to_window(&win, &cfg);
+                            win.set_global_status_is_error(false);
+                            win.set_global_status(SharedString::from(format!(
+                                "成功导入 VAD 模型: {}",
+                                name
+                            )));
+                        }
+                        Err(e) => {
+                            win.set_global_status_is_error(true);
+                            win.set_global_status(SharedString::from(format!(
+                                "保存 VAD 模型配置失败: {}",
+                                e
+                            )));
+                        }
                     }
                 }
             }
@@ -101,34 +111,39 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     let current_cfg_cell = loaded_config.clone();
     window.on_import_punct_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            if let Some(imported_path) = waylan_voice::import_onnx_model_dialog(
-                "punct",
+            if let Some(src_path) = pick_file_dialog(
                 "请选择要导入的标点符号预测模型文件 (.onnx)",
+                "ONNX 神经网络模型 (*.onnx)",
+                "*.onnx",
             ) {
-                let name = imported_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let mut cfg = current_cfg_cell.borrow().clone();
-                update_config_from_window(&win, &mut cfg);
-                cfg.voice.punct_model_path = Some(imported_path.to_string_lossy().to_string());
-                match cfg.save_default() {
-                    Ok(()) => {
-                        *current_cfg_cell.borrow_mut() = cfg.clone();
-                        sync_config_to_window(&win, &cfg);
-                        win.set_global_status_is_error(false);
-                        win.set_global_status(SharedString::from(format!(
-                            "成功导入标点模型: {}",
-                            name
-                        )));
-                    }
-                    Err(e) => {
-                        win.set_global_status_is_error(true);
-                        win.set_global_status(SharedString::from(format!(
-                            "保存标点模型配置失败: {}",
-                            e
-                        )));
+                if let Some(imported_path) =
+                    waylan_voice::import_onnx_model_from_file("punct", &src_path)
+                {
+                    let name = imported_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let mut cfg = current_cfg_cell.borrow().clone();
+                    update_config_from_window(&win, &mut cfg);
+                    cfg.voice.punct_model_path = Some(imported_path.to_string_lossy().to_string());
+                    match cfg.save_default() {
+                        Ok(()) => {
+                            *current_cfg_cell.borrow_mut() = cfg.clone();
+                            sync_config_to_window(&win, &cfg);
+                            win.set_global_status_is_error(false);
+                            win.set_global_status(SharedString::from(format!(
+                                "成功导入标点模型: {}",
+                                name
+                            )));
+                        }
+                        Err(e) => {
+                            win.set_global_status_is_error(true);
+                            win.set_global_status(SharedString::from(format!(
+                                "保存标点模型配置失败: {}",
+                                e
+                            )));
+                        }
                     }
                 }
             }

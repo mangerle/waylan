@@ -4,7 +4,7 @@
 //! - **实现初衷**：为输入法提供本地模型统一的发现扫描、类型分类与无损导入能力。
 //! - **核心优势**：严格遵循 Linux XDG 规范，实现系统内置目录 (`/usr/share/waylan/models/`) 与用户
 //!   个性化导入目录 (`~/.local/share/waylan/models/`) 的物理权限隔离，确保系统升级重装绝不损坏用户导入模型。
-//! - **代价与局限**：图形化导入调用桌面标准的 `zenity` 原生对话框工具，若在纯 CLI 环境将自动优雅降级。
+//! - **代价与局限**：模型文件物理复制受目标磁盘可用空间与文件系统权限约束。
 
 use log::{info, warn};
 use std::fs;
@@ -322,26 +322,9 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 调用系统原生对话框 (zenity) 导入 ASR 复合模型文件夹并拷贝至用户目录
-pub fn import_asr_model_dialog() -> Option<PathBuf> {
+/// 将指定的外部 ASR 复合模型文件夹导入并拷贝至用户模型目录
+pub fn import_asr_model_from_dir(src_path: &Path) -> Option<PathBuf> {
     ensure_user_models_dirs();
-    let output = Command::new("zenity")
-        .arg("--file-selection")
-        .arg("--directory")
-        .arg("--title=请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let selected_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if selected_str.is_empty() {
-        return None;
-    }
-
-    let src_path = PathBuf::from(&selected_str);
     if !src_path.is_dir() {
         return None;
     }
@@ -353,7 +336,7 @@ pub fn import_asr_model_dialog() -> Option<PathBuf> {
         "[模型管理] 正在将 ASR 模型从 {:?} 导入至 {:?}",
         src_path, target_dir
     );
-    if let Err(e) = copy_dir_all(&src_path, &target_dir) {
+    if let Err(e) = copy_dir_all(src_path, &target_dir) {
         warn!("[模型管理] 复制 ASR 模型目录失败: {}", e);
         return None;
     }
@@ -361,26 +344,9 @@ pub fn import_asr_model_dialog() -> Option<PathBuf> {
     Some(target_dir)
 }
 
-/// 调用系统原生对话框 (zenity) 导入单个 ONNX 模型文件至指定子目录 (vad 或 punct)
-pub fn import_onnx_model_dialog(subdir: &str, title: &str) -> Option<PathBuf> {
+/// 将指定的外部单个 ONNX 模型文件导入至用户模型的指定子目录 (vad 或 punct)
+pub fn import_onnx_model_from_file(subdir: &str, src_path: &Path) -> Option<PathBuf> {
     ensure_user_models_dirs();
-    let output = Command::new("zenity")
-        .arg("--file-selection")
-        .arg("--file-filter=ONNX 神经网络模型 (*.onnx) | *.onnx")
-        .arg(format!("--title={}", title))
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let selected_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if selected_str.is_empty() {
-        return None;
-    }
-
-    let src_path = PathBuf::from(&selected_str);
     if !src_path.is_file() {
         return None;
     }
@@ -392,7 +358,7 @@ pub fn import_onnx_model_dialog(subdir: &str, title: &str) -> Option<PathBuf> {
         "[模型管理] 正在将模型文件从 {:?} 导入至 {:?}",
         src_path, target_file
     );
-    if let Err(e) = fs::copy(&src_path, &target_file) {
+    if let Err(e) = fs::copy(src_path, &target_file) {
         warn!("[模型管理] 复制模型文件失败: {}", e);
         return None;
     }
@@ -458,5 +424,30 @@ mod tests {
                 .any(|m| m.path.as_deref() == Some("__bypass__")),
             "NS 必须包含直通透传项"
         );
+    }
+
+    #[test]
+    fn test_import_models_pure_io() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src_model_dir = temp_dir.path().join("dummy_asr");
+        fs::create_dir_all(&src_model_dir).unwrap();
+        fs::write(src_model_dir.join("model.onnx"), b"dummy").unwrap();
+
+        let imported_dir = import_asr_model_from_dir(&src_model_dir);
+        assert!(imported_dir.is_some());
+        let imported_path = imported_dir.unwrap();
+        assert!(imported_path.exists());
+        assert!(imported_path.join("model.onnx").exists());
+
+        // 清理测试产物
+        let _ = fs::remove_dir_all(&imported_path);
+
+        let src_onnx = temp_dir.path().join("dummy_vad.onnx");
+        fs::write(&src_onnx, b"dummy vad onnx").unwrap();
+        let imported_vad = import_onnx_model_from_file("vad", &src_onnx);
+        assert!(imported_vad.is_some());
+        let imported_vad_path = imported_vad.unwrap();
+        assert!(imported_vad_path.exists());
+        let _ = fs::remove_file(&imported_vad_path);
     }
 }

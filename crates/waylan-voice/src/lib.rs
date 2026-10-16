@@ -23,9 +23,9 @@ pub use itn::{
     apply_pangu_spacing, convert_chinese_numbers, filter_filler_words, normalize_voice_text,
 };
 pub use model_manager::{
-    ensure_user_models_dirs, import_asr_model_dialog, import_onnx_model_dialog, list_asr_models,
-    list_ns_models, list_punct_models, list_vad_models, open_user_models_directory,
-    user_models_dir, ModelItem,
+    ensure_user_models_dirs, import_asr_model_from_dir, import_onnx_model_from_file,
+    list_asr_models, list_ns_models, list_punct_models, list_vad_models,
+    open_user_models_directory, user_models_dir, ModelItem,
 };
 pub use recognizer::{
     create_recognizer, encode_pcm_to_wav, test_cloud_profile_connection, CloudVoiceRecognizer,
