@@ -47,4 +47,5 @@ pub use opencc::OpenCcDict;
 pub use table::LexiconTable;
 pub use table_mmap::CompactMmapLexicon;
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
+pub use user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};
 pub use vocab::Vocabulary;

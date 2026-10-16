@@ -7,8 +7,8 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 旧版 WAL 预写日志魔数标识（16 字节，V1 记录未携带频次字段）
@@ -44,14 +44,120 @@ pub fn mark_internal_compact() {
     LAST_INTERNAL_COMPACT_MS.store(now, Ordering::Release);
 }
 
-impl UserAdaptiveModel {
-    /// 追加单条用户上屏记录到 WAL（预写日志）中
-    ///
-    /// # 架构优势
-    /// 1. 采用追加写（Append-Only），每次选词仅产生数十字节文件尾部写入，耗时控制在微秒级；
-    /// 2. 彻底根除每次选词保存全量序列化造成的磁盘 I/O 停顿。
-    pub fn append_to_wal<P: AsRef<Path>>(
+/// 用户词库预写日志（WAL）与磁盘文件持久化管理器
+///
+/// # 架构优势
+/// 1. 采用追加写（Append-Only），每次选词仅产生数十字节文件尾部写入，耗时控制在微秒级；
+/// 2. 彻底根除每次选词保存全量序列化造成的磁盘 I/O 停顿；
+/// 3. 管理常驻文件追加写入句柄，消除高频选词时的重复 open/close 系统调用开销；
+/// 4. 彻底解耦领域纯内存模型与底层物理文件描述符的生命周期管理。
+#[derive(Debug)]
+pub struct UserAdaptiveWal {
+    /// 常驻保持的 WAL 日志追加写入文件句柄（消除每次选词时的重复 open/stat/close 系统调用）
+    wal_file: std::sync::Mutex<Option<(PathBuf, File)>>,
+    /// 运行期向 WAL 追加记录的计数器（用于触发周期性自动压缩）
+    wal_append_counter: usize,
+    /// 触发自动压缩的追加条数阈值（默认为 1000 条）
+    compact_threshold: usize,
+    /// 最近一次内部 WAL 归并压缩落盘完成的时间戳（毫秒级 UNIX 时间）
+    last_compact_ms: Arc<AtomicU64>,
+}
+
+impl Default for UserAdaptiveWal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UserAdaptiveWal {
+    /// 默认运行时触发自动压缩的追加阈值
+    pub const DEFAULT_COMPACT_THRESHOLD: usize = 1000;
+
+    /// 创建新的 WAL 持久化管理器
+    pub fn new() -> Self {
+        Self {
+            wal_file: std::sync::Mutex::new(None),
+            wal_append_counter: 0,
+            compact_threshold: Self::DEFAULT_COMPACT_THRESHOLD,
+            last_compact_ms: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// 获取当前管理器绑定的归并落盘时间戳共享原子句柄
+    pub fn last_compact_time(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.last_compact_ms)
+    }
+
+    /// 查询当前是否处于刚刚完成 WAL 归并落盘的防重保护窗口内（毫秒）
+    pub fn is_recent_compact(&self, window_ms: u64) -> bool {
+        let last = self.last_compact_ms.load(Ordering::Acquire);
+        if last == 0 {
+            return false;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        now.saturating_sub(last) <= window_ms
+    }
+
+    /// 标记当前完成内部 WAL 归并压缩落盘
+    pub fn mark_internal_compact(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.last_compact_ms.store(now, Ordering::Release);
+        mark_internal_compact();
+    }
+
+    /// 设置运行期触发自动压缩的 WAL 追加流水阈值
+    pub fn set_compact_threshold(&mut self, threshold: usize) {
+        self.compact_threshold = threshold;
+    }
+
+    /// 获取当前未压缩的 WAL 追加流水计数值
+    pub fn wal_append_counter(&self) -> usize {
+        self.wal_append_counter
+    }
+
+    /// 重置 WAL 追加流水计数值
+    pub fn reset_append_counter(&mut self) {
+        self.wal_append_counter = 0;
+    }
+
+    /// 判断磁盘上的 WAL 文件是否与当前管理器持有的常驻追加句柄指向同一底层文件（相同 inode 且长度一致）
+    pub fn is_same_wal_file(&self, path: &Path) -> bool {
+        let Ok(guard) = self.wal_file.lock() else {
+            return false;
+        };
+        let Some((ref opened_path, ref opened_file)) = *guard else {
+            return false;
+        };
+        if opened_path != path {
+            return false;
+        }
+        let (Ok(opened_meta), Ok(disk_meta)) = (opened_file.metadata(), std::fs::metadata(path))
+        else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            opened_meta.dev() == disk_meta.dev()
+                && opened_meta.ino() == disk_meta.ino()
+                && opened_meta.len() == disk_meta.len()
+        }
+        #[cfg(not(unix))]
+        {
+            opened_meta.len() == disk_meta.len()
+        }
+    }
+
+    /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
+    pub fn append<P: AsRef<Path>>(
         &mut self,
+        model: &mut UserAdaptiveModel,
         path: P,
         text: &str,
         pinyin: &str,
@@ -105,10 +211,10 @@ impl UserAdaptiveModel {
                         if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
                             drop(existing_file);
                             drop(guard);
-                            if let Ok(old_model) = Self::load_or_replay_wal(path_ref) {
-                                self.merge(&old_model);
+                            if let Ok(old_model) = Self::load_or_replay(path_ref) {
+                                model.merge(&old_model);
                             }
-                            self.compact_wal(path_ref)?;
+                            self.compact(model, path_ref)?;
                             guard = self
                                 .wal_file
                                 .lock()
@@ -195,9 +301,9 @@ impl UserAdaptiveModel {
         drop(guard);
 
         // 同步更新内存模型状态机（遵循 WAL 先写日志后更新内存的设计原则）
-        self.record_commit(text, pinyin, timestamp);
+        model.record_commit(text, pinyin, timestamp);
 
-        // 运行期累计写入流水计数（解耦打字按键热路径与重度磁盘 IO，由外部在失焦或退出时调用 maybe_compact_wal）
+        // 运行期累计写入流水计数（解耦打字按键热路径与重度磁盘 IO，由外部在失焦或退出时调用 maybe_compact）
         self.wal_append_counter += 1;
 
         Ok(())
@@ -209,9 +315,13 @@ impl UserAdaptiveModel {
     /// - **实现初衷**：将耗时的全量词条扫描与 `sync_all` 磁盘落盘从用户打字热路径中剥离，
     ///   由外部在输入法失焦（Deactivate）、闲置或退出等安全时机按需触发。
     /// - **核心优势**：保证选词上屏维持微秒级纯页缓存写入，彻底杜绝输入过程中的瞬时停顿。
-    pub fn maybe_compact_wal<P: AsRef<Path>>(&mut self, path: P) -> Result<bool, AlgoError> {
+    pub fn maybe_compact<P: AsRef<Path>>(
+        &mut self,
+        model: &UserAdaptiveModel,
+        path: P,
+    ) -> Result<bool, AlgoError> {
         if self.wal_append_counter >= self.compact_threshold {
-            self.compact_wal(path)?;
+            self.compact(model, path)?;
             self.wal_append_counter = 0;
             Ok(true)
         } else {
@@ -220,8 +330,8 @@ impl UserAdaptiveModel {
     }
 
     /// 从二进制缓冲区重放 WAL 记录帧（公共重放逻辑）
-    fn replay_wal_records(buf: &[u8], is_v2: bool) -> (Self, bool, usize) {
-        let mut model = Self::new();
+    fn replay_wal_records(buf: &[u8], is_v2: bool) -> (UserAdaptiveModel, bool, usize) {
+        let mut model = UserAdaptiveModel::new();
         let mut record_count = 0;
         let mut cursor = 0;
         let mut has_corrupted_tail = false;
@@ -296,10 +406,10 @@ impl UserAdaptiveModel {
     }
 
     /// 从 WAL 日志文件中重放还原用户词库模型，向下兼容旧版全量文件与旧版 V1 WAL
-    pub fn load_or_replay_wal<P: AsRef<Path>>(path: P) -> Result<Self, AlgoError> {
+    pub fn load_or_replay<P: AsRef<Path>>(path: P) -> Result<UserAdaptiveModel, AlgoError> {
         let path_ref = path.as_ref();
         if !path_ref.exists() {
-            return Ok(Self::new());
+            return Ok(UserAdaptiveModel::new());
         }
 
         let mut file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
@@ -340,26 +450,49 @@ impl UserAdaptiveModel {
                     || has_corrupted_tail
                     || (record_count >= 50 && record_count > model.total_entries() * 3)
                 {
-                    let _ = model.compact_wal(path_ref);
+                    let _ = Self::compact_model(&model, path_ref);
                 }
 
                 Ok(model)
             } else {
-                Self::load_from_file(path_ref)
+                UserAdaptiveModel::load_from_file(path_ref)
             }
         } else {
-            Self::load_from_file(path_ref)
+            UserAdaptiveModel::load_from_file(path_ref)
         }
     }
 
     /// 对 WAL 文件执行压缩归并快照，清除冗余流水记录
-    pub fn compact_wal<P: AsRef<Path>>(&self, path: P) -> Result<(), AlgoError> {
+    pub fn compact<P: AsRef<Path>>(
+        &self,
+        model: &UserAdaptiveModel,
+        path: P,
+    ) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
         // 压缩前主动释放常驻写入句柄，避免占用文件妨碍原子 rename
         if let Ok(mut guard) = self.wal_file.lock() {
             *guard = None;
         }
 
+        Self::compact_model_with_callback(model, path_ref, || {
+            self.mark_internal_compact();
+        })
+    }
+
+    /// 针对任意 UserAdaptiveModel 实例执行单次 WAL 归并压缩（无常驻句柄依赖）
+    pub fn compact_model<P: AsRef<Path>>(
+        model: &UserAdaptiveModel,
+        path: P,
+    ) -> Result<(), AlgoError> {
+        Self::compact_model_with_callback(model, path.as_ref(), mark_internal_compact)
+    }
+
+    /// 执行 WAL 压缩落盘并回调标记时间戳
+    fn compact_model_with_callback<F: Fn()>(
+        model: &UserAdaptiveModel,
+        path_ref: &Path,
+        mark_compact_fn: F,
+    ) -> Result<(), AlgoError> {
         // 若目标原文件存在，先获取跨进程排他锁以防与其他正在追加的进程发生冲突
         let orig_lock_file = if path_ref.exists() {
             if let Ok(f) = OpenOptions::new().read(true).write(true).open(path_ref) {
@@ -420,7 +553,7 @@ impl UserAdaptiveModel {
                     source: e,
                 })?;
 
-            for list in self.entries.values() {
+            for list in model.entries.values() {
                 for entry in list {
                     let py_bytes = entry.pinyin.as_bytes();
                     let text_bytes = entry.text.as_bytes();
@@ -458,7 +591,7 @@ impl UserAdaptiveModel {
         }
 
         // 在原子重命名前即刻激活内部归并标记，防止内核派发重命名/删除事件与落盘标记产生竞态
-        self.mark_internal_compact();
+        mark_compact_fn();
 
         std::fs::rename(&temp_path, path_ref).map_err(|e| AlgoError::UserDictPersistFailed {
             path: PathBuf::from(path_ref),
@@ -467,7 +600,7 @@ impl UserAdaptiveModel {
 
         // 成功完成原子重命名后解除守卫删除并刷新内部落盘完成时间戳
         guard.1 = true;
-        self.mark_internal_compact();
+        mark_compact_fn();
 
         if let Some(f) = orig_lock_file {
             let _ = flock(&f, FlockOperation::Unlock);

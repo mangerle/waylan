@@ -67,14 +67,12 @@ fn test_wal_append_replay_and_compaction() {
 
     // 1. 流式追加记录
     let mut model = UserAdaptiveModel::new();
-    model
-        .append_to_wal(&wal_path, "微澜", "wei'lan", 1_700_000_000)
+    let mut wal = UserAdaptiveWal::new();
+    wal.append(&mut model, &wal_path, "微澜", "wei'lan", 1_700_000_000)
         .expect("写入第1条WAL");
-    model
-        .append_to_wal(&wal_path, "微澜", "wei'lan", 1_700_000_100)
+    wal.append(&mut model, &wal_path, "微澜", "wei'lan", 1_700_000_100)
         .expect("写入第2条WAL");
-    model
-        .append_to_wal(&wal_path, "输入法", "shu'ru'fa", 1_700_000_200)
+    wal.append(&mut model, &wal_path, "输入法", "shu'ru'fa", 1_700_000_200)
         .expect("写入第3条WAL");
 
     // 2. 从 WAL 文件重放
@@ -116,25 +114,24 @@ fn test_wal_runtime_auto_compaction() {
     }
 
     let mut model = UserAdaptiveModel::new();
+    let mut wal = UserAdaptiveWal::new();
     // 设置较小阈值为 5，用于测试自动触发
-    model.set_compact_threshold(5);
+    wal.set_compact_threshold(5);
 
     for i in 0..4 {
-        model
-            .append_to_wal(&wal_path, "测试", "ce'shi", 1_700_000_000 + i)
+        wal.append(&mut model, &wal_path, "测试", "ce'shi", 1_700_000_000 + i)
             .expect("追加写入");
     }
-    assert_eq!(model.wal_append_counter(), 4);
+    assert_eq!(wal.wal_append_counter(), 4);
 
     // 第 5 次追加达到阈值，但不会在追加写热路径中同步触发阻塞式压缩，计数器保持递增
-    model
-        .append_to_wal(&wal_path, "测试", "ce'shi", 1_700_000_010)
+    wal.append(&mut model, &wal_path, "测试", "ce'shi", 1_700_000_010)
         .expect("追加写入");
-    assert_eq!(model.wal_append_counter(), 5);
+    assert_eq!(wal.wal_append_counter(), 5);
 
-    // 在外部安全窗口（如会话失焦）调用 maybe_compact_wal 成功执行条件压缩并清零计数器
-    assert!(model.maybe_compact_wal(&wal_path).expect("条件压缩"));
-    assert_eq!(model.wal_append_counter(), 0);
+    // 在外部安全窗口（如会话失焦）调用 maybe_compact 成功执行条件压缩并清零计数器
+    assert!(wal.maybe_compact(&model, &wal_path).expect("条件压缩"));
+    assert_eq!(wal.wal_append_counter(), 0);
 
     // 重新加载验证数据完整无损
     let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放验证");
@@ -152,13 +149,19 @@ fn test_wal_startup_auto_compaction() {
     }
 
     let mut model = UserAdaptiveModel::new();
-    model.set_compact_threshold(100_000); // 运行期不触发
+    let mut wal = UserAdaptiveWal::new();
+    wal.set_compact_threshold(100_000); // 运行期不触发
 
     // 写入 60 条同一个词的流水（高冗余率：60 流水 vs 1 个词）
     for i in 0..60 {
-        model
-            .append_to_wal(&wal_path, "高频词", "gao'pin'ci", 1_700_000_000 + i)
-            .expect("追加");
+        wal.append(
+            &mut model,
+            &wal_path,
+            "高频词",
+            "gao'pin'ci",
+            1_700_000_000 + i,
+        )
+        .expect("追加");
     }
 
     let size_before = std::fs::metadata(&wal_path).unwrap().len();
@@ -187,11 +190,10 @@ fn test_wal_truncation_and_corrupt_resilience() {
     }
 
     let mut model = UserAdaptiveModel::new();
-    model
-        .append_to_wal(&wal_path, "完整词", "wan'zheng", 1_700_000_000)
+    let mut wal = UserAdaptiveWal::new();
+    wal.append(&mut model, &wal_path, "完整词", "wan'zheng", 1_700_000_000)
         .expect("写入正常第一条");
-    model
-        .append_to_wal(&wal_path, "被截断词", "jie'duan", 1_700_000_001)
+    wal.append(&mut model, &wal_path, "被截断词", "jie'duan", 1_700_000_001)
         .expect("写入将被截断的第二条");
 
     // 模拟断电或进程崩溃：向文件末尾随机截断 5 个字节
@@ -270,20 +272,26 @@ fn test_wal_append_reopens_on_inode_change() {
     let temp_new_path = temp_dir.join(format!("test_wal_inode_new_{}.wal", nanos));
 
     let mut model = UserAdaptiveModel::new();
+    let mut wal = UserAdaptiveWal::new();
     // 第一次写入，建立常驻句柄
-    model
-        .append_to_wal(&wal_path, "中国", "zhong'guo", 1_700_000_000)
+    wal.append(&mut model, &wal_path, "中国", "zhong'guo", 1_700_000_000)
         .expect("首次追加写入成功");
 
     let mut new_model = UserAdaptiveModel::new();
-    new_model
-        .append_to_wal(&temp_new_path, "北京", "bei'jing", 1_700_000_010)
+    let mut new_wal = UserAdaptiveWal::new();
+    new_wal
+        .append(
+            &mut new_model,
+            &temp_new_path,
+            "北京",
+            "bei'jing",
+            1_700_000_010,
+        )
         .expect("向临时文件写入成功");
     std::fs::rename(&temp_new_path, &wal_path).expect("原子替换原文件");
 
-    // 原 model 再次写入，应当感知到 Inode 改变并重新打开新文件，而不是继续写向旧文件的孤儿句柄
-    model
-        .append_to_wal(&wal_path, "上海", "shang'hai", 1_700_000_020)
+    // 原 wal 再次写入，应当感知到 Inode 改变并重新打开新文件，而不是继续写向旧文件的孤儿句柄
+    wal.append(&mut model, &wal_path, "上海", "shang'hai", 1_700_000_020)
         .expect("替换后追加写入成功");
 
     // 重放磁盘文件，应同时包含“北京”与“上海”

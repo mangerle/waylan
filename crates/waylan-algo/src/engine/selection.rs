@@ -84,7 +84,8 @@ impl AlgoEngine {
         // 当选中的候选词为合规中文拼音词条（支持简繁中文）时，记录用户选词并动态调频
         if should_record {
             if let Some(ref path) = self.user_dict_path {
-                let _ = self.user_model.append_to_wal(
+                let _ = self.wal.append(
+                    &mut self.user_model,
                     path,
                     &selected.text,
                     &selected.pinyin,
@@ -175,7 +176,8 @@ impl AlgoEngine {
                 let char_len = full_text.chars().count();
                 if (2..=8).contains(&char_len) {
                     if let Some(ref path) = self.user_dict_path {
-                        let _ = self.user_model.append_to_wal(
+                        let _ = self.wal.append(
+                            &mut self.user_model,
                             path,
                             &full_text,
                             &full_pinyin,

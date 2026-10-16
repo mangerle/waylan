@@ -130,7 +130,7 @@ impl SessionConfigBundle {
                     info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
                     engine.user_model = UserAdaptiveModel::new();
                     engine.set_user_dict_path(&self.user_dict_path);
-                } else if !engine.user_model.is_same_wal_file(&self.user_dict_path) {
+                } else if !engine.is_same_wal_file(&self.user_dict_path) {
                     engine.set_user_dict_path(&self.user_dict_path);
                 }
             }

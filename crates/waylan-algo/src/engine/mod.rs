@@ -10,7 +10,7 @@ mod tests;
 pub use pangu::PanguSpacing;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,7 +25,7 @@ use crate::opencc::OpenCcDict;
 use crate::prism::PrismEngine;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, AlgoConfig};
-use crate::user_adaptive::UserAdaptiveModel;
+use crate::user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};
 
 /// 微澜统一核心算法引擎门面 (AlgoEngine)
 ///
@@ -38,8 +38,10 @@ use crate::user_adaptive::UserAdaptiveModel;
 pub struct AlgoEngine {
     /// 静态系统词典表
     pub table: LexiconTable,
-    /// 用户自适应词频模型
+    /// 用户自适应词频纯内存模型
     pub user_model: UserAdaptiveModel,
+    /// 用户词库预写日志持久化管理器
+    pub wal: UserAdaptiveWal,
     /// 自定义短语管理器
     pub custom_phrases: CustomPhraseManager,
     /// 英文单词联想管理器
@@ -86,6 +88,7 @@ impl AlgoEngine {
         Self {
             table,
             user_model: UserAdaptiveModel::new(),
+            wal: UserAdaptiveWal::new(),
             custom_phrases: CustomPhraseManager::new(),
             english_suggester: EnglishSuggestionManager::default_global(),
             symbol_suggester: SymbolSuggestionManager::default_global(),
@@ -122,7 +125,7 @@ impl AlgoEngine {
     /// 强制执行用户自适应词库的归并与刷盘持久化 (WAL Compaction)
     pub fn persist_user_dict(&mut self) -> Result<(), AlgoError> {
         if let Some(ref path) = self.user_dict_path {
-            self.user_model.compact_wal(path)?;
+            self.wal.compact(&self.user_model, path)?;
         }
         Ok(())
     }
@@ -130,10 +133,15 @@ impl AlgoEngine {
     /// 检查并在达到压缩阈值时对用户词库执行归并压缩（通常在会话失焦时调用）
     pub fn maybe_compact_user_dict(&mut self) -> Result<bool, AlgoError> {
         if let Some(ref path) = self.user_dict_path {
-            self.user_model.maybe_compact_wal(path)
+            self.wal.maybe_compact(&self.user_model, path)
         } else {
             Ok(false)
         }
+    }
+
+    /// 判断磁盘上的 WAL 文件是否与当前引擎持有的常驻追加句柄指向同一文件
+    pub fn is_same_wal_file(&self, path: &Path) -> bool {
+        self.wal.is_same_wal_file(path)
     }
 }
 
@@ -144,7 +152,7 @@ impl Drop for AlgoEngine {
                 "[算法引擎] 引擎正在析构，确保用户自适应词库落盘: {:?}",
                 path
             );
-            if let Err(e) = self.user_model.compact_wal(path) {
+            if let Err(e) = self.wal.compact(&self.user_model, path) {
                 log::warn!("[算法引擎] 析构保存用户词库失败: {}", e);
             } else {
                 log::info!("[算法引擎] 析构已成功完成用户词库安全落盘。");
