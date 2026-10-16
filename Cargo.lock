@@ -6201,6 +6201,7 @@ dependencies = [
  "slint",
  "slint-build",
  "tempfile",
+ "thiserror 1.0.69",
  "toml 0.8.23",
  "waylan-algo",
  "waylan-core",

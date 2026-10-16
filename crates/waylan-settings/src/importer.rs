@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+use thiserror::Error;
 use waylan_algo::dict_importer::DictImporter;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AuxiliaryDict;
@@ -21,24 +22,85 @@ use waylan_core::config::AppConfig;
 /// 外部导入文件体积最大允许上限（64 MB），防止异常大文件导致内存暴涨
 pub const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// 外部词库与字典数据导入错误枚举
+#[derive(Debug, Error)]
+pub enum ImportError {
+    /// 词库文件不存在或路径无效
+    #[error("指定的词库文件不存在或路径无效: {path}")]
+    FileNotFound {
+        /// 目标文件路径
+        path: String,
+    },
+
+    /// 词库文件体积超出安全上限
+    #[error(
+        "词库文件体积超过安全上限（{limit_bytes} 字节）: {path}（当前体积: {actual_bytes} 字节）"
+    )]
+    FileTooLarge {
+        /// 目标文件路径
+        path: String,
+        /// 允许的最大字节上限
+        limit_bytes: u64,
+        /// 实际检测到的文件字节数
+        actual_bytes: u64,
+    },
+
+    /// 文件读取或写入 I/O 异常
+    #[error("词库文件 I/O 操作失败，路径: {path}，原因: {source}")]
+    IoError {
+        /// 目标文件路径
+        path: String,
+        /// 底层 I/O 错误
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// 词库解析失败
+    #[error("解析词库文件失败，路径: {path}，原因: {message}")]
+    ParseError {
+        /// 目标文件路径
+        path: String,
+        /// 解析失败原因描述
+        message: String,
+    },
+
+    /// 持久化保存失败
+    #[error("保存用户词库失败，路径: {path}，原因: {message}")]
+    SaveError {
+        /// 目标文件路径
+        path: String,
+        /// 保存失败原因描述
+        message: String,
+    },
+}
+
 /// 解析并合入外部拼音词库
 ///
 /// # Errors
-/// 当文件不存在、体积超限、解析格式错误或写入磁盘失败时返回错误描述。
-pub fn import_pinyin_dict_file(path_str: &str) -> Result<String, String> {
+/// 当文件不存在、体积超限、解析格式错误或写入磁盘失败时返回 [`ImportError`]。
+pub fn import_pinyin_dict_file(path_str: &str) -> Result<String, ImportError> {
     let path = Path::new(path_str.trim());
     if !path.is_file() {
-        return Err("指定的词库文件不存在或路径无效，请核对后重试。".to_string());
+        return Err(ImportError::FileNotFound {
+            path: path_str.to_string(),
+        });
     }
-    if path
-        .metadata()
-        .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
-        .unwrap_or(true)
-    {
-        return Err("词库文件体积超过 64MB 安全上限，已拒绝加载。".to_string());
+    let meta = fs::metadata(path).map_err(|source| ImportError::IoError {
+        path: path_str.to_string(),
+        source,
+    })?;
+    if meta.len() > MAX_IMPORT_FILE_BYTES {
+        return Err(ImportError::FileTooLarge {
+            path: path_str.to_string(),
+            limit_bytes: MAX_IMPORT_FILE_BYTES,
+            actual_bytes: meta.len(),
+        });
     }
 
-    let entries = DictImporter::import_file(path).map_err(|e| format!("解析词库失败: {}", e))?;
+    let entries = DictImporter::import_file(path).map_err(|e| ImportError::ParseError {
+        path: path_str.to_string(),
+        message: e.to_string(),
+    })?;
     let count = entries.len();
     let user_dict_path = AppConfig::user_dict_path();
     let mut user_model = UserAdaptiveModel::load_or_replay_wal(&user_dict_path).unwrap_or_default();
@@ -51,7 +113,10 @@ pub fn import_pinyin_dict_file(path_str: &str) -> Result<String, String> {
     }
     user_model
         .compact_wal(&user_dict_path)
-        .map_err(|e| format!("保存用户词库失败: {}", e))?;
+        .map_err(|e| ImportError::SaveError {
+            path: user_dict_path.to_string_lossy().to_string(),
+            message: e.to_string(),
+        })?;
 
     Ok(format!(
         "成功合入 {} 条词目，当前自适应词库总词量: {} 条",
@@ -63,24 +128,33 @@ pub fn import_pinyin_dict_file(path_str: &str) -> Result<String, String> {
 /// 解析并合入外部英文单词库
 ///
 /// # Errors
-/// 当文件不存在、体积超限、读取失败或写入磁盘失败时返回错误描述。
+/// 当文件不存在、体积超限、读取失败或写入磁盘失败时返回 [`ImportError`]。
 pub fn import_english_dict_file(
     path_str: &str,
     aux: &mut AuxiliaryDict,
-) -> Result<(String, usize), String> {
+) -> Result<(String, usize), ImportError> {
     let path = Path::new(path_str.trim());
     if !path.is_file() {
-        return Err("指定的英文词典文件不存在，请核对路径。".to_string());
+        return Err(ImportError::FileNotFound {
+            path: path_str.to_string(),
+        });
     }
-    if path
-        .metadata()
-        .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
-        .unwrap_or(true)
-    {
-        return Err("英文词库体积超过 64MB 安全上限。".to_string());
+    let meta = fs::metadata(path).map_err(|source| ImportError::IoError {
+        path: path_str.to_string(),
+        source,
+    })?;
+    if meta.len() > MAX_IMPORT_FILE_BYTES {
+        return Err(ImportError::FileTooLarge {
+            path: path_str.to_string(),
+            limit_bytes: MAX_IMPORT_FILE_BYTES,
+            actual_bytes: meta.len(),
+        });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| format!("读取文件失败: {}", e))?;
+    let content = fs::read_to_string(path).map_err(|source| ImportError::IoError {
+        path: path_str.to_string(),
+        source,
+    })?;
     let mut existing: HashSet<String> = aux
         .english_words
         .iter()
@@ -114,7 +188,10 @@ pub fn import_english_dict_file(
 
     let aux_path = AppConfig::user_aux_dict_path();
     aux.save_to_file(&aux_path)
-        .map_err(|e| format!("保存用户辅助词库失败: {}", e))?;
+        .map_err(|e| ImportError::SaveError {
+            path: aux_path.to_string_lossy().to_string(),
+            message: e.to_string(),
+        })?;
 
     Ok((
         format!(
@@ -129,24 +206,33 @@ pub fn import_english_dict_file(
 /// 解析并合入外部符号映射表
 ///
 /// # Errors
-/// 当文件不存在、体积超限、读取失败或写入磁盘失败时返回错误描述。
+/// 当文件不存在、体积超限、读取失败或写入磁盘失败时返回 [`ImportError`]。
 pub fn import_symbols_dict_file(
     path_str: &str,
     aux: &mut AuxiliaryDict,
-) -> Result<(String, usize), String> {
+) -> Result<(String, usize), ImportError> {
     let path = Path::new(path_str.trim());
     if !path.is_file() {
-        return Err("指定的符号映射文件不存在，请核对路径。".to_string());
+        return Err(ImportError::FileNotFound {
+            path: path_str.to_string(),
+        });
     }
-    if path
-        .metadata()
-        .map(|m| m.len() > MAX_IMPORT_FILE_BYTES)
-        .unwrap_or(true)
-    {
-        return Err("符号词库体积超过 64MB 安全上限。".to_string());
+    let meta = fs::metadata(path).map_err(|source| ImportError::IoError {
+        path: path_str.to_string(),
+        source,
+    })?;
+    if meta.len() > MAX_IMPORT_FILE_BYTES {
+        return Err(ImportError::FileTooLarge {
+            path: path_str.to_string(),
+            limit_bytes: MAX_IMPORT_FILE_BYTES,
+            actual_bytes: meta.len(),
+        });
     }
 
-    let content = fs::read_to_string(path).map_err(|e| format!("读取文件失败: {}", e))?;
+    let content = fs::read_to_string(path).map_err(|source| ImportError::IoError {
+        path: path_str.to_string(),
+        source,
+    })?;
     let mut existing: HashSet<(String, String)> = aux
         .symbols
         .iter()
@@ -177,7 +263,10 @@ pub fn import_symbols_dict_file(
 
     let aux_path = AppConfig::user_aux_dict_path();
     aux.save_to_file(&aux_path)
-        .map_err(|e| format!("保存用户符号词库失败: {}", e))?;
+        .map_err(|e| ImportError::SaveError {
+            path: aux_path.to_string_lossy().to_string(),
+            message: e.to_string(),
+        })?;
 
     Ok((
         format!(
@@ -187,4 +276,52 @@ pub fn import_symbols_dict_file(
         ),
         aux.symbols.len(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_import_nonexistent_file() {
+        let res = import_pinyin_dict_file("/path/not/exist/foo.txt");
+        assert!(matches!(res, Err(ImportError::FileNotFound { .. })));
+
+        let mut aux = AuxiliaryDict::default();
+        let res_en = import_english_dict_file("/path/not/exist/en.txt", &mut aux);
+        assert!(matches!(res_en, Err(ImportError::FileNotFound { .. })));
+
+        let res_sym = import_symbols_dict_file("/path/not/exist/sym.txt", &mut aux);
+        assert!(matches!(res_sym, Err(ImportError::FileNotFound { .. })));
+    }
+
+    #[test]
+    fn test_import_english_and_symbols_flow() {
+        let mut aux = AuxiliaryDict::default();
+
+        let temp_en = NamedTempFile::new().unwrap();
+        fs::write(
+            temp_en.path(),
+            "---\nname: english\n...\nhello\t100\nworld\t200\nhello\t300\n# comment\n",
+        )
+        .unwrap();
+
+        let (msg, count) =
+            import_english_dict_file(&temp_en.path().to_string_lossy(), &mut aux).unwrap();
+        assert_eq!(count, 2);
+        assert!(msg.contains("成功导入 2 个英文单词"));
+
+        let temp_sym = NamedTempFile::new().unwrap();
+        fs::write(
+            temp_sym.path(),
+            "sj\t(｡･ω･｡)\t颜文字\nsj\t(｡･ω･｡)\t重复项\nhh\t哈哈\n",
+        )
+        .unwrap();
+
+        let (msg_sym, count_sym) =
+            import_symbols_dict_file(&temp_sym.path().to_string_lossy(), &mut aux).unwrap();
+        assert_eq!(count_sym, 2);
+        assert!(msg_sym.contains("成功导入 2 组符号联想项"));
+    }
 }

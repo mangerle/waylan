@@ -14,6 +14,8 @@ pub mod importer;
 pub mod sync;
 pub mod voice_handlers;
 
+pub use importer::ImportError;
+
 use std::cell::RefCell;
 use std::error::Error;
 use std::rc::Rc;
