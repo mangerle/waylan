@@ -246,7 +246,12 @@ impl AuxiliaryDict {
         if let Some(parent) = path_ref.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let temp_path = path_ref.with_extension("aux.tmp");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+        let temp_path = path_ref.with_extension(format!("aux.{}.{}.tmp", pid, nanos));
 
         struct TempFileGuard<'a>(&'a Path, bool);
         impl<'a> Drop for TempFileGuard<'a> {
