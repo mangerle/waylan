@@ -36,6 +36,7 @@ jobs:
             libfontconfig1-dev \
             libfreetype6-dev \
             libdbus-1-dev \
+            libasound2-dev \
             pkg-config
 
       - name: 基于 Commit 规范自动生成当前版本分类 Changelog (git-cliff)
