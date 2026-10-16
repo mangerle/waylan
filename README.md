@@ -189,4 +189,4 @@ cargo test --workspace
 
 ## 开源许可
 
-本项目遵循 [MIT 许可证](LICENSE-MIT) 或 [Apache-2.0 许可证](LICENSE-APACHE) 双重开源许可。
+本项目遵循 [Apache-2.0 许可证](LICENSE-APACHE) 双重开源许可。

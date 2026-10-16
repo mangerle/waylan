@@ -84,7 +84,7 @@ pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
     <exec>{exe} --ibus</exec>
     <version>{ver}</version>
     <author>WayLan Contributors</author>
-    <license>MIT OR Apache-2.0</license>
+    <license>Apache-2.0</license>
     <homepage>https://github.com/waylan/waylan</homepage>
     <textdomain>waylan</textdomain>
     <engines>
@@ -93,7 +93,7 @@ pub fn format_ibus_component_xml(exe_path: &str, version: &str) -> String {
             <longname>微澜拼音</longname>
             <description>微澜 (WayLan) - 现代轻量纯 Rust 中文拼音输入法</description>
             <language>zh_CN</language>
-            <license>MIT OR Apache-2.0</license>
+            <license>Apache-2.0</license>
             <author>WayLan Contributors</author>
             <icon>{icon}</icon>
             <layout>us</layout>
@@ -124,7 +124,7 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
         <longname>微澜拼音</longname>
         <description>微澜 (WayLan) - 现代轻量纯 Rust 中文拼音输入法</description>
         <language>zh_CN</language>
-        <license>MIT OR Apache-2.0</license>
+        <license>Apache-2.0</license>
         <author>WayLan Contributors</author>
         <icon>{}</icon>
         <layout>us</layout>
