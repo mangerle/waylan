@@ -70,7 +70,7 @@ pub fn has_syllable_prefix(prefix: &str) -> bool {
 /// - **代价与局限**：仅判定全切分可达性，不包含纠错容错边与模糊音扩展，仅作为前置硬剪枝漏斗。
 pub fn can_segment_into_syllables(s: &str) -> bool {
     let n = s.len();
-    if n == 0 || n > 32 {
+    if n == 0 || n > 32 || !s.is_ascii() {
         return false;
     }
     let mut reachable = [false; 33];
@@ -559,5 +559,15 @@ mod tests {
             corrections_zh.iter().any(|(syl, _)| syl == "zhong"),
             "zhobg 应纠错召回 zhong"
         );
+    }
+
+    #[test]
+    fn test_can_segment_into_syllables_non_ascii_safety() {
+        assert!(!can_segment_into_syllables("你好"));
+        assert!(!can_segment_into_syllables("ni'好"));
+        assert!(!can_segment_into_syllables("★※→"));
+        assert!(can_segment_into_syllables("zhongguo"));
+        assert!(can_segment_into_syllables("xian"));
+        assert!(!can_segment_into_syllables("zzzzzz"));
     }
 }
