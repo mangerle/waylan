@@ -141,9 +141,10 @@ impl NoiseSuppressor for RnnoiseSuppressor {
             samples.copy_from_slice(&self.out_16k_queue[..needed]);
             self.out_16k_queue.drain(0..needed);
         } else {
-            // 初始冷启动几毫秒内队列尚未排满，将已有样本填入，不足部分透传
+            // 初始冷启动期间队列尚未排满，将已有样本填入，不足部分以静音垫底，严禁残留原始样本拼接导致时域阶跃爆音
             let available = self.out_16k_queue.len();
             samples[..available].copy_from_slice(&self.out_16k_queue[..available]);
+            samples[available..].fill(0.0);
             self.out_16k_queue.clear();
         }
     }
@@ -225,8 +226,10 @@ impl NoiseSuppressor for DeepFilterSuppressor {
             samples.copy_from_slice(&self.out_queue[..needed]);
             self.out_queue.drain(..needed);
         } else {
+            // 初始冷启动期间队列尚未排满，将已有样本填入，不足部分以静音垫底，严禁残留原始样本拼接导致时域阶跃爆音
             let available = self.out_queue.len();
             samples[..available].copy_from_slice(&self.out_queue[..available]);
+            samples[available..].fill(0.0);
             self.out_queue.clear();
         }
     }
@@ -303,8 +306,10 @@ impl NoiseSuppressor for GtcrnSuppressor {
             samples.copy_from_slice(&self.out_queue[..needed]);
             self.out_queue.drain(..needed);
         } else {
+            // 初始冷启动期间队列尚未排满，将已有样本填入，不足部分以静音垫底，严禁残留原始样本拼接导致时域阶跃爆音
             let available = self.out_queue.len();
             samples[..available].copy_from_slice(&self.out_queue[..available]);
+            samples[available..].fill(0.0);
             self.out_queue.clear();
         }
     }
