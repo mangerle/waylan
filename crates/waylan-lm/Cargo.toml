@@ -1,0 +1,22 @@
+[package]
+name = "waylan-lm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "微澜 (WayLan) - 本地轻量级神经网络语言模型推理与重排序库"
+
+[dependencies]
+waylan-core = { path = "../waylan-core" }
+waylan-algo = { path = "../waylan-algo" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+memmap2.workspace = true
+safetensors.workspace = true
+tokenizers.workspace = true
+bytemuck = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
