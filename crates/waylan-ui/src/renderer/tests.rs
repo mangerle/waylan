@@ -211,3 +211,16 @@ fn test_cosmic_text_smoke() {
     }
     assert!(line_w > 0.0);
 }
+
+#[test]
+fn test_measure_text_cache_hit_and_clear() {
+    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let w1 = renderer.measure_text("测试", 15.0);
+    let w2 = renderer.measure_text("测试", 15.0);
+    assert_eq!(w1, w2, "缓存命中的测量宽度必须完全一致");
+
+    renderer.clear_glyph_cache();
+    let w3 = renderer.measure_text("测试", 15.0);
+    assert_eq!(w1, w3, "清空缓存后重新计算的测量宽度必须保持完全一致");
+}
+

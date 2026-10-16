@@ -11,16 +11,43 @@ use draw::blend_swash_image;
 use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 use font::FontManager;
 use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, LayoutParams};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::sync::Mutex;
 use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
+
+/// 文本排版测量缓存大小（固定 128 项直接映射，零堆分配淘汰）
+const MEASURE_CACHE_SIZE: usize = 128;
+
+/// 单项文本排版测量缓存条目
+#[derive(Clone, Default)]
+struct MeasureCacheEntry {
+    hash: u64,
+    size_bits: u32,
+    width: f32,
+    text: String,
+}
+
+/// 计算文本测量查询键的哈希指纹
+fn calculate_measure_hash(text: &str, size_bits: u32) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    size_bits.hash(&mut hasher);
+    let h = hasher.finish();
+    if h == 0 {
+        1
+    } else {
+        h
+    }
+}
 
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
     font_system: FontSystem,
     swash_cache: SwashCache,
     buffer: Buffer,
+    measure_cache: [MeasureCacheEntry; MEASURE_CACHE_SIZE],
 }
 
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
@@ -50,6 +77,7 @@ impl CandidateBoxRenderer {
                 font_system,
                 swash_cache,
                 buffer,
+                measure_cache: std::array::from_fn(|_| MeasureCacheEntry::default()),
             }),
             hit_regions: Mutex::new(Vec::with_capacity(36)),
         }
@@ -115,19 +143,34 @@ impl CandidateBoxRenderer {
             .unwrap_or(0)
     }
 
-    /// 清空字形光栅化缓存
+    /// 清空字形光栅化与排版测量缓存
     pub fn clear_glyph_cache(&self) {
         if let Ok(mut engine) = self.text_engine.lock() {
             engine.swash_cache = SwashCache::new();
+            for entry in &mut engine.measure_cache {
+                entry.hash = 0;
+            }
         }
     }
 
-    /// 测量一段文字的排版宽度（基于 cosmic-text 高级塑形与布局，复用 Buffer 消除堆分配）
+    /// 测量一段文字的排版宽度（基于 cosmic-text 高级塑形与布局，复用 Buffer 与直接映射缓存消除多余塑形）
     pub fn measure_text(&self, text: &str, size: f32) -> f32 {
         let Ok(mut engine) = self.text_engine.lock() else {
             let s = self.scale.max(0.5);
             return text.chars().count() as f32 * (size * 0.8 + 3.0 * s);
         };
+
+        let size_bits = size.to_bits();
+        let hash = calculate_measure_hash(text, size_bits);
+        let idx = (hash as usize) & (MEASURE_CACHE_SIZE - 1);
+
+        if engine.measure_cache[idx].hash == hash
+            && engine.measure_cache[idx].size_bits == size_bits
+            && engine.measure_cache[idx].text == text
+        {
+            return engine.measure_cache[idx].width;
+        }
+
         let engine = &mut *engine;
         engine.buffer.set_metrics(Metrics::new(size, size * 1.2));
         let shaping = if text.is_ascii() {
@@ -145,6 +188,14 @@ impl CandidateBoxRenderer {
         for run in engine.buffer.layout_runs() {
             width = width.max(run.line_w);
         }
+
+        let entry = &mut engine.measure_cache[idx];
+        entry.hash = hash;
+        entry.size_bits = size_bits;
+        entry.width = width;
+        entry.text.clear();
+        entry.text.push_str(text);
+
         width
     }
 
