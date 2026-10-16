@@ -9,6 +9,7 @@ use crate::system::ShutdownCoordinator;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
+use std::time::Duration;
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Message;
 
@@ -124,21 +125,33 @@ pub(crate) fn spawn_screen_saver_listener(
     let handle = ThreadBuilder::new()
         .name("waylan-screen-saver-listener".to_string())
         .spawn(move || {
-            let Ok(conn) = Connection::session() else {
-                return;
-            };
-            register_screen_saver_rules(&conn);
-            let iter = MessageIterator::from(&conn);
-            for msg_res in iter {
+            while !coordinator.is_shutting_down() {
+                let Ok(conn) = Connection::session() else {
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                };
+                register_screen_saver_rules(&conn);
+                // 连接建立或重连后主动同步一次当前真实锁屏状态，避免休眠唤醒期间信号丢失
+                let active = query_initial_screen_saver_active(&conn);
+                if screen_locked_clone.swap(active, Ordering::AcqRel) != active {
+                    coordinator.wake();
+                }
+                let iter = MessageIterator::from(&conn);
+                for msg_res in iter {
+                    if coordinator.is_shutting_down() {
+                        break;
+                    }
+                    let Ok(msg) = msg_res else {
+                        break;
+                    };
+                    if handle_screen_saver_signal(&msg, &screen_locked_clone) {
+                        coordinator.wake();
+                    }
+                }
                 if coordinator.is_shutting_down() {
                     break;
                 }
-                let Ok(msg) = msg_res else {
-                    break;
-                };
-                if handle_screen_saver_signal(&msg, &screen_locked_clone) {
-                    coordinator.wake();
-                }
+                std::thread::sleep(Duration::from_millis(200));
             }
         })
         .ok();

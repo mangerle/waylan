@@ -5,6 +5,7 @@
 //! - **核心优势**：纯内存瞬时加锁变更状态并提取不可变快照，所有信号发送在释放互斥锁后异步执行。
 //! - **代价与局限**：必须严格遵循 IBus D-Bus 信号契约。
 
+use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -117,8 +118,10 @@ impl IbusEngineService {
 
     /// 重置会话并向 `ibus-daemon` 发送隐藏预编辑与候选面板信号
     async fn reset_and_hide_ui(&self, ctxt: &SignalContext<'_>) {
+        self.is_password.store(false, Ordering::Release);
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            guard.is_password_context = false;
             guard.reset_context();
             UiSnapshot::capture(&guard)
         };
@@ -168,16 +171,15 @@ impl IbusEngineService {
     /// 取消手写输入事件（保持空实现以兼容协议）
     fn cancel_hand_writing(&self, _n_strokes: u32) {}
 
-    /// 设置客户端支持的输入法能力位掩码
+    /// 设置客户端支持的输入法能力位掩码（同步更新密码框感知标记并清除非密码态残留）
     fn set_capabilities(&self, caps: u32) {
         const IBUS_CAP_PASSWORD: u32 = 1 << 4;
-        if (caps & IBUS_CAP_PASSWORD) != 0 {
-            self.is_password.store(true, Ordering::Release);
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            guard.is_password_context = true;
-            if !guard.engine.raw_input().is_empty() {
-                guard.reset_context();
-            }
+        let is_pwd = (caps & IBUS_CAP_PASSWORD) != 0;
+        self.is_password.store(is_pwd, Ordering::Release);
+        let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+        guard.is_password_context = is_pwd;
+        if is_pwd && !guard.engine.raw_input().is_empty() {
+            guard.reset_context();
         }
     }
 
@@ -255,6 +257,11 @@ impl IbusEngineService {
             // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
             // 既杜绝旧普通窗口残留密码标记，又防止因先触发 SetContentType 后触发 FocusIn 导致密码标记被误冲刷
             guard.is_password_context = self.is_password.load(Ordering::Acquire);
+            // 自愈保护：若当前获焦的并非密码框，而内部仍记录为锁屏状态，说明桌面已解锁但锁屏信号丢失，自动解除锁屏直通
+            if !guard.is_password_context && guard.is_screen_locked {
+                info!("[微澜 IBus] 普通窗口获焦，自动校准并解除残留的锁屏直通保护。");
+                guard.is_screen_locked = false;
+            }
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
             let trad = guard.engine.config.traditional_chinese;
@@ -459,4 +466,48 @@ impl IbusEngineService {
         keycode: u32,
         state: u32,
     ) -> zbus::Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use waylan_algo::types::AlgoConfig;
+    use waylan_algo::AlgoEngine;
+
+    #[test]
+    fn test_password_capabilities_and_reset_lifecycle() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let core = Arc::new(Mutex::new(IbusSessionCore::new(engine)));
+        let is_password = Arc::new(AtomicBool::new(false));
+        let service = IbusEngineService {
+            core: Arc::clone(&core),
+            reload_requested: None,
+            loop_wakeup: None,
+            subprocess_manager: Arc::new(SubprocessManager::new(Arc::new(AtomicBool::new(false)))),
+            settings_running: Arc::new(AtomicBool::new(false)),
+            suppress_properties: false,
+            is_password: Arc::clone(&is_password),
+        };
+
+        // 1. 模拟进入密码框，设置密码能力位
+        const IBUS_CAP_PASSWORD: u32 = 1 << 4;
+        service.set_capabilities(IBUS_CAP_PASSWORD);
+        assert!(is_password.load(Ordering::Acquire));
+        assert!(core.lock().unwrap().is_password_context);
+
+        // 2. 模拟切回普通窗口，设置非密码能力位（必须成功复位）
+        service.set_capabilities(0);
+        assert!(!is_password.load(Ordering::Acquire));
+        assert!(!core.lock().unwrap().is_password_context);
+
+        // 3. 再次通过 set_content_type 进入密码框
+        service.set_content_type((IBUS_INPUT_PURPOSE_PASSWORD, 0));
+        assert!(is_password.load(Ordering::Acquire));
+        assert!(core.lock().unwrap().is_password_context);
+
+        // 4. 普通内容类型复位
+        service.set_content_type((0, 0));
+        assert!(!is_password.load(Ordering::Acquire));
+        assert!(!core.lock().unwrap().is_password_context);
+    }
 }

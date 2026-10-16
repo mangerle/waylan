@@ -63,6 +63,7 @@ fn handle_screen_saver_transition(
         info!("[微澜 IBus] 检测到系统屏幕已解锁，正在自动校准并切回微澜输入法。");
         if let Ok(mut guard) = shared_core.lock() {
             guard.is_screen_locked = false;
+            guard.is_password_context = false;
         }
         ensure_global_engine_active(conn);
         let _ = Command::new("gsettings")
