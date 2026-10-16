@@ -166,3 +166,63 @@ fn extract_key_symbol(section: &str, keyname: &str) -> Option<char> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keymap_layout_dynamic_update() {
+        let mut layout = KeymapLayout::qwerty();
+        assert_eq!(layout.get_char(30), Some('a'));
+
+        let mock_xkb = r#"
+            key <AC01> { [ o, O ] };
+            key <AC02> { [ a, A ] };
+            key <AC03> { [ e, E ] };
+            key <AC04> { [ u, U ] };
+            key <AC05> { [ i, I ] };
+            key <AC06> { [ d, D ] };
+            key <AC07> { [ h, H ] };
+            key <AC08> { [ t, T ] };
+            key <AC09> { [ n, N ] };
+            key <AC10> { [ s, S ] };
+            key <AC11> { [ apostrophe, quotedbl ] };
+        "#;
+        layout.update_from_xkb_text(mock_xkb);
+        assert_eq!(layout.get_char(30), Some('o'));
+        assert_eq!(layout.get_char(31), Some('a'));
+        assert_eq!(layout.get_char(KEY_APOSTROPHE), Some('\''));
+        assert_eq!(layout.get_char(48), Some('b'));
+
+        let mut full_layout = KeymapLayout::qwerty();
+        let real_xkb = r#"
+            xkb_keymap {
+                xkb_keycodes "evdev+aliases(qwerty)" {
+                    minimum = 8;
+                    maximum = 255;
+                    <AC01> = 38;
+                    <AC02> = 39;
+                    <AC03> = 40;
+                    <AC04> = 41;
+                };
+                xkb_symbols "pc+us(dvorak)" {
+                    key <AC01> { [ a, A ] };
+                    key <AC02> { [ o, O ] };
+                    key <AC03> { [ e, E ] };
+                    key <AC04> { [ u, U ] };
+                    key <AC05> { [ i, I ] };
+                    key <AC06> { [ d, D ] };
+                    key <AC07> { [ h, H ] };
+                    key <AC08> { [ t, T ] };
+                    key <AC09> { [ n, N ] };
+                    key <AC10> { [ s, S ] };
+                };
+            };
+        "#;
+        full_layout.update_from_xkb_text(real_xkb);
+        assert_eq!(full_layout.get_char(31), Some('o'));
+        assert_eq!(full_layout.get_char(32), Some('e'));
+        assert_eq!(full_layout.get_char(33), Some('u'));
+    }
+}

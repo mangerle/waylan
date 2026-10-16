@@ -9,11 +9,12 @@ use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, Wl
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
-use crate::session_v1::{
-    handle_composition_key_with_params, keycode_to_ascii_digit_char,
-    keycode_to_punctuation_with_shift, CompositionKeyParams, KeyProcessAction, WaylanV1Session,
-    KEY_BACKSPACE, KEY_CAPSLOCK, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
+use waylan_algo::composition::{
+    handle_composition_key_with_params, CompositionKeyParams, KeyProcessAction,
 };
+use waylan_core::input::*;
+
+use crate::session_v1::WaylanV1Session;
 
 /// 处理 XKB 键盘字符布局映射同步
 fn handle_v1_keymap(state: &mut WaylanV1Session, fd: std::os::fd::OwnedFd, size: u32) {

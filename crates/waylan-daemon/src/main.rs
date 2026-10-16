@@ -1,12 +1,10 @@
 mod cli;
-mod config;
 mod ibus;
 mod logger;
 mod session_bundle;
 mod system;
 mod tray;
 
-use config::{AppConfig, SwitchKey, ThemeMode};
 use log::{info, warn};
 use session_bundle::{
     apply_reload_v1, apply_reload_v2, build_wayland_voice_filter, check_wayland_capabilities,
@@ -25,6 +23,8 @@ use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
 use waylan_algo::AlgoEngine;
+pub use waylan_core::config;
+use waylan_core::config::{AppConfig, SwitchKey, ThemeMode};
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 use waylan_wayland::session_v1::WaylanV1Session;
 use waylan_wayland::session_v2::WaylanV2Session;

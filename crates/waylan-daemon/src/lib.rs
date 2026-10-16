@@ -1,5 +1,5 @@
 pub mod cli;
-pub mod config;
+pub use waylan_core::config;
 pub mod logger;
 pub mod session_bundle;
 pub mod system;

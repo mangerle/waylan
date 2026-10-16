@@ -11,7 +11,10 @@ use waylan_core::{CandidateBoxState, InputMode, TextAction};
 
 use super::surrounding::{clamp_char_boundary_ceil, clamp_char_boundary_floor};
 use super::WaylanV2Session;
-use crate::input_core::*;
+use waylan_algo::composition::{
+    handle_composition_key_with_params, CompositionKeyParams, KeyProcessAction,
+};
+use waylan_core::input::*;
 
 pub(crate) use repeat::{drive_key_repeat, next_poll_timeout_ms};
 

@@ -85,7 +85,7 @@ mod tests {
 
         let mut filter = filter.unwrap();
         // 普通按键应放行透传
-        let res = filter(waylan_wayland::KEY_SPACE, true, 0);
+        let res = filter(waylan_core::input::KEY_SPACE, true, 0);
         assert_eq!(res, waylan_wayland::KeyFilterResult::PassThrough);
     }
 }

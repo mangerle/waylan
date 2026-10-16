@@ -20,10 +20,10 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
 use crate::fs_watcher::InotifyWatcher;
-use crate::input_core::*;
 use crate::loop_wakeup::LoopWakeup;
 use crate::session_common::*;
 use crate::surface::{CandidateSurfaceManager, CursorRect};
+use waylan_core::input::*;
 
 pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
 

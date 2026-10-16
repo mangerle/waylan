@@ -357,3 +357,160 @@ pub fn handle_composition_key(
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::AlgoConfig;
+    use waylan_core::input::*;
+
+    #[test]
+    fn test_handle_composition_key() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut punct = PunctuationProcessor::new();
+        let page_keys = PageKeyConfig::default();
+
+        engine.push_char('n');
+        engine.push_char('i');
+        assert_eq!(engine.raw_input(), "ni");
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_ENTER, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Commit("ni".to_string())));
+        assert!(engine.raw_input().is_empty());
+
+        engine.push_char('x');
+        engine.push_char('i');
+        let act =
+            handle_composition_key(&mut engine, &mut punct, KEY_APOSTROPHE, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.raw_input(), "xi'");
+        engine.push_char('a');
+        engine.push_char('n');
+        assert_eq!(engine.raw_input(), "xi'an");
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_ESC, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Reset));
+        assert!(engine.raw_input().is_empty());
+
+        engine.push_char('h');
+        engine.push_char('a');
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_KPENTER, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Commit("ha".to_string())));
+        assert!(engine.raw_input().is_empty());
+
+        engine.push_char('n');
+        engine.push_char('i');
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_KP1, false, page_keys, 0);
+        assert!(matches!(act, Some(KeyProcessAction::Commit(_))));
+        assert!(engine.raw_input().is_empty());
+    }
+
+    #[test]
+    fn test_v_mode_composition_keys() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut punct = PunctuationProcessor::new();
+        let page_keys = PageKeyConfig::default();
+
+        engine.push_char('v');
+        assert_eq!(engine.raw_input(), "v");
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_2, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.raw_input(), "v2");
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_0, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.raw_input(), "v20");
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_8, true, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.raw_input(), "v20*");
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_KP5, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.raw_input(), "v20*5");
+
+        let cands = engine.candidates();
+        assert!(!cands.is_empty());
+        assert_eq!(cands[0].text, "100");
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Commit("100".to_string())));
+        assert!(engine.raw_input().is_empty());
+    }
+
+    #[test]
+    fn test_smart_navigation_selection_and_overflow_to_cursor_edit() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut punct = PunctuationProcessor::new();
+        let page_keys = PageKeyConfig::default();
+
+        for ch in "xian".chars() {
+            engine.push_char(ch);
+        }
+        assert_eq!(engine.cursor(), 4);
+        assert_eq!(engine.selected_index, 0);
+        assert!(engine.candidates().len() >= 2);
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.selected_index, 1);
+        assert_eq!(engine.cursor(), 4);
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.selected_index, 0);
+        assert_eq!(engine.cursor(), 4);
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.cursor(), 3);
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.cursor(), 2);
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.cursor(), 3);
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(engine.cursor(), 4);
+        assert_eq!(engine.selected_index, 0);
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
+        assert!(matches!(act, Some(KeyProcessAction::Commit(_))));
+        assert!(engine.raw_input().is_empty());
+    }
+
+    #[test]
+    fn test_smart_navigation_down_page_and_expand_grid() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut punct = PunctuationProcessor::new();
+        let page_keys = PageKeyConfig::default();
+
+        engine.push_char('n');
+        engine.push_char('i');
+
+        while engine.can_next_page() {
+            let act =
+                handle_composition_key(&mut engine, &mut punct, KEY_DOWN, false, page_keys, 0);
+            assert_eq!(act, Some(KeyProcessAction::Handled));
+        }
+
+        let act = handle_composition_key(&mut engine, &mut punct, KEY_DOWN, false, page_keys, 0);
+        assert_eq!(act, Some(KeyProcessAction::ExpandGrid));
+
+        if engine.can_prev_page() {
+            let act = handle_composition_key(&mut engine, &mut punct, KEY_UP, false, page_keys, 0);
+            assert_eq!(act, Some(KeyProcessAction::Handled));
+        }
+    }
+}

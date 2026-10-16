@@ -23,9 +23,9 @@ use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPan
 use crate::surface::CandidateSurfaceManager;
 
 use crate::fs_watcher::InotifyWatcher;
-pub use crate::input_core::*;
 use crate::loop_wakeup::LoopWakeup;
 use crate::session_common::*;
+pub use waylan_core::input::*;
 
 /// V1 会话配置与词库热重载回调函数类型
 pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;

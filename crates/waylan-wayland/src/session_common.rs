@@ -21,8 +21,8 @@ use wayland_client::protocol::{
 use wayland_client::{Dispatch, QueueHandle};
 
 use crate::fs_watcher::{check_watched_paths_changed, InotifyWatcher};
-use crate::input_core::{update_modifier_masks, ModifierState};
 use crate::surface::CandidateSurfaceManager;
+use waylan_core::input::{update_modifier_masks, ModifierState, MOD_CAPS};
 
 /// 尝试初始化 inotify 文件监控器
 ///
@@ -152,7 +152,7 @@ pub fn has_ctrl_or_alt_state(mods_depressed: u32, phys_mods: u8) -> bool {
 /// 判断给定的锁定掩码是否处于 CapsLock 大写锁定状态
 #[inline]
 pub fn is_caps_locked_state(mods_locked: u32) -> bool {
-    (mods_locked & crate::input_constants::MOD_CAPS) != 0
+    (mods_locked & MOD_CAPS) != 0
 }
 
 /// 提交候选框图层所需的 Wayland 目标上下文参数对象

@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use log::{info, warn};
+use waylan_core::input::*;
 use waylan_core::VoiceConfig;
 
 /// 为 Wayland 原生会话构建语音按键拦截器
@@ -31,10 +32,10 @@ pub fn build_wayland_voice_filter(
                        is_press: bool,
                        mods_depressed: u32|
           -> waylan_wayland::KeyFilterResult {
-        let shift_active = (mods_depressed & waylan_wayland::MOD_SHIFT) != 0;
-        let ctrl_active = (mods_depressed & waylan_wayland::MOD_CTRL) != 0;
-        let alt_active = (mods_depressed & waylan_wayland::MOD_ALT) != 0;
-        let super_active = (mods_depressed & waylan_wayland::MOD_SUPER) != 0;
+        let shift_active = (mods_depressed & MOD_SHIFT) != 0;
+        let ctrl_active = (mods_depressed & MOD_CTRL) != 0;
+        let alt_active = (mods_depressed & MOD_ALT) != 0;
+        let super_active = (mods_depressed & MOD_SUPER) != 0;
 
         // 持续消费后台语音事件，更新实时预览文字
         if let Some(ref rx) = voice_rx {
@@ -57,12 +58,12 @@ pub fn build_wayland_voice_filter(
             let is_main_release = push_to_talk_key == Some(evdev_key);
             let is_mod_release = matches!(
                 evdev_key,
-                waylan_wayland::KEY_LEFTCTRL
-                    | waylan_wayland::KEY_RIGHTCTRL
-                    | waylan_wayland::KEY_LEFTALT
-                    | waylan_wayland::KEY_RIGHTALT
-                    | waylan_wayland::KEY_LEFTSHIFT
-                    | waylan_wayland::KEY_RIGHTSHIFT
+                KEY_LEFTCTRL
+                    | KEY_RIGHTCTRL
+                    | KEY_LEFTALT
+                    | KEY_RIGHTALT
+                    | KEY_LEFTSHIFT
+                    | KEY_RIGHTSHIFT
             );
             if is_main_release || is_mod_release {
                 info!("[微澜 Wayland 语音] 对讲机快捷键松开，停止录音并请求转录上屏");
@@ -94,7 +95,7 @@ pub fn build_wayland_voice_filter(
 
         // 2. 录音过程中的控制键拦截
         if is_press && controller.is_recording() {
-            if evdev_key == waylan_wayland::KEY_ESC {
+            if evdev_key == KEY_ESC {
                 info!("[微澜 Wayland 语音] 收到 Esc 键，取消语音录制");
                 controller.cancel();
                 is_push_to_talk_active = false;
@@ -103,7 +104,7 @@ pub fn build_wayland_voice_filter(
                 partial_text = None;
                 return waylan_wayland::KeyFilterResult::Consumed;
             }
-            if evdev_key == waylan_wayland::KEY_ENTER {
+            if evdev_key == KEY_ENTER {
                 info!("[微澜 Wayland 语音] 收到 Enter 键，提前完成录音并请求转录上屏");
                 controller.stop_and_commit();
                 is_push_to_talk_active = false;

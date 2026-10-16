@@ -1,7 +1,7 @@
 //! V2 协议会话网格大候选面板导航与选词逻辑
 
 use super::super::WaylanV2Session;
-use crate::input_core::*;
+use waylan_core::input::*;
 
 /// 提交指定全局索引的网格候选词上屏并退出大网格展开态
 fn commit_grid_candidate_by_index(
