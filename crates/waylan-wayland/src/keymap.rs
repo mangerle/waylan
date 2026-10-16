@@ -145,6 +145,19 @@ fn extract_key_symbol(section: &str, keyname: &str) -> Option<char> {
                         if c.is_ascii_alphabetic() || c == '\'' {
                             return Some(c);
                         }
+                    } else {
+                        match sym {
+                            "apostrophe" => return Some('\''),
+                            "minus" => return Some('-'),
+                            "equal" => return Some('='),
+                            "bracketleft" => return Some('['),
+                            "bracketright" => return Some(']'),
+                            "semicolon" => return Some(';'),
+                            "comma" => return Some(','),
+                            "period" => return Some('.'),
+                            "slash" => return Some('/'),
+                            _ => {}
+                        }
                     }
                 }
             }
