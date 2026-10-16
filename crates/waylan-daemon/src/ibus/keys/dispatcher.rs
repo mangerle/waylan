@@ -5,7 +5,6 @@
 //! - **核心优势**：职责高度分离，每个按键处理分支单一清晰，遵循“微秒级纯内存处理”准则。
 //! - **代价与局限**：对多修饰键组合需统一通过 update_modifier_masks 状态跟踪。
 
-use log::info;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +14,7 @@ use waylan_algo::composition::{
 use waylan_core::input::modifiers::update_modifier_masks;
 use waylan_core::input::*;
 use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
+use waylan_voice::VoiceKeyAction;
 
 use super::core::{IbusKeyOutcome, IbusSessionCore};
 use super::keyval::{
@@ -84,68 +84,50 @@ impl IbusSessionCore {
         }
     }
 
-    /// 处理对讲机长按模式松开事件
-    pub(crate) fn handle_push_to_talk_release(&mut self, evdev_key: u32) -> Option<IbusKeyOutcome> {
-        if !self.is_push_to_talk_active || !self.voice_controller.is_recording() {
-            return None;
+    /// 统一调用 VoiceInteractionManager 处理语音按键交互（启动、停止、断句、取消）
+    pub(crate) fn handle_voice_key(
+        &mut self,
+        evdev_key: u32,
+        is_press: bool,
+        effective_mods: u32,
+    ) -> Option<IbusKeyOutcome> {
+        let action = self
+            .voice_manager
+            .handle_key_event(evdev_key, is_press, effective_mods);
+        match action {
+            VoiceKeyAction::PassThrough => None,
+            VoiceKeyAction::Consumed => {
+                if is_press {
+                    self.consumed_keys.record_press(evdev_key, true);
+                    if !self.engine.raw_input().is_empty() {
+                        self.engine.reset();
+                    }
+                } else {
+                    self.consumed_keys.take_release(evdev_key);
+                }
+                Some(IbusKeyOutcome {
+                    consumed: true,
+                    update_ui: true,
+                    ..Default::default()
+                })
+            }
+            VoiceKeyAction::Commit(text) => {
+                if is_press {
+                    self.consumed_keys.record_press(evdev_key, true);
+                    if !self.engine.raw_input().is_empty() {
+                        self.engine.reset();
+                    }
+                } else {
+                    self.consumed_keys.take_release(evdev_key);
+                }
+                Some(IbusKeyOutcome {
+                    consumed: true,
+                    commit_text: Some(text),
+                    update_ui: true,
+                    ..Default::default()
+                })
+            }
         }
-        let is_main_key_release = self.push_to_talk_key == Some(evdev_key);
-        let is_modifier_release = matches!(
-            evdev_key,
-            KEY_LEFTCTRL
-                | KEY_RIGHTCTRL
-                | KEY_LEFTALT
-                | KEY_RIGHTALT
-                | KEY_LEFTSHIFT
-                | KEY_RIGHTSHIFT
-                | KEY_LEFTMETA
-                | KEY_RIGHTMETA
-        );
-        if is_main_key_release || is_modifier_release {
-            info!("[微澜 IBus 语音] 对讲机模式快捷键松开，自动断句上屏提交");
-            let commit_text = self.stop_voice_recording_and_commit();
-            let was_consumed = self.consumed_keys.take_release(evdev_key);
-            return Some(IbusKeyOutcome {
-                consumed: was_consumed || is_main_key_release,
-                commit_text,
-                update_ui: true,
-                ..Default::default()
-            });
-        }
-        None
-    }
-
-    /// 录音活跃状态下的按键拦截处理（Esc 取消，Enter 提交，其余静默消费）
-    pub(crate) fn handle_voice_recording_key(&mut self, evdev_key: u32) -> Option<IbusKeyOutcome> {
-        if !self.voice_controller.is_recording() {
-            return None;
-        }
-        if evdev_key == KEY_ESC {
-            self.voice_controller.cancel();
-            self.clear_voice_state();
-            self.consumed_keys.record_press(evdev_key, true);
-            return Some(IbusKeyOutcome {
-                consumed: true,
-                update_ui: true,
-                ..Default::default()
-            });
-        }
-        if evdev_key == KEY_ENTER {
-            info!("[微澜 IBus 语音] Enter 键触发停止录音并请求提交");
-            let commit_text = self.stop_voice_recording_and_commit();
-            self.consumed_keys.record_press(evdev_key, true);
-            return Some(IbusKeyOutcome {
-                consumed: true,
-                commit_text,
-                update_ui: true,
-                ..Default::default()
-            });
-        }
-        self.consumed_keys.record_press(evdev_key, true);
-        Some(IbusKeyOutcome {
-            consumed: true,
-            ..Default::default()
-        })
     }
 
     /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
@@ -180,32 +162,41 @@ impl IbusSessionCore {
             self.shift_sm.on_key_event(evdev_key, is_press, self.mode)
         };
 
+        let mut effective_mods = self.mods_depressed;
+        if (state & IBUS_SHIFT_MASK) != 0 {
+            effective_mods |= MOD_SHIFT;
+        }
+        if (state & IBUS_CONTROL_MASK) != 0 {
+            effective_mods |= MOD_CTRL;
+        }
+        if (state & IBUS_MOD1_MASK) != 0 {
+            effective_mods |= MOD_ALT;
+        }
+        if (state & IBUS_SUPER_MASK) != 0 {
+            effective_mods |= MOD_SUPER;
+        }
+
         if !is_press {
-            if let Some(outcome) = self.handle_push_to_talk_release(evdev_key) {
+            if let Some(outcome) = self.handle_voice_key(evdev_key, false, effective_mods) {
                 return outcome;
             }
             return self.handle_key_release(evdev_key, toggled_mode);
         }
 
-        let shift_active = (state & IBUS_SHIFT_MASK) != 0 || (self.mods_depressed & MOD_SHIFT) != 0;
-        let ctrl_active = (state & IBUS_CONTROL_MASK) != 0 || (self.mods_depressed & MOD_CTRL) != 0;
-        let alt_active = (state & IBUS_MOD1_MASK) != 0 || (self.mods_depressed & MOD_ALT) != 0;
-        let super_active = (state & IBUS_SUPER_MASK) != 0 || (self.mods_depressed & MOD_SUPER) != 0;
+        let shift_active = (effective_mods & MOD_SHIFT) != 0;
+        let ctrl_active = (effective_mods & MOD_CTRL) != 0;
+        let alt_active = (effective_mods & MOD_ALT) != 0;
         let ctrl_or_alt = ibus_state_has_ctrl_or_alt(state)
-            || (self.mods_depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
+            || (effective_mods & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0;
 
-        if let Some(shortcut_outcome) = self.handle_global_shortcuts(
-            evdev_key,
-            shift_active,
-            ctrl_active,
-            alt_active,
-            super_active,
-        ) {
+        if let Some(shortcut_outcome) =
+            self.handle_global_shortcuts(evdev_key, shift_active, ctrl_active, alt_active)
+        {
             self.consumed_keys.record_press(evdev_key, true);
             return shortcut_outcome;
         }
 
-        if let Some(voice_outcome) = self.handle_voice_recording_key(evdev_key) {
+        if let Some(voice_outcome) = self.handle_voice_key(evdev_key, true, effective_mods) {
             return voice_outcome;
         }
 

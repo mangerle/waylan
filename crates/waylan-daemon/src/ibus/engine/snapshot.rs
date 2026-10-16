@@ -22,10 +22,10 @@ pub(crate) struct UiSnapshot {
 impl UiSnapshot {
     /// 提取处于语音录入或语音展示期间的 UI 快照
     fn capture_voice_snapshot(core: &IbusSessionCore) -> Self {
-        let candidates = if let Some(ref voice_text) = core.voice_display_text {
+        let candidates = if let Some(ref voice_text) = core.voice_manager.display_text {
             vec![Candidate {
                 text: voice_text.clone(),
-                pinyin: core.voice_waveform.clone().unwrap_or_default(),
+                pinyin: core.voice_manager.waveform.clone().unwrap_or_default(),
                 score: 1000,
                 is_expandable: false,
                 sub_candidates: Vec::new(),
@@ -33,7 +33,7 @@ impl UiSnapshot {
         } else {
             Vec::new()
         };
-        let preedit = core.voice_partial_text.clone().unwrap_or_default();
+        let preedit = core.voice_manager.partial_text.clone().unwrap_or_default();
         Self {
             preedit,
             candidates,
@@ -112,8 +112,8 @@ mod tests {
         assert!(!normal_snap.candidates.is_empty());
 
         // 模拟语音激活状态：正在聆听中...
-        core.voice_display_text = Some("正在聆听中...".to_string());
-        core.voice_waveform = Some(" ▂▃▄▅".to_string());
+        core.voice_manager.display_text = Some("正在聆听中...".to_string());
+        core.voice_manager.waveform = Some(" ▂▃▄▅".to_string());
         let voice_snap = UiSnapshot::capture(&core);
 
         // 核心断言：输入框预编辑必须完全为空，严禁将波形塞入输入框光标处

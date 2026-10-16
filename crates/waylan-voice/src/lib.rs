@@ -8,6 +8,7 @@
 pub mod afe;
 pub mod capture;
 pub mod error;
+pub mod interaction;
 pub mod itn;
 pub mod model_manager;
 pub mod recognizer;
@@ -19,6 +20,7 @@ pub use afe::{
 };
 pub use capture::{AudioCapture, LinearResampler, TARGET_SAMPLE_RATE};
 pub use error::VoiceError;
+pub use interaction::{VoiceInteractionManager, VoiceKeyAction};
 pub use itn::{
     apply_pangu_spacing, convert_chinese_numbers, filter_filler_words, normalize_voice_text,
 };

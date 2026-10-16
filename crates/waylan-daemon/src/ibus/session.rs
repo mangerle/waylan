@@ -38,10 +38,7 @@ pub(crate) fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut 
     core.traditional_shortcut = bundle.traditional_shortcut;
     core.full_width_char_shortcut = bundle.full_width_char_shortcut;
     core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
-    core.voice_config = bundle.voice.clone();
-    if !core.voice_config.enabled {
-        core.voice_controller.unload_models();
-    }
+    core.voice_manager.update_config(bundle.voice.clone());
     bundle.apply_to_engine_and_input(
         &mut core.engine,
         &mut core.shift_sm,

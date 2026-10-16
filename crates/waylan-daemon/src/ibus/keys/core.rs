@@ -6,9 +6,8 @@
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
@@ -17,7 +16,7 @@ use waylan_core::{
     Candidate, CandidateIndexStyle, CandidateOrientation, FullWidthCharShortcut,
     FullWidthPunctShortcut, InputMode, TraditionalShortcut, VoiceConfig,
 };
-use waylan_voice::{VoiceEvent, VoiceSessionController};
+use waylan_voice::VoiceInteractionManager;
 use waylan_wayland::session_common::sync_mode_from_shared_flag;
 
 /// 单次 IBus 按键或交互事件的决策输出
@@ -60,17 +59,7 @@ pub struct IbusSessionCore {
     pub traditional_shortcut: TraditionalShortcut,
     pub full_width_char_shortcut: FullWidthCharShortcut,
     pub full_width_punct_shortcut: FullWidthPunctShortcut,
-    pub voice_controller: VoiceSessionController,
-    pub voice_config: VoiceConfig,
-    pub voice_display_text: Option<String>,
-    pub voice_waveform: Option<String>,
-    pub voice_partial_text: Option<String>,
-    pub voice_event_rx: Option<Receiver<VoiceEvent>>,
-    pub last_voice_trigger_time: Instant,
-    /// 是否处于长按对讲机 (Push-to-Talk) 语音触发中
-    pub is_push_to_talk_active: bool,
-    /// 长按对讲机模式下的触发主键扫描码
-    pub push_to_talk_key: Option<u32>,
+    pub voice_manager: VoiceInteractionManager,
     /// 当前拥有焦点的活跃 IBus 引擎对象路径
     pub active_engine_path: Option<String>,
 }
@@ -102,17 +91,7 @@ impl IbusSessionCore {
             traditional_shortcut: TraditionalShortcut::default(),
             full_width_char_shortcut: FullWidthCharShortcut::default(),
             full_width_punct_shortcut: FullWidthPunctShortcut::default(),
-            voice_controller: VoiceSessionController::new(),
-            voice_config: VoiceConfig::default(),
-            voice_display_text: None,
-            voice_waveform: None,
-            voice_partial_text: None,
-            voice_event_rx: None,
-            last_voice_trigger_time: Instant::now()
-                .checked_sub(Duration::from_secs(10))
-                .unwrap_or_else(Instant::now),
-            is_push_to_talk_active: false,
-            push_to_talk_key: None,
+            voice_manager: VoiceInteractionManager::new(VoiceConfig::default()),
             active_engine_path: None,
         }
     }
@@ -147,15 +126,10 @@ impl IbusSessionCore {
 
     /// 重置当前预编辑与修饰键跟踪状态（用于失焦 `FocusOut` 或 `Reset`）
     pub fn reset_context(&mut self) {
-        if self.voice_controller.is_recording() {
-            self.voice_controller.cancel();
+        if self.voice_manager.is_recording() {
+            self.voice_manager.cancel();
         }
-        self.is_push_to_talk_active = false;
-        self.push_to_talk_key = None;
-        self.voice_display_text = None;
-        self.voice_waveform = None;
-        self.voice_partial_text = None;
-        self.voice_event_rx = None;
+        self.voice_manager.clear_state();
         self.engine.reset();
         self.shift_sm.reset();
         self.mods_depressed = 0;
