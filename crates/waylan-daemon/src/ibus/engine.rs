@@ -54,37 +54,32 @@ pub(crate) struct UiSnapshot {
 }
 
 impl UiSnapshot {
-    /// 从当前会话核心提取 UI 快照
-    pub(crate) fn capture(core: &IbusSessionCore) -> Self {
-        // 当处于语音录入或语音展示期间：
-        // 1. 输入框预编辑（preedit）严格保持为空，彻底杜绝状态提示与音量波形字符误入宿主输入框；
-        // 2. 状态提示与跳动音量波形作为唯一的候选项呈现在悬浮候选框（LookupTable）内；
-        // 3. 序号样式设为 None，以干净利落的单行胶囊悬浮框展示。
-        if core.is_voice_active() {
-            let candidates = if let Some(ref voice_text) = core.voice_display_text {
-                vec![Candidate {
-                    text: voice_text.clone(),
-                    pinyin: String::new(),
-                    score: 1000,
-                    is_expandable: false,
-                    sub_candidates: Vec::new(),
-                }]
-            } else {
-                Vec::new()
-            };
-            // 实时流式文字同步至预编辑（preedit）：
-            // 若识别出实时文字，则流式显示在输入框光标处；若尚无文字（仅有波形），preedit 保持为空防止波形混入输入框
-            let preedit = core.voice_partial_text.clone().unwrap_or_default();
-            return Self {
-                preedit,
-                candidates,
-                page_size: 1,
-                selected_index: 0,
-                orientation: super::types::IBUS_ORIENTATION_HORIZONTAL,
-                index_style: CandidateIndexStyle::None,
-            };
+    /// 提取处于语音录入或语音展示期间的 UI 快照
+    fn capture_voice_snapshot(core: &IbusSessionCore) -> Self {
+        let candidates = if let Some(ref voice_text) = core.voice_display_text {
+            vec![Candidate {
+                text: voice_text.clone(),
+                pinyin: String::new(),
+                score: 1000,
+                is_expandable: false,
+                sub_candidates: Vec::new(),
+            }]
+        } else {
+            Vec::new()
+        };
+        let preedit = core.voice_partial_text.clone().unwrap_or_default();
+        Self {
+            preedit,
+            candidates,
+            page_size: 1,
+            selected_index: 0,
+            orientation: super::types::IBUS_ORIENTATION_HORIZONTAL,
+            index_style: CandidateIndexStyle::None,
         }
+    }
 
+    /// 提取常规键盘输入组词状态下的 UI 快照
+    fn capture_input_snapshot(core: &IbusSessionCore) -> Self {
         let is_v_mode = core.engine.raw_input().starts_with('v');
         let preedit = if core.engine.raw_input().is_empty() {
             String::new()
@@ -119,6 +114,15 @@ impl UiSnapshot {
             selected_index,
             orientation,
             index_style: core.candidate_index_style,
+        }
+    }
+
+    /// 从当前会话核心提取 UI 快照
+    pub(crate) fn capture(core: &IbusSessionCore) -> Self {
+        if core.is_voice_active() {
+            Self::capture_voice_snapshot(core)
+        } else {
+            Self::capture_input_snapshot(core)
         }
     }
 }
@@ -302,6 +306,130 @@ impl IbusEngineService {
         let _ = Self::hide_preedit_text(ctxt).await;
         let _ = Self::hide_lookup_table(ctxt).await;
     }
+
+    /// 响应状态栏点击切换中英文输入模式
+    async fn on_prop_input_mode(&self, ctxt: &SignalContext<'_>) {
+        let (new_mode, is_caps) = {
+            let Ok(mut guard) = self.core.lock() else {
+                return;
+            };
+            let next = match guard.mode {
+                InputMode::Chinese | InputMode::VMode => InputMode::English,
+                InputMode::English => InputMode::Chinese,
+            };
+            guard.mode = next;
+            if let Some(ref zh_flag) = guard.shared_is_chinese {
+                zh_flag.store(matches!(next, InputMode::Chinese), Ordering::Release);
+            }
+            if let Some(ref tx) = guard.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+            (next, guard.is_caps_locked)
+        };
+        if !self.suppress_properties {
+            if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
+                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+            }
+        }
+    }
+
+    /// 响应状态栏点击切换简繁模式
+    async fn on_prop_traditional_chinese(&self, ctxt: &SignalContext<'_>) {
+        let is_trad = {
+            let Ok(mut guard) = self.core.lock() else {
+                return;
+            };
+            let next = !guard.engine.config.traditional_chinese;
+            guard.engine.config.traditional_chinese = next;
+            if let Some(ref flag) = guard.shared_traditional_chinese {
+                flag.store(next, Ordering::Release);
+            }
+            if let Some(ref tx) = guard.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+            info!(
+                "[微澜 IBus] 原生状态栏切换简繁模式为: {}",
+                if next { "繁体" } else { "简体" }
+            );
+            next
+        };
+        if let Ok(prop_val) = build_traditional_property(is_trad) {
+            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+        }
+    }
+
+    /// 响应状态栏点击切换标点全半角模式
+    async fn on_prop_full_width_punct(&self, ctxt: &SignalContext<'_>) {
+        let is_full = {
+            let Ok(mut guard) = self.core.lock() else {
+                return;
+            };
+            let next = !guard.punct_processor.full_width_punct;
+            guard.punct_processor.full_width_punct = next;
+            if let Some(ref flag) = guard.shared_full_width_punct {
+                flag.store(next, Ordering::Release);
+            }
+            if let Some(ref tx) = guard.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+            info!(
+                "[微澜 IBus] 原生状态栏切换标点模式为: {}",
+                if next {
+                    "全角 (中文标点)"
+                } else {
+                    "半角 (英文标点)"
+                }
+            );
+            next
+        };
+        if let Ok(prop_val) = build_full_width_punct_property(is_full) {
+            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+        }
+    }
+
+    /// 响应状态栏点击切换字符全半角模式
+    async fn on_prop_full_width_char(&self, ctxt: &SignalContext<'_>) {
+        let is_full = {
+            let Ok(guard) = self.core.lock() else {
+                return;
+            };
+            let current = guard
+                .shared_full_width_char
+                .as_ref()
+                .map(|f| f.load(Ordering::Acquire))
+                .unwrap_or(false);
+            let next = !current;
+            if let Some(ref flag) = guard.shared_full_width_char {
+                flag.store(next, Ordering::Release);
+            }
+            if let Some(ref tx) = guard.mode_notify_tx {
+                let _ = tx.try_send(());
+            }
+            info!(
+                "[微澜 IBus] 原生状态栏切换字符模式为: {}",
+                if next {
+                    "全角 (英文字母)"
+                } else {
+                    "半角 (英文字母)"
+                }
+            );
+            next
+        };
+        if let Ok(prop_val) = build_full_width_char_property(is_full) {
+            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+        }
+    }
+
+    /// 响应状态栏点击重新加载词库与配置
+    fn on_prop_reload_config(&self) {
+        if let Some(ref flag) = self.reload_requested {
+            flag.store(true, Ordering::Release);
+        }
+        if let Some(ref wakeup) = self.loop_wakeup {
+            wakeup.wake();
+        }
+        info!("[微澜 IBus] 收到原生状态栏菜单重载指令，已触发词库与配置热重载。");
+    }
 }
 
 #[interface(name = "org.freedesktop.IBus.Engine")]
@@ -365,120 +493,11 @@ impl IbusEngineService {
         _state: u32,
     ) {
         match name {
-            "InputMode" => {
-                let (new_mode, is_caps) = {
-                    let Ok(mut guard) = self.core.lock() else {
-                        return;
-                    };
-                    let next = match guard.mode {
-                        InputMode::Chinese | InputMode::VMode => InputMode::English,
-                        InputMode::English => InputMode::Chinese,
-                    };
-                    guard.mode = next;
-                    if let Some(ref zh_flag) = guard.shared_is_chinese {
-                        zh_flag.store(matches!(next, InputMode::Chinese), Ordering::Release);
-                    }
-                    if let Some(ref tx) = guard.mode_notify_tx {
-                        let _ = tx.try_send(());
-                    }
-                    (next, guard.is_caps_locked)
-                };
-                if !self.suppress_properties {
-                    if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
-                        let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
-                    }
-                }
-            }
-            "TraditionalChinese" => {
-                let is_trad = {
-                    let Ok(mut guard) = self.core.lock() else {
-                        return;
-                    };
-                    let next = !guard.engine.config.traditional_chinese;
-                    guard.engine.config.traditional_chinese = next;
-                    if let Some(ref flag) = guard.shared_traditional_chinese {
-                        flag.store(next, Ordering::Release);
-                    }
-                    if let Some(ref tx) = guard.mode_notify_tx {
-                        let _ = tx.try_send(());
-                    }
-                    info!(
-                        "[微澜 IBus] 原生状态栏切换简繁模式为: {}",
-                        if next { "繁体" } else { "简体" }
-                    );
-                    next
-                };
-                if let Ok(prop_val) = build_traditional_property(is_trad) {
-                    let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
-                }
-            }
-            "FullWidthPunct" => {
-                let is_full = {
-                    let Ok(mut guard) = self.core.lock() else {
-                        return;
-                    };
-                    let next = !guard.punct_processor.full_width_punct;
-                    guard.punct_processor.full_width_punct = next;
-                    if let Some(ref flag) = guard.shared_full_width_punct {
-                        flag.store(next, Ordering::Release);
-                    }
-                    if let Some(ref tx) = guard.mode_notify_tx {
-                        let _ = tx.try_send(());
-                    }
-                    info!(
-                        "[微澜 IBus] 原生状态栏切换标点模式为: {}",
-                        if next {
-                            "全角 (中文标点)"
-                        } else {
-                            "半角 (英文标点)"
-                        }
-                    );
-                    next
-                };
-                if let Ok(prop_val) = build_full_width_punct_property(is_full) {
-                    let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
-                }
-            }
-            "FullWidthChar" => {
-                let is_full = {
-                    let Ok(guard) = self.core.lock() else {
-                        return;
-                    };
-                    let current = guard
-                        .shared_full_width_char
-                        .as_ref()
-                        .map(|f| f.load(Ordering::Acquire))
-                        .unwrap_or(false);
-                    let next = !current;
-                    if let Some(ref flag) = guard.shared_full_width_char {
-                        flag.store(next, Ordering::Release);
-                    }
-                    if let Some(ref tx) = guard.mode_notify_tx {
-                        let _ = tx.try_send(());
-                    }
-                    info!(
-                        "[微澜 IBus] 原生状态栏切换字符模式为: {}",
-                        if next {
-                            "全角 (英文字母)"
-                        } else {
-                            "半角 (英文字母)"
-                        }
-                    );
-                    next
-                };
-                if let Ok(prop_val) = build_full_width_char_property(is_full) {
-                    let _ = Self::update_property(&ctxt, Value::from(prop_val)).await;
-                }
-            }
-            "ReloadConfig" => {
-                if let Some(ref flag) = self.reload_requested {
-                    flag.store(true, Ordering::Release);
-                }
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-                info!("[微澜 IBus] 收到原生状态栏菜单重载指令，已触发词库与配置热重载。");
-            }
+            "InputMode" => self.on_prop_input_mode(&ctxt).await,
+            "TraditionalChinese" => self.on_prop_traditional_chinese(&ctxt).await,
+            "FullWidthPunct" => self.on_prop_full_width_punct(&ctxt).await,
+            "FullWidthChar" => self.on_prop_full_width_char(&ctxt).await,
+            "ReloadConfig" => self.on_prop_reload_config(),
             "Setup" => {
                 self.subprocess_manager
                     .launch_settings(&self.settings_running);

@@ -27,6 +27,89 @@ pub fn print_main_usage() {
 ///
 /// # Errors
 /// 当词库源文件不存在、格式解析失败或目标二进制文件写入失败时返回错误。
+fn handle_build(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+    if sub_args.len() < 3 {
+        print_dict_usage();
+        return Ok(());
+    }
+    let output_path = &sub_args[sub_args.len() - 1];
+    let input_paths = &sub_args[1..sub_args.len() - 1];
+    info!(
+        "[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}",
+        output_path
+    );
+    let stats = DictBuilder::build_compact_binary_dict(input_paths, Path::new(output_path))?;
+    info!(
+        "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
+        stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
+    );
+    Ok(())
+}
+
+fn handle_build_opencc(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+    let default_chars = "/usr/share/opencc/STCharacters.txt".to_string();
+    let default_phrases = "/usr/share/opencc/STPhrases.txt".to_string();
+    let default_output = "opencc.dict.bin".to_string();
+    let (chars_path, phrases_path, output_path) = if sub_args.len() >= 4 {
+        (&sub_args[1], &sub_args[2], &sub_args[3])
+    } else {
+        (&default_chars, &default_phrases, &default_output)
+    };
+    info!(
+        "[简繁词库] 正在将 OpenCC 词表编译为二进制紧凑词库: {} + {} -> {}",
+        chars_path, phrases_path, output_path
+    );
+    let dict = OpenCcDict::from_tsv_files(chars_path, phrases_path)?;
+    dict.save_to_file(output_path)?;
+    info!(
+        "[简繁词库] 编译完成，短语数: {}, 单字数: {}",
+        dict.phrases_len(),
+        dict.chars.len()
+    );
+    Ok(())
+}
+
+fn handle_build_aux(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+    if sub_args.len() < 4 {
+        print_dict_usage();
+        return Ok(());
+    }
+    let english_path = &sub_args[1];
+    let symbols_path = &sub_args[2];
+    let output_path = &sub_args[3];
+    info!(
+        "[辅助词库] 编译英文与符号表情词库: {} + {} -> {}",
+        english_path, symbols_path, output_path
+    );
+    let stats = DictBuilder::build_auxiliary_dict(&[english_path], &[symbols_path], output_path)?;
+    info!(
+        "[辅助词库] 编译完成，英文词汇数: {}, 符号表情数: {}",
+        stats.english_words.len(),
+        stats.symbols.len()
+    );
+    Ok(())
+}
+
+fn handle_import_user(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+    if sub_args.len() < 3 {
+        print_dict_usage();
+        return Ok(());
+    }
+    let input_path = &sub_args[1];
+    let user_dict_path = &sub_args[2];
+    info!(
+        "[用户词库] 从文本导入自造词与调频记录: {} -> {}",
+        input_path, user_dict_path
+    );
+    let mut engine = AlgoEngine::default();
+    engine.set_user_dict_path(user_dict_path);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let count = DictBuilder::import_user_text_dict(input_path, &mut engine.user_model, now)?;
+    engine.persist_user_dict()?;
+    info!("[用户词库] 成功导入 {} 条用户记录", count);
+    Ok(())
+}
+
 pub fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
     if sub_args.is_empty() {
         print_dict_usage();
@@ -37,85 +120,10 @@ pub fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn Error>>
         "--help" | "-h" => {
             print_dict_usage();
         }
-        "build" => {
-            if sub_args.len() < 3 {
-                print_dict_usage();
-                return Ok(());
-            }
-            let output_path = &sub_args[sub_args.len() - 1];
-            let input_paths = &sub_args[1..sub_args.len() - 1];
-            info!(
-                "[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}",
-                output_path
-            );
-            let stats =
-                DictBuilder::build_compact_binary_dict(input_paths, Path::new(output_path))?;
-            info!(
-                "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
-                stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
-            );
-        }
-        "build-opencc" => {
-            let (chars_path, phrases_path, output_path) = if sub_args.len() >= 4 {
-                (&sub_args[1], &sub_args[2], &sub_args[3])
-            } else {
-                (
-                    &"/usr/share/opencc/STCharacters.txt".to_string(),
-                    &"/usr/share/opencc/STPhrases.txt".to_string(),
-                    &"opencc.dict.bin".to_string(),
-                )
-            };
-            info!(
-                "[简繁词库] 正在将 OpenCC 词表编译为二进制紧凑词库: {} + {} -> {}",
-                chars_path, phrases_path, output_path
-            );
-            let dict = OpenCcDict::from_tsv_files(chars_path, phrases_path)?;
-            dict.save_to_file(output_path)?;
-            info!(
-                "[简繁词库] 编译完成，短语数: {}, 单字数: {}",
-                dict.phrases_len(),
-                dict.chars.len()
-            );
-        }
-        "build-aux" => {
-            if sub_args.len() < 4 {
-                print_dict_usage();
-                return Ok(());
-            }
-            let english_path = &sub_args[1];
-            let symbols_path = &sub_args[2];
-            let output_path = &sub_args[3];
-            info!(
-                "[辅助词库] 编译英文与符号表情词库: {} + {} -> {}",
-                english_path, symbols_path, output_path
-            );
-            let stats =
-                DictBuilder::build_auxiliary_dict(&[english_path], &[symbols_path], output_path)?;
-            info!(
-                "[辅助词库] 编译完成，英文词汇数: {}, 符号表情数: {}",
-                stats.english_words.len(),
-                stats.symbols.len()
-            );
-        }
-        "import-user" => {
-            if sub_args.len() < 3 {
-                print_dict_usage();
-                return Ok(());
-            }
-            let input_path = &sub_args[1];
-            let user_dict_path = &sub_args[2];
-            info!(
-                "[用户词库] 从文本导入自造词与调频记录: {} -> {}",
-                input_path, user_dict_path
-            );
-            let mut engine = AlgoEngine::default();
-            engine.set_user_dict_path(user_dict_path);
-            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-            let count =
-                DictBuilder::import_user_text_dict(input_path, &mut engine.user_model, now)?;
-            engine.persist_user_dict()?;
-            info!("[用户词库] 成功导入 {} 条用户记录", count);
-        }
+        "build" => handle_build(sub_args)?,
+        "build-opencc" => handle_build_opencc(sub_args)?,
+        "build-aux" => handle_build_aux(sub_args)?,
+        "import-user" => handle_import_user(sub_args)?,
         other => {
             warn!("未知的词库管理子命令: {}", other);
             print_dict_usage();

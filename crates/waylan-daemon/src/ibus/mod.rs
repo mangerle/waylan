@@ -207,6 +207,54 @@ struct IbusMonitorParams {
     exclusive_input_source: bool,
 }
 
+/// 基于外部参数装配并初始化 IBus 共享状态、服务实例与循环参数
+fn assemble_ibus_services(
+    opts: IbusSessionOptions,
+) -> (
+    Arc<Mutex<IbusSessionCore>>,
+    IbusEngineService,
+    IbusMonitorParams,
+    bool,
+    bool,
+) {
+    let mut session_core = IbusSessionCore::new(opts.engine);
+    session_core.shared_is_chinese = opts.shared_is_chinese;
+    session_core.shared_is_caps_locked = opts.shared_is_caps_locked;
+    session_core.shared_traditional_chinese = opts.shared_traditional_chinese;
+    session_core.shared_full_width_punct = opts.shared_full_width_punct;
+    session_core.shared_full_width_char = opts.shared_full_width_char;
+    session_core.mode_notify_tx = opts.mode_notify_tx;
+    apply_bundle_to_ibus_core(SessionConfigBundle::load_current(), &mut session_core);
+
+    let shared_core = Arc::new(Mutex::new(session_core));
+    let engine_srv = IbusEngineService {
+        core: Arc::clone(&shared_core),
+        reload_requested: opts.reload_requested.clone(),
+        loop_wakeup: opts.loop_wakeup.clone(),
+        subprocess_manager: Arc::new(SubprocessManager::new(Arc::clone(&opts.exit_requested))),
+        settings_running: Arc::new(AtomicBool::new(false)),
+        suppress_properties: opts.suppress_properties,
+        is_password: Arc::new(AtomicBool::new(false)),
+    };
+
+    let monitor_params = IbusMonitorParams {
+        watched_paths: opts.watched_paths,
+        last_mtime: opts.initial_mtime,
+        reload_requested: opts.reload_requested,
+        exit_requested: opts.exit_requested,
+        loop_wakeup: opts.loop_wakeup,
+        exclusive_input_source: opts.exclusive_input_source,
+    };
+
+    (
+        shared_core,
+        engine_srv,
+        monitor_params,
+        opts.is_ibus_child_mode,
+        opts.exclusive_input_source,
+    )
+}
+
 /// 启动并运行 IBus 输入法会话事件循环
 ///
 /// # Errors
@@ -216,58 +264,13 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> 
         .ok_or("未检测到活跃的 IBus 会话总线地址，请确认 ibus-daemon 正在运行")?;
     info!("[微澜 IBus] 成功探测到活跃 IBus 总线地址: {}", ibus_addr);
 
-    let IbusSessionOptions {
-        engine,
-        is_ibus_child_mode,
-        watched_paths,
-        initial_mtime,
-        shared_is_chinese,
-        shared_is_caps_locked,
-        shared_traditional_chinese,
-        shared_full_width_punct,
-        shared_full_width_char,
-        mode_notify_tx,
-        reload_requested,
-        exit_requested,
-        loop_wakeup,
-        suppress_properties,
-        exclusive_input_source,
-    } = opts;
-
-    let mut session_core = IbusSessionCore::new(engine);
-    session_core.shared_is_chinese = shared_is_chinese;
-    session_core.shared_is_caps_locked = shared_is_caps_locked;
-    session_core.shared_traditional_chinese = shared_traditional_chinese;
-    session_core.shared_full_width_punct = shared_full_width_punct;
-    session_core.shared_full_width_char = shared_full_width_char;
-    session_core.mode_notify_tx = mode_notify_tx;
-    apply_bundle_to_ibus_core(SessionConfigBundle::load_current(), &mut session_core);
-
-    let shared_core = Arc::new(Mutex::new(session_core));
-    let engine_srv_obj = IbusEngineService {
-        core: Arc::clone(&shared_core),
-        reload_requested: reload_requested.clone(),
-        loop_wakeup: loop_wakeup.clone(),
-        subprocess_manager: Arc::new(SubprocessManager::new(Arc::clone(&exit_requested))),
-        settings_running: Arc::new(AtomicBool::new(false)),
-        suppress_properties,
-        is_password: Arc::new(AtomicBool::new(false)),
-    };
-    let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv_obj)?;
-
-    register_or_activate_ibus_engine(&conn, is_ibus_child_mode, exclusive_input_source)?;
+    let (shared_core, engine_srv, monitor_params, is_child, exclusive) =
+        assemble_ibus_services(opts);
+    let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv)?;
+    register_or_activate_ibus_engine(&conn, is_child, exclusive)?;
 
     let mut inotify_watcher: Option<InotifyWatcher> = None;
-    init_session_inotify_watcher(&watched_paths, &mut inotify_watcher, "IBus");
-
-    let monitor_params = IbusMonitorParams {
-        watched_paths,
-        last_mtime: initial_mtime,
-        reload_requested,
-        exit_requested,
-        loop_wakeup,
-        exclusive_input_source,
-    };
+    init_session_inotify_watcher(&monitor_params.watched_paths, &mut inotify_watcher, "IBus");
 
     info!("[微澜 IBus] 引擎服务已就绪，进入 GNOME / IBus 输入法事件循环。");
     run_ibus_monitor_loop(&conn, &shared_core, &mut inotify_watcher, monitor_params);
@@ -444,6 +447,45 @@ impl Drop for ScreenSaverListenerHandle {
     }
 }
 
+/// 注册跨桌面锁屏信号匹配规则（涵盖 GNOME、KDE Plasma、XFCE、systemd-logind 等）
+fn register_screen_saver_rules(conn: &Connection) {
+    let rules = [
+        "type='signal',member='ActiveChanged'",
+        "type='signal',interface='org.freedesktop.login1.Session',member='Lock'",
+        "type='signal',interface='org.freedesktop.login1.Session',member='Unlock'",
+    ];
+    for rule in rules {
+        let _ = conn.call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "AddMatch",
+            &rule,
+        );
+    }
+}
+
+/// 解析锁屏信号并原子更新当前状态标志，若状态发生改变则返回 true
+fn handle_screen_saver_signal(msg: &zbus::message::Message, screen_locked: &AtomicBool) -> bool {
+    let header = msg.header();
+    let member = header.member().map(|m| m.as_str());
+    match member {
+        Some("ActiveChanged") => {
+            if let Ok(active) = msg.body().deserialize::<bool>() {
+                return screen_locked.swap(active, Ordering::AcqRel) != active;
+            }
+        }
+        Some("Lock") => {
+            return !screen_locked.swap(true, Ordering::AcqRel);
+        }
+        Some("Unlock") => {
+            return screen_locked.swap(false, Ordering::AcqRel);
+        }
+        _ => {}
+    }
+    false
+}
+
 /// 启动后台常驻 D-Bus 锁屏信号被动监听器
 ///
 /// 通过 D-Bus 信号被动订阅（MatchRule）监听桌面锁屏变迁，彻底杜绝在主循环中高频主动轮询同步 RPC。
@@ -461,65 +503,16 @@ fn spawn_screen_saver_listener(
             let Ok(conn) = Connection::session() else {
                 return;
             };
-
-            // 注册跨桌面锁屏信号匹配规则（涵盖 GNOME、KDE Plasma、XFCE、systemd-logind 等）
-            let rules = [
-                // 1. GNOME & FreeDesktop (KDE Plasma, XFCE 等) 屏幕保护状态变更信号
-                "type='signal',member='ActiveChanged'",
-                // 2. systemd-logind 会话锁屏与解锁信号
-                "type='signal',interface='org.freedesktop.login1.Session',member='Lock'",
-                "type='signal',interface='org.freedesktop.login1.Session',member='Unlock'",
-            ];
-
-            for rule in rules {
-                let _ = conn.call_method(
-                    Some("org.freedesktop.DBus"),
-                    "/org/freedesktop/DBus",
-                    Some("org.freedesktop.DBus"),
-                    "AddMatch",
-                    &rule,
-                );
-            }
-
+            register_screen_saver_rules(&conn);
             let iter = MessageIterator::from(&conn);
             for msg_res in iter {
                 if exit_requested.load(Ordering::Acquire) {
                     break;
                 }
-
                 let Ok(msg) = msg_res else {
                     break;
                 };
-
-                let header = msg.header();
-                let member = header.member().map(|m| m.as_str());
-                let mut state_changed = false;
-
-                match member {
-                    Some("ActiveChanged") => {
-                        if let Ok(active) = msg.body().deserialize::<bool>() {
-                            let prev = screen_locked_clone.swap(active, Ordering::AcqRel);
-                            if prev != active {
-                                state_changed = true;
-                            }
-                        }
-                    }
-                    Some("Lock") => {
-                        let prev = screen_locked_clone.swap(true, Ordering::AcqRel);
-                        if !prev {
-                            state_changed = true;
-                        }
-                    }
-                    Some("Unlock") => {
-                        let prev = screen_locked_clone.swap(false, Ordering::AcqRel);
-                        if prev {
-                            state_changed = true;
-                        }
-                    }
-                    _ => {}
-                }
-
-                if state_changed {
+                if handle_screen_saver_signal(&msg, &screen_locked_clone) {
                     if let Some(wakeup) = loop_wakeup.as_ref() {
                         wakeup.wake();
                     }
@@ -536,6 +529,235 @@ fn spawn_screen_saver_listener(
     )
 }
 
+/// 处理锁屏状态变迁与输入法状态同步
+fn handle_screen_saver_transition(
+    conn: &Connection,
+    shared_core: &Arc<Mutex<IbusSessionCore>>,
+    current_screen_locked: bool,
+    last_screen_locked: &mut bool,
+) {
+    if current_screen_locked == *last_screen_locked {
+        return;
+    }
+    if current_screen_locked {
+        info!("[微澜 IBus] 检测到系统进入锁屏状态，进入硬件按键直通与密码保护模式。");
+        if let Ok(mut guard) = shared_core.lock() {
+            guard.is_screen_locked = true;
+            guard.reset_context();
+        }
+    } else {
+        info!("[微澜 IBus] 检测到系统屏幕已解锁，正在自动校准并切回微澜输入法。");
+        if let Ok(mut guard) = shared_core.lock() {
+            guard.is_screen_locked = false;
+        }
+        ensure_global_engine_active(conn);
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
+            .output();
+    }
+    *last_screen_locked = current_screen_locked;
+}
+
+/// 获取当前语音活跃状态与目标 IBus 引擎对象路径
+fn query_voice_active_and_path(shared_core: &Arc<Mutex<IbusSessionCore>>) -> (bool, String) {
+    if let Ok(guard) = shared_core.lock() {
+        let active = guard.is_voice_active();
+        let path = guard
+            .active_engine_path
+            .clone()
+            .unwrap_or_else(|| WAYLAN_ENGINE_OBJECT_PATH.to_string());
+        (active, path)
+    } else {
+        (false, WAYLAN_ENGINE_OBJECT_PATH.to_string())
+    }
+}
+
+/// 发送语音波形候选框与实时预编辑文本更新
+fn emit_voice_stream_update(conn: &Connection, target_engine_path: &str, voice_snap: &UiSnapshot) {
+    let table_visible = !voice_snap.candidates.is_empty();
+    if let Ok(table_val) = types::build_ibus_lookup_table(
+        &voice_snap.candidates,
+        voice_snap.page_size,
+        voice_snap.selected_index,
+        voice_snap.orientation,
+        voice_snap.index_style,
+    ) {
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            "org.freedesktop.IBus.Engine",
+            "UpdateLookupTable",
+            &(Value::from(table_val), table_visible),
+        );
+    }
+
+    if let Ok(preedit_val) = types::build_ibus_preedit_text(&voice_snap.preedit) {
+        let char_len = voice_snap.preedit.chars().count() as u32;
+        let visible = !voice_snap.preedit.is_empty();
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            "org.freedesktop.IBus.Engine",
+            "UpdatePreeditText",
+            &(
+                Value::from(preedit_val),
+                char_len,
+                visible,
+                types::IBUS_ENGINE_PREEDIT_CLEAR,
+            ),
+        );
+    }
+}
+
+/// 发射清空候选框与预编辑的信号
+fn emit_voice_stream_exit(conn: &Connection, target_engine_path: &str) {
+    if let Ok(empty_table) = types::build_ibus_lookup_table(
+        &[],
+        1,
+        0,
+        types::IBUS_ORIENTATION_HORIZONTAL,
+        CandidateIndexStyle::None,
+    ) {
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            "org.freedesktop.IBus.Engine",
+            "UpdateLookupTable",
+            &(Value::from(empty_table), false),
+        );
+    }
+    if let Ok(empty_preedit) = types::build_ibus_preedit_text("") {
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            "org.freedesktop.IBus.Engine",
+            "UpdatePreeditText",
+            &(
+                Value::from(empty_preedit),
+                0u32,
+                false,
+                types::IBUS_ENGINE_PREEDIT_CLEAR,
+            ),
+        );
+    }
+}
+
+/// 自动断句文字上屏提交
+fn commit_voice_text(conn: &Connection, target_engine_path: &str, commit_text: &str) {
+    if commit_text.is_empty() {
+        return;
+    }
+    info!(
+        "[微澜 IBus 语音] 自动断句文字上屏 (目标路径: {}): \"{}\"",
+        target_engine_path, commit_text
+    );
+    emit_voice_stream_exit(conn, target_engine_path);
+    if let Ok(text_val) = types::build_ibus_text(commit_text) {
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            "org.freedesktop.IBus.Engine",
+            "CommitText",
+            &(Value::from(text_val),),
+        );
+    }
+}
+
+/// 处理单轮语音事件轮询、流式更新与过渡退出
+fn handle_voice_stream_cycle(
+    conn: &Connection,
+    shared_core: &Arc<Mutex<IbusSessionCore>>,
+    target_engine_path: &str,
+    is_voice_active: bool,
+    last_voice_active: &mut bool,
+) {
+    if is_voice_active {
+        let (voice_snap, voice_commit) = match shared_core.lock() {
+            Ok(mut guard) => {
+                let commit = guard.poll_voice_events();
+                let snap = UiSnapshot::capture(&guard);
+                (snap, commit)
+            }
+            Err(_) => return,
+        };
+        emit_voice_stream_update(conn, target_engine_path, &voice_snap);
+        if let Some(ref commit_text) = voice_commit {
+            commit_voice_text(conn, target_engine_path, commit_text);
+        }
+    } else if *last_voice_active {
+        emit_voice_stream_exit(conn, target_engine_path);
+    }
+    *last_voice_active = is_voice_active;
+}
+
+/// 处理词库与配置热重载事件，若触发指示器形态变更自重启则返回 true
+fn handle_config_reload_event(
+    shared_core: &Arc<Mutex<IbusSessionCore>>,
+    params: &mut IbusMonitorParams,
+    last_reload_instant: &mut Instant,
+) -> bool {
+    let now = Instant::now();
+    if now.duration_since(*last_reload_instant) < Duration::from_millis(800) {
+        debug!("[微澜 IBus] 处于热重载防抖窗口期内，已安全合并重复触发请求。");
+        return false;
+    }
+    *last_reload_instant = now;
+    let bundle = SessionConfigBundle::load_current();
+    let hide_ext = bundle.exclusive_input_source;
+    let current_has_tray = shared_core
+        .lock()
+        .map(|g| g.shared_is_chinese.is_some())
+        .unwrap_or(false);
+    let new_cfg = crate::config::AppConfig::load_or_create();
+    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_uppercase().contains("GNOME"))
+        .unwrap_or(false);
+    let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
+
+    if expected_tray != current_has_tray {
+        info!(
+            "[微澜 IBus] 检测到指示器形态变更 (当前托盘: {}, 期望托盘: {})，正在触发平滑自重启...",
+            current_has_tray, expected_tray
+        );
+        crate::session_bundle::trigger_graceful_restart_and_exit(
+            params.exit_requested.as_ref(),
+            params.loop_wakeup.as_ref(),
+        );
+        return true;
+    }
+
+    if let Ok(mut guard) = shared_core.lock() {
+        apply_bundle_to_ibus_core(bundle, &mut guard);
+    }
+    if hide_ext != params.exclusive_input_source {
+        params.exclusive_input_source = hide_ext;
+        desktop_integration::ensure_gnome_input_source_registered(hide_ext);
+        desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
+    }
+    info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
+    false
+}
+
+/// 同步托盘模式切换并发射 IBus 引擎 UpdateProperty 信号
+fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSessionCore>>) {
+    let mode_changed = shared_core
+        .lock()
+        .ok()
+        .and_then(|mut g| g.sync_shared_mode().map(|m| (m, g.is_caps_locked)));
+    if let Some((new_mode, is_caps)) = mode_changed {
+        if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
+            let _ = conn.emit_signal(
+                Option::<&str>::None,
+                WAYLAN_ENGINE_OBJECT_PATH,
+                "org.freedesktop.IBus.Engine",
+                "UpdateProperty",
+                &(Value::from(prop_val),),
+            );
+            debug!("[微澜 IBus] 已同步托盘模式切换并发射 UpdateProperty 信号");
+        }
+    }
+}
+
 /// 驱动后台文件热重载与托盘状态同步的阻塞监控循环
 fn run_ibus_monitor_loop(
     conn: &Connection,
@@ -543,13 +765,9 @@ fn run_ibus_monitor_loop(
     inotify_watcher: &mut Option<InotifyWatcher>,
     mut params: IbusMonitorParams,
 ) {
-    // 开机/启动初期的时差自愈轮数（前 25 轮，每秒 1 次）；放宽至 25 秒彻底包容桌面组件异步加载完成时差；
-    // 正常运行阶段绝不定时重复调用 SetGlobalEngine，避免打断用户当前打字状态或触发上下文重置闪退。
     let mut startup_healing_rounds: u32 = 25;
-
-    // 建立用户 D-Bus 会话总线连接以探测初始桌面锁屏（ScreenSaver）状态（仅启动时单次检测）
-    let session_conn = Connection::session().ok();
-    let initial_screen_locked = session_conn
+    let initial_screen_locked = Connection::session()
+        .ok()
         .as_ref()
         .map(query_initial_screen_saver_active)
         .unwrap_or(false);
@@ -583,41 +801,10 @@ fn run_ibus_monitor_loop(
             ensure_global_engine_active(conn);
         }
 
-        // 动态感知锁屏状态变迁（由被动 D-Bus 信号驱动更新 AtomicBool，零同步 RPC 轮询开销）
-        let current_screen_locked = screen_locked_flag.load(Ordering::Acquire);
-        if current_screen_locked != last_screen_locked {
-            if current_screen_locked {
-                info!("[微澜 IBus] 检测到系统进入锁屏状态，进入硬件按键直通与密码保护模式。");
-                if let Ok(mut guard) = shared_core.lock() {
-                    guard.is_screen_locked = true;
-                    guard.reset_context();
-                }
-            } else {
-                info!("[微澜 IBus] 检测到系统屏幕已解锁，正在自动校准并切回微澜输入法。");
-                if let Ok(mut guard) = shared_core.lock() {
-                    guard.is_screen_locked = false;
-                }
-                ensure_global_engine_active(conn);
-                let _ = Command::new("gsettings")
-                    .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-                    .output();
-            }
-            last_screen_locked = current_screen_locked;
-        }
+        let current_locked = screen_locked_flag.load(Ordering::Acquire);
+        handle_screen_saver_transition(conn, shared_core, current_locked, &mut last_screen_locked);
 
-        let (is_voice_active, target_engine_path) = {
-            if let Ok(guard) = shared_core.lock() {
-                let active = guard.is_voice_active();
-                let path = guard
-                    .active_engine_path
-                    .clone()
-                    .unwrap_or_else(|| WAYLAN_ENGINE_OBJECT_PATH.to_string());
-                (active, path)
-            } else {
-                (false, WAYLAN_ENGINE_OBJECT_PATH.to_string())
-            }
-        };
-
+        let (is_voice_active, target_engine_path) = query_voice_active_and_path(shared_core);
         let poll_timeout_ms = if is_voice_active { 60 } else { 1000 };
         poll_wakeup_and_inotify(
             inotify_watcher.as_ref(),
@@ -625,136 +812,13 @@ fn run_ibus_monitor_loop(
             poll_timeout_ms,
         );
 
-        // 驱动语音输入状态流式刷新与自动静音上屏提交
-        if is_voice_active {
-            let (voice_snap, voice_commit) = {
-                if let Ok(mut guard) = shared_core.lock() {
-                    let commit = guard.poll_voice_events();
-                    let snap = UiSnapshot::capture(&guard);
-                    (snap, commit)
-                } else {
-                    continue;
-                }
-            };
-
-            // 1. 发射候选框更新：跳动音量波形与状态指示在悬浮框呈现
-            let table_visible = !voice_snap.candidates.is_empty();
-            if let Ok(table_val) = types::build_ibus_lookup_table(
-                &voice_snap.candidates,
-                voice_snap.page_size,
-                voice_snap.selected_index,
-                voice_snap.orientation,
-                voice_snap.index_style,
-            ) {
-                let _ = conn.emit_signal(
-                    None::<&str>,
-                    target_engine_path.as_str(),
-                    "org.freedesktop.IBus.Engine",
-                    "UpdateLookupTable",
-                    &(Value::from(table_val), table_visible),
-                );
-            }
-
-            // 2. 实时流式预编辑：将识别出的真实汉字流式同步到光标处，无文字时保持清空防波形乱入
-            if let Ok(preedit_val) = types::build_ibus_preedit_text(&voice_snap.preedit) {
-                let char_len = voice_snap.preedit.chars().count() as u32;
-                let visible = !voice_snap.preedit.is_empty();
-                let _ = conn.emit_signal(
-                    None::<&str>,
-                    target_engine_path.as_str(),
-                    "org.freedesktop.IBus.Engine",
-                    "UpdatePreeditText",
-                    &(
-                        Value::from(preedit_val),
-                        char_len,
-                        visible,
-                        types::IBUS_ENGINE_PREEDIT_CLEAR,
-                    ),
-                );
-            }
-
-            // 3. 自动断句识别结果上屏
-            if let Some(ref commit_text) = voice_commit {
-                if !commit_text.is_empty() {
-                    info!(
-                        "[微澜 IBus 语音] 自动断句文字上屏 (目标路径: {}): \"{}\"",
-                        target_engine_path, commit_text
-                    );
-                    // 隐去悬浮候选框并清空预编辑，防止后续按键残留
-                    if let Ok(empty_table) = types::build_ibus_lookup_table(
-                        &[],
-                        1,
-                        0,
-                        types::IBUS_ORIENTATION_HORIZONTAL,
-                        CandidateIndexStyle::None,
-                    ) {
-                        let _ = conn.emit_signal(
-                            None::<&str>,
-                            target_engine_path.as_str(),
-                            "org.freedesktop.IBus.Engine",
-                            "UpdateLookupTable",
-                            &(Value::from(empty_table), false),
-                        );
-                    }
-                    if let Ok(empty_preedit) = types::build_ibus_preedit_text("") {
-                        let _ = conn.emit_signal(
-                            None::<&str>,
-                            target_engine_path.as_str(),
-                            "org.freedesktop.IBus.Engine",
-                            "UpdatePreeditText",
-                            &(
-                                Value::from(empty_preedit),
-                                0u32,
-                                false,
-                                types::IBUS_ENGINE_PREEDIT_CLEAR,
-                            ),
-                        );
-                    }
-                    // 纯净识别结果文字提交当前应用窗口
-                    if let Ok(text_val) = types::build_ibus_text(commit_text) {
-                        let _ = conn.emit_signal(
-                            None::<&str>,
-                            target_engine_path.as_str(),
-                            "org.freedesktop.IBus.Engine",
-                            "CommitText",
-                            &(Value::from(text_val),),
-                        );
-                    }
-                }
-            }
-        } else if last_voice_active {
-            // 录音状态结束过渡：立即隐去候选面板并确保预编辑清空
-            if let Ok(empty_table) = types::build_ibus_lookup_table(
-                &[],
-                1,
-                0,
-                types::IBUS_ORIENTATION_HORIZONTAL,
-                CandidateIndexStyle::None,
-            ) {
-                let _ = conn.emit_signal(
-                    None::<&str>,
-                    target_engine_path.as_str(),
-                    "org.freedesktop.IBus.Engine",
-                    "UpdateLookupTable",
-                    &(Value::from(empty_table), false),
-                );
-            }
-            if let Ok(empty_preedit) = types::build_ibus_preedit_text("") {
-                let _ = conn.emit_signal(
-                    None::<&str>,
-                    target_engine_path.as_str(),
-                    "org.freedesktop.IBus.Engine",
-                    "UpdatePreeditText",
-                    &(
-                        Value::from(empty_preedit),
-                        0u32,
-                        false,
-                        types::IBUS_ENGINE_PREEDIT_CLEAR,
-                    ),
-                );
-            }
-        }
-        last_voice_active = is_voice_active;
+        handle_voice_stream_cycle(
+            conn,
+            shared_core,
+            &target_engine_path,
+            is_voice_active,
+            &mut last_voice_active,
+        );
 
         if params.exit_requested.load(Ordering::Acquire) {
             info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
@@ -767,67 +831,15 @@ fn run_ibus_monitor_loop(
             &params.watched_paths,
             &mut params.last_mtime,
         );
-        if should_reload {
-            let now = Instant::now();
-            if now.duration_since(last_reload_instant) < Duration::from_millis(800) {
-                debug!("[微澜 IBus] 处于热重载防抖窗口期内，已安全合并重复触发请求。");
-            } else {
-                last_reload_instant = now;
-                let bundle = SessionConfigBundle::load_current();
-                let hide_ext = bundle.exclusive_input_source;
-                let current_has_tray = shared_core
-                    .lock()
-                    .map(|g| g.shared_is_chinese.is_some())
-                    .unwrap_or(false);
-                let new_cfg = crate::config::AppConfig::load_or_create();
-                let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-                    .map(|d| d.to_uppercase().contains("GNOME"))
-                    .unwrap_or(false);
-                let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
-
-                if expected_tray != current_has_tray {
-                    info!(
-                        "[微澜 IBus] 检测到指示器形态变更 (当前托盘: {}, 期望托盘: {})，正在触发平滑自重启...",
-                        current_has_tray, expected_tray
-                    );
-                    crate::session_bundle::trigger_graceful_restart_and_exit(
-                        params.exit_requested.as_ref(),
-                        params.loop_wakeup.as_ref(),
-                    );
-                    break;
-                }
-
-                if let Ok(mut guard) = shared_core.lock() {
-                    apply_bundle_to_ibus_core(bundle, &mut guard);
-                }
-                if hide_ext != params.exclusive_input_source {
-                    params.exclusive_input_source = hide_ext;
-                    desktop_integration::ensure_gnome_input_source_registered(hide_ext);
-                    desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
-                }
-                info!("[微澜 IBus] 已完成用户词库与运行配置热重载。");
-            }
+        if should_reload
+            && handle_config_reload_event(shared_core, &mut params, &mut last_reload_instant)
+        {
+            break;
         }
 
-        let mode_changed = shared_core
-            .lock()
-            .ok()
-            .and_then(|mut g| g.sync_shared_mode().map(|m| (m, g.is_caps_locked)));
-        if let Some((new_mode, is_caps)) = mode_changed {
-            if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
-                let _ = conn.emit_signal(
-                    Option::<&str>::None,
-                    WAYLAN_ENGINE_OBJECT_PATH,
-                    "org.freedesktop.IBus.Engine",
-                    "UpdateProperty",
-                    &(Value::from(prop_val),),
-                );
-                debug!("[微澜 IBus] 已同步托盘模式切换并发射 UpdateProperty 信号");
-            }
-        }
+        sync_engine_mode_property(conn, shared_core);
     }
 
-    // 停止后台锁屏信号监听器并回收线程资源
     listener_handle.stop();
 }
 

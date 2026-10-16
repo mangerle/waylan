@@ -97,39 +97,43 @@ impl Write for RollingFileWriter {
 ///
 /// # Errors
 /// 当日志文件打开失败或全局日志器已被重复注册时返回错误。
-pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
-    // 确定日志文件路径
-    let log_path = log_file_path();
-
-    // 确保日志文件所在的目录存在并设置 0o700 安全权限
-    if let Some(parent) = log_path.parent() {
-        #[cfg(unix)]
-        {
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true).mode(0o700);
-            if let Err(e) = builder.create(parent) {
-                eprintln!("[微澜日志 警告] 创建日志存储目录 {:?} 失败: {}", parent, e);
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            if let Err(e) = fs::create_dir_all(parent) {
-                eprintln!("[微澜日志 警告] 创建日志存储目录 {:?} 失败: {}", parent, e);
-            }
+/// 确保日志存储目录存在并设置安全访问权限 (0o700)
+fn ensure_log_directory(log_path: &Path) {
+    let Some(parent) = log_path.parent() else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        if let Err(e) = builder.create(parent) {
+            eprintln!("[微澜日志 警告] 创建日志存储目录 {:?} 失败: {}", parent, e);
         }
     }
+    #[cfg(not(unix))]
+    {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("[微澜日志 警告] 创建日志存储目录 {:?} 失败: {}", parent, e);
+        }
+    }
+}
 
-    // 根据环境变量 RUST_LOG 决定日志级别，默认为 Info
+/// 解析环境变量 `RUST_LOG` 为对应的日志过滤级别
+fn parse_log_level_filter() -> LevelFilter {
     let env_level = env_var_non_empty("RUST_LOG").unwrap_or_else(|| "info".to_string());
-    let level_filter = match env_level.to_lowercase().as_str() {
+    match env_level.to_lowercase().as_str() {
         "trace" => LevelFilter::Trace,
         "debug" => LevelFilter::Debug,
         "warn" => LevelFilter::Warn,
         "error" => LevelFilter::Error,
         _ => LevelFilter::Info,
-    };
+    }
+}
 
-    // 使用常驻自动轮转写入器（支持在运行中持续检测体积并在超出 10MB 时滚动）
+pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
+    let log_path = log_file_path();
+    ensure_log_directory(&log_path);
+    let level_filter = parse_log_level_filter();
     let rolling_writer = RollingFileWriter::open(log_path.clone(), MAX_LOG_FILE_BYTES)?;
 
     // 使用 fern 构建多目标日志格式化器，并对嘈杂的第三方底层库限制在 Warn 级别
@@ -150,9 +154,7 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         .level_for("winit", LevelFilter::Warn)
         .level_for("wayland_client", LevelFilter::Warn)
         .level_for("rustix", LevelFilter::Warn)
-        // 终端标准输出通道
         .chain(stdout())
-        // 日志文件持久化通道（按行自动刷盘并在运行中自动体积轮转，防止磁盘耗尽）
         .chain(Box::new(rolling_writer) as Box<dyn Write + Send>)
         .apply()?;
 

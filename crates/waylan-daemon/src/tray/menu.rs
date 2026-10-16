@@ -154,18 +154,7 @@ impl SubprocessManager {
         };
         #[cfg(unix)]
         cmd.process_group(0);
-
-        for var in [
-            "WAYLAND_DISPLAY",
-            "DISPLAY",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-            "XDG_CURRENT_DESKTOP",
-        ] {
-            if let Ok(val) = env::var(var) {
-                cmd.env(var, &val);
-            }
-        }
+        inject_desktop_env(&mut cmd);
 
         match cmd.spawn() {
             Ok(child) => {
@@ -197,24 +186,37 @@ impl SubprocessManager {
     }
 }
 
+/// 向待派生的外部进程命令注入 Linux 桌面关键会话环境变量
+fn inject_desktop_env(cmd: &mut Command) {
+    for var in [
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_CURRENT_DESKTOP",
+        "DESKTOP_SESSION",
+    ] {
+        if let Ok(val) = env::var(var) {
+            cmd.env(var, &val);
+        }
+    }
+}
+
+/// 尝试派生注入了桌面环境与独立进程组的文件查看器子进程
+fn try_spawn_viewer(mut cmd: Command, tracker: &SubprocessManager, desc: &'static str) -> bool {
+    inject_desktop_env(&mut cmd);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    if let Ok(child) = cmd.spawn() {
+        tracker.track(child, None, desc);
+        true
+    } else {
+        false
+    }
+}
+
 /// 注入桌面环境关键变量并多级回退唤起外部文本编辑器或查看器
 fn spawn_file_viewer(path: &Path, tracker: &SubprocessManager, desc: &'static str) {
-    let inject_env = |cmd: &mut Command| {
-        for var in [
-            "WAYLAND_DISPLAY",
-            "DISPLAY",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-            "XDG_CURRENT_DESKTOP",
-            "DESKTOP_SESSION",
-        ] {
-            if let Ok(val) = env::var(var) {
-                cmd.env(var, &val);
-            }
-        }
-    };
-
-    // 1. 优先尝试常见的 Linux 桌面图形文本编辑器
     let editors = [
         "gnome-text-editor",
         "gedit",
@@ -226,27 +228,17 @@ fn spawn_file_viewer(path: &Path, tracker: &SubprocessManager, desc: &'static st
     for editor in editors {
         let mut cmd = Command::new(editor);
         cmd.arg(path);
-        inject_env(&mut cmd);
-        #[cfg(unix)]
-        cmd.process_group(0);
-        if let Ok(child) = cmd.spawn() {
-            tracker.track(child, None, desc);
+        if try_spawn_viewer(cmd, tracker, desc) {
             return;
         }
     }
 
-    // 2. 回退使用 GNOME/Wayland 标准文件关联唤起命令 gio open
     let mut gio_cmd = Command::new("gio");
     gio_cmd.arg("open").arg(path);
-    inject_env(&mut gio_cmd);
-    #[cfg(unix)]
-    gio_cmd.process_group(0);
-    if let Ok(child) = gio_cmd.spawn() {
-        tracker.track(child, None, desc);
+    if try_spawn_viewer(gio_cmd, tracker, desc) {
         return;
     }
 
-    // 3. 最终回退至 FreeDesktop 标准 xdg-open
     let xdg_bin = ["/usr/bin/xdg-open", "/bin/xdg-open"]
         .iter()
         .find(|p| Path::new(p).exists())
@@ -254,12 +246,7 @@ fn spawn_file_viewer(path: &Path, tracker: &SubprocessManager, desc: &'static st
         .unwrap_or("xdg-open");
     let mut xdg_cmd = Command::new(xdg_bin);
     xdg_cmd.arg(path);
-    inject_env(&mut xdg_cmd);
-    #[cfg(unix)]
-    xdg_cmd.process_group(0);
-    if let Ok(child) = xdg_cmd.spawn() {
-        tracker.track(child, None, desc);
-    }
+    let _ = try_spawn_viewer(xdg_cmd, tracker, desc);
 }
 
 impl Drop for SubprocessManager {
@@ -323,6 +310,57 @@ impl DBusMenu {
 
     fn launch_view_log(&self) {
         self.subprocess_manager.launch_view_log();
+    }
+
+    /// 切换原子标志并在通道唤醒托盘与 Wayland 事件循环，同时输出中文日志反馈
+    fn toggle_flag_with_feedback(
+        &self,
+        flag: &AtomicBool,
+        label: &'static str,
+        val_true: &'static str,
+        val_false: &'static str,
+    ) {
+        let current = flag.load(Ordering::Acquire);
+        let next = !current;
+        flag.store(next, Ordering::Release);
+        let _ = self.icon_update_tx.try_send(());
+        if let Some(ref wakeup) = self.loop_wakeup {
+            wakeup.wake();
+        }
+        info!(
+            "[系统托盘] 右键菜单切换{}为: {}",
+            label,
+            if next { val_true } else { val_false }
+        );
+    }
+
+    /// 响应点击菜单“重新加载词库与配置”
+    fn on_menu_reload(&self) {
+        self.reload_requested.store(true, Ordering::Release);
+        if let Some(ref wakeup) = self.loop_wakeup {
+            wakeup.wake();
+        }
+        info!("[系统托盘] 右键菜单触发：已发出重新加载词库与配置信号...");
+    }
+
+    /// 响应点击菜单“退出微澜输入法”
+    fn on_menu_exit(&self) {
+        info!("[系统托盘] 收到退出菜单指令，正在触发优雅停机与数据落盘流程...");
+        self.exit_requested.store(true, Ordering::Release);
+        let _ = self.icon_update_tx.try_send(());
+        if let Some(ref wakeup) = self.loop_wakeup {
+            wakeup.wake();
+        }
+    }
+
+    /// 响应点击菜单“重启微澜输入法”
+    fn on_menu_restart(&self) {
+        info!("[系统托盘] 收到重启菜单指令，正在排队等待旧实例完全释放后拉起新实例...");
+        crate::session_bundle::trigger_graceful_restart_and_exit(
+            self.exit_requested.as_ref(),
+            self.loop_wakeup.as_ref(),
+        );
+        let _ = self.icon_update_tx.try_send(());
     }
 }
 
@@ -389,95 +427,30 @@ impl DBusMenu {
         }
 
         match id {
-            1 => {
-                let current = self.is_chinese.load(Ordering::Acquire);
-                let next = !current;
-                self.is_chinese.store(next, Ordering::Release);
-                let _ = self.icon_update_tx.try_send(());
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-                info!(
-                    "[系统托盘] 右键菜单切换输入模式为: {}",
-                    if next { "中文" } else { "英文" }
-                );
-            }
-            2 => {
-                self.reload_requested.store(true, Ordering::Release);
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-                info!("[系统托盘] 右键菜单触发：已发出重新加载词库与配置信号...");
-            }
-            3 => {
-                self.launch_settings();
-            }
-            4 => {
-                self.launch_view_log();
-            }
-            5 => {
-                info!("[系统托盘] 收到退出菜单指令，正在触发优雅停机与数据落盘流程...");
-                self.exit_requested.store(true, Ordering::Release);
-                let _ = self.icon_update_tx.try_send(());
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-            }
-            9 => {
-                info!("[系统托盘] 收到重启菜单指令，正在排队等待旧实例完全释放后拉起新实例...");
-                crate::session_bundle::trigger_graceful_restart_and_exit(
-                    self.exit_requested.as_ref(),
-                    self.loop_wakeup.as_ref(),
-                );
-                let _ = self.icon_update_tx.try_send(());
-            }
-            6 => {
-                let current = self.traditional_chinese.load(Ordering::Acquire);
-                let next = !current;
-                self.traditional_chinese.store(next, Ordering::Release);
-                let _ = self.icon_update_tx.try_send(());
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-                info!(
-                    "[系统托盘] 右键菜单切换简繁模式为: {}",
-                    if next { "繁体" } else { "简体" }
-                );
-            }
-            7 => {
-                let current = self.full_width_punct.load(Ordering::Acquire);
-                let next = !current;
-                self.full_width_punct.store(next, Ordering::Release);
-                let _ = self.icon_update_tx.try_send(());
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-                info!(
-                    "[系统托盘] 右键菜单切换标点模式为: {}",
-                    if next {
-                        "全角 (中文标点)"
-                    } else {
-                        "半角 (英文标点)"
-                    }
-                );
-            }
-            8 => {
-                let current = self.full_width_char.load(Ordering::Acquire);
-                let next = !current;
-                self.full_width_char.store(next, Ordering::Release);
-                let _ = self.icon_update_tx.try_send(());
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-                info!(
-                    "[系统托盘] 右键菜单切换字符全半角为: {}",
-                    if next {
-                        "全角 (英文字母)"
-                    } else {
-                        "半角 (英文字母)"
-                    }
-                );
-            }
+            1 => self.toggle_flag_with_feedback(&self.is_chinese, "输入模式", "中文", "英文"),
+            2 => self.on_menu_reload(),
+            3 => self.launch_settings(),
+            4 => self.launch_view_log(),
+            5 => self.on_menu_exit(),
+            6 => self.toggle_flag_with_feedback(
+                &self.traditional_chinese,
+                "简繁模式",
+                "繁体",
+                "简体",
+            ),
+            7 => self.toggle_flag_with_feedback(
+                &self.full_width_punct,
+                "标点模式",
+                "全角 (中文标点)",
+                "半角 (英文标点)",
+            ),
+            8 => self.toggle_flag_with_feedback(
+                &self.full_width_char,
+                "字符全半角",
+                "全角 (英文字母)",
+                "半角 (英文字母)",
+            ),
+            9 => self.on_menu_restart(),
             _ => {}
         }
     }

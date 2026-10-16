@@ -341,7 +341,8 @@ impl IbusSessionCore {
         }
 
         let commit_text = final_text.or_else(|| {
-            if let Some(preview) = fallback_preview {
+            let candidate_preview = fallback_preview.or_else(|| self.voice_partial_text.clone());
+            if let Some(preview) = candidate_preview {
                 let trimmed = preview.trim().to_string();
                 if !trimmed.is_empty() {
                     log::info!(
@@ -412,6 +413,132 @@ impl IbusSessionCore {
     }
 
     /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
+    /// 检查并处理系统锁屏或密码输入框状态下的按键直通逻辑
+    fn handle_lock_or_password_state(
+        &mut self,
+        evdev_key: u32,
+        is_press: bool,
+    ) -> Option<IbusKeyOutcome> {
+        if !self.is_screen_locked && !self.is_password_context {
+            return None;
+        }
+        self.shift_sm.reset();
+        if !is_press {
+            let was_consumed = self.consumed_keys.take_release(evdev_key);
+            return Some(IbusKeyOutcome {
+                consumed: was_consumed,
+                ..Default::default()
+            });
+        }
+        self.consumed_keys.record_press(evdev_key, false);
+        Some(IbusKeyOutcome::default())
+    }
+
+    /// 处理 CapsLock 键按下与释放状态变迁
+    fn handle_capslock_event(&mut self, evdev_key: u32, is_press: bool) -> IbusKeyOutcome {
+        self.shift_sm.reset();
+        if is_press {
+            let mut outcome = IbusKeyOutcome {
+                consumed: false,
+                ..Default::default()
+            };
+            if !self.engine.raw_input().is_empty() {
+                let raw = self.engine.raw_input().to_string();
+                self.engine.reset();
+                outcome.commit_text = Some(raw);
+                outcome.update_ui = true;
+            }
+            let next_locked = !self.is_caps_locked;
+            self.update_caps_lock_state(next_locked);
+
+            if self.mode != InputMode::English {
+                let effective_mode = if next_locked {
+                    InputMode::English
+                } else {
+                    self.mode
+                };
+                outcome.mode_changed = Some(effective_mode);
+            }
+            self.consumed_keys.record_press(evdev_key, false);
+            outcome
+        } else {
+            let was_consumed = self.consumed_keys.take_release(evdev_key);
+            IbusKeyOutcome {
+                consumed: was_consumed,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// 处理对讲机长按模式松开事件
+    fn handle_push_to_talk_release(&mut self, evdev_key: u32) -> Option<IbusKeyOutcome> {
+        if !self.is_push_to_talk_active || !self.voice_controller.is_recording() {
+            return None;
+        }
+        let is_main_key_release = self.push_to_talk_key == Some(evdev_key);
+        let is_modifier_release = matches!(
+            evdev_key,
+            KEY_LEFTCTRL
+                | KEY_RIGHTCTRL
+                | KEY_LEFTALT
+                | KEY_RIGHTALT
+                | KEY_LEFTSHIFT
+                | KEY_RIGHTSHIFT
+                | KEY_LEFTMETA
+                | KEY_RIGHTMETA
+        );
+        if is_main_key_release || is_modifier_release {
+            log::info!("[微澜 IBus 语音] 对讲机模式快捷键松开，自动断句上屏提交");
+            let commit_text = self.stop_voice_recording_and_commit();
+            let was_consumed = self.consumed_keys.take_release(evdev_key);
+            return Some(IbusKeyOutcome {
+                consumed: was_consumed || is_main_key_release,
+                commit_text,
+                update_ui: true,
+                ..Default::default()
+            });
+        }
+        None
+    }
+
+    /// 录音活跃状态下的按键拦截处理（Esc 取消，Enter 提交，其余静默消费）
+    fn handle_voice_recording_key(&mut self, evdev_key: u32) -> Option<IbusKeyOutcome> {
+        if !self.voice_controller.is_recording() {
+            return None;
+        }
+        if evdev_key == KEY_ESC {
+            self.voice_controller.cancel();
+            self.is_push_to_talk_active = false;
+            self.push_to_talk_key = None;
+            self.voice_display_text = None;
+            self.voice_partial_text = None;
+            self.voice_event_rx = None;
+            self.consumed_keys.record_press(evdev_key, true);
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                update_ui: true,
+                ..Default::default()
+            });
+        }
+        if evdev_key == KEY_ENTER {
+            log::info!("[微澜 IBus 语音] Enter 键触发停止录音并请求提交");
+            let commit_text = self.stop_voice_recording_and_commit();
+            self.consumed_keys.record_press(evdev_key, true);
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                commit_text,
+                update_ui: true,
+                ..Default::default()
+            });
+        }
+        self.consumed_keys.record_press(evdev_key, true);
+        Some(IbusKeyOutcome {
+            consumed: true,
+            ..Default::default()
+        })
+    }
+
+    /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
     pub fn process_key_event(&mut self, keyval: u32, keycode: u32, state: u32) -> IbusKeyOutcome {
         let _ = self.sync_shared_mode();
         self.sync_shared_settings();
@@ -424,103 +551,28 @@ impl IbusSessionCore {
             is_press,
         );
 
-        // 密码框或系统锁屏状态防线：当处于密码输入框或屏幕锁定时，强制所有硬件按键 100% 直通操作系统，
-        // 绝对不拦截按键、不生成预编辑拼音，杜绝锁屏密码框跳出拼音候选框泄露或阻碍密码输入。
-        if self.is_screen_locked || self.is_password_context {
-            self.shift_sm.reset();
-            if !is_press {
-                let was_consumed = self.consumed_keys.take_release(evdev_key);
-                return IbusKeyOutcome {
-                    consumed: was_consumed,
-                    ..Default::default()
-                };
-            }
-            self.consumed_keys.record_press(evdev_key, false);
-            return IbusKeyOutcome::default();
+        if let Some(outcome) = self.handle_lock_or_password_state(evdev_key, is_press) {
+            return outcome;
         }
 
-        // CapsLock 键处理：若当前存在未完成拼音，直接提交英文字符上屏并重置；按键原生透传
         if evdev_key == KEY_CAPSLOCK {
-            self.shift_sm.reset();
-            return if is_press {
-                let mut outcome = IbusKeyOutcome {
-                    consumed: false,
-                    ..Default::default()
-                };
-                if !self.engine.raw_input().is_empty() {
-                    let raw = self.engine.raw_input().to_string();
-                    self.engine.reset();
-                    outcome.commit_text = Some(raw);
-                    outcome.update_ui = true;
-                }
-                let next_locked = !self.is_caps_locked;
-                self.update_caps_lock_state(next_locked);
-
-                // 仅当原本处于中文模式时，开启/关闭大写才需要驱动对外的中英显示模式切换；
-                // 若原本处于英文模式，则始终保持英文模式，不触发中英文切换信号以防止状态栏闪烁
-                if self.mode != InputMode::English {
-                    let effective_mode = if next_locked {
-                        InputMode::English
-                    } else {
-                        self.mode
-                    };
-                    outcome.mode_changed = Some(effective_mode);
-                }
-                self.consumed_keys.record_press(evdev_key, false);
-                outcome
-            } else {
-                let was_consumed = self.consumed_keys.take_release(evdev_key);
-                // 在按键释放阶段仅记录消费状态，不根据滞后的硬件 state 掩码重新翻转锁定状态，
-                // 彻底杜绝松开按键时被旧状态覆盖而导致“必须按两下才能退出大写”
-                IbusKeyOutcome {
-                    consumed: was_consumed,
-                    ..Default::default()
-                }
-            };
+            return self.handle_capslock_event(evdev_key, is_press);
         }
 
-        // 硬件修饰符校准：
-        // 若客户端传入的 state 明确带有 IBUS_LOCK_MASK，则确保大写锁定置为激活；
-        // 若 state 没有携带 IBUS_LOCK_MASK，绝不能直接盲目推断为“大写已关闭”，
-        // 因为众多 Wayland/XWayland 客户端并不会在每个字符按键上传递 Lock 掩码，
-        // 唯有当 evdev_key == KEY_CAPSLOCK 时由按键事件本身权威翻转锁定状态。
         if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked {
             self.update_caps_lock_state(true);
         }
 
-        // 大写锁定期间严格重置并旁路 Shift 单击中英文切换状态机，防止输入大写符号时误篡改基准中英模式
         let toggled_mode = if self.is_caps_locked {
             self.shift_sm.reset();
             None
         } else {
             self.shift_sm.on_key_event(evdev_key, is_press, self.mode)
         };
+
         if !is_press {
-            // 对讲机长按模式 (Push-to-Talk)：松开主键或修饰键时立即截断并提交上屏
-            if self.is_push_to_talk_active && self.voice_controller.is_recording() {
-                let is_main_key_release = self.push_to_talk_key == Some(evdev_key);
-                let is_modifier_release = matches!(
-                    evdev_key,
-                    KEY_LEFTCTRL
-                        | KEY_RIGHTCTRL
-                        | KEY_LEFTALT
-                        | KEY_RIGHTALT
-                        | KEY_LEFTSHIFT
-                        | KEY_RIGHTSHIFT
-                        | KEY_LEFTMETA
-                        | KEY_RIGHTMETA
-                );
-                if is_main_key_release || is_modifier_release {
-                    log::info!("[微澜 IBus 语音] 对讲机模式快捷键松开，自动断句上屏提交");
-                    let commit_text = self.stop_voice_recording_and_commit();
-                    let was_consumed = self.consumed_keys.take_release(evdev_key);
-                    return IbusKeyOutcome {
-                        consumed: was_consumed || is_main_key_release,
-                        commit_text,
-                        update_ui: true,
-                        ..Default::default()
-                    };
-                }
+            if let Some(outcome) = self.handle_push_to_talk_release(evdev_key) {
+                return outcome;
             }
             return self.handle_key_release(evdev_key, toggled_mode);
         }
@@ -543,38 +595,8 @@ impl IbusSessionCore {
             return shortcut_outcome;
         }
 
-        // 录音状态下的快捷拦截：Esc 取消，Enter 提交，其它按键静默消费
-        if self.voice_controller.is_recording() {
-            if evdev_key == KEY_ESC {
-                self.voice_controller.cancel();
-                self.is_push_to_talk_active = false;
-                self.push_to_talk_key = None;
-                self.voice_display_text = None;
-                self.voice_partial_text = None;
-                self.voice_event_rx = None;
-                self.consumed_keys.record_press(evdev_key, true);
-                return IbusKeyOutcome {
-                    consumed: true,
-                    update_ui: true,
-                    ..Default::default()
-                };
-            }
-            if evdev_key == KEY_ENTER {
-                log::info!("[微澜 IBus 语音] Enter 键触发停止录音并请求提交");
-                let commit_text = self.stop_voice_recording_and_commit();
-                self.consumed_keys.record_press(evdev_key, true);
-                return IbusKeyOutcome {
-                    consumed: true,
-                    commit_text,
-                    update_ui: true,
-                    ..Default::default()
-                };
-            }
-            self.consumed_keys.record_press(evdev_key, true);
-            return IbusKeyOutcome {
-                consumed: true,
-                ..Default::default()
-            };
+        if let Some(voice_outcome) = self.handle_voice_recording_key(evdev_key) {
+            return voice_outcome;
         }
 
         let mut outcome =
@@ -588,16 +610,14 @@ impl IbusSessionCore {
         outcome
     }
 
-    /// 匹配并执行用户配置的全局模式切换快捷键（简繁切换、字符全半角、标点全半角）
-    fn handle_global_shortcuts(
+    /// 尝试匹配简繁切换快捷键
+    fn try_toggle_traditional(
         &mut self,
         evdev_key: u32,
         shift_active: bool,
         ctrl_active: bool,
         alt_active: bool,
-        super_active: bool,
     ) -> Option<IbusKeyOutcome> {
-        // 1. 简繁切换快捷键匹配
         let trad_match = match self.traditional_shortcut {
             TraditionalShortcut::CtrlShiftF => {
                 ctrl_active && shift_active && !alt_active && evdev_key == KEY_F
@@ -625,8 +645,17 @@ impl IbusSessionCore {
                 ..Default::default()
             });
         }
+        None
+    }
 
-        // 2. 字符全半角切换快捷键匹配
+    /// 尝试匹配字符全半角切换快捷键
+    fn try_toggle_full_width_char(
+        &mut self,
+        evdev_key: u32,
+        shift_active: bool,
+        ctrl_active: bool,
+        alt_active: bool,
+    ) -> Option<IbusKeyOutcome> {
         let char_match = match self.full_width_char_shortcut {
             FullWidthCharShortcut::ShiftSpace => {
                 shift_active && !ctrl_active && !alt_active && evdev_key == KEY_SPACE
@@ -649,8 +678,17 @@ impl IbusSessionCore {
                 ..Default::default()
             });
         }
+        None
+    }
 
-        // 3. 标点全半角切换快捷键匹配
+    /// 尝试匹配标点全半角切换快捷键
+    fn try_toggle_full_width_punct(
+        &mut self,
+        evdev_key: u32,
+        shift_active: bool,
+        ctrl_active: bool,
+        alt_active: bool,
+    ) -> Option<IbusKeyOutcome> {
         let punct_match = match self.full_width_punct_shortcut {
             FullWidthPunctShortcut::CtrlPeriod => {
                 ctrl_active && !shift_active && !alt_active && evdev_key == KEY_DOT
@@ -674,119 +712,183 @@ impl IbusSessionCore {
                 ..Default::default()
             });
         }
+        None
+    }
 
-        // 4. 语音输入触发快捷键匹配（支持方案 A：连续听写开关与长按对讲机双独立快捷键并存）
-        if self.voice_config.enabled {
-            // 4.1 优先匹配长按对讲机快捷键 (Push-to-Talk)
-            let ptt_match = self
-                .voice_config
-                .get_effective_ptt_shortcut()
-                .is_some_and(|s| {
-                    s.matches(
-                        evdev_key,
-                        shift_active,
-                        ctrl_active,
-                        alt_active,
-                        super_active,
-                    )
-                });
+    /// 尝试触发长按对讲机语音录入快捷键
+    fn try_trigger_push_to_talk(
+        &mut self,
+        evdev_key: u32,
+        shift_active: bool,
+        ctrl_active: bool,
+        alt_active: bool,
+        super_active: bool,
+    ) -> Option<IbusKeyOutcome> {
+        let ptt_match = self
+            .voice_config
+            .get_effective_ptt_shortcut()
+            .is_some_and(|s| {
+                s.matches(
+                    evdev_key,
+                    shift_active,
+                    ctrl_active,
+                    alt_active,
+                    super_active,
+                )
+            });
+        if !ptt_match {
+            return None;
+        }
 
-            if ptt_match {
-                if self.voice_controller.is_recording() && self.is_push_to_talk_active {
-                    // 正在长按中，忽略系统的 Auto-Repeat 连发，持续录音
-                    return Some(IbusKeyOutcome {
-                        consumed: true,
-                        ..Default::default()
-                    });
-                } else if !self.voice_controller.is_recording() {
-                    // 首次按压触发启动对讲机录音
-                    log::info!("[微澜 IBus 语音] 对讲机模式快捷键按下，开始捕获语音");
-                    self.engine.reset();
-                    let (tx, rx) = sync_channel(32);
-                    let opts = VoiceSessionOptions {
-                        voice_config: self.voice_config.clone(),
-                    };
-                    if let Err(e) = self.voice_controller.start(opts, tx) {
-                        log::error!("[微澜 IBus 语音] 启动麦克风录音捕获失败: {}", e);
-                    } else {
-                        self.is_push_to_talk_active = true;
-                        self.push_to_talk_key = Some(evdev_key);
-                        if self.voice_config.interaction.show_floating_bar {
-                            self.voice_display_text = Some("正在聆听中... ▏▎▍".to_string());
-                        } else {
-                            self.voice_display_text = None;
-                        }
-                        self.voice_partial_text = None;
-                        self.voice_event_rx = Some(rx);
-                    }
-                    return Some(IbusKeyOutcome {
-                        consumed: true,
-                        update_ui: true,
-                        ..Default::default()
-                    });
-                }
-            }
-
-            // 4.2 匹配连续听写开关快捷键 (Toggle)
-            let toggle_match = self
-                .voice_config
-                .get_effective_toggle_shortcut()
-                .is_some_and(|s| {
-                    s.matches(
-                        evdev_key,
-                        shift_active,
-                        ctrl_active,
-                        alt_active,
-                        super_active,
-                    )
-                });
-
-            if toggle_match {
-                let now = Instant::now();
-                if now.duration_since(self.last_voice_trigger_time) < Duration::from_millis(400) {
-                    // 过滤按键连发（Auto-Repeat）或短时间内微秒级抖动
-                    return Some(IbusKeyOutcome {
-                        consumed: true,
-                        ..Default::default()
-                    });
-                }
-                self.last_voice_trigger_time = now;
-
-                return if self.voice_controller.is_recording() {
-                    log::info!("[微澜 IBus 语音] 开关模式快捷键触发停止录音并请求提交");
-                    let commit_text = self.stop_voice_recording_and_commit();
-                    Some(IbusKeyOutcome {
-                        consumed: true,
-                        commit_text,
-                        update_ui: true,
-                        ..Default::default()
-                    })
+        if self.voice_controller.is_recording() && self.is_push_to_talk_active {
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                ..Default::default()
+            });
+        }
+        if !self.voice_controller.is_recording() {
+            log::info!("[微澜 IBus 语音] 对讲机模式快捷键按下，开始捕获语音");
+            self.engine.reset();
+            let (tx, rx) = sync_channel(32);
+            let opts = VoiceSessionOptions {
+                voice_config: self.voice_config.clone(),
+            };
+            if let Err(e) = self.voice_controller.start(opts, tx) {
+                log::error!("[微澜 IBus 语音] 启动麦克风录音捕获失败: {}", e);
+            } else {
+                self.is_push_to_talk_active = true;
+                self.push_to_talk_key = Some(evdev_key);
+                self.voice_display_text = if self.voice_config.interaction.show_floating_bar {
+                    Some("正在聆听中... ▏▎▍".to_string())
                 } else {
-                    log::info!("[微澜 IBus 语音] 开关模式快捷键触发开启连续听写录音");
-                    self.engine.reset();
-                    let (tx, rx) = sync_channel(32);
-                    let opts = VoiceSessionOptions {
-                        voice_config: self.voice_config.clone(),
-                    };
-                    if let Err(e) = self.voice_controller.start(opts, tx) {
-                        log::error!("[微澜 IBus 语音] 启动麦克风录音捕获失败: {}", e);
-                    } else {
-                        self.is_push_to_talk_active = false;
-                        self.push_to_talk_key = None;
-                        if self.voice_config.interaction.show_floating_bar {
-                            self.voice_display_text = Some("正在聆听中... ▏▎▍".to_string());
-                        } else {
-                            self.voice_display_text = None;
-                        }
-                        self.voice_partial_text = None;
-                        self.voice_event_rx = Some(rx);
-                    }
-                    Some(IbusKeyOutcome {
-                        consumed: true,
-                        update_ui: true,
-                        ..Default::default()
-                    })
+                    None
                 };
+                self.voice_partial_text = None;
+                self.voice_event_rx = Some(rx);
+            }
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                update_ui: true,
+                ..Default::default()
+            });
+        }
+        None
+    }
+
+    /// 尝试触发连续听写开关语音快捷键
+    fn try_trigger_voice_toggle(
+        &mut self,
+        evdev_key: u32,
+        shift_active: bool,
+        ctrl_active: bool,
+        alt_active: bool,
+        super_active: bool,
+    ) -> Option<IbusKeyOutcome> {
+        let toggle_match = self
+            .voice_config
+            .get_effective_toggle_shortcut()
+            .is_some_and(|s| {
+                s.matches(
+                    evdev_key,
+                    shift_active,
+                    ctrl_active,
+                    alt_active,
+                    super_active,
+                )
+            });
+        if !toggle_match {
+            return None;
+        }
+
+        let now = Instant::now();
+        if now.duration_since(self.last_voice_trigger_time) < Duration::from_millis(400) {
+            return Some(IbusKeyOutcome {
+                consumed: true,
+                ..Default::default()
+            });
+        }
+        self.last_voice_trigger_time = now;
+
+        if self.voice_controller.is_recording() {
+            log::info!("[微澜 IBus 语音] 开关模式快捷键触发停止录音并请求提交");
+            let commit_text = self.stop_voice_recording_and_commit();
+            Some(IbusKeyOutcome {
+                consumed: true,
+                commit_text,
+                update_ui: true,
+                ..Default::default()
+            })
+        } else {
+            log::info!("[微澜 IBus 语音] 开关模式快捷键触发开启连续听写录音");
+            self.engine.reset();
+            let (tx, rx) = sync_channel(32);
+            let opts = VoiceSessionOptions {
+                voice_config: self.voice_config.clone(),
+            };
+            if let Err(e) = self.voice_controller.start(opts, tx) {
+                log::error!("[微澜 IBus 语音] 启动麦克风录音捕获失败: {}", e);
+            } else {
+                self.is_push_to_talk_active = false;
+                self.push_to_talk_key = None;
+                self.voice_display_text = if self.voice_config.interaction.show_floating_bar {
+                    Some("正在聆听中... ▏▎▍".to_string())
+                } else {
+                    None
+                };
+                self.voice_partial_text = None;
+                self.voice_event_rx = Some(rx);
+            }
+            Some(IbusKeyOutcome {
+                consumed: true,
+                update_ui: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    /// 匹配并执行用户配置的全局模式切换快捷键（简繁切换、字符全半角、标点全半角）
+    fn handle_global_shortcuts(
+        &mut self,
+        evdev_key: u32,
+        shift_active: bool,
+        ctrl_active: bool,
+        alt_active: bool,
+        super_active: bool,
+    ) -> Option<IbusKeyOutcome> {
+        if let Some(outcome) =
+            self.try_toggle_traditional(evdev_key, shift_active, ctrl_active, alt_active)
+        {
+            return Some(outcome);
+        }
+        if let Some(outcome) =
+            self.try_toggle_full_width_char(evdev_key, shift_active, ctrl_active, alt_active)
+        {
+            return Some(outcome);
+        }
+        if let Some(outcome) =
+            self.try_toggle_full_width_punct(evdev_key, shift_active, ctrl_active, alt_active)
+        {
+            return Some(outcome);
+        }
+
+        if self.voice_config.enabled {
+            if let Some(outcome) = self.try_trigger_push_to_talk(
+                evdev_key,
+                shift_active,
+                ctrl_active,
+                alt_active,
+                super_active,
+            ) {
+                return Some(outcome);
+            }
+            if let Some(outcome) = self.try_trigger_voice_toggle(
+                evdev_key,
+                shift_active,
+                ctrl_active,
+                alt_active,
+                super_active,
+            ) {
+                return Some(outcome);
             }
         }
 

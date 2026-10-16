@@ -103,6 +103,81 @@ pub struct StatusNotifierItem {
     pub(crate) loop_wakeup: Option<LoopWakeup>,
 }
 
+/// 解析得到的系统托盘图标配置与资源路径
+struct ResolvedTrayIcons {
+    theme_path: String,
+    icon_zh: String,
+    icon_en: String,
+    icon_en_caps: String,
+}
+
+/// 解析系统环境变量与应用配置中的托盘图标主题路径及各状态图标名称
+fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
+    let env_theme = env_var_non_empty("WAYLAN_ICON_THEME_PATH");
+    let env_path = env_var_non_empty("WAYLAN_ICON_PATH");
+    let path_parent = env_path.as_deref().and_then(|p| {
+        Path::new(p)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().into_owned())
+    });
+
+    let explicit_theme = env_theme
+        .or(path_parent)
+        .or_else(|| config.tray_icon_theme_path.clone());
+
+    let (icon_theme_path, has_custom_theme) = if let Some(p) = explicit_theme {
+        (p, true)
+    } else if let Some(p) = detect_default_assets_path() {
+        (p, true)
+    } else {
+        (String::new(), false)
+    };
+
+    let env_zh = env_var_non_empty("WAYLAN_ICON_ZH");
+    let env_en = env_var_non_empty("WAYLAN_ICON_EN");
+    let env_en_caps = env_var_non_empty("WAYLAN_ICON_EN_CAPS");
+
+    let icon_zh = env_zh
+        .or_else(|| config.tray_icon_zh.clone())
+        .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
+        .unwrap_or_else(|| {
+            if has_custom_theme {
+                resolve_icon_path_or_name(&icon_theme_path, "tray-zh")
+            } else {
+                "input-keyboard".to_string()
+            }
+        });
+
+    let icon_en = env_en
+        .or_else(|| config.tray_icon_en.clone())
+        .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
+        .unwrap_or_else(|| {
+            if has_custom_theme {
+                resolve_icon_path_or_name(&icon_theme_path, "tray-en")
+            } else {
+                "input-latin".to_string()
+            }
+        });
+
+    let icon_en_caps = env_en_caps
+        .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
+        .unwrap_or_else(|| {
+            if has_custom_theme {
+                resolve_icon_path_or_name(&icon_theme_path, "tray-en-caps")
+            } else {
+                "input-latin".to_string()
+            }
+        });
+
+    ResolvedTrayIcons {
+        theme_path: icon_theme_path,
+        icon_zh,
+        icon_en,
+        icon_en_caps,
+    }
+}
+
 impl StatusNotifierItem {
     pub(crate) fn new(
         is_chinese: Arc<AtomicBool>,
@@ -111,71 +186,15 @@ impl StatusNotifierItem {
         config: &AppConfig,
         loop_wakeup: Option<LoopWakeup>,
     ) -> Self {
-        let env_theme = env_var_non_empty("WAYLAN_ICON_THEME_PATH");
-        let env_path = env_var_non_empty("WAYLAN_ICON_PATH");
-        let path_parent = env_path.as_deref().and_then(|p| {
-            Path::new(p)
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .map(|p| p.to_string_lossy().into_owned())
-        });
-
-        let explicit_theme = env_theme
-            .or(path_parent)
-            .or_else(|| config.tray_icon_theme_path.clone());
-
-        let (icon_theme_path, has_custom_theme) = if let Some(p) = explicit_theme {
-            (p, true)
-        } else if let Some(p) = detect_default_assets_path() {
-            (p, true)
-        } else {
-            (String::new(), false)
-        };
-
-        let env_zh = env_var_non_empty("WAYLAN_ICON_ZH");
-        let env_en = env_var_non_empty("WAYLAN_ICON_EN");
-        let env_en_caps = env_var_non_empty("WAYLAN_ICON_EN_CAPS");
-
-        let icon_zh = env_zh
-            .or_else(|| config.tray_icon_zh.clone())
-            .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
-            .unwrap_or_else(|| {
-                if has_custom_theme {
-                    resolve_icon_path_or_name(&icon_theme_path, "tray-zh")
-                } else {
-                    "input-keyboard".to_string()
-                }
-            });
-
-        let icon_en = env_en
-            .or_else(|| config.tray_icon_en.clone())
-            .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
-            .unwrap_or_else(|| {
-                if has_custom_theme {
-                    resolve_icon_path_or_name(&icon_theme_path, "tray-en")
-                } else {
-                    "input-latin".to_string()
-                }
-            });
-
-        let icon_en_caps = env_en_caps
-            .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
-            .unwrap_or_else(|| {
-                if has_custom_theme {
-                    resolve_icon_path_or_name(&icon_theme_path, "tray-en-caps")
-                } else {
-                    "input-latin".to_string()
-                }
-            });
-
+        let icons = resolve_tray_icons(config);
         Self {
             is_chinese,
             is_caps_locked,
             icon_update_tx,
-            icon_theme_path,
-            icon_zh,
-            icon_en,
-            icon_en_caps,
+            icon_theme_path: icons.theme_path,
+            icon_zh: icons.icon_zh,
+            icon_en: icons.icon_en,
+            icon_en_caps: icons.icon_en_caps,
             loop_wakeup,
         }
     }

@@ -202,58 +202,58 @@ pub fn ensure_ibus_and_gnome_integration(exe_path: &str, exclusive: bool) {
     sync_gnome_hide_indicator_extension(exclusive);
 }
 
-/// 同步 GNOME Shell 原生输入法指示器隐藏扩展的启用/禁用状态
-pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
-    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_uppercase().contains("GNOME"))
-        .unwrap_or(false);
-    if !is_gnome {
-        return;
-    }
-
-    let extension_uuid = "waylan-hide-input-source@waylan.org";
+/// 安装或更新 GNOME Shell 隐藏原生指示器扩展文件至用户扩展目录
+fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
     let user_dir = env_var_non_empty("HOME").map(|h| {
         PathBuf::from(h)
             .join(".local/share/gnome-shell/extensions")
             .join(extension_uuid)
     });
 
-    if let Some(assets) = crate::tray::item::detect_default_assets_path() {
-        let src_dir = Path::new(&assets)
-            .parent()
-            .unwrap_or(Path::new(&assets))
-            .join("gnome-extension");
-        if src_dir.is_dir() {
-            if let Some(ref target) = user_dir {
-                if fs::create_dir_all(target).is_ok() {
-                    for file_name in ["metadata.json", "extension.js", "stylesheet.css"] {
-                        let src_file = src_dir.join(file_name);
-                        let dst_file = target.join(file_name);
-                        if src_file.is_file() {
-                            let needs_copy =
-                                match (fs::metadata(&src_file), fs::metadata(&dst_file)) {
-                                    (Ok(s_meta), Ok(d_meta)) => s_meta.len() != d_meta.len(),
-                                    (Ok(_), Err(_)) => true,
-                                    _ => false,
-                                };
-                            if needs_copy {
-                                if let Err(e) = fs::copy(&src_file, &dst_file) {
-                                    log::warn!(
-                                        "[微澜 IBus 警告] 同步 GNOME 扩展文件 {:?} 失败: {}",
-                                        src_file,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
+    let Some(assets) = crate::tray::item::detect_default_assets_path() else {
+        return;
+    };
+    let src_dir = Path::new(&assets)
+        .parent()
+        .unwrap_or(Path::new(&assets))
+        .join("gnome-extension");
+    if !src_dir.is_dir() {
+        return;
+    }
+    let Some(ref target) = user_dir else {
+        return;
+    };
+    if fs::create_dir_all(target).is_err() {
+        return;
+    }
+
+    for file_name in ["metadata.json", "extension.js", "stylesheet.css"] {
+        let src_file = src_dir.join(file_name);
+        let dst_file = target.join(file_name);
+        if !src_file.is_file() {
+            continue;
+        }
+        let needs_copy = match (fs::metadata(&src_file), fs::metadata(&dst_file)) {
+            (Ok(s_meta), Ok(d_meta)) => s_meta.len() != d_meta.len(),
+            (Ok(_), Err(_)) => true,
+            _ => false,
+        };
+        if needs_copy {
+            if let Err(e) = fs::copy(&src_file, &dst_file) {
+                log::warn!(
+                    "[微澜 IBus 警告] 同步 GNOME 扩展文件 {:?} 失败: {}",
+                    src_file,
+                    e
+                );
             }
         }
     }
+}
 
-    let action = if hide_native { "enable" } else { "disable" };
-    update_gsettings_enabled_extensions(extension_uuid, hide_native);
+/// 通过 `gnome-extensions` CLI 与 `gsettings` 设置扩展的启用或禁用状态
+fn set_gnome_extension_enabled(extension_uuid: &str, enable: bool) {
+    let action = if enable { "enable" } else { "disable" };
+    update_gsettings_enabled_extensions(extension_uuid, enable);
     match Command::new("gnome-extensions")
         .args([action, extension_uuid])
         .output()
@@ -261,7 +261,7 @@ pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
         Ok(out) if out.status.success() => {
             info!(
                 "[微澜 IBus] 已成功{} GNOME 隐藏原生指示器扩展 ({})",
-                if hide_native { "启用" } else { "禁用" },
+                if enable { "启用" } else { "禁用" },
                 extension_uuid
             );
         }
@@ -276,6 +276,20 @@ pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
             debug!("[微澜 IBus] 调用 gnome-extensions 失败: {}", e);
         }
     }
+}
+
+/// 同步 GNOME Shell 原生输入法指示器隐藏扩展的启用/禁用状态
+pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
+    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_uppercase().contains("GNOME"))
+        .unwrap_or(false);
+    if !is_gnome {
+        return;
+    }
+
+    let extension_uuid = "waylan-hide-input-source@waylan.org";
+    install_gnome_hide_indicator_extension(extension_uuid);
+    set_gnome_extension_enabled(extension_uuid, hide_native);
 }
 
 /// 同步更新 GNOME GSettings enabled-extensions 列表
