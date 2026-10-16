@@ -11,6 +11,7 @@ use waylan_core::VoiceConfig;
 use crate::afe::AudioFrontEndPipeline;
 use crate::capture::AudioCapture;
 use crate::recognizer::{PunctuationRestorer, VoiceRecognizer};
+use crate::vad::{VadProcessor, WaveformVisualizer};
 
 /// 起音前置环形预缓冲区容量（以 16kHz 单声道采样点计）：300ms = 4800 采样点
 /// 用于在 VAD 判定为说话前的静音抑制期间暂存最近 300ms 音频，确保起音瞬间不被切断微弱辅音声母
@@ -72,4 +73,27 @@ pub(super) struct StopCommitContext<'a> {
     pub voice_config: &'a VoiceConfig,
     pub event_tx: &'a SyncSender<VoiceEvent>,
     pub is_active: &'a Arc<AtomicBool>,
+}
+
+/// 活跃录音与实时推理运行上下文参数结构体
+pub(super) struct ActiveRecordingContext<'a> {
+    pub capture: AudioCapture,
+    pub pcm_rx: Receiver<Vec<f32>>,
+    pub cmd_rx: &'a Receiver<WorkerCommand>,
+    pub event_tx: &'a SyncSender<VoiceEvent>,
+    pub visualizer: &'a mut WaveformVisualizer,
+    pub vad: &'a mut dyn VadProcessor,
+    pub recognizer: &'a mut dyn VoiceRecognizer,
+    pub punct_restorer: Option<&'a PunctuationRestorer>,
+    pub voice_config: &'a VoiceConfig,
+    pub is_active: &'a Arc<AtomicBool>,
+}
+
+/// 识别流式馈送处理上下文参数结构体
+pub(super) struct RecognitionFeedContext<'a> {
+    pub recognizer: &'a mut dyn VoiceRecognizer,
+    pub pre_speech_buffer: &'a mut VecDeque<f32>,
+    pub last_partial_text: &'a mut String,
+    pub event_tx: &'a SyncSender<VoiceEvent>,
+    pub real_time_preview: bool,
 }

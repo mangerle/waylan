@@ -1,34 +1,34 @@
 //! 语音录制与实时推理流水线处理逻辑
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use log::{info, warn};
 use waylan_core::VoiceConfig;
 
-use super::types::{StopCommitContext, VoiceEvent, WorkerCommand, PRE_SPEECH_BUFFER_CAPACITY};
+use super::types::{
+    ActiveRecordingContext, RecognitionFeedContext, StopCommitContext, VoiceEvent, WorkerCommand,
+    PRE_SPEECH_BUFFER_CAPACITY,
+};
 use crate::afe::AudioFrontEndPipeline;
-use crate::capture::AudioCapture;
 use crate::recognizer::{PunctuationRestorer, VoiceRecognizer};
-use crate::vad::{calculate_rms, VadProcessor, WaveformVisualizer};
+use crate::vad::calculate_rms;
 
 /// 活跃录音与实时推理循环
-#[allow(clippy::too_many_arguments)]
-pub(super) fn active_recording_loop(
-    _capture: AudioCapture,
-    pcm_rx: Receiver<Vec<f32>>,
-    cmd_rx: &Receiver<WorkerCommand>,
-    event_tx: &SyncSender<VoiceEvent>,
-    visualizer: &mut WaveformVisualizer,
-    vad: &mut dyn VadProcessor,
-    recognizer: &mut dyn VoiceRecognizer,
-    punct_restorer: Option<&PunctuationRestorer>,
-    voice_config: &VoiceConfig,
-    is_active: &Arc<AtomicBool>,
-) {
+pub(super) fn active_recording_loop(ctx: ActiveRecordingContext<'_>) {
+    let ActiveRecordingContext {
+        capture: _capture,
+        pcm_rx,
+        cmd_rx,
+        event_tx,
+        visualizer,
+        vad,
+        recognizer,
+        punct_restorer,
+        voice_config,
+        is_active,
+    } = ctx;
     let mut afe = AudioFrontEndPipeline::new(&voice_config.afe);
     let mut last_visual_time = Instant::now();
     let mut last_partial_text = String::new();
@@ -125,12 +125,14 @@ pub(super) fn active_recording_loop(
                 // 一旦检测到人声起音，将预缓冲区内的前置辅音连同当前音频一并送入 ASR 激活解码。
                 if vad.is_speech_started() {
                     let should_continue = process_recognition_feed(
-                        recognizer,
+                        RecognitionFeedContext {
+                            recognizer,
+                            pre_speech_buffer: &mut pre_speech_buffer,
+                            last_partial_text: &mut last_partial_text,
+                            event_tx,
+                            real_time_preview: voice_config.interaction.real_time_preview,
+                        },
                         &samples,
-                        &mut pre_speech_buffer,
-                        &mut last_partial_text,
-                        event_tx,
-                        voice_config.interaction.real_time_preview,
                     );
                     if !should_continue {
                         break;
@@ -204,12 +206,14 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
             Ok(mut samples) => {
                 ctx.afe.process(&mut samples);
                 let _ = process_recognition_feed(
-                    ctx.recognizer,
+                    RecognitionFeedContext {
+                        recognizer: ctx.recognizer,
+                        pre_speech_buffer: ctx.pre_speech_buffer,
+                        last_partial_text: ctx.last_partial_text,
+                        event_tx: ctx.event_tx,
+                        real_time_preview: ctx.voice_config.interaction.real_time_preview,
+                    },
                     &samples,
-                    ctx.pre_speech_buffer,
-                    ctx.last_partial_text,
-                    ctx.event_tx,
-                    ctx.voice_config.interaction.real_time_preview,
                 );
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
@@ -224,12 +228,14 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     while let Ok(mut samples) = ctx.pcm_rx.try_recv() {
         ctx.afe.process(&mut samples);
         let _ = process_recognition_feed(
-            ctx.recognizer,
+            RecognitionFeedContext {
+                recognizer: ctx.recognizer,
+                pre_speech_buffer: ctx.pre_speech_buffer,
+                last_partial_text: ctx.last_partial_text,
+                event_tx: ctx.event_tx,
+                real_time_preview: ctx.voice_config.interaction.real_time_preview,
+            },
             &samples,
-            ctx.pre_speech_buffer,
-            ctx.last_partial_text,
-            ctx.event_tx,
-            ctx.voice_config.interaction.real_time_preview,
         );
     }
 
@@ -243,12 +249,14 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     const TRAILING_SILENCE_SAMPLES: usize = 16_000 * 200 / 1000;
     let silence = vec![0.0f32; TRAILING_SILENCE_SAMPLES];
     let _ = process_recognition_feed(
-        ctx.recognizer,
+        RecognitionFeedContext {
+            recognizer: ctx.recognizer,
+            pre_speech_buffer: ctx.pre_speech_buffer,
+            last_partial_text: ctx.last_partial_text,
+            event_tx: ctx.event_tx,
+            real_time_preview: ctx.voice_config.interaction.real_time_preview,
+        },
         &silence,
-        ctx.pre_speech_buffer,
-        ctx.last_partial_text,
-        ctx.event_tx,
-        ctx.voice_config.interaction.real_time_preview,
     );
 
     // 5. 调用 finish 提取最终整句识别文字与标点预测
@@ -283,31 +291,24 @@ pub(super) fn push_pre_speech_silence(buffer: &mut VecDeque<f32>, samples: &[f32
 }
 
 /// 推进 ASR 解码流并向外部通道发送流式文字
-pub(super) fn process_recognition_feed(
-    recognizer: &mut dyn VoiceRecognizer,
-    samples: &[f32],
-    pre_speech_buffer: &mut VecDeque<f32>,
-    last_partial_text: &mut String,
-    event_tx: &SyncSender<VoiceEvent>,
-    real_time_preview: bool,
-) -> bool {
-    let feed_result = if !pre_speech_buffer.is_empty() {
-        let mut combined = Vec::with_capacity(pre_speech_buffer.len() + samples.len());
-        combined.extend(pre_speech_buffer.drain(..));
+pub(super) fn process_recognition_feed(ctx: RecognitionFeedContext<'_>, samples: &[f32]) -> bool {
+    let feed_result = if !ctx.pre_speech_buffer.is_empty() {
+        let mut combined = Vec::with_capacity(ctx.pre_speech_buffer.len() + samples.len());
+        combined.extend(ctx.pre_speech_buffer.drain(..));
         combined.extend_from_slice(samples);
-        recognizer.feed_pcm(&combined)
+        ctx.recognizer.feed_pcm(&combined)
     } else {
-        recognizer.feed_pcm(samples)
+        ctx.recognizer.feed_pcm(samples)
     };
 
     match feed_result {
         Ok(Some(partial)) => {
-            if !partial.is_empty() && partial != *last_partial_text {
+            if !partial.is_empty() && partial != *ctx.last_partial_text {
                 info!("[语音会话] 实时流式识别出字: \"{}\"", partial);
-                *last_partial_text = partial.clone();
-                if real_time_preview {
+                *ctx.last_partial_text = partial.clone();
+                if ctx.real_time_preview {
                     if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-                        event_tx.try_send(VoiceEvent::PartialText(partial))
+                        ctx.event_tx.try_send(VoiceEvent::PartialText(partial))
                     {
                         info!("[语音会话] 外部事件通道已关闭，退出录音循环");
                         return false;
@@ -318,7 +319,7 @@ pub(super) fn process_recognition_feed(
         Ok(None) => {}
         Err(e) => {
             warn!("[语音会话] 语音识别推理遇到异常: {}", e);
-            let _ = event_tx.try_send(VoiceEvent::Error(e.to_string()));
+            let _ = ctx.event_tx.try_send(VoiceEvent::Error(e.to_string()));
             return false;
         }
     }

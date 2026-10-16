@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use log::{info, warn};
 
 use self::pipeline::{active_recording_loop, compute_asr_fingerprint};
-use self::types::{WorkerCommand, IDLE_MODEL_UNLOAD_TIMEOUT};
+use self::types::{ActiveRecordingContext, WorkerCommand, IDLE_MODEL_UNLOAD_TIMEOUT};
 use crate::capture::AudioCapture;
 use crate::error::VoiceError;
 use crate::recognizer::{create_recognizer, PunctuationRestorer, VoiceRecognizer};
@@ -238,18 +238,18 @@ impl VoiceSessionController {
                     };
 
                     info!("[语音会话] 录音捕获流与识别管道启动就绪，正在聆听用户语音...");
-                    active_recording_loop(
+                    active_recording_loop(ActiveRecordingContext {
                         capture,
                         pcm_rx,
-                        &cmd_rx,
-                        &event_tx,
-                        &mut visualizer,
-                        vad.as_mut(),
-                        recognizer.as_mut(),
-                        cached_punct.as_ref(),
-                        &options.voice_config,
-                        &is_active,
-                    );
+                        cmd_rx: &cmd_rx,
+                        event_tx: &event_tx,
+                        visualizer: &mut visualizer,
+                        vad: vad.as_mut(),
+                        recognizer: recognizer.as_mut(),
+                        punct_restorer: cached_punct.as_ref(),
+                        voice_config: &options.voice_config,
+                        is_active: &is_active,
+                    });
                 }
                 WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
                     is_active.store(false, Ordering::Release);
@@ -290,7 +290,7 @@ mod tests {
         extract_final_text, handle_stop_and_commit, process_recognition_feed,
         push_pre_speech_silence,
     };
-    use self::types::{StopCommitContext, PRE_SPEECH_BUFFER_CAPACITY};
+    use self::types::{RecognitionFeedContext, StopCommitContext, PRE_SPEECH_BUFFER_CAPACITY};
     use super::*;
     use crate::afe::AudioFrontEndPipeline;
     use crate::recognizer::MockVoiceRecognizer;
@@ -347,12 +347,14 @@ mod tests {
 
         let chunk = vec![0.1; 500];
         let res = process_recognition_feed(
-            &mut recognizer,
+            RecognitionFeedContext {
+                recognizer: &mut recognizer,
+                pre_speech_buffer: &mut pre_buffer,
+                last_partial_text: &mut last_partial,
+                event_tx: &tx,
+                real_time_preview: true,
+            },
             &chunk,
-            &mut pre_buffer,
-            &mut last_partial,
-            &tx,
-            true,
         );
 
         assert!(res);
