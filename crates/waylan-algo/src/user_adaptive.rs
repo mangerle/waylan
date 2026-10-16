@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 pub use wal::{is_recent_internal_compact, mark_internal_compact, WAL_MAGIC, WAL_MAGIC_V1};
 
 /// 用户词库反序列化最大允许字节数（64 MB），防止损坏文件伪造超长容器长度触发 OOM
-const MAX_USER_DICT_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_USER_DICT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 用户词条使用记录
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

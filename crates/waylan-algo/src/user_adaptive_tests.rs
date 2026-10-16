@@ -258,3 +258,39 @@ fn test_cached_max_timestamp_o1() {
     assert_eq!(model.max_timestamp(), 0);
     assert_eq!(model.latest_timestamp(), 1_700_000_000);
 }
+
+#[test]
+fn test_wal_append_reopens_on_inode_change() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir();
+    let wal_path = temp_dir.join(format!("test_wal_inode_{}.wal", nanos));
+    let temp_new_path = temp_dir.join(format!("test_wal_inode_new_{}.wal", nanos));
+
+    let mut model = UserAdaptiveModel::new();
+    // 第一次写入，建立常驻句柄
+    model
+        .append_to_wal(&wal_path, "中国", "zhong'guo", 1_700_000_000)
+        .expect("首次追加写入成功");
+
+    let mut new_model = UserAdaptiveModel::new();
+    new_model
+        .append_to_wal(&temp_new_path, "北京", "bei'jing", 1_700_000_010)
+        .expect("向临时文件写入成功");
+    std::fs::rename(&temp_new_path, &wal_path).expect("原子替换原文件");
+
+    // 原 model 再次写入，应当感知到 Inode 改变并重新打开新文件，而不是继续写向旧文件的孤儿句柄
+    model
+        .append_to_wal(&wal_path, "上海", "shang'hai", 1_700_000_020)
+        .expect("替换后追加写入成功");
+
+    // 重放磁盘文件，应同时包含“北京”与“上海”
+    let replayed = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放新文件成功");
+    assert_eq!(replayed.total_entries(), 2);
+    let words = replayed.lookup_user_words("shang'hai", 1_700_000_030);
+    assert_eq!(words.len(), 1);
+    assert_eq!(words[0].text, "上海");
+    let _ = std::fs::remove_file(wal_path);
+}

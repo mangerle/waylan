@@ -64,7 +64,28 @@ impl UserAdaptiveModel {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let need_reopen = match &*guard {
-            Some((current_path, _)) => current_path != path_ref,
+            Some((current_path, opened_file)) => {
+                if current_path != path_ref {
+                    true
+                } else {
+                    match (opened_file.metadata(), std::fs::metadata(path_ref)) {
+                        (Ok(opened_meta), Ok(disk_meta)) => {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::MetadataExt;
+                                opened_meta.dev() != disk_meta.dev()
+                                    || opened_meta.ino() != disk_meta.ino()
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                false
+                            }
+                        }
+                        // 句柄或磁盘元数据获取失败（如底层文件被删除或替换），重新打开
+                        _ => true,
+                    }
+                }
+            }
             None => true,
         };
 
@@ -285,6 +306,20 @@ impl UserAdaptiveModel {
             path: PathBuf::from(path_ref),
             source: e,
         })?;
+
+        let meta = file.metadata().map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path_ref),
+            source: e,
+        })?;
+        if meta.len() > crate::user_adaptive::MAX_USER_DICT_BYTES {
+            return Err(AlgoError::deserialize_failed(
+                path_ref,
+                format!(
+                    "WAL 用户词库文件体积异常 ({} 字节)，超出 64MB 上限",
+                    meta.len()
+                ),
+            ));
+        }
 
         let mut magic = [0u8; 16];
         if file.read_exact(&mut magic).is_ok() {
