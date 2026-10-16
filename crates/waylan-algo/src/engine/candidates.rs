@@ -263,12 +263,20 @@ impl AlgoEngine {
         let total_units =
             best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
         if total_units >= min_units {
-            if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context(
+            // 当连续音节数达到长句阈值（>= 3）时，触发 Top-5 多路径解码与语言模型重排序
+            let k = if total_units >= 3 { 5 } else { 1 };
+            let mut sentences = ViterbiDecoder::decode_k_best_with_context(
                 &best_path.syllables,
                 &best_path.remaining,
                 &self.table,
                 self.last_commit_context.as_deref(),
-            ) {
+                k,
+            );
+            if sentences.len() > 1 {
+                self.reranker
+                    .rerank(&mut sentences, self.last_commit_context.as_deref());
+            }
+            for mut sentence in sentences {
                 sentence.score = sentence
                     .score
                     .saturating_sub(best_path.cost.saturating_mul(100));

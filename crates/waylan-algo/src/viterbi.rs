@@ -1,6 +1,7 @@
 use crate::syllables::find_syllables_by_prefix;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
+use std::collections::HashSet;
 
 /// 轻量级 2-gram 统计语言模型与平滑算法 (Bigram Language Model)
 ///
@@ -167,7 +168,7 @@ impl ViterbiDecoder {
         }
     }
 
-    /// 对给定的音节切分列表与末尾残存拼音进行整句动态规划求解
+    /// 对给定的音节切分列表与末尾残存拼音进行整句动态规划求解（返回单一最优解）
     pub fn decode_sentence(
         syllables: &[String],
         remaining: &str,
@@ -176,18 +177,47 @@ impl ViterbiDecoder {
         Self::decode_sentence_with_context(syllables, remaining, table, None)
     }
 
-    /// 对给定的音节切分列表、末尾残存拼音与上屏历史上下文进行整句动态规划求解
+    /// 对给定的音节切分列表、末尾残存拼音与上下文进行整句动态规划求解（返回单一最优解）
     pub fn decode_sentence_with_context(
         syllables: &[String],
         remaining: &str,
         table: &LexiconTable,
         prev_context: Option<&str>,
     ) -> Option<AlgoCandidate> {
-        let n = syllables.len();
-        if n == 0 && remaining.is_empty() {
-            return None;
+        Self::decode_k_best_with_context(syllables, remaining, table, prev_context, 1)
+            .into_iter()
+            .next()
+    }
+
+    /// 对给定的音节切分列表与末尾残存拼音进行 K-Best 路径求解，返回前 K 条候选整句
+    pub fn decode_k_best(
+        syllables: &[String],
+        remaining: &str,
+        table: &LexiconTable,
+        k: usize,
+    ) -> Vec<AlgoCandidate> {
+        Self::decode_k_best_with_context(syllables, remaining, table, None, k)
+    }
+
+    /// 对给定的音节切分列表、末尾残存拼音与上下文进行 K-Best 路径求解，返回前 K 条候选整句
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：为神经语言模型（Neural LM）重排序或多候选整句展示提供 Top-K 备选路径集合；
+    /// - **核心优势**：直接复用已有格点动态规划计算的 dp 束状态拓扑，仅通过多次反向指针回溯即可得到备选集，
+    ///   无需重新运行高昂的状态转移矩阵计算，微秒级开销；
+    /// - **去重保障**：不同分词拓扑可能拼接出相同的汉字整句，内部进行哈希去重，确保交付的高质量 K 条候选各不相同。
+    pub fn decode_k_best_with_context(
+        syllables: &[String],
+        remaining: &str,
+        table: &LexiconTable,
+        prev_context: Option<&str>,
+        k: usize,
+    ) -> Vec<AlgoCandidate> {
+        if k == 0 || (syllables.is_empty() && remaining.is_empty()) {
+            return Vec::new();
         }
 
+        let n = syllables.len();
         let has_bigram = table.compact_bigram.is_some();
         let ctx_str = prev_context.unwrap_or("");
         let ctx_word_id = if has_bigram && !ctx_str.is_empty() {
@@ -208,38 +238,63 @@ impl ViterbiDecoder {
             total_score: 0,
         });
 
-        // 沿音节序列向右推进求解 Viterbi 最优路径
+        // 沿音节序列向右推进求解 Viterbi 最优束格点拓扑
         Self::solve_syllable_lattice(syllables, table, has_bigram, ctx_str, &mut dp);
 
-        // 末尾残缺音节与声母扩展（处理未完成键入态）
+        let mut results = Vec::with_capacity(k);
+        let mut seen = HashSet::with_capacity(k);
+
+        // 1. 若存在末尾残缺音节或声母，优先提取结合扩展候选
         if !remaining.is_empty() {
-            if let Some(cand) = Self::expand_remaining_tail(
+            let ext_candidates = Self::collect_remaining_tail_candidates(
                 syllables,
                 remaining,
                 table,
                 has_bigram,
                 prev_context,
                 &dp,
-            ) {
-                return Some(cand);
+            );
+            for (step, beam_idx, word, score) in ext_candidates {
+                let full_text = backtrack_sentence(&dp, step, beam_idx, Some(&word));
+                if seen.insert(full_text.clone()) {
+                    let pinyin_str = if syllables.is_empty() {
+                        remaining.to_string()
+                    } else {
+                        format!("{}'{}", syllables.join("'"), remaining)
+                    };
+                    let positive_score = Self::to_positive_score(score);
+                    results.push(
+                        AlgoCandidate::new(full_text, pinyin_str, positive_score)
+                            .with_comment("整句预测")
+                            .with_tier(CandidateTier::SentenceViterbi),
+                    );
+                    if results.len() >= k {
+                        return results;
+                    }
+                }
             }
         }
 
-        // 若无 remaining 或扩展未命中，直接提取到达第 n 个音节的全局最优解
-        if dp[n].is_empty() {
-            return None;
+        // 2. 提取到达第 n 个完整音节的束状态候选
+        if !dp[n].is_empty() {
+            let pinyin_str = syllables.join("'");
+            for (beam_idx, node) in dp[n].iter().enumerate() {
+                let full_text = backtrack_sentence(&dp, n, beam_idx, None);
+                if seen.insert(full_text.clone()) {
+                    let positive_score = Self::to_positive_score(node.total_score);
+                    results.push(
+                        AlgoCandidate::new(full_text, pinyin_str.clone(), positive_score)
+                            .with_comment("整句预测")
+                            .with_tier(CandidateTier::SentenceViterbi),
+                    );
+                    if results.len() >= k {
+                        break;
+                    }
+                }
+            }
         }
 
-        let best = &dp[n][0];
-        let full_text = backtrack_sentence(&dp, n, 0, None);
-        let pinyin_str = syllables.join("'");
-        let positive_score = Self::to_positive_score(best.total_score);
-
-        Some(
-            AlgoCandidate::new(full_text, pinyin_str, positive_score)
-                .with_comment("整句预测")
-                .with_tier(CandidateTier::SentenceViterbi),
-        )
+        results
     }
 
     /// 遍历音节切分列表并在词格点拓扑上推进束搜索动态规划
@@ -346,15 +401,15 @@ impl ViterbiDecoder {
         }
     }
 
-    /// 对末尾残存拼音与声母链进行结合扩展与整句回溯生成
-    fn expand_remaining_tail(
+    /// 对末尾残存拼音与声母链进行结合扩展，收集所有合法转移候选并按得分降序排序
+    fn collect_remaining_tail_candidates(
         syllables: &[String],
         remaining: &str,
         table: &LexiconTable,
         has_bigram: bool,
         prev_context: Option<&str>,
         dp: &[Vec<ViterbiBeamNode>],
-    ) -> Option<AlgoCandidate> {
+    ) -> Vec<(usize, usize, String, i64)> {
         let n = syllables.len();
         let mut ext_candidates: Vec<(usize, usize, String, i64)> = Vec::new();
 
@@ -479,24 +534,8 @@ impl ViterbiDecoder {
             }
         }
 
-        if let Some((best_step, best_beam_idx, best_word, best_score)) =
-            ext_candidates.into_iter().max_by_key(|cand| cand.3)
-        {
-            let full_text = backtrack_sentence(dp, best_step, best_beam_idx, Some(&best_word));
-            let pinyin_str = if syllables.is_empty() {
-                remaining.to_string()
-            } else {
-                format!("{}'{}", syllables.join("'"), remaining)
-            };
-            let positive_score = Self::to_positive_score(best_score);
-            return Some(
-                AlgoCandidate::new(full_text, pinyin_str, positive_score)
-                    .with_comment("整句预测")
-                    .with_tier(CandidateTier::SentenceViterbi),
-            );
-        }
-
-        None
+        ext_candidates.sort_by_key(|a| std::cmp::Reverse(a.3));
+        ext_candidates
     }
 
     /// 将原始静态词频转换为与二元转移矩阵同量纲的对数似然得分

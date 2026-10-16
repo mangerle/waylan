@@ -191,3 +191,45 @@ fn test_viterbi_super_long_sentence_beam_stability() {
     let best = ViterbiDecoder::decode_sentence(&syllables, "", &table).expect("超长句应解码成功");
     assert_eq!(best.text, "我们都是智能输入法的忠实用户");
 }
+
+#[test]
+fn test_viterbi_decode_k_best_multi_candidates() {
+    let mut table = LexiconTable::with_sample_data();
+    table.insert("zhong'guo", "中国", 80_000);
+    table.insert("zhong'guo", "钟表", 10_000);
+    table.insert("ren'min", "人民", 70_000);
+    table.insert("ren'min", "仁民", 5_000);
+
+    let syllables = vec![
+        "zhong".to_string(),
+        "guo".to_string(),
+        "ren".to_string(),
+        "min".to_string(),
+    ];
+
+    // 请求 Top-3 候选路径
+    let candidates = ViterbiDecoder::decode_k_best(&syllables, "", &table, 3);
+    assert!(!candidates.is_empty(), "K-Best 应至少返回 1 条路径");
+    assert!(candidates.len() <= 3, "返回条数不得超过 k");
+
+    // 验证最优解为“中国人民”
+    assert_eq!(candidates[0].text, "中国人民");
+
+    // 验证所有候选文本互不相同（去重性）
+    let mut unique_texts = std::collections::HashSet::new();
+    for cand in &candidates {
+        assert!(
+            unique_texts.insert(cand.text.clone()),
+            "K-Best 输出结果中不得包含重复文本: {}",
+            cand.text
+        );
+    }
+
+    // 验证分数单调不增（降序排列）
+    for window in candidates.windows(2) {
+        assert!(
+            window[0].score >= window[1].score,
+            "K-Best 路径得分必须保持降序排列"
+        );
+    }
+}

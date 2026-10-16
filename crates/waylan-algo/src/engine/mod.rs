@@ -23,6 +23,7 @@ use crate::entity::EntityProtectionManager;
 use crate::error::AlgoError;
 use crate::opencc::OpenCcDict;
 use crate::prism::PrismEngine;
+use crate::reranker::{NoopReranker, SentenceReranker};
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, AlgoConfig};
 use crate::user_adaptive::UserAdaptiveModel;
@@ -34,7 +35,7 @@ use crate::user_adaptive::UserAdaptiveModel;
 ///   向输入法上层提供极简的按键响应与选词接口。
 /// - **核心优势**：完全纯 Rust 实现，零 C++ 依赖；全生命周期无锁、无异步竞态；100% 内存安全与可测试。
 /// - **代价与局限**：门面结构体聚合了多个子模块状态，但在单进程输入法模型下保证了单一状态真实源（Single Source of Truth）。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AlgoEngine {
     /// 静态系统词典表
     pub table: LexiconTable,
@@ -76,6 +77,14 @@ pub struct AlgoEngine {
     pub(crate) last_timestamp: u64,
     /// 当前输入缓冲区经 Prism 切分后的格式化预编辑文本缓存（避免渲染与光标定位重复执行 DAG 搜索）
     pub(crate) cached_preedit: String,
+    /// 语言模型整句重排序与联想预测器
+    pub reranker: Arc<dyn SentenceReranker>,
+}
+
+impl Default for AlgoEngine {
+    fn default() -> Self {
+        Self::new(LexiconTable::default(), AlgoConfig::default())
+    }
 }
 
 impl AlgoEngine {
@@ -102,7 +111,19 @@ impl AlgoEngine {
             partial_commit_segments: Vec::new(),
             last_timestamp: 0,
             cached_preedit: String::new(),
+            reranker: Arc::new(NoopReranker),
         }
+    }
+
+    /// 设置并挂载自定义整句语言模型重排序器（Builder 模式）
+    pub fn with_reranker(mut self, reranker: Arc<dyn SentenceReranker>) -> Self {
+        self.reranker = reranker;
+        self
+    }
+
+    /// 动态设置或热更新整句语言模型重排序器
+    pub fn set_reranker(&mut self, reranker: Arc<dyn SentenceReranker>) {
+        self.reranker = reranker;
     }
 
     /// 设置用户自适应词库持久化文件路径并自动重放加载已有 WAL 记录

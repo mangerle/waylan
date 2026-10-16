@@ -25,6 +25,7 @@ pub mod prism;
 pub(crate) mod prism_fsa;
 pub(crate) mod prism_fuzzy;
 pub mod prism_types;
+pub mod reranker;
 pub mod syllables;
 pub mod table;
 pub mod table_mmap;
@@ -40,6 +41,7 @@ pub use custom_phrase::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestio
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;
+pub use reranker::{NoopReranker, SentenceReranker};
 pub use table::LexiconTable;
 pub use table_mmap::CompactMmapLexicon;
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
