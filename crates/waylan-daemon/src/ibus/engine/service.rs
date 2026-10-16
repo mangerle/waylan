@@ -17,7 +17,7 @@ use zbus::zvariant::Value;
 use super::super::keys::{IbusKeyOutcome, IbusSessionCore};
 use super::super::types::{build_ibus_prop_list, extract_text_from_ibus_variant};
 use super::snapshot::UiSnapshot;
-use crate::tray::menu::SubprocessManager;
+use crate::system::SubprocessManager;
 
 /// IBus 输入框用途常量：密码框 (`IBUS_INPUT_PURPOSE_PASSWORD`)
 pub(crate) const IBUS_INPUT_PURPOSE_PASSWORD: u32 = 2;

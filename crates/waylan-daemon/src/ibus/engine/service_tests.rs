@@ -7,7 +7,7 @@ use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
 
 use crate::ibus::keys::IbusSessionCore;
-use crate::tray::menu::SubprocessManager;
+use crate::system::SubprocessManager;
 
 #[test]
 fn test_password_capabilities_and_reset_lifecycle() {

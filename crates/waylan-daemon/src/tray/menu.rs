@@ -22,7 +22,7 @@ pub(crate) fn make_menu_item(id: i32, label: &str) -> Value<'static> {
     Value::from((id, props, Vec::<Value>::new()))
 }
 
-pub use super::subprocess::SubprocessManager;
+pub use crate::system::SubprocessManager;
 
 /// DBusMenu 构造配置参数包
 pub(crate) struct DBusMenuOptions {

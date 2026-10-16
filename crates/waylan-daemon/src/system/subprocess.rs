@@ -1,7 +1,7 @@
-//! 托盘与守护进程外部子进程生命周期管理模块
+//! 系统守护进程外部子进程生命周期治理与防僵尸进程模块
 //!
 //! # 设计原理
-//! - **实现初衷**：统一纳管从系统托盘菜单或辅助工具派生的外部子进程，避免裸线程阻塞等待与脱缰孤儿进程。
+//! - **实现初衷**：统一纳管从系统守护进程、托盘菜单或 IBus 交互派生的外部子进程，避免裸线程阻塞等待与脱缰孤儿进程。
 //! - **核心优势**：通过单一定时守护线程以非阻塞方式 (`try_wait`) 统一轮询回收退出子进程，在主进程退出或 Drop 时优雅清理未终止子进程 (`kill` 与 `wait`)，杜绝 PCB 残留与线程泄漏。
 //! - **代价与局限**：后台运行一个休眠 200ms 的轻量管理线程，开销极小。
 
@@ -17,6 +17,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+/// 构建微澜偏好设置中心外部进程命令实例并注入关键会话环境变量
+pub fn build_settings_command() -> Command {
+    let current_exe = env::current_exe().ok();
+    let sibling_settings = current_exe
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|d| d.join("waylan-settings"))
+        .filter(|p| p.is_file());
+
+    let mut cmd = if let Some(ref path) = sibling_settings {
+        Command::new(path)
+    } else {
+        Command::new("waylan-settings")
+    };
+    #[cfg(unix)]
+    cmd.process_group(0);
+    inject_desktop_env(&mut cmd);
+    cmd
+}
 
 /// 被纳管的外部子进程条目
 pub(crate) struct TrackedChild {
@@ -49,7 +69,7 @@ impl SubprocessManager {
                     lock.retain_mut(|tracked| match tracked.child.try_wait() {
                         Ok(Some(status)) => {
                             log::debug!(
-                                "[系统托盘] 外部子进程 [{}] 已正常退出: {:?}",
+                                "[进程治理] 外部子进程 [{}] 已正常退出: {:?}",
                                 tracked.name,
                                 status
                             );
@@ -61,7 +81,7 @@ impl SubprocessManager {
                         Ok(None) => true,
                         Err(e) => {
                             log::warn!(
-                                "[系统托盘] 查询外部子进程 [{}] 状态失败: {}",
+                                "[进程治理] 查询外部子进程 [{}] 状态失败: {}",
                                 tracked.name,
                                 e
                             );
@@ -78,7 +98,7 @@ impl SubprocessManager {
             if let Ok(mut lock) = children_clone.lock() {
                 for tracked in lock.iter_mut() {
                     info!(
-                        "[系统托盘] 正在终止被纳管的外部子进程 [{}]...",
+                        "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
                         tracked.name
                     );
                     let _ = tracked.child.kill();
@@ -99,12 +119,7 @@ impl SubprocessManager {
     }
 
     /// 注册纳管新启动的外部子进程
-    pub(crate) fn track(
-        &self,
-        child: Child,
-        running_guard: Option<Arc<AtomicBool>>,
-        name: &'static str,
-    ) {
+    pub fn track(&self, child: Child, running_guard: Option<Arc<AtomicBool>>, name: &'static str) {
         if let Ok(mut lock) = self.children.lock() {
             lock.push(TrackedChild {
                 child,
@@ -115,30 +130,16 @@ impl SubprocessManager {
     }
 
     /// 唤起偏好设置图形界面进程
-    pub(crate) fn launch_settings(&self, settings_running: &Arc<AtomicBool>) {
+    pub fn launch_settings(&self, settings_running: &Arc<AtomicBool>) {
         if settings_running
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            info!("[系统托盘] 偏好设置窗口已在运行中，忽略重复唤起请求。");
+            info!("[进程治理] 偏好设置窗口已在运行中，忽略重复唤起请求。");
             return;
         }
-        info!("[系统托盘] 唤起微澜偏好设置界面...");
-        let current_exe = env::current_exe().ok();
-        let sibling_settings = current_exe
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|d| d.join("waylan-settings"))
-            .filter(|p| p.is_file());
-
-        let mut cmd = if let Some(ref path) = sibling_settings {
-            Command::new(path)
-        } else {
-            Command::new("waylan-settings")
-        };
-        #[cfg(unix)]
-        cmd.process_group(0);
-        inject_desktop_env(&mut cmd);
+        info!("[进程治理] 唤起微澜偏好设置界面...");
+        let mut cmd = build_settings_command();
 
         match cmd.spawn() {
             Ok(child) => {
@@ -146,7 +147,7 @@ impl SubprocessManager {
             }
             Err(e) => {
                 log::warn!(
-                    "[系统托盘] 无法启动图形偏好设置二进制 waylan-settings ({})，回退使用文本编辑器打开配置文件。",
+                    "[进程治理] 无法启动图形偏好设置二进制 waylan-settings ({})，回退使用文本编辑器打开配置文件。",
                     e
                 );
                 settings_running.store(false, Ordering::Release);

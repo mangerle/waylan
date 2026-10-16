@@ -13,20 +13,21 @@ use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{self, Command, Stdio};
+use std::process::{self, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_wayland::LoopWakeup;
 
 use crate::config::AppConfig;
+
+pub mod subprocess;
+pub use subprocess::{build_settings_command, SubprocessManager};
 
 /// 进程全局停机协调器
 ///
@@ -150,35 +151,8 @@ pub fn determine_tray_and_exclusive(cfg: &AppConfig, use_ibus_backend: bool) -> 
 /// 唤起独立的微澜偏好设置中心图形界面
 pub fn launch_settings_gui() -> Result<(), Box<dyn Error>> {
     info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
-    let current_exe = env::current_exe().ok();
-    let sibling_settings = current_exe
-        .as_ref()
-        .and_then(|p| p.parent())
-        .map(|d| d.join("waylan-settings"))
-        .filter(|p| p.is_file());
-
-    let mut cmd = if let Some(ref path) = sibling_settings {
-        Command::new(path)
-    } else {
-        Command::new("waylan-settings")
-    };
-
-    for var in [
-        "WAYLAND_DISPLAY",
-        "DISPLAY",
-        "XDG_RUNTIME_DIR",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "XDG_CURRENT_DESKTOP",
-    ] {
-        if let Ok(val) = env::var(var) {
-            cmd.env(var, &val);
-        }
-    }
-
+    let mut cmd = build_settings_command();
     cmd.stdin(Stdio::null());
-    #[cfg(unix)]
-    cmd.process_group(0);
-
     let _child = cmd.spawn()?;
     Ok(())
 }

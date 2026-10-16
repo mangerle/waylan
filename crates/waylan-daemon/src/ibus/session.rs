@@ -29,7 +29,7 @@ use super::monitor::{run_ibus_monitor_loop, IbusMonitorParams};
 use super::types::build_waylan_ibus_component;
 use super::IbusSessionOptions;
 use crate::session_bundle::SessionConfigBundle;
-use crate::tray::menu::SubprocessManager;
+use crate::system::SubprocessManager;
 
 /// 将 `SessionConfigBundle` 应用到 `IbusSessionCore` 中（初始化与热重载共用）
 pub(crate) fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSessionCore) {

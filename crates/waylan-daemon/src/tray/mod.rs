@@ -1,6 +1,5 @@
 pub(crate) mod item;
 pub(crate) mod menu;
-pub mod subprocess;
 
 use crate::config::AppConfig;
 use crate::system::ShutdownCoordinator;
