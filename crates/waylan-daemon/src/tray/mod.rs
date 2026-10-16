@@ -214,31 +214,45 @@ impl TrayService {
             item_service
         );
 
-        // 尝试向系统托盘监视器注册自身（带轮询重试机制，确保平滑自重启后可靠挂载至顶栏）
+        // 尝试向系统托盘监视器注册自身：
+        // 先通过 D-Bus 原生 NameHasOwner 进行微秒级预检，若当前环境暂无 Watcher 则秒级跳过，杜绝无谓休眠
+        let has_watcher: bool = conn
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "NameHasOwner",
+                &("org.kde.StatusNotifierWatcher",),
+            )
+            .and_then(|reply| reply.body().deserialize::<bool>())
+            .unwrap_or(false);
+
         let mut registered = false;
-        for _ in 0..5 {
-            registered = conn
-                .call_method(
-                    Some("org.kde.StatusNotifierWatcher"),
-                    "/StatusNotifierWatcher",
-                    Some("org.kde.StatusNotifierWatcher"),
-                    "RegisterStatusNotifierItem",
-                    &(item_service.as_str(),),
-                )
-                .is_ok()
-                || conn
+        if has_watcher {
+            for _ in 0..5 {
+                registered = conn
                     .call_method(
                         Some("org.kde.StatusNotifierWatcher"),
                         "/StatusNotifierWatcher",
                         Some("org.kde.StatusNotifierWatcher"),
                         "RegisterStatusNotifierItem",
-                        &("/StatusNotifierItem",),
+                        &(item_service.as_str(),),
                     )
-                    .is_ok();
-            if registered {
-                break;
+                    .is_ok()
+                    || conn
+                        .call_method(
+                            Some("org.kde.StatusNotifierWatcher"),
+                            "/StatusNotifierWatcher",
+                            Some("org.kde.StatusNotifierWatcher"),
+                            "RegisterStatusNotifierItem",
+                            &("/StatusNotifierItem",),
+                        )
+                        .is_ok();
+                if registered {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         if registered {

@@ -276,18 +276,61 @@ impl IbusSessionCore {
         self.is_push_to_talk_active = false;
         self.push_to_talk_key = None;
 
-        let mut final_text = None;
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(350) {
+        // 1. 优先非阻塞提取当前已到达的语音事件
+        let mut final_text = self.poll_voice_events();
+
+        // 2. 若后台工作线程尚未完全输出终态文本，通过通道条件变量挂起等待事件（事件到达即刻被内核唤醒，彻底杜绝 thread::sleep 自旋）
+        let deadline = Instant::now() + Duration::from_millis(350);
+        while final_text.is_none() {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            if remaining.is_zero() {
+                break;
+            }
             if let Some(text) = self.poll_voice_events() {
                 if !text.is_empty() {
                     final_text = Some(text);
                     break;
                 }
             }
-            std::thread::sleep(Duration::from_millis(5));
+            let Some(ref rx) = self.voice_event_rx else {
+                break;
+            };
+            match rx.recv_timeout(remaining.min(Duration::from_millis(50))) {
+                Ok(VoiceEvent::FinalCommit(text)) | Ok(VoiceEvent::SegmentCommit(text)) => {
+                    if !text.is_empty() {
+                        final_text = Some(text);
+                    }
+                    self.is_push_to_talk_active = false;
+                    self.push_to_talk_key = None;
+                    self.voice_display_text = None;
+                    self.voice_partial_text = None;
+                    self.voice_event_rx = None;
+                    break;
+                }
+                Ok(VoiceEvent::PartialText(text)) => {
+                    if self.voice_config.interaction.real_time_preview {
+                        self.voice_partial_text = Some(text);
+                    }
+                }
+                Ok(VoiceEvent::Cancelled) => {
+                    self.is_push_to_talk_active = false;
+                    self.push_to_talk_key = None;
+                    self.voice_display_text = None;
+                    self.voice_partial_text = None;
+                    self.voice_event_rx = None;
+                    break;
+                }
+                Ok(_) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    break;
+                }
+            }
         }
 
+        // 3. 退出等待后最后执行一次排空
         if final_text.is_none() {
             if let Some(text) = self.poll_voice_events() {
                 if !text.is_empty() {

@@ -145,7 +145,7 @@ impl IbusFactoryService {
         let obj_path = OwnedObjectPath::try_from(path_str.as_str())
             .map_err(|e| zbus::fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
 
-        if let Ok(slot) = self.conn_slot.lock() {
+        let conn_registered = if let Ok(slot) = self.conn_slot.lock() {
             if let Some(ref conn) = *slot {
                 let mut srv = self.engine_template.clone();
                 srv.is_password = Arc::new(AtomicBool::new(false));
@@ -168,7 +168,22 @@ impl IbusFactoryService {
                     "[微澜 IBus] 成功为新应用输入上下文动态注册 Engine 实例: {}",
                     path_str
                 );
+                true
+            } else {
+                false
             }
+        } else {
+            false
+        };
+
+        if !conn_registered {
+            warn!(
+                "[微澜 IBus 警告] D-Bus 宿主连接未就绪或锁中毒，无法为动态路径 {} 注册接口",
+                path_str
+            );
+            return Err(zbus::fdo::Error::Failed(
+                "D-Bus 宿主连接尚未就绪，无法创建引擎实例".to_string(),
+            ));
         }
 
         Ok(obj_path)
