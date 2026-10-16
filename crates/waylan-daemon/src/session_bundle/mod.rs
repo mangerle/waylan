@@ -1,0 +1,91 @@
+//! 会话环境依赖包与热重载管理模块
+//!
+//! 负责整合输入法会话运行所需的词库加载、配置装配、环境能力探测与 Wayland 原生语音快捷键拦截器。
+
+mod config_bundle;
+mod dict_loader;
+mod system_env;
+mod voice_filter;
+
+pub use config_bundle::{apply_reload_v1, apply_reload_v2, SessionConfigBundle};
+#[cfg(test)]
+pub use dict_loader::{load_auxiliary_dict, load_opencc_dict};
+pub use dict_loader::{load_auxiliary_managers, load_lexicon_table};
+pub use system_env::{check_wayland_capabilities, trigger_graceful_restart_and_exit};
+pub use voice_filter::build_wayland_voice_filter;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
+    use waylan_algo::{AlgoConfig, AlgoEngine};
+    use waylan_core::VoiceConfig;
+    use waylan_wayland::session_v1::PageKeyConfig;
+
+    #[test]
+    fn test_session_config_bundle_load() {
+        let bundle = SessionConfigBundle::load_current();
+        assert!(bundle.algo_config.page_size >= 5 && bundle.algo_config.page_size <= 9);
+        assert!(bundle.font_size >= 12.0 && bundle.font_size <= 24.0);
+    }
+
+    #[test]
+    fn test_load_lexicon_table_fallback() {
+        let table = load_lexicon_table();
+        assert!(!table.is_empty(), "回退词库应包含基础词条数据");
+    }
+
+    #[test]
+    fn test_load_auxiliary_and_opencc_dict_fallback() {
+        let aux = load_auxiliary_dict();
+        assert!(!aux.english_words.is_empty(), "辅助词库应包含基础英文词条");
+        assert!(!aux.symbols.is_empty(), "辅助词库应包含基础符号映射");
+
+        let opencc = load_opencc_dict();
+        assert!(!opencc.chars.is_empty(), "简繁词库应包含基础字符映射");
+    }
+
+    #[test]
+    fn test_reload_preserves_punctuation_context() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut shift_sm = ShiftToggleStateMachine::with_toggle_key(ToggleKeyMode::Shift);
+        let mut punct = PunctuationProcessor::with_options(true, true, false);
+        let mut page_keys = PageKeyConfig::default();
+
+        // 模拟已输入左双引号与上下文网址前缀
+        punct.record_commit("“https://example.com");
+        assert!(punct.double_quote_open);
+        assert_eq!(punct.recent_context, "“https://example.com");
+
+        let mut bundle = SessionConfigBundle::load_current();
+        bundle.punct_processor = PunctuationProcessor::with_options(false, true, false);
+        bundle.apply_to_engine_and_input(&mut engine, &mut shift_sm, &mut punct, &mut page_keys);
+
+        // 验证热重载更新了配置开关，同时完整保留了引号开闭状态与最近输入上下文
+        assert!(!punct.slash_to_dunhao);
+        assert!(punct.double_quote_open);
+        assert_eq!(punct.recent_context, "“https://example.com");
+    }
+
+    #[test]
+    fn test_build_wayland_voice_filter_lifecycle() {
+        let cfg_disabled = VoiceConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        assert!(build_wayland_voice_filter(&cfg_disabled).is_none());
+
+        let cfg_enabled = VoiceConfig {
+            enabled: true,
+            push_to_talk_shortcut: "F8".to_string(),
+            ..Default::default()
+        };
+        let filter = build_wayland_voice_filter(&cfg_enabled);
+        assert!(filter.is_some());
+
+        let mut filter = filter.unwrap();
+        // 普通按键应放行透传
+        let res = filter(waylan_wayland::KEY_SPACE, true, 0);
+        assert_eq!(res, waylan_wayland::KeyFilterResult::PassThrough);
+    }
+}
