@@ -1,214 +1,34 @@
-//! IBus `org.freedesktop.IBus.Engine`、`Factory` 与 `Service` D-Bus 接口服务实现
+//! IBus 核心引擎服务 D-Bus 接口实现
 //!
 //! # 设计原理
-//! - **实现初衷**：对接 GNOME (Mutter) 与 `ibus-daemon` 的 D-Bus 通信协议，将系统键盘输入、鼠标选词、
-//!   焦点切换与属性栏交互转发至 `IbusSessionCore`，并通过标准信号驱动 GNOME Shell 原生候选框与客户端内联预编辑。
-//! - **核心优势**：所有状态变更均在微秒级纯内存同步临界区内完成，信号序列化与异步 I/O 发送全部位于锁作用域之外，
-//!   严格杜绝跨 `.await` 持有互斥锁，保证高并发按键流下的极低延迟。
-//! - **代价与局限**：依赖 `ibus-daemon` 转发键盘与候选面板事件。
+//! - **实现初衷**：实现 `org.freedesktop.IBus.Engine` 规范，接收按键、选词、焦点事件，并通过 D-Bus 信号驱动客户端。
+//! - **核心优势**：纯内存瞬时加锁变更状态并提取不可变快照，所有信号发送在释放互斥锁后异步执行。
+//! - **代价与局限**：必须严格遵循 IBus D-Bus 信号契约。
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-use log::{debug, info, warn};
-use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
 use waylan_wayland::input_constants::{KEY_LEFT, KEY_RIGHT};
 use waylan_wayland::LoopWakeup;
-use zbus::blocking::Connection;
-use zbus::fdo;
 use zbus::interface;
 use zbus::object_server::SignalContext;
-use zbus::zvariant::{OwnedObjectPath, Value};
+use zbus::zvariant::Value;
 
-use super::keys::{
+use super::super::keys::{
     IbusKeyOutcome, IbusSessionCore, IBUS_KEYVAL_LEFT, IBUS_KEYVAL_RIGHT, IBUS_RELEASE_MASK,
 };
-use super::types::{
-    build_full_width_char_property, build_full_width_punct_property, build_ibus_lookup_table,
-    build_ibus_preedit_text, build_ibus_prop_list, build_ibus_text, build_input_mode_property,
-    build_traditional_property, extract_text_from_ibus_variant, IBUS_ENGINE_PREEDIT_CLEAR,
+use super::super::types::{
+    build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_prop_list, build_ibus_text,
+    build_input_mode_property, extract_text_from_ibus_variant, IBUS_ENGINE_PREEDIT_CLEAR,
 };
+use super::snapshot::UiSnapshot;
 use crate::tray::menu::SubprocessManager;
-
-/// 微澜 IBus 引擎固定导出的 D-Bus 对象路径
-pub const WAYLAN_ENGINE_OBJECT_PATH: &str = "/org/freedesktop/IBus/Engine/1";
-
-/// 微澜 IBus 工厂固定导出的 D-Bus 对象路径
-pub const WAYLAN_FACTORY_OBJECT_PATH: &str = "/org/freedesktop/IBus/Factory";
 
 /// IBus 输入框用途常量：密码框 (`IBUS_INPUT_PURPOSE_PASSWORD`)
 const IBUS_INPUT_PURPOSE_PASSWORD: u32 = 2;
 
 /// IBus 输入框用途常量：PIN 码框 (`IBUS_INPUT_PURPOSE_PIN`)
 const IBUS_INPUT_PURPOSE_PIN: u32 = 3;
-
-/// 锁外发射 UI 刷新信号所需的轻量状态快照
-pub(crate) struct UiSnapshot {
-    pub(crate) preedit: String,
-    pub(crate) candidates: Vec<Candidate>,
-    pub(crate) page_size: usize,
-    pub(crate) selected_index: usize,
-    pub(crate) orientation: i32,
-    pub(crate) index_style: CandidateIndexStyle,
-}
-
-impl UiSnapshot {
-    /// 提取处于语音录入或语音展示期间的 UI 快照
-    fn capture_voice_snapshot(core: &IbusSessionCore) -> Self {
-        let candidates = if let Some(ref voice_text) = core.voice_display_text {
-            vec![Candidate {
-                text: voice_text.clone(),
-                pinyin: String::new(),
-                score: 1000,
-                is_expandable: false,
-                sub_candidates: Vec::new(),
-            }]
-        } else {
-            Vec::new()
-        };
-        let preedit = core.voice_partial_text.clone().unwrap_or_default();
-        Self {
-            preedit,
-            candidates,
-            page_size: 1,
-            selected_index: 0,
-            orientation: super::types::IBUS_ORIENTATION_HORIZONTAL,
-            index_style: CandidateIndexStyle::None,
-        }
-    }
-
-    /// 提取常规键盘输入组词状态下的 UI 快照
-    fn capture_input_snapshot(core: &IbusSessionCore) -> Self {
-        let is_v_mode = core.engine.raw_input().starts_with('v');
-        let preedit = if core.engine.raw_input().is_empty() {
-            String::new()
-        } else if is_v_mode {
-            core.engine.raw_input().to_string()
-        } else {
-            core.engine.formatted_preedit()
-        };
-        let is_expanded = core.engine.is_expanded;
-        let candidates = core.current_candidates();
-        let (page_size, selected_index, orientation) = if is_expanded {
-            (
-                candidates.len().max(1),
-                core.engine.expanded_selected_index,
-                super::types::IBUS_ORIENTATION_VERTICAL,
-            )
-        } else {
-            let orientation = match core.candidate_orientation {
-                CandidateOrientation::Horizontal => super::types::IBUS_ORIENTATION_HORIZONTAL,
-                CandidateOrientation::Vertical => super::types::IBUS_ORIENTATION_VERTICAL,
-            };
-            (
-                core.engine.config.page_size,
-                core.engine.selected_index,
-                orientation,
-            )
-        };
-        Self {
-            preedit,
-            candidates,
-            page_size,
-            selected_index,
-            orientation,
-            index_style: core.candidate_index_style,
-        }
-    }
-
-    /// 从当前会话核心提取 UI 快照
-    pub(crate) fn capture(core: &IbusSessionCore) -> Self {
-        if core.is_voice_active() {
-            Self::capture_voice_snapshot(core)
-        } else {
-            Self::capture_input_snapshot(core)
-        }
-    }
-}
-
-/// `org.freedesktop.IBus.Factory` 接口实现
-pub struct IbusFactoryService {
-    pub(crate) core: Arc<Mutex<IbusSessionCore>>,
-    pub(crate) conn_slot: Arc<Mutex<Option<Connection>>>,
-    pub(crate) engine_template: IbusEngineService,
-    pub(crate) next_engine_id: Arc<AtomicU32>,
-}
-
-#[interface(name = "org.freedesktop.IBus.Factory")]
-impl IbusFactoryService {
-    /// 响应 `ibus-daemon` 的引擎实例创建请求，返回动态创建并注册的微澜引擎对象路径
-    fn create_engine(&self, name: &str) -> fdo::Result<OwnedObjectPath> {
-        debug!("[微澜 IBus] 收到 CreateEngine 请求，引擎名: {}", name);
-        {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            guard.reset_context();
-        }
-
-        let id = self.next_engine_id.fetch_add(1, Ordering::SeqCst);
-        let path_str = format!("/org/freedesktop/IBus/Engine/{}", id);
-        let obj_path = OwnedObjectPath::try_from(path_str.as_str())
-            .map_err(|e| fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
-
-        let conn_registered = if let Ok(slot) = self.conn_slot.lock() {
-            if let Some(ref conn) = *slot {
-                let mut srv = self.engine_template.clone();
-                srv.is_password = Arc::new(AtomicBool::new(false));
-                let gen = IbusGenericService {
-                    core: Arc::clone(&self.core),
-                };
-                if let Err(e) = conn.object_server().at(&obj_path, srv) {
-                    warn!(
-                        "[微澜 IBus] 为动态路径 {} 注册 Engine 接口失败: {}",
-                        path_str, e
-                    );
-                }
-                if let Err(e) = conn.object_server().at(&obj_path, gen) {
-                    warn!(
-                        "[微澜 IBus] 为动态路径 {} 注册 Service 接口失败: {}",
-                        path_str, e
-                    );
-                }
-                debug!(
-                    "[微澜 IBus] 成功为新应用输入上下文动态注册 Engine 实例: {}",
-                    path_str
-                );
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !conn_registered {
-            warn!(
-                "[微澜 IBus 警告] D-Bus 宿主连接未就绪或锁中毒，无法为动态路径 {} 注册接口",
-                path_str
-            );
-            return Err(fdo::Error::Failed(
-                "D-Bus 宿主连接尚未就绪，无法创建引擎实例".to_string(),
-            ));
-        }
-
-        Ok(obj_path)
-    }
-}
-
-/// `org.freedesktop.IBus.Service` 通用生命周期接口实现
-pub struct IbusGenericService {
-    pub(crate) core: Arc<Mutex<IbusSessionCore>>,
-}
-
-#[interface(name = "org.freedesktop.IBus.Service")]
-impl IbusGenericService {
-    /// 响应服务对象销毁请求，安全重置内部预编辑与按键状态
-    fn destroy(&self) {
-        debug!("[微澜 IBus] 收到 Service.Destroy 请求，重置当前输入法上下文。");
-        let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-        guard.reset_context();
-    }
-}
 
 /// `org.freedesktop.IBus.Engine` 核心接口实现
 #[derive(Clone)]
@@ -305,130 +125,6 @@ impl IbusEngineService {
         Self::emit_ui_snapshot(ctxt, &snap).await;
         let _ = Self::hide_preedit_text(ctxt).await;
         let _ = Self::hide_lookup_table(ctxt).await;
-    }
-
-    /// 响应状态栏点击切换中英文输入模式
-    async fn on_prop_input_mode(&self, ctxt: &SignalContext<'_>) {
-        let (new_mode, is_caps) = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
-            let next = match guard.mode {
-                InputMode::Chinese | InputMode::VMode => InputMode::English,
-                InputMode::English => InputMode::Chinese,
-            };
-            guard.mode = next;
-            if let Some(ref zh_flag) = guard.shared_is_chinese {
-                zh_flag.store(matches!(next, InputMode::Chinese), Ordering::Release);
-            }
-            if let Some(ref tx) = guard.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
-            (next, guard.is_caps_locked)
-        };
-        if !self.suppress_properties {
-            if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
-                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-            }
-        }
-    }
-
-    /// 响应状态栏点击切换简繁模式
-    async fn on_prop_traditional_chinese(&self, ctxt: &SignalContext<'_>) {
-        let is_trad = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
-            let next = !guard.engine.config.traditional_chinese;
-            guard.engine.config.traditional_chinese = next;
-            if let Some(ref flag) = guard.shared_traditional_chinese {
-                flag.store(next, Ordering::Release);
-            }
-            if let Some(ref tx) = guard.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
-            info!(
-                "[微澜 IBus] 原生状态栏切换简繁模式为: {}",
-                if next { "繁体" } else { "简体" }
-            );
-            next
-        };
-        if let Ok(prop_val) = build_traditional_property(is_trad) {
-            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-        }
-    }
-
-    /// 响应状态栏点击切换标点全半角模式
-    async fn on_prop_full_width_punct(&self, ctxt: &SignalContext<'_>) {
-        let is_full = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
-            let next = !guard.punct_processor.full_width_punct;
-            guard.punct_processor.full_width_punct = next;
-            if let Some(ref flag) = guard.shared_full_width_punct {
-                flag.store(next, Ordering::Release);
-            }
-            if let Some(ref tx) = guard.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
-            info!(
-                "[微澜 IBus] 原生状态栏切换标点模式为: {}",
-                if next {
-                    "全角 (中文标点)"
-                } else {
-                    "半角 (英文标点)"
-                }
-            );
-            next
-        };
-        if let Ok(prop_val) = build_full_width_punct_property(is_full) {
-            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-        }
-    }
-
-    /// 响应状态栏点击切换字符全半角模式
-    async fn on_prop_full_width_char(&self, ctxt: &SignalContext<'_>) {
-        let is_full = {
-            let Ok(guard) = self.core.lock() else {
-                return;
-            };
-            let current = guard
-                .shared_full_width_char
-                .as_ref()
-                .map(|f| f.load(Ordering::Acquire))
-                .unwrap_or(false);
-            let next = !current;
-            if let Some(ref flag) = guard.shared_full_width_char {
-                flag.store(next, Ordering::Release);
-            }
-            if let Some(ref tx) = guard.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
-            info!(
-                "[微澜 IBus] 原生状态栏切换字符模式为: {}",
-                if next {
-                    "全角 (英文字母)"
-                } else {
-                    "半角 (英文字母)"
-                }
-            );
-            next
-        };
-        if let Ok(prop_val) = build_full_width_char_property(is_full) {
-            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-        }
-    }
-
-    /// 响应状态栏点击重新加载词库与配置
-    fn on_prop_reload_config(&self) {
-        if let Some(ref flag) = self.reload_requested {
-            flag.store(true, Ordering::Release);
-        }
-        if let Some(ref wakeup) = self.loop_wakeup {
-            wakeup.wake();
-        }
-        info!("[微澜 IBus] 收到原生状态栏菜单重载指令，已触发词库与配置热重载。");
     }
 }
 
@@ -763,36 +459,4 @@ impl IbusEngineService {
         keycode: u32,
         state: u32,
     ) -> zbus::Result<()>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use waylan_algo::{AlgoConfig, AlgoEngine};
-
-    #[test]
-    fn test_ui_snapshot_voice_isolation() {
-        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-        let mut core = IbusSessionCore::new(engine);
-
-        // 模拟正常输入状态
-        let _ = core.process_key_event(b'n' as u32, 49, 0);
-        let normal_snap = UiSnapshot::capture(&core);
-        assert_eq!(normal_snap.preedit, "n");
-        assert!(!normal_snap.candidates.is_empty());
-
-        // 模拟语音激活状态：正在聆听中... ▏▎▍
-        core.voice_display_text = Some("正在聆听中... ▏▎▍".to_string());
-        let voice_snap = UiSnapshot::capture(&core);
-
-        // 核心断言：输入框预编辑必须完全为空，严禁将波形塞入输入框光标处
-        assert_eq!(
-            voice_snap.preedit, "",
-            "录音期间预编辑必须为空以防污染输入框"
-        );
-        // 核心断言：波形状态必须呈现在候选框中且不带数字序号
-        assert_eq!(voice_snap.candidates.len(), 1);
-        assert_eq!(voice_snap.candidates[0].text, "正在聆听中... ▏▎▍");
-        assert_eq!(voice_snap.index_style, CandidateIndexStyle::None);
-    }
 }

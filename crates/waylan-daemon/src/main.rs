@@ -3,6 +3,7 @@ mod config;
 mod ibus;
 mod logger;
 mod session_bundle;
+mod system;
 mod tray;
 
 use config::{AppConfig, SwitchKey, ThemeMode};
@@ -13,16 +14,15 @@ use session_bundle::{
 };
 use std::env;
 use std::error::Error;
-use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{self, Command, Stdio};
+use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
+use system::{
+    check_another_instance_running, collect_watched_paths, determine_tray_and_exclusive,
+    launch_settings_gui, register_system_signals,
+};
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::types::{AlgoConfig, FuzzyConfig};
@@ -61,20 +61,6 @@ fn handle_early_cli(args: &[String]) -> Result<Option<()>, Box<dyn Error>> {
         return Ok(Some(()));
     }
     Ok(None)
-}
-
-/// 注册进程系统退出信号拦截 (SIGINT / SIGTERM)
-fn register_system_signals(term_now: &Arc<AtomicBool>) {
-    for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
-        if let Err(e) =
-            signal_hook::flag::register_conditional_shutdown(sig, 1, Arc::clone(term_now))
-        {
-            warn!("[微澜守护进程] 注册信号拦截失败: {}", e);
-        }
-        if let Err(e) = signal_hook::flag::register(sig, Arc::clone(term_now)) {
-            warn!("[微澜守护进程] 注册信号标志置位失败: {}", e);
-        }
-    }
 }
 
 /// 构建算法引擎并加载全量汉字库、自定义短语与用户个性化词库
@@ -128,40 +114,6 @@ fn build_algo_engine(
     );
 
     Ok(Some(engine))
-}
-
-/// 收集被监控热重载的配置文件与词库路径及其初始修改时间
-fn collect_watched_paths() -> (Vec<PathBuf>, Option<SystemTime>) {
-    let mut watched_paths = Vec::with_capacity(3);
-    if let Some(c_path) = AppConfig::config_path() {
-        watched_paths.push(c_path);
-    }
-    watched_paths.push(CustomPhraseManager::default_path());
-    watched_paths.push(AppConfig::user_aux_dict_path());
-
-    let initial_mtime = watched_paths
-        .iter()
-        .filter_map(|p| fs::metadata(p).ok().and_then(|m| m.modified().ok()))
-        .max();
-    (watched_paths, initial_mtime)
-}
-
-/// 计算托盘展示形态与独占输入源配置
-fn determine_tray_and_exclusive(cfg: &AppConfig, use_ibus_backend: bool) -> (bool, bool) {
-    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_uppercase().contains("GNOME"))
-        .unwrap_or(false);
-    let force_tray = cfg.enable_tray.unwrap_or_else(|| {
-        env::var("WAYLAN_ENABLE_TRAY")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    });
-    let exclusive_source = cfg.exclusive_input_source
-        || env::var("WAYLAN_EXCLUSIVE_INPUT_SOURCE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-    let should_spawn_tray = force_tray || (!use_ibus_backend && !is_gnome);
-    (should_spawn_tray, exclusive_source)
 }
 
 /// IBus 会话派发参数包
@@ -479,88 +431,4 @@ fn main() -> Result<(), Box<dyn Error>> {
             loop_wakeup,
         })
     }
-}
-
-/// 唤起独立的微澜偏好设置中心图形界面
-///
-/// # 设计原理
-/// - **实现初衷**：统一 CLI `settings` 子命令与桌面单例防多开时的偏好设置界面唤起逻辑。
-/// - **核心优势**：自动继承当前 Wayland/X11 会话与 D-Bus 上下文，无缝拉起 Slint 设置中心。
-/// - **代价与局限**：若目标可执行文件缺失则返回对应 I/O 错误。
-fn launch_settings_gui() -> Result<(), Box<dyn Error>> {
-    info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
-    let current_exe = env::current_exe().ok();
-    let sibling_settings = current_exe
-        .as_ref()
-        .and_then(|p| p.parent())
-        .map(|d| d.join("waylan-settings"))
-        .filter(|p| p.is_file());
-
-    let mut cmd = if let Some(ref path) = sibling_settings {
-        Command::new(path)
-    } else {
-        Command::new("waylan-settings")
-    };
-
-    for var in [
-        "WAYLAND_DISPLAY",
-        "DISPLAY",
-        "XDG_RUNTIME_DIR",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "XDG_CURRENT_DESKTOP",
-    ] {
-        if let Ok(val) = env::var(var) {
-            cmd.env(var, &val);
-        }
-    }
-
-    cmd.stdin(Stdio::null());
-    #[cfg(unix)]
-    cmd.process_group(0);
-
-    let _child = cmd.spawn()?;
-    Ok(())
-}
-
-/// 检查当前系统桌面会话中是否已有活跃的微澜输入法守护进程正在运行
-///
-/// # 设计原理
-/// - **实现初衷**：防止用户从桌面应用菜单重复点击“微澜输入法”导致多实例冲突与托盘抢占失败。
-/// - **核心优势**：通过 Linux 原生 `/proc` 文件系统快速遍历 `comm` 并比对属主 UID，微秒级判定且杜绝多用户误判。
-/// - **代价与局限**：仅适用于 Linux 操作系统环境。
-fn check_another_instance_running() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let current_pid = process::id();
-        let current_uid = rustix::process::getuid().as_raw();
-        if let Ok(entries) = fs::read_dir("/proc") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
-                    continue;
-                };
-                let Ok(pid) = file_name.parse::<u32>() else {
-                    continue;
-                };
-                if pid == current_pid {
-                    continue;
-                }
-                // 仅匹配同属当前用户的实例，杜绝 Linux 多用户环境下的误判拦截
-                if let Ok(meta) = entry.metadata() {
-                    if meta.uid() != current_uid {
-                        continue;
-                    }
-                }
-                if let Ok(comm) = fs::read_to_string(path.join("comm")) {
-                    if comm.trim() == "waylan" {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
 }
