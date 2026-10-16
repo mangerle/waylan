@@ -360,6 +360,10 @@ impl CandidateSurfaceManager {
                 "[悬浮窗口] 槽位 {} 仍被合成器占用，重新分配独立共享内存槽位以杜绝数据竞争撕裂。",
                 next_slot
             );
+            // 将正在被合成器占用的旧缓冲移入待释放队列，等待 release 事件后再安全销毁
+            if let Some(old_buffer) = self.slot_buffers[next_slot].take() {
+                self.push_pending_release(next_slot, old_buffer);
+            }
             if let Ok(new_slot) = ShmSlot::new(required_bytes.max(64 * 1024)) {
                 self.shm_slots[next_slot] = Some(new_slot);
             }
