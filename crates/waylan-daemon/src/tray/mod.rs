@@ -3,7 +3,9 @@ pub(crate) mod menu;
 pub mod subprocess;
 
 use crate::config::AppConfig;
+use crate::system::ShutdownCoordinator;
 use log::{debug, info, warn};
+use menu::{DBusMenu, DBusMenuOptions};
 use std::collections::HashMap;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +20,19 @@ use zbus::blocking::connection::Builder;
 use zbus::zvariant::Value;
 
 pub use item::StatusNotifierItem;
-pub use menu::DBusMenu;
+
+/// 托盘后台事件循环参数包
+struct TrayLoopParams {
+    is_chinese: Arc<AtomicBool>,
+    is_caps_locked: Arc<AtomicBool>,
+    traditional_chinese: Arc<AtomicBool>,
+    full_width_punct: Arc<AtomicBool>,
+    full_width_char: Arc<AtomicBool>,
+    reload_requested: Arc<AtomicBool>,
+    coordinator: ShutdownCoordinator,
+    icon_update_tx: SyncSender<()>,
+    icon_update_rx: Receiver<()>,
+}
 
 /// 系统托盘服务控制器
 ///
@@ -34,14 +48,14 @@ pub struct TrayService {
     full_width_punct: Arc<AtomicBool>,
     full_width_char: Arc<AtomicBool>,
     reload_requested: Arc<AtomicBool>,
-    exit_requested: Arc<AtomicBool>,
+    coordinator: ShutdownCoordinator,
     icon_update_tx: SyncSender<()>,
     join_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl TrayService {
-    /// 使用全局退出标志与事件循环唤醒器启动后台系统托盘常驻服务
-    pub fn spawn(exit_requested: Arc<AtomicBool>, loop_wakeup: Option<LoopWakeup>) -> Self {
+    /// 使用停机协调器启动后台系统托盘常驻服务
+    pub fn spawn(coordinator: ShutdownCoordinator) -> Self {
         let config = AppConfig::load_or_create();
         let is_chinese = Arc::new(AtomicBool::new(config.init_chinese));
         let is_caps_locked = Arc::new(AtomicBool::new(false));
@@ -51,28 +65,20 @@ impl TrayService {
         let reload_requested = Arc::new(AtomicBool::new(false));
         let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(64);
 
-        let flag_clone = Arc::clone(&is_chinese);
-        let caps_clone = Arc::clone(&is_caps_locked);
-        let trad_clone = Arc::clone(&traditional_chinese);
-        let punct_clone = Arc::clone(&full_width_punct);
-        let char_clone = Arc::clone(&full_width_char);
-        let reload_clone = Arc::clone(&reload_requested);
-        let exit_clone = Arc::clone(&exit_requested);
-        let tx_clone = icon_update_tx.clone();
+        let params = TrayLoopParams {
+            is_chinese: Arc::clone(&is_chinese),
+            is_caps_locked: Arc::clone(&is_caps_locked),
+            traditional_chinese: Arc::clone(&traditional_chinese),
+            full_width_punct: Arc::clone(&full_width_punct),
+            full_width_char: Arc::clone(&full_width_char),
+            reload_requested: Arc::clone(&reload_requested),
+            coordinator: coordinator.clone(),
+            icon_update_tx: icon_update_tx.clone(),
+            icon_update_rx,
+        };
 
         let handle = thread::spawn(move || {
-            Self::run_dbus_loop(
-                flag_clone,
-                caps_clone,
-                trad_clone,
-                punct_clone,
-                char_clone,
-                reload_clone,
-                exit_clone,
-                tx_clone,
-                icon_update_rx,
-                loop_wakeup,
-            );
+            Self::run_dbus_loop(params);
         });
 
         Self {
@@ -82,10 +88,19 @@ impl TrayService {
             full_width_punct,
             full_width_char,
             reload_requested,
-            exit_requested,
+            coordinator,
             icon_update_tx,
             join_handle: Some(handle),
         }
+    }
+
+    /// 使用退出标志与唤醒器构建托盘常驻服务（兼容旧入口与单元测试）
+    #[allow(dead_code)]
+    pub fn spawn_with_parts(
+        exit_requested: Arc<AtomicBool>,
+        loop_wakeup: Option<LoopWakeup>,
+    ) -> Self {
+        Self::spawn(ShutdownCoordinator::from_parts(exit_requested, loop_wakeup))
     }
 
     /// 获取中英文模式共享原子标志句柄
@@ -120,8 +135,9 @@ impl TrayService {
     }
 
     /// 获取优雅退出请求共享原子标志句柄
+    #[allow(dead_code)]
     pub fn exit_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.exit_requested)
+        self.coordinator.flag()
     }
 
     /// 获取托盘图标与菜单状态刷新通知发送端句柄
@@ -130,8 +146,15 @@ impl TrayService {
     }
 
     /// 查询是否已收到优雅退出请求
+    #[allow(dead_code)]
     pub fn is_exit_requested(&self) -> bool {
-        self.exit_requested.load(Ordering::Acquire)
+        self.coordinator.is_shutting_down()
+    }
+
+    /// 获取停机协调器引用
+    #[allow(dead_code)]
+    pub fn coordinator(&self) -> &ShutdownCoordinator {
+        &self.coordinator
     }
 
     /// 获取当前是否处于中文模式（供单元测试断言使用）
@@ -151,39 +174,27 @@ impl TrayService {
     }
 
     /// 在独立线程中初始化 DBus 连接与注册 StatusNotifierItem 及 DBusMenu
-    #[allow(clippy::too_many_arguments)]
-    fn run_dbus_loop(
-        is_chinese: Arc<AtomicBool>,
-        is_caps_locked: Arc<AtomicBool>,
-        traditional_chinese: Arc<AtomicBool>,
-        full_width_punct: Arc<AtomicBool>,
-        full_width_char: Arc<AtomicBool>,
-        reload_requested: Arc<AtomicBool>,
-        exit_requested: Arc<AtomicBool>,
-        icon_update_tx: SyncSender<()>,
-        icon_update_rx: Receiver<()>,
-        loop_wakeup: Option<LoopWakeup>,
-    ) {
+    fn run_dbus_loop(params: TrayLoopParams) {
         let config = AppConfig::load_or_create();
+        let loop_wakeup = params.coordinator.loop_wakeup();
         let sni = StatusNotifierItem::new(
-            Arc::clone(&is_chinese),
-            Arc::clone(&is_caps_locked),
-            icon_update_tx.clone(),
+            Arc::clone(&params.is_chinese),
+            Arc::clone(&params.is_caps_locked),
+            params.icon_update_tx.clone(),
             &config,
-            loop_wakeup.clone(),
-        );
-        let menu = DBusMenu::new(
-            Arc::clone(&is_chinese),
-            Arc::clone(&is_caps_locked),
-            traditional_chinese,
-            full_width_punct,
-            full_width_char,
-            reload_requested,
-            Arc::clone(&exit_requested),
-            Arc::new(AtomicBool::new(false)),
-            icon_update_tx,
             loop_wakeup,
         );
+        let menu = DBusMenu::new(DBusMenuOptions {
+            is_chinese: Arc::clone(&params.is_chinese),
+            is_caps_locked: Arc::clone(&params.is_caps_locked),
+            traditional_chinese: params.traditional_chinese,
+            full_width_punct: params.full_width_punct,
+            full_width_char: params.full_width_char,
+            reload_requested: params.reload_requested,
+            coordinator: params.coordinator.clone(),
+            settings_running: Arc::new(AtomicBool::new(false)),
+            icon_update_tx: params.icon_update_tx,
+        });
 
         // 尝试连接用户 DBus 会话总线（依据 FreeDesktop/KDE 规范，使用基于当前 PID 的唯一名称以避免重启或多实例时的总线名抢占冲突）
         let pid = process::id();
@@ -268,25 +279,27 @@ impl TrayService {
 
         // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon、PropertiesChanged、NewToolTip 与 LayoutUpdated 信号
         let mut menu_revision: u32 = 1;
-        let mut last_emitted_is_chinese = is_chinese.load(Ordering::Acquire);
-        let mut last_emitted_is_caps = is_caps_locked.load(Ordering::Acquire);
+        let mut last_emitted_is_chinese = params.is_chinese.load(Ordering::Acquire);
+        let mut last_emitted_is_caps = params.is_caps_locked.load(Ordering::Acquire);
 
         loop {
-            if exit_requested.load(Ordering::Acquire) {
+            if params.coordinator.is_shutting_down() {
                 break;
             }
 
             // 使用带超时的阻塞接收：在收到通道通知时即时响应，若无事件则每 500ms 检查一次原子标志以提供自愈兜底
-            let received = icon_update_rx.recv_timeout(Duration::from_millis(500));
-            if exit_requested.load(Ordering::Acquire) {
+            let received = params
+                .icon_update_rx
+                .recv_timeout(Duration::from_millis(500));
+            if params.coordinator.is_shutting_down() {
                 break;
             }
 
             // 无论是由通道唤醒还是超时触发，排空通道内积压的多余唤醒通知，防止重复无效发射
-            while icon_update_rx.try_recv().is_ok() {}
+            while params.icon_update_rx.try_recv().is_ok() {}
 
-            let current_is_chinese = is_chinese.load(Ordering::Acquire);
-            let current_is_caps = is_caps_locked.load(Ordering::Acquire);
+            let current_is_chinese = params.is_chinese.load(Ordering::Acquire);
+            let current_is_caps = params.is_caps_locked.load(Ordering::Acquire);
 
             let should_emit = received.is_ok()
                 || current_is_chinese != last_emitted_is_chinese
@@ -355,7 +368,7 @@ impl TrayService {
 
 impl Drop for TrayService {
     fn drop(&mut self) {
-        self.exit_requested.store(true, Ordering::Release);
+        self.coordinator.request_shutdown();
         // 使用非阻塞 try_send 避免通道已满时阻塞死锁；通道已满说明已有待唤醒信号
         let _ = self.icon_update_tx.try_send(());
         if let Some(handle) = self.join_handle.take() {

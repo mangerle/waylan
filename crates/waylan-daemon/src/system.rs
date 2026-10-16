@@ -12,7 +12,7 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -22,20 +22,92 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 
 use waylan_algo::custom_phrase::CustomPhraseManager;
+use waylan_wayland::LoopWakeup;
 
 use crate::config::AppConfig;
 
-/// 注册进程系统退出信号拦截 (SIGINT / SIGTERM)
-pub fn register_system_signals(term_now: &Arc<AtomicBool>) {
-    for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
-        if let Err(e) =
-            signal_hook::flag::register_conditional_shutdown(sig, 1, Arc::clone(term_now))
-        {
-            warn!("[微澜守护进程] 注册信号拦截失败: {}", e);
+/// 进程全局停机协调器
+///
+/// # 设计原理
+/// - **实现初衷**：统一收敛操作系统信号（SIGINT/SIGTERM）、托盘菜单退出/自重启、
+///   以及跨线程事件循环唤醒（eventfd / LoopWakeup），杜绝退出标志与唤醒器的分散零乱传递。
+/// - **核心优势**：一旦触发停机或自重启，原子标志置位与跨线程事件循环唤醒自动原子联动，
+///   保证所有挂起在 poll/epoll 上的事件循环立即脱困退场，实现确定性微秒级优雅停机。
+/// - **代价与局限**：跨线程共享依赖 Arc 引用计数。
+#[derive(Clone)]
+pub struct ShutdownCoordinator {
+    exit_requested: Arc<AtomicBool>,
+    loop_wakeup: Option<LoopWakeup>,
+}
+
+impl ShutdownCoordinator {
+    /// 创建新的停机协调器实例
+    pub fn new(loop_wakeup: Option<LoopWakeup>) -> Self {
+        Self {
+            exit_requested: Arc::new(AtomicBool::new(false)),
+            loop_wakeup,
         }
-        if let Err(e) = signal_hook::flag::register(sig, Arc::clone(term_now)) {
-            warn!("[微澜守护进程] 注册信号标志置位失败: {}", e);
+    }
+
+    /// 使用现有的原子标志句柄与唤醒器构建（供测试或向下兼容）
+    #[allow(dead_code)]
+    pub fn from_parts(exit_requested: Arc<AtomicBool>, loop_wakeup: Option<LoopWakeup>) -> Self {
+        Self {
+            exit_requested,
+            loop_wakeup,
         }
+    }
+
+    /// 注册进程系统退出信号拦截 (SIGINT / SIGTERM)
+    pub fn register_system_signals(&self) {
+        let flag = Arc::clone(&self.exit_requested);
+        for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
+            if let Err(e) =
+                signal_hook::flag::register_conditional_shutdown(sig, 1, Arc::clone(&flag))
+            {
+                warn!("[微澜守护进程] 注册信号拦截失败: {}", e);
+            }
+            if let Err(e) = signal_hook::flag::register(sig, Arc::clone(&flag)) {
+                warn!("[微澜守护进程] 注册信号标志置位失败: {}", e);
+            }
+        }
+    }
+
+    /// 查询当前是否已收到退出或停机请求
+    #[inline]
+    pub fn is_shutting_down(&self) -> bool {
+        self.exit_requested.load(Ordering::Acquire)
+    }
+
+    /// 请求优雅停机，并将退出标志置位且立即唤醒主事件循环
+    pub fn request_shutdown(&self) {
+        self.exit_requested.store(true, Ordering::Release);
+        self.wake();
+    }
+
+    /// 触发看门狗自重启并在成功后发送停机唤醒
+    pub fn trigger_graceful_restart(&self) {
+        crate::session_bundle::trigger_graceful_restart_and_exit(
+            self.exit_requested.as_ref(),
+            self.loop_wakeup.as_ref(),
+        );
+    }
+
+    /// 触发事件循环唤醒（如果配置了 LoopWakeup）
+    pub fn wake(&self) {
+        if let Some(ref wakeup) = self.loop_wakeup {
+            wakeup.wake();
+        }
+    }
+
+    /// 获取底层退出标志的 Arc 共享句柄
+    pub fn flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.exit_requested)
+    }
+
+    /// 获取事件循环唤醒器句柄
+    pub fn loop_wakeup(&self) -> Option<LoopWakeup> {
+        self.loop_wakeup.clone()
     }
 }
 
@@ -145,4 +217,33 @@ pub fn check_another_instance_running() -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shutdown_coordinator_lifecycle() {
+        let wakeup = LoopWakeup::new().ok();
+        let coordinator = ShutdownCoordinator::new(wakeup.clone());
+
+        assert!(!coordinator.is_shutting_down());
+        assert!(!coordinator.flag().load(Ordering::Acquire));
+
+        coordinator.request_shutdown();
+        assert!(coordinator.is_shutting_down());
+        assert!(coordinator.flag().load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_shutdown_coordinator_from_parts() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let coordinator = ShutdownCoordinator::from_parts(Arc::clone(&flag), None);
+        assert!(!coordinator.is_shutting_down());
+
+        coordinator.request_shutdown();
+        assert!(coordinator.is_shutting_down());
+        assert!(flag.load(Ordering::Acquire));
+    }
 }

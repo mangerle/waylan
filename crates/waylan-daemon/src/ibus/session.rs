@@ -73,8 +73,8 @@ fn assemble_ibus_services(
     let engine_srv = IbusEngineService {
         core: Arc::clone(&shared_core),
         reload_requested: opts.reload_requested.clone(),
-        loop_wakeup: opts.loop_wakeup.clone(),
-        subprocess_manager: Arc::new(SubprocessManager::new(Arc::clone(&opts.exit_requested))),
+        loop_wakeup: opts.coordinator.loop_wakeup(),
+        subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: opts.suppress_properties,
         is_password: Arc::new(AtomicBool::new(false)),
@@ -84,8 +84,7 @@ fn assemble_ibus_services(
         watched_paths: opts.watched_paths,
         last_mtime: opts.initial_mtime,
         reload_requested: opts.reload_requested,
-        exit_requested: opts.exit_requested,
-        loop_wakeup: opts.loop_wakeup,
+        coordinator: opts.coordinator,
         exclusive_input_source: opts.exclusive_input_source,
     };
 

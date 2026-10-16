@@ -32,14 +32,14 @@ use super::types::{
     IBUS_ENGINE_PREEDIT_CLEAR, IBUS_ORIENTATION_HORIZONTAL,
 };
 use crate::session_bundle::SessionConfigBundle;
+use crate::system::ShutdownCoordinator;
 
 /// 后台监控循环参数结构体
 pub(crate) struct IbusMonitorParams {
     pub(crate) watched_paths: Vec<PathBuf>,
     pub(crate) last_mtime: Option<SystemTime>,
     pub(crate) reload_requested: Option<Arc<AtomicBool>>,
-    pub(crate) exit_requested: Arc<AtomicBool>,
-    pub(crate) loop_wakeup: Option<LoopWakeup>,
+    pub(crate) coordinator: ShutdownCoordinator,
     pub(crate) exclusive_input_source: bool,
 }
 
@@ -233,10 +233,7 @@ fn handle_config_reload_event(
             "[微澜 IBus] 检测到指示器形态变更 (当前托盘: {}, 期望托盘: {})，正在触发平滑自重启...",
             current_has_tray, expected_tray
         );
-        crate::session_bundle::trigger_graceful_restart_and_exit(
-            params.exit_requested.as_ref(),
-            params.loop_wakeup.as_ref(),
-        );
+        params.coordinator.trigger_graceful_restart();
         return true;
     }
 
@@ -293,11 +290,8 @@ pub(crate) fn run_ibus_monitor_loop(
         info!("[微澜 IBus] 启动时检测到系统处于锁屏状态，已进入密码直通保护模式。");
     }
 
-    let (screen_locked_flag, mut listener_handle) = spawn_screen_saver_listener(
-        initial_screen_locked,
-        params.loop_wakeup.clone(),
-        Arc::clone(&params.exit_requested),
-    );
+    let (screen_locked_flag, mut listener_handle) =
+        spawn_screen_saver_listener(initial_screen_locked, params.coordinator.clone());
     let mut last_screen_locked = initial_screen_locked;
     let mut last_voice_active = false;
     let mut last_reload_instant = Instant::now()
@@ -305,7 +299,7 @@ pub(crate) fn run_ibus_monitor_loop(
         .unwrap_or_else(Instant::now);
 
     loop {
-        if params.exit_requested.load(Ordering::Acquire) {
+        if params.coordinator.is_shutting_down() {
             info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
             break;
         }
@@ -322,7 +316,7 @@ pub(crate) fn run_ibus_monitor_loop(
         let poll_timeout_ms = if is_voice_active { 60 } else { 1000 };
         poll_wakeup_and_inotify(
             inotify_watcher.as_ref(),
-            params.loop_wakeup.as_ref(),
+            params.coordinator.loop_wakeup().as_ref(),
             poll_timeout_ms,
         );
 
@@ -334,7 +328,7 @@ pub(crate) fn run_ibus_monitor_loop(
             &mut last_voice_active,
         );
 
-        if params.exit_requested.load(Ordering::Acquire) {
+        if params.coordinator.is_shutting_down() {
             info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
             break;
         }

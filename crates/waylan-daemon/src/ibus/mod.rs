@@ -27,7 +27,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use waylan_algo::AlgoEngine;
-use waylan_wayland::LoopWakeup;
+
+use crate::system::ShutdownCoordinator;
 
 pub use session::run_ibus_session;
 
@@ -57,10 +58,8 @@ pub struct IbusSessionOptions {
     pub shared_full_width_punct: Option<Arc<AtomicBool>>,
     /// 与系统托盘共享的全角/半角字符标志
     pub shared_full_width_char: Option<Arc<AtomicBool>>,
-    /// 全局平滑退出标志
-    pub exit_requested: Arc<AtomicBool>,
-    /// 跨线程 poll 唤醒句柄
-    pub loop_wakeup: Option<LoopWakeup>,
+    /// 进程停机协调器
+    pub coordinator: ShutdownCoordinator,
     /// 是否静默原生 IBus 属性上报（在独立托盘开启时置为 true 以实现原生顶栏白字指示器自动隐藏）
     pub suppress_properties: bool,
     /// 是否将微澜设为 GNOME 独占单一输入源

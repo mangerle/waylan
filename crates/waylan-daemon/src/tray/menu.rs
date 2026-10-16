@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use waylan_wayland::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
+
+use crate::system::ShutdownCoordinator;
 
 /// DBusMenu 布局返回元组类型定义
 pub type DbusMenuLayout = (
@@ -23,6 +24,19 @@ pub(crate) fn make_menu_item(id: i32, label: &str) -> Value<'static> {
 
 pub use super::subprocess::SubprocessManager;
 
+/// DBusMenu 构造配置参数包
+pub(crate) struct DBusMenuOptions {
+    pub(crate) is_chinese: Arc<AtomicBool>,
+    pub(crate) is_caps_locked: Arc<AtomicBool>,
+    pub(crate) traditional_chinese: Arc<AtomicBool>,
+    pub(crate) full_width_punct: Arc<AtomicBool>,
+    pub(crate) full_width_char: Arc<AtomicBool>,
+    pub(crate) reload_requested: Arc<AtomicBool>,
+    pub(crate) coordinator: ShutdownCoordinator,
+    pub(crate) settings_running: Arc<AtomicBool>,
+    pub(crate) icon_update_tx: SyncSender<()>,
+}
+
 /// 标准 FreeDesktop DBusMenu 菜单实现
 pub struct DBusMenu {
     pub(crate) is_chinese: Arc<AtomicBool>,
@@ -31,39 +45,25 @@ pub struct DBusMenu {
     pub(crate) full_width_punct: Arc<AtomicBool>,
     pub(crate) full_width_char: Arc<AtomicBool>,
     pub(crate) reload_requested: Arc<AtomicBool>,
-    pub(crate) exit_requested: Arc<AtomicBool>,
+    pub(crate) coordinator: ShutdownCoordinator,
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) icon_update_tx: SyncSender<()>,
-    pub(crate) loop_wakeup: Option<LoopWakeup>,
     pub(crate) subprocess_manager: Arc<SubprocessManager>,
 }
 
 impl DBusMenu {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        is_chinese: Arc<AtomicBool>,
-        is_caps_locked: Arc<AtomicBool>,
-        traditional_chinese: Arc<AtomicBool>,
-        full_width_punct: Arc<AtomicBool>,
-        full_width_char: Arc<AtomicBool>,
-        reload_requested: Arc<AtomicBool>,
-        exit_requested: Arc<AtomicBool>,
-        settings_running: Arc<AtomicBool>,
-        icon_update_tx: SyncSender<()>,
-        loop_wakeup: Option<LoopWakeup>,
-    ) -> Self {
-        let subprocess_manager = Arc::new(SubprocessManager::new(Arc::clone(&exit_requested)));
+    pub(crate) fn new(opts: DBusMenuOptions) -> Self {
+        let subprocess_manager = Arc::new(SubprocessManager::new(opts.coordinator.flag()));
         Self {
-            is_chinese,
-            is_caps_locked,
-            traditional_chinese,
-            full_width_punct,
-            full_width_char,
-            reload_requested,
-            exit_requested,
-            settings_running,
-            icon_update_tx,
-            loop_wakeup,
+            is_chinese: opts.is_chinese,
+            is_caps_locked: opts.is_caps_locked,
+            traditional_chinese: opts.traditional_chinese,
+            full_width_punct: opts.full_width_punct,
+            full_width_char: opts.full_width_char,
+            reload_requested: opts.reload_requested,
+            coordinator: opts.coordinator,
+            settings_running: opts.settings_running,
+            icon_update_tx: opts.icon_update_tx,
             subprocess_manager,
         }
     }
@@ -89,9 +89,7 @@ impl DBusMenu {
         let next = !current;
         flag.store(next, Ordering::Release);
         let _ = self.icon_update_tx.try_send(());
-        if let Some(ref wakeup) = self.loop_wakeup {
-            wakeup.wake();
-        }
+        self.coordinator.wake();
         info!(
             "[系统托盘] 右键菜单切换{}为: {}",
             label,
@@ -102,29 +100,21 @@ impl DBusMenu {
     /// 响应点击菜单“重新加载词库与配置”
     fn on_menu_reload(&self) {
         self.reload_requested.store(true, Ordering::Release);
-        if let Some(ref wakeup) = self.loop_wakeup {
-            wakeup.wake();
-        }
+        self.coordinator.wake();
         info!("[系统托盘] 右键菜单触发：已发出重新加载词库与配置信号...");
     }
 
     /// 响应点击菜单“退出微澜输入法”
     fn on_menu_exit(&self) {
         info!("[系统托盘] 收到退出菜单指令，正在触发优雅停机与数据落盘流程...");
-        self.exit_requested.store(true, Ordering::Release);
+        self.coordinator.request_shutdown();
         let _ = self.icon_update_tx.try_send(());
-        if let Some(ref wakeup) = self.loop_wakeup {
-            wakeup.wake();
-        }
     }
 
     /// 响应点击菜单“重启微澜输入法”
     fn on_menu_restart(&self) {
         info!("[系统托盘] 收到重启菜单指令，正在排队等待旧实例完全释放后拉起新实例...");
-        crate::session_bundle::trigger_graceful_restart_and_exit(
-            self.exit_requested.as_ref(),
-            self.loop_wakeup.as_ref(),
-        );
+        self.coordinator.trigger_graceful_restart();
         let _ = self.icon_update_tx.try_send(());
     }
 }
@@ -247,18 +237,19 @@ mod tests {
         let is_full_punct = Arc::new(AtomicBool::new(true));
         let is_full_char = Arc::new(AtomicBool::new(false));
 
-        let menu = DBusMenu::new(
-            is_chinese.clone(),
-            is_caps.clone(),
-            is_trad.clone(),
-            is_full_punct.clone(),
-            is_full_char.clone(),
-            reload,
-            exit,
-            settings,
-            tx,
-            None,
-        );
+        let coordinator = ShutdownCoordinator::from_parts(exit, None);
+
+        let menu = DBusMenu::new(DBusMenuOptions {
+            is_chinese: is_chinese.clone(),
+            is_caps_locked: is_caps.clone(),
+            traditional_chinese: is_trad.clone(),
+            full_width_punct: is_full_punct.clone(),
+            full_width_char: is_full_char.clone(),
+            reload_requested: reload,
+            coordinator,
+            settings_running: settings,
+            icon_update_tx: tx,
+        });
         let (_rev, (_root_id, _props, items)) = menu.get_layout(0, -1, Vec::new());
         assert_eq!(items.len(), 9);
 

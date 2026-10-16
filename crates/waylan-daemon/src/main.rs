@@ -16,12 +16,10 @@ use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::SystemTime;
 use system::{
     check_another_instance_running, collect_watched_paths, determine_tray_and_exclusive,
-    launch_settings_gui, register_system_signals,
+    launch_settings_gui, ShutdownCoordinator,
 };
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
@@ -66,10 +64,10 @@ fn handle_early_cli(args: &[String]) -> Result<Option<()>, Box<dyn Error>> {
 /// 构建算法引擎并加载全量汉字库、自定义短语与用户个性化词库
 fn build_algo_engine(
     cfg: &AppConfig,
-    term_now: &Arc<AtomicBool>,
+    coordinator: &ShutdownCoordinator,
 ) -> Result<Option<AlgoEngine>, Box<dyn Error>> {
     let table = load_lexicon_table();
-    if term_now.load(Ordering::Relaxed) {
+    if coordinator.is_shutting_down() {
         info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
         return Ok(None);
     }
@@ -125,8 +123,7 @@ struct IbusDispatchOptions<'a> {
     watched_paths: Vec<PathBuf>,
     initial_mtime: Option<SystemTime>,
     tray: Option<&'a tray::TrayService>,
-    term_now: Arc<AtomicBool>,
-    loop_wakeup: Option<LoopWakeup>,
+    coordinator: ShutdownCoordinator,
 }
 
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
@@ -151,8 +148,7 @@ fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Box<dyn Er
         shared_full_width_char: opts.tray.as_ref().map(|t| t.full_width_char_flag()),
         mode_notify_tx: opts.tray.as_ref().map(|t| t.icon_notifier()),
         reload_requested: opts.tray.as_ref().map(|t| t.reload_flag()),
-        exit_requested: Arc::clone(&opts.term_now),
-        loop_wakeup: opts.loop_wakeup,
+        coordinator: opts.coordinator.clone(),
         suppress_properties: false,
         exclusive_input_source: opts.exclusive_source,
     });
@@ -161,7 +157,7 @@ fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Box<dyn Er
             info!("[微澜守护进程] IBus 输入法事件循环已正常退出，所有资源已安全释放。");
             Ok(())
         }
-        Err(_) if opts.term_now.load(Ordering::Relaxed) => {
+        Err(_) if opts.coordinator.is_shutting_down() => {
             info!("[微澜守护进程] 收到退出信号，IBus 服务安全退场。");
             Ok(())
         }
@@ -180,7 +176,7 @@ struct WaylandSessionParams<'a> {
     watched_paths: Vec<PathBuf>,
     initial_mtime: Option<SystemTime>,
     tray: Option<&'a tray::TrayService>,
-    loop_wakeup: Option<LoopWakeup>,
+    coordinator: &'a ShutdownCoordinator,
 }
 
 /// 运行 Wayland V1 会话
@@ -203,8 +199,8 @@ fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), Box<dyn Error>
     session.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
     session.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
     session.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-    session.exit_requested = params.tray.as_ref().map(|t| t.exit_flag());
-    session.loop_wakeup = params.loop_wakeup;
+    session.exit_requested = Some(params.coordinator.flag());
+    session.loop_wakeup = params.coordinator.loop_wakeup();
     session.reload_callback = Some(Box::new(apply_reload_v1));
     run_session_v1_loop(session).map_err(Into::into)
 }
@@ -233,19 +229,14 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
     session_v2.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
     session_v2.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
     session_v2.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-    session_v2.exit_requested = params.tray.as_ref().map(|t| t.exit_flag());
-    session_v2.loop_wakeup = params.loop_wakeup.clone();
+    session_v2.exit_requested = Some(params.coordinator.flag());
+    session_v2.loop_wakeup = params.coordinator.loop_wakeup();
     session_v2.reload_callback = Some(Box::new(apply_reload_v2));
     let v2_result = run_session_v2_loop_fallible(session_v2);
     match v2_result {
         Ok(()) => Ok(()),
         Err((e, returned_session)) => {
-            if params
-                .tray
-                .as_ref()
-                .map(|t| t.is_exit_requested())
-                .unwrap_or(false)
-            {
+            if params.coordinator.is_shutting_down() {
                 info!("[微澜守护进程] 检测到优雅退出请求，服务安全退场。");
                 return Ok(());
             }
@@ -268,8 +259,8 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
             session.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
             session.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
             session.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-            session.exit_requested = params.tray.as_ref().map(|t| t.exit_flag());
-            session.loop_wakeup = params.loop_wakeup;
+            session.exit_requested = Some(params.coordinator.flag());
+            session.loop_wakeup = params.coordinator.loop_wakeup();
             session.reload_callback = Some(Box::new(apply_reload_v1));
             run_session_v1_loop(session).map_err(Into::into)
         }
@@ -285,8 +276,7 @@ struct WaylandDispatchOptions<'a> {
     watched_paths: Vec<PathBuf>,
     initial_mtime: Option<SystemTime>,
     tray: Option<&'a tray::TrayService>,
-    term_now: &'a Arc<AtomicBool>,
-    loop_wakeup: Option<LoopWakeup>,
+    coordinator: &'a ShutdownCoordinator,
 }
 
 /// 运行 Wayland 会话并处理异常退出
@@ -298,7 +288,7 @@ fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), Box<
         watched_paths: opts.watched_paths,
         initial_mtime: opts.initial_mtime,
         tray: opts.tray,
-        loop_wakeup: opts.loop_wakeup,
+        coordinator: opts.coordinator,
     };
 
     let loop_result = if opts.caps.has_input_method_v2 && opts.caps.has_seat {
@@ -312,13 +302,7 @@ fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), Box<
             info!("[微澜守护进程] Wayland 输入法事件循环已正常退出，所有资源已安全释放。");
         }
         Err(e) => {
-            if opts
-                .tray
-                .as_ref()
-                .map(|t| t.is_exit_requested())
-                .unwrap_or(false)
-                || opts.term_now.load(Ordering::Relaxed)
-            {
+            if opts.coordinator.is_shutting_down() {
                 info!("[微澜守护进程] 收到退出信号或托盘退出请求，服务安全退场。");
                 return Ok(());
             }
@@ -359,8 +343,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let term_now = Arc::new(AtomicBool::new(false));
-    register_system_signals(&term_now);
+    let loop_wakeup = LoopWakeup::new().ok();
+    let coordinator = ShutdownCoordinator::new(loop_wakeup);
+    coordinator.register_system_signals();
 
     info!("============================================================");
     info!(
@@ -377,7 +362,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut renderer = CandidateBoxRenderer::new(theme);
     renderer.font_size = cfg.font_size;
 
-    let Some(mut engine) = build_algo_engine(&cfg, &term_now)? else {
+    let Some(mut engine) = build_algo_engine(&cfg, &coordinator)? else {
         return Ok(());
     };
 
@@ -386,22 +371,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    if term_now.load(Ordering::Relaxed) {
+    if coordinator.is_shutting_down() {
         return Ok(());
     }
 
     let caps = check_wayland_capabilities();
-    let loop_wakeup = LoopWakeup::new().ok();
     let use_ibus_backend = is_ibus_arg || (!caps.has_input_method_v2 && !caps.has_input_method_v1);
     let (watched_paths, initial_mtime) = collect_watched_paths();
     let (should_spawn_tray, exclusive_source) =
         determine_tray_and_exclusive(&cfg, use_ibus_backend);
 
     let tray = if should_spawn_tray {
-        Some(tray::TrayService::spawn(
-            Arc::clone(&term_now),
-            loop_wakeup.clone(),
-        ))
+        Some(tray::TrayService::spawn(coordinator.clone()))
     } else {
         None
     };
@@ -415,8 +396,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             watched_paths,
             initial_mtime,
             tray: tray.as_ref(),
-            term_now,
-            loop_wakeup,
+            coordinator,
         })
     } else {
         dispatch_wayland_session(WaylandDispatchOptions {
@@ -427,8 +407,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             watched_paths,
             initial_mtime,
             tray: tray.as_ref(),
-            term_now: &term_now,
-            loop_wakeup,
+            coordinator: &coordinator,
         })
     }
 }
