@@ -239,8 +239,13 @@ impl VoiceSessionController {
                         ));
                     }
 
-                    let recognizer = cached_recognizer.as_mut().unwrap();
-                    let vad = cached_vad.as_mut().unwrap();
+                    let (Some(recognizer), Some(vad)) =
+                        (cached_recognizer.as_mut(), cached_vad.as_mut())
+                    else {
+                        warn!("[语音会话] 语音识别器或 VAD 模型未正确初始化，跳过本次录音");
+                        is_active.store(false, Ordering::Release);
+                        continue;
+                    };
                     recognizer.reset();
                     vad.reset();
                     visualizer.reset();
