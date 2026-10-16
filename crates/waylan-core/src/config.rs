@@ -2,6 +2,42 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+/// 微澜输入法配置系统领域错误枚举
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    /// 无法解析或定位当前用户的配置目录
+    #[error("无法确定用户配置文件存储路径，请检查 HOME 或 XDG_CONFIG_HOME 环境变量")]
+    ConfigDirectoryNotFound,
+
+    /// 配置文件底层 I/O 错误
+    #[error("配置文件 I/O 读写失败，路径: {path}，原因: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// TOML 配置反序列化失败
+    #[error("TOML 配置解析失败: {0}")]
+    TomlDe(#[from] toml::de::Error),
+
+    /// TOML 配置序列化失败
+    #[error("TOML 配置序列化失败: {0}")]
+    TomlSer(#[from] toml::ser::Error),
+
+    /// 容错解析与合并失败
+    #[error("TOML 容错解析失败，严格错误: {strict_err}，合并错误: {merge_err}")]
+    ParseFailed {
+        strict_err: String,
+        merge_err: String,
+    },
+
+    /// 语法损坏错误
+    #[error("TOML 语法损坏无法解析: {0}")]
+    SyntaxCorrupted(String),
+}
 
 pub use crate::config_types::{
     AudioFrontEndConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation,
@@ -423,7 +459,7 @@ impl AppConfig {
     }
 
     /// 宽容解析配置文件：优先严格解析，失败时尝试提取有效字段并以默认配置补齐
-    pub fn parse_tolerant(content: &str) -> Result<Self, String> {
+    pub fn parse_tolerant(content: &str) -> Result<Self, ConfigError> {
         match toml::from_str::<Self>(content) {
             Ok(mut cfg) => {
                 cfg.sanitize();
@@ -432,11 +468,11 @@ impl AppConfig {
             Err(strict_err) => {
                 // 尝试作为通用 toml::Table 解析，最大限度挽救用户已有配置项
                 let Ok(table) = toml::from_str::<toml::Table>(content) else {
-                    return Err(format!("TOML 语法损坏无法解析: {}", strict_err));
+                    return Err(ConfigError::SyntaxCorrupted(strict_err.to_string()));
                 };
 
-                let mut base_val = toml::Value::try_from(Self::default())
-                    .map_err(|e| format!("序列化默认配置失败: {}", e))?;
+                let mut base_val =
+                    toml::Value::try_from(Self::default()).map_err(ConfigError::TomlSer)?;
 
                 if let toml::Value::Table(ref mut base_table) = base_val {
                     for (k, v) in table {
@@ -469,10 +505,10 @@ impl AppConfig {
                         );
                         Ok(merged_cfg)
                     }
-                    Err(merge_err) => Err(format!(
-                        "严格解析失败: {}，容错合并失败: {}",
-                        strict_err, merge_err
-                    )),
+                    Err(merge_err) => Err(ConfigError::ParseFailed {
+                        strict_err: strict_err.to_string(),
+                        merge_err: merge_err.to_string(),
+                    }),
                 }
             }
         }
@@ -566,21 +602,20 @@ impl AppConfig {
     /// 保存配置到默认用户路径
     ///
     /// # Errors
-    /// 当无法确定用户配置目录或磁盘写入失败时返回错误。
-    pub fn save_default(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// 当无法确定用户配置目录或磁盘写入失败时返回 [`ConfigError`]。
+    pub fn save_default(&self) -> Result<(), ConfigError> {
         if let Some(path) = Self::config_path() {
-            self.save_to_file(&path)?;
-            Ok(())
+            self.save_to_file(&path)
         } else {
-            Err("无法确定用户配置文件存储路径".into())
+            Err(ConfigError::ConfigDirectoryNotFound)
         }
     }
 
     /// 保存配置到指定路径
     ///
     /// # Errors
-    /// 当目录创建失败、TOML 序列化失败或原子重命名失败时返回错误。
-    pub fn save_to_file(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    /// 当目录创建失败、TOML 序列化失败或原子重命名失败时返回 [`ConfigError`]。
+    pub fn save_to_file(&self, path: &Path) -> Result<(), ConfigError> {
         if let Some(parent) = path.parent() {
             #[cfg(unix)]
             {
@@ -591,7 +626,10 @@ impl AppConfig {
             }
             #[cfg(not(unix))]
             {
-                fs::create_dir_all(parent)?;
+                fs::create_dir_all(parent).map_err(|e| ConfigError::Io {
+                    path: parent.to_path_buf(),
+                    source: e,
+                })?;
             }
         }
         let serialized = toml::to_string_pretty(self)?;
@@ -614,7 +652,10 @@ impl AppConfig {
         })();
         if let Err(e) = write_res {
             let _ = fs::remove_file(&tmp_path);
-            return Err(e.into());
+            return Err(ConfigError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            });
         }
         Ok(())
     }

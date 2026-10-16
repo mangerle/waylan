@@ -4,7 +4,7 @@ pub mod config_types;
 pub use candidate_format::{format_candidate_display, CIRCLED_NUMBERS};
 pub use config::{
     AppConfig, AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
-    CloudProfile, CloudProviderType, FullWidthCharShortcut, FullWidthPunctShortcut,
+    CloudProfile, CloudProviderType, ConfigError, FullWidthCharShortcut, FullWidthPunctShortcut,
     FuzzyPinyinRules, NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut,
     SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType,
     VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
