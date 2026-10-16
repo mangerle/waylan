@@ -213,11 +213,10 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
     session_v2.surface_manager.renderer = params.renderer;
     session_v2.watched_paths = params.watched_paths;
     session_v2.last_watched_mtime = params.initial_mtime;
-    session_v2.shift_state =
-        ShiftToggleStateMachine::with_toggle_key(match params.cfg.switch_key {
-            SwitchKey::Shift => ToggleKeyMode::Shift,
-            SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
-        });
+    session_v2.shift_sm = ShiftToggleStateMachine::with_toggle_key(match params.cfg.switch_key {
+        SwitchKey::Shift => ToggleKeyMode::Shift,
+        SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
+    });
     let mut session_v2_punct = PunctuationProcessor::with_options(
         params.cfg.slash_to_dunhao,
         params.cfg.protect_digits_punctuation,
@@ -249,22 +248,21 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
             let returned_session = *returned_session;
             let mut surface_manager = returned_session.surface_manager;
             surface_manager.clear_wayland_resources();
-            let mut session = WaylanV1Session::with_engine(returned_session.engine);
-            session.surface_manager = surface_manager;
-            session.keymap_layout = returned_session.keymap_layout;
-            session.watched_paths = returned_session.watched_paths;
-            session.last_watched_mtime = returned_session.last_watched_mtime;
-            session.shift_sm = returned_session.shift_state;
-            session.punctuation_processor = returned_session.punctuation_processor;
-            session.page_keys = returned_session.page_keys;
-            session.shared_is_chinese = params.tray.as_ref().map(|t| t.mode_flag());
-            session.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
-            session.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
-            session.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-            session.exit_requested = Some(params.coordinator.flag());
-            session.loop_wakeup = params.coordinator.loop_wakeup();
-            session.reload_callback = Some(Box::new(apply_reload_v1));
-            session.key_filter = build_wayland_voice_filter(&params.cfg.voice);
+            let session = WaylanV1Session {
+                core: returned_session.core,
+                surface_manager,
+                watched_paths: returned_session.watched_paths,
+                last_watched_mtime: returned_session.last_watched_mtime,
+                shared_is_chinese: params.tray.as_ref().map(|t| t.mode_flag()),
+                shared_is_caps_locked: params.tray.as_ref().map(|t| t.caps_lock_flag()),
+                mode_notify_tx: params.tray.as_ref().map(|t| t.icon_notifier()),
+                reload_requested: params.tray.as_ref().map(|t| t.reload_flag()),
+                exit_requested: Some(params.coordinator.flag()),
+                loop_wakeup: params.coordinator.loop_wakeup(),
+                reload_callback: Some(Box::new(apply_reload_v1)),
+                key_filter: build_wayland_voice_filter(&params.cfg.voice),
+                ..WaylanV1Session::default()
+            };
             run_session_v1_loop(session).map_err(Into::into)
         }
     }

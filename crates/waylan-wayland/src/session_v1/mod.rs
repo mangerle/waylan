@@ -1,11 +1,10 @@
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
 use std::time::SystemTime;
 
 use log::{debug, info};
-use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
-use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
+use waylan_algo::{AlgoEngine, ImeCoreSession};
 use waylan_core::{CandidateBoxState, InputMode};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_keyboard::WlKeyboard, wl_shm::WlShm, wl_surface::WlSurface,
@@ -31,19 +30,12 @@ pub use waylan_core::input::*;
 pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;
 
 /// 微澜输入法会话状态机
+#[derive(Default)]
 pub struct WaylanV1Session {
-    /// 拼音算法引擎核心
-    pub engine: AlgoEngine,
-    /// 标点符号智能处理器
-    pub punctuation_processor: PunctuationProcessor,
-    /// Shift/Ctrl 防误触状态机
-    pub shift_sm: ShiftToggleStateMachine,
-    /// 候选词翻页快捷键模式
-    pub page_keys: PageKeyConfig,
+    /// 核心输入法决策会话与算法状态机
+    pub core: ImeCoreSession,
     /// 候选框悬浮图层管理器
     pub surface_manager: CandidateSurfaceManager,
-    /// 当前输入语言模式
-    pub mode: InputMode,
     /// 与外部系统托盘共享的中英文状态标志
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
     /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
@@ -78,16 +70,6 @@ pub struct WaylanV1Session {
     pub current_serial: u32,
     /// 文本输入上下文状态同步序号（由 commit_state 事件更新，用于 commit_string 与 preedit_string）
     pub commit_serial: u32,
-    /// 当前按下的修饰键位掩码（XKB mods_depressed）
-    pub mods_depressed: u32,
-    /// 当前锁定的修饰键位掩码（XKB mods_locked，如 CapsLock / NumLock）
-    pub mods_locked: u32,
-    /// 左右物理修饰键独立按下位掩码
-    pub phys_mods: u8,
-    /// 按键按下与释放对称消费跟踪器
-    pub consumed_keys: ConsumedKeyTracker,
-    /// 物理按键与动态键位布局映射表（支持 Dvorak / Colemak 等动态布局）
-    pub keymap_layout: KeymapLayout,
     /// 与外部系统托盘共享的优雅退出请求标志
     pub exit_requested: Option<Arc<AtomicBool>>,
     /// 基于 Linux inotify 的配置文件与词库变更监控器
@@ -98,42 +80,19 @@ pub struct WaylanV1Session {
     pub key_filter: Option<KeyFilterCallback>,
 }
 
-impl Default for WaylanV1Session {
-    fn default() -> Self {
-        Self {
-            engine: AlgoEngine::with_sample_data(AlgoConfig::default()),
-            punctuation_processor: PunctuationProcessor::new(),
-            shift_sm: ShiftToggleStateMachine::new(),
-            page_keys: PageKeyConfig::default(),
-            surface_manager: CandidateSurfaceManager::new(),
-            mode: InputMode::Chinese,
-            shared_is_chinese: None,
-            shared_is_caps_locked: None,
-            mode_notify_tx: None,
-            reload_requested: None,
-            reload_callback: None,
-            watched_paths: Vec::new(),
-            last_watched_mtime: None,
-            active_context: None,
-            grabbed_keyboard: None,
-            shm: None,
-            popup_wl_surface: None,
-            panel_surface: None,
-            layer_surface: None,
-            active_buffer: None,
-            qhandle: None,
-            current_serial: 0,
-            commit_serial: 0,
-            mods_depressed: 0,
-            mods_locked: 0,
-            phys_mods: 0,
-            consumed_keys: ConsumedKeyTracker::new(),
-            keymap_layout: KeymapLayout::default(),
-            exit_requested: None,
-            inotify_watcher: None,
-            loop_wakeup: None,
-            key_filter: None,
-        }
+impl Deref for WaylanV1Session {
+    type Target = ImeCoreSession;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl DerefMut for WaylanV1Session {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.core
     }
 }
 
@@ -156,37 +115,9 @@ impl WaylanV1Session {
     /// - **代价与局限**：调用方需负责算法引擎的预热与全生命周期参数调优。
     pub fn with_engine(engine: AlgoEngine) -> Self {
         Self {
-            engine,
+            core: ImeCoreSession::new(engine),
             ..Self::default()
         }
-    }
-
-    /// 根据按键按下/释放事件更新修饰键位掩码
-    pub(crate) fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
-        update_session_modifiers(
-            &mut self.mods_depressed,
-            &mut self.phys_mods,
-            keycode,
-            is_press,
-        );
-    }
-
-    /// 判断当前是否处于 Shift 按下状态
-    #[inline]
-    pub(crate) fn is_shift_active(&self) -> bool {
-        is_shift_active_state(self.mods_depressed, self.phys_mods)
-    }
-
-    /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
-    #[inline]
-    pub(crate) fn has_ctrl_or_alt(&self) -> bool {
-        has_ctrl_or_alt_state(self.mods_depressed, self.phys_mods)
-    }
-
-    /// 判断当前是否处于 CapsLock 大写锁定状态
-    #[inline]
-    pub(crate) fn is_caps_locked(&self) -> bool {
-        is_caps_locked_state(self.mods_locked)
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）
@@ -234,7 +165,7 @@ impl WaylanV1Session {
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即清理残留预编辑与候选框
     fn sync_mode_from_shared_flag(&mut self) {
         if let Some(InputMode::English) =
-            sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.mode)
+            sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
         {
             if !self.engine.raw_input().is_empty() {
                 self.engine.reset();
@@ -299,12 +230,7 @@ impl WaylanV1Session {
 
     /// 重置会话的修饰键位图、按键消费记录及算法引擎状态
     fn reset_input_state(&mut self) {
-        self.mods_depressed = 0;
-        self.phys_mods = 0;
-        self.consumed_keys.clear();
-        self.shift_sm.reset();
-        self.punctuation_processor.reset();
-        self.engine.reset();
+        self.core.reset_input_state();
     }
 
     /// 处理 V1 协议下的会话激活与键盘抓取建立

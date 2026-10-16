@@ -13,6 +13,7 @@ pub mod opencc;
 pub mod pipeline;
 pub mod preprocessor;
 pub mod prism;
+pub mod session;
 pub mod syllables;
 pub mod table;
 pub mod types;
@@ -29,6 +30,7 @@ pub use custom_phrase::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestio
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;
+pub use session::{ImeAction, ImeCoreSession};
 pub use table::{CompactMmapLexicon, LexiconTable};
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 pub use user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};

@@ -171,9 +171,8 @@ fn handle_grab_modifiers(
     group: u32,
 ) {
     let prev_caps = state.is_caps_locked();
-    state.mods_depressed = mods_depressed;
+    state.core.set_modifiers(mods_depressed, mods_locked);
     state.mods_latched = mods_latched;
-    state.mods_locked = mods_locked;
     state.mods_group = group;
     if state.has_virtual_keymap {
         if let Some(ref vk) = state.virtual_keyboard {

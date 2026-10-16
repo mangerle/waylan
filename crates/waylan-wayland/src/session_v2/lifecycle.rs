@@ -57,9 +57,9 @@ impl WaylanV2Session {
             self.pending_is_password = false;
             self.is_password_context = false;
             if was_active || focus_reset {
-                if self.mods_depressed != 0 && self.has_virtual_keymap {
+                if self.core.mods_depressed() != 0 && self.has_virtual_keymap {
                     if let Some(ref vk) = self.virtual_keyboard {
-                        vk.modifiers(0, 0, self.mods_locked, self.mods_group);
+                        vk.modifiers(0, 0, self.core.mods_locked(), self.mods_group);
                     }
                 }
                 self.reset_focus_state();
@@ -71,16 +71,10 @@ impl WaylanV2Session {
 
     /// 重置焦点关联的键盘修饰键、防误触状态机与输入引擎状态
     pub(crate) fn reset_focus_state(&mut self) {
-        self.mods_depressed = 0;
-        self.phys_mods = 0;
-        self.consumed_keys.clear();
+        self.core.reset_input_state();
         self.repeat_state = None;
         self.mods_latched = 0;
-        self.mods_locked = 0;
         self.mods_group = 0;
-        self.shift_state.reset();
-        self.punctuation_processor.reset();
-        self.engine.reset();
         self.hide_candidate_surface();
     }
 
@@ -124,7 +118,7 @@ impl WaylanV2Session {
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即取消输入并隐藏候选框
     pub(crate) fn sync_mode_from_shared_flag(&mut self) {
         if let Some(InputMode::English) =
-            sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.mode)
+            sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
         {
             if !self.engine.raw_input().is_empty() {
                 self.cancel_input();

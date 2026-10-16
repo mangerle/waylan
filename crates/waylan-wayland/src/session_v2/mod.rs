@@ -2,14 +2,14 @@ mod keys;
 mod lifecycle;
 mod surrounding;
 
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
 use std::time::{Instant, SystemTime};
 
 use log::{debug, warn};
-use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
-use waylan_algo::AlgoEngine;
-use waylan_core::{CandidateBoxState, InputMode};
+use waylan_algo::{AlgoEngine, ImeCoreSession};
+use waylan_core::CandidateBoxState;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_pointer::WlPointer, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -23,7 +23,8 @@ use crate::fs_watcher::InotifyWatcher;
 use crate::loop_wakeup::LoopWakeup;
 use crate::session_common::*;
 use crate::surface::{CandidateSurfaceManager, CursorRect};
-use waylan_core::input::*;
+pub use waylan_core::input::*;
+pub use waylan_core::InputMode;
 
 pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
 
@@ -32,14 +33,8 @@ pub type ReloadCallback = Box<dyn FnMut(&mut WaylanV2Session) + Send>;
 
 /// 微澜面向现代 Wayland 合成器 (KDE Plasma 6 / GNOME 46+ / Hyprland) 的 V2 会话状态
 pub struct WaylanV2Session {
-    /// 核心拼音算法引擎
-    pub engine: AlgoEngine,
-    /// 中英文状态机
-    pub shift_state: ShiftToggleStateMachine,
-    /// 智能标点符号处理器
-    pub punctuation_processor: PunctuationProcessor,
-    /// 候选词翻页快捷键模式
-    pub page_keys: PageKeyConfig,
+    /// 核心输入法决策会话与算法状态机
+    pub core: ImeCoreSession,
     /// 候选框透明悬浮 Surface 管理器
     pub surface_manager: CandidateSurfaceManager,
     /// 当前是否处于激活会话
@@ -62,8 +57,6 @@ pub struct WaylanV2Session {
     pub qhandle: Option<QueueHandle<Self>>,
     /// 当前跟踪的光标坐标
     pub current_cursor: CursorRect,
-    /// 当前输入语言模式
-    pub mode: InputMode,
     /// 与外部系统托盘共享的中英文状态标志
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
     /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
@@ -92,16 +85,8 @@ pub struct WaylanV2Session {
     pub pending_focus_reset: bool,
     /// Done 事件累计序列号（用于 commit 请求原子同步）
     pub done_serial: u32,
-    /// 当前按下的修饰键位掩码（XKB mods_depressed）
-    pub mods_depressed: u32,
-    /// 左右物理修饰键独立按下位掩码
-    pub phys_mods: u8,
-    /// 按键按下与释放对称消费跟踪器
-    pub consumed_keys: ConsumedKeyTracker,
     /// 当前锁存的修饰键位掩码（XKB mods_latched）
     pub mods_latched: u32,
-    /// 当前锁定的修饰键位掩码（XKB mods_locked，如 CapsLock / NumLock）
-    pub mods_locked: u32,
     /// 当前激活的键盘布局组索引（XKB group）
     pub mods_group: u32,
     /// 标记虚拟键盘是否已完成 keymap 映射表初始化（防止未发送 keymap 即调用 key 引发协议错误）
@@ -114,8 +99,6 @@ pub struct WaylanV2Session {
     pub is_unavailable: bool,
     /// 与外部系统托盘共享的优雅退出请求标志
     pub exit_requested: Option<Arc<AtomicBool>>,
-    /// 动态键盘布局映射表（支持根据 XKB Keymap 动态更新）
-    pub keymap_layout: KeymapLayout,
     /// 5 行网格大候选词面板是否展开
     pub is_grid_expanded: bool,
     /// 5 行网格大候选词面板当前选中的全局候选词索引
@@ -134,6 +117,22 @@ pub struct WaylanV2Session {
     pub key_filter: Option<KeyFilterCallback>,
 }
 
+impl Deref for WaylanV2Session {
+    type Target = ImeCoreSession;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl DerefMut for WaylanV2Session {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.core
+    }
+}
+
 impl WaylanV2Session {
     /// 基于已加载并配置好的核心算法引擎构造 Wayland V2 输入法会话
     ///
@@ -143,10 +142,7 @@ impl WaylanV2Session {
     /// - **代价与局限**：强依赖合成器完整实现 V2 输入法扩展协议，不支持无该协议的早期合成器环境。
     pub fn new(engine: AlgoEngine) -> Self {
         Self {
-            engine,
-            shift_state: ShiftToggleStateMachine::new(),
-            punctuation_processor: PunctuationProcessor::new(),
-            page_keys: PageKeyConfig::default(),
+            core: ImeCoreSession::new(engine),
             surface_manager: CandidateSurfaceManager::new(),
             is_active: false,
             input_method: None,
@@ -158,7 +154,6 @@ impl WaylanV2Session {
             active_buffer: None,
             qhandle: None,
             current_cursor: CursorRect::default(),
-            mode: InputMode::Chinese,
             shared_is_chinese: None,
             shared_is_caps_locked: None,
             mode_notify_tx: None,
@@ -173,18 +168,13 @@ impl WaylanV2Session {
             is_password_context: false,
             pending_focus_reset: false,
             done_serial: 0,
-            mods_depressed: 0,
-            phys_mods: 0,
-            consumed_keys: ConsumedKeyTracker::new(),
             mods_latched: 0,
-            mods_locked: 0,
             mods_group: 0,
             has_virtual_keymap: false,
             repeat_info: (25, 400),
             repeat_state: None,
             is_unavailable: false,
             exit_requested: None,
-            keymap_layout: KeymapLayout::default(),
             is_grid_expanded: false,
             grid_selected_index: 0,
             pointer: None,
@@ -194,34 +184,6 @@ impl WaylanV2Session {
             loop_wakeup: None,
             key_filter: None,
         }
-    }
-
-    /// 根据按键按下/释放事件更新修饰键位掩码
-    pub(crate) fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
-        update_session_modifiers(
-            &mut self.mods_depressed,
-            &mut self.phys_mods,
-            keycode,
-            is_press,
-        );
-    }
-
-    /// 判断当前是否处于 Shift 按下状态
-    #[inline]
-    pub(crate) fn is_shift_active(&self) -> bool {
-        is_shift_active_state(self.mods_depressed, self.phys_mods)
-    }
-
-    /// 判断当前是否按下了 Ctrl / Alt / Super 组合修饰键
-    #[inline]
-    pub(crate) fn has_ctrl_or_alt(&self) -> bool {
-        has_ctrl_or_alt_state(self.mods_depressed, self.phys_mods)
-    }
-
-    /// 判断当前是否处于 CapsLock 大写锁定状态
-    #[inline]
-    pub(crate) fn is_caps_locked(&self) -> bool {
-        is_caps_locked_state(self.mods_locked)
     }
 
     /// 设置关联的 V2 输入法实例

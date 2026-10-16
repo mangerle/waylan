@@ -142,6 +142,16 @@ impl SessionConfigBundle {
         engine.english_suggester = self.english_suggester;
         engine.symbol_suggester = self.symbol_suggester;
     }
+
+    /// 将配置包原子应用到输入法核心会话状态中
+    pub fn apply_to_core(self, core: &mut waylan_algo::ImeCoreSession) {
+        self.apply_to_engine_and_input(
+            &mut core.engine,
+            &mut core.shift_sm,
+            &mut core.punctuation_processor,
+            &mut core.page_keys,
+        );
+    }
 }
 
 /// 执行 V2 会话的配置与词库热重载
@@ -149,12 +159,7 @@ pub fn apply_reload_v2(s: &mut WaylanV2Session) {
     let b = SessionConfigBundle::load_current();
     s.surface_manager.renderer.theme = b.theme.clone();
     s.surface_manager.renderer.font_size = b.font_size;
-    b.apply_to_engine_and_input(
-        &mut s.engine,
-        &mut s.shift_state,
-        &mut s.punctuation_processor,
-        &mut s.page_keys,
-    );
+    b.apply_to_core(&mut s.core);
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }
@@ -165,12 +170,7 @@ pub fn apply_reload_v1(s: &mut WaylanV1Session) {
     let b = SessionConfigBundle::load_current();
     s.surface_manager.renderer.theme = b.theme.clone();
     s.surface_manager.renderer.font_size = b.font_size;
-    b.apply_to_engine_and_input(
-        &mut s.engine,
-        &mut s.shift_sm,
-        &mut s.punctuation_processor,
-        &mut s.page_keys,
-    );
+    b.apply_to_core(&mut s.core);
     if !s.engine.raw_input().is_empty() {
         s.refresh_candidate_surface();
     }

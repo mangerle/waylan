@@ -464,7 +464,7 @@ fn test_caps_lock_toggle_and_passthrough() {
     assert!(!caps_up_consumed);
 
     // 3. 模拟合成器下发修饰键锁定状态（mods_locked 包含 MOD_CAPS）
-    session.mods_locked = MOD_CAPS;
+    session.modifiers.locked = MOD_CAPS;
     assert!(session.is_caps_locked());
 
     // 大写锁定期间，敲击字母键（如 A 键，扫描码 30），输入法不拦截消费，直通焦点应用
@@ -473,7 +473,7 @@ fn test_caps_lock_toggle_and_passthrough() {
     assert!(session.engine.raw_input().is_empty());
 
     // 4. 解除大写锁定（合成器更新 mods_locked = 0）
-    session.mods_locked = 0;
+    session.modifiers.locked = 0;
     assert!(!session.is_caps_locked());
     assert_eq!(
         session.mode,
@@ -488,9 +488,9 @@ fn test_caps_lock_toggle_and_passthrough() {
 
     // 5. 若原来是英文模式：解除大写锁定后应保持英文模式
     session.mode = InputMode::English;
-    session.mods_locked = MOD_CAPS;
+    session.modifiers.locked = MOD_CAPS;
     assert!(session.is_caps_locked());
-    session.mods_locked = 0;
+    session.modifiers.locked = 0;
     assert!(!session.is_caps_locked());
     assert_eq!(
         session.mode,

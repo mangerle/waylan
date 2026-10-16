@@ -4,16 +4,13 @@ use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::debug;
-use waylan_core::{InputMode, TextAction};
+use waylan_algo::ImeAction;
+use waylan_core::input::*;
+use waylan_core::InputMode;
 use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, WlKeyboard};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
-use waylan_algo::composition::{
-    handle_composition_key_with_params, CompositionKeyParams, KeyProcessAction,
-};
-use waylan_core::input::*;
-
 use crate::session_v1::WaylanV1Session;
 
 /// 处理 XKB 键盘字符布局映射同步
@@ -39,18 +36,15 @@ fn handle_v1_capslock(
     key: u32,
     is_press: bool,
 ) {
+    let (was_consumed, committed) = state.core.handle_capslock(is_press);
+    if let Some(raw) = committed {
+        state.hide_candidate_surface();
+        context.commit_string(state.commit_serial, raw);
+        context.preedit_string(state.commit_serial, String::new(), String::new());
+    }
     if is_press {
-        if !state.engine.raw_input().is_empty() {
-            let raw = state.engine.raw_input().to_string();
-            state.engine.reset();
-            state.hide_candidate_surface();
-            context.commit_string(state.commit_serial, raw);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-        }
-        state.consumed_keys.record_press(key, false);
         context.key(serial, time, key, 1);
-    } else {
-        state.consumed_keys.take_release(key);
+    } else if !was_consumed {
         context.key(serial, time, key, 0);
     }
 }
@@ -62,11 +56,9 @@ fn handle_v1_key_release(
     serial: u32,
     time: u32,
     key: u32,
-    toggled_mode: Option<InputMode>,
 ) {
-    let was_press_consumed = state.consumed_keys.take_release(key);
+    let (was_press_consumed, toggled_mode, committed) = state.core.handle_key_release(key);
     if let Some(new_mode) = toggled_mode {
-        state.mode = new_mode;
         if let Some(ref zh_flag) = state.shared_is_chinese {
             zh_flag.store(
                 matches!(new_mode, InputMode::Chinese | InputMode::VMode),
@@ -83,9 +75,7 @@ fn handle_v1_key_release(
         };
         debug!("[微澜] 切换输入模式为：{}", mode_str);
 
-        if new_mode == InputMode::English && !state.engine.raw_input().is_empty() {
-            let raw = state.engine.raw_input().to_string();
-            state.engine.reset();
+        if let Some(raw) = committed {
             state.hide_candidate_surface();
             context.commit_string(state.commit_serial, raw);
             context.preedit_string(state.commit_serial, String::new(), String::new());
@@ -107,8 +97,7 @@ fn handle_v1_modifiers(
     group: u32,
 ) {
     let prev_caps = state.is_caps_locked();
-    state.mods_depressed = mods_depressed;
-    state.mods_locked = mods_locked;
+    state.core.set_modifiers(mods_depressed, mods_locked);
     let curr_caps = state.is_caps_locked();
     if prev_caps != curr_caps {
         if let Some(ref caps_flag) = state.shared_is_caps_locked {
@@ -119,6 +108,73 @@ fn handle_v1_modifiers(
         }
     }
     context.modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
+}
+
+/// 处理 V1 协议下的按键按下事件，返回该按键是否被输入法内部消费（true=已消费，false=需原样透传给客户端）
+fn handle_v1_key_press(
+    state: &mut WaylanV1Session,
+    context: &ZwpInputMethodContextV1,
+    serial: u32,
+    time: u32,
+    key: u32,
+) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let action = state.core.handle_key_press(key, now, None);
+    match action {
+        ImeAction::PassThrough => false,
+        ImeAction::Handled | ImeAction::ExpandGrid => {
+            let preedit = state.engine.formatted_preedit();
+            let cursor = state.engine.formatted_cursor_byte_offset() as i32;
+            state.refresh_candidate_surface();
+            context.preedit_cursor(cursor);
+            context.preedit_string(state.commit_serial, preedit, String::new());
+            true
+        }
+        ImeAction::Commit(text) => {
+            state.hide_candidate_surface();
+            context.commit_string(state.commit_serial, text);
+            context.preedit_cursor(0);
+            context.preedit_string(state.commit_serial, String::new(), String::new());
+            true
+        }
+        ImeAction::CommitPunctuation {
+            text,
+            cursor_offset,
+        } => {
+            context.commit_string(state.commit_serial, text);
+            let dir_key = if cursor_offset < 0 {
+                KEY_LEFT
+            } else {
+                KEY_RIGHT
+            };
+            for _ in 0..cursor_offset.unsigned_abs() {
+                context.key(serial, time, dir_key, 1);
+                context.key(serial, time, dir_key, 0);
+            }
+            true
+        }
+        ImeAction::CommitPartial {
+            committed,
+            remaining_preedit,
+        } => {
+            let cursor = state.engine.formatted_cursor_byte_offset() as i32;
+            context.commit_string(state.commit_serial, committed);
+            state.refresh_candidate_surface();
+            context.preedit_cursor(cursor);
+            context.preedit_string(state.commit_serial, remaining_preedit, String::new());
+            true
+        }
+        ImeAction::Reset => {
+            state.hide_candidate_surface();
+            context.preedit_cursor(0);
+            context.preedit_string(state.commit_serial, String::new(), String::new());
+            true
+        }
+    }
 }
 
 impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
@@ -154,7 +210,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
 
                 // 外部快捷键拦截器（如语音听写）优先捕获
                 if let Some(mut filter) = state.key_filter.take() {
-                    let filter_outcome = filter(key, is_press, state.mods_depressed);
+                    let filter_outcome = filter(key, is_press, state.core.mods_depressed());
                     state.key_filter = Some(filter);
                     match filter_outcome {
                         crate::session_common::KeyFilterResult::Consumed => {
@@ -190,13 +246,12 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                     return;
                 }
 
-                let toggled_mode = state.shift_sm.on_key_event(key, is_press, state.mode);
                 if !is_press {
-                    handle_v1_key_release(state, &context, serial, time, key, toggled_mode);
+                    handle_v1_key_release(state, &context, serial, time, key);
                     return;
                 }
 
-                let consumed = handle_v1_key_press(state, &context, time, key);
+                let consumed = handle_v1_key_press(state, &context, serial, time, key);
                 state.consumed_keys.record_press(key, consumed);
                 if !consumed {
                     context.key(serial, time, key, 1);
@@ -222,145 +277,4 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
             _ => {}
         }
     }
-}
-
-/// 处理处于拼音组词状态下的键盘按键拦截
-fn handle_v1_composition_press(
-    state: &mut WaylanV1Session,
-    context: &ZwpInputMethodContextV1,
-    key: u32,
-) -> Option<bool> {
-    if state.engine.raw_input().is_empty() {
-        return None;
-    }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    let params = CompositionKeyParams {
-        key,
-        shift_active: state.is_shift_active(),
-        page_keys: state.page_keys,
-        now,
-    };
-    let action = handle_composition_key_with_params(
-        &mut state.engine,
-        &mut state.punctuation_processor,
-        params,
-    )?;
-
-    match action {
-        KeyProcessAction::PassThrough => None,
-        KeyProcessAction::Handled | KeyProcessAction::ExpandGrid => {
-            let preedit = state.engine.formatted_preedit();
-            let cursor = state.engine.formatted_cursor_byte_offset() as i32;
-            state.refresh_candidate_surface();
-            context.preedit_cursor(cursor);
-            context.preedit_string(state.commit_serial, preedit, String::new());
-            Some(true)
-        }
-        KeyProcessAction::Commit(text) => {
-            state.hide_candidate_surface();
-            context.commit_string(state.commit_serial, text);
-            context.preedit_cursor(0);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-            Some(true)
-        }
-        KeyProcessAction::CommitPartial {
-            committed,
-            remaining_preedit,
-        } => {
-            let cursor = state.engine.formatted_cursor_byte_offset() as i32;
-            context.commit_string(state.commit_serial, committed);
-            state.refresh_candidate_surface();
-            context.preedit_cursor(cursor);
-            context.preedit_string(state.commit_serial, remaining_preedit, String::new());
-            Some(true)
-        }
-        KeyProcessAction::Reset => {
-            state.hide_candidate_surface();
-            context.preedit_cursor(0);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-            Some(true)
-        }
-    }
-}
-
-/// 处理输入缓冲区为空时的空闲标点与数字上下文拦截
-fn handle_v1_idle_press(
-    state: &mut WaylanV1Session,
-    context: &ZwpInputMethodContextV1,
-    serial: u32,
-    time: u32,
-    key: u32,
-) -> Option<bool> {
-    if !state.engine.raw_input().is_empty() {
-        return None;
-    }
-    if key == KEY_BACKSPACE || key == KEY_SPACE {
-        return Some(false);
-    }
-    if let Some(punct_char) = keycode_to_punctuation_with_shift(key, state.is_shift_active()) {
-        if let Some(actions) = state.punctuation_processor.process_punctuation(punct_char) {
-            for action in actions {
-                match action {
-                    TextAction::Commit(text) => {
-                        context.commit_string(state.commit_serial, text);
-                    }
-                    TextAction::MoveCursor(offset) => {
-                        let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
-                        for _ in 0..offset.unsigned_abs() {
-                            context.key(serial, time, dir_key, 1);
-                            context.key(serial, time, dir_key, 0);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            return Some(true);
-        }
-    }
-    if !state.is_shift_active() {
-        if let Some(digit_ch) = keycode_to_ascii_digit_char(key) {
-            state
-                .punctuation_processor
-                .record_commit(&digit_ch.to_string());
-            return Some(false);
-        }
-    }
-    None
-}
-
-/// 处理 V1 协议下的按键按下事件，返回该按键是否被输入法内部消费（true=已消费，false=需原样透传给客户端）
-fn handle_v1_key_press(
-    state: &mut WaylanV1Session,
-    context: &ZwpInputMethodContextV1,
-    time: u32,
-    key: u32,
-) -> bool {
-    let serial = state.current_serial;
-    if state.mode == InputMode::English || state.is_caps_locked() || state.has_ctrl_or_alt() {
-        return false;
-    }
-
-    if let Some(consumed) = handle_v1_composition_press(state, context, key) {
-        return consumed;
-    }
-
-    if let Some(consumed) = handle_v1_idle_press(state, context, serial, time, key) {
-        return consumed;
-    }
-
-    if let Some(ch) = state.keymap_layout.get_char(key) {
-        state.engine.push_char(ch);
-        let preedit = state.engine.formatted_preedit();
-        let cursor = state.engine.formatted_cursor_byte_offset() as i32;
-        state.refresh_candidate_surface();
-        context.preedit_cursor(cursor);
-        context.preedit_string(state.commit_serial, preedit, String::new());
-        return true;
-    }
-
-    false
 }
