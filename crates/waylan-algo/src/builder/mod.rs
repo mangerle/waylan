@@ -7,6 +7,9 @@ use std::io::{BufRead, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+pub mod compact;
+pub use compact::CompactDictBuilder;
+
 /// 词库编译统计指标
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildStats {
@@ -297,10 +300,9 @@ impl DictBuilder {
         input_paths: &[P],
         bin_path: Q,
     ) -> Result<BuildStats, AlgoError> {
-        crate::builder_compact::CompactDictBuilder::build_compact_binary_dict(input_paths, bin_path)
+        self::compact::CompactDictBuilder::build_compact_binary_dict(input_paths, bin_path)
     }
 }
 
 #[cfg(test)]
-#[path = "builder_tests.rs"]
 mod tests;

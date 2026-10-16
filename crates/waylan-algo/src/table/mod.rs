@@ -6,7 +6,11 @@ use crate::vocab::Vocabulary;
 use std::collections::HashMap;
 use std::path::Path;
 
-pub use crate::table_mmap::{CompactMmapLexicon, COMPACT_DICT_MAGIC};
+pub mod mmap;
+mod prefix;
+mod sample;
+
+pub use mmap::{CompactMmapLexicon, COMPACT_DICT_MAGIC};
 
 /// 紧凑词典索引表 (Table / Lexicon)
 ///

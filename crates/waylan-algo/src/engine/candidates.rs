@@ -1,8 +1,7 @@
 use super::AlgoEngine;
 use crate::dispatcher::ModeDispatcher;
 use crate::pipeline::CandidatePipeline;
-use crate::prism::{PrismEngine, SegmentPath};
-use crate::prism_fuzzy::PrismFuzzy;
+use crate::prism::{PrismEngine, PrismFuzzy, SegmentPath};
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 

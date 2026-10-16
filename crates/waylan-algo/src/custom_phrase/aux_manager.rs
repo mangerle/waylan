@@ -1,4 +1,4 @@
-use crate::custom_phrase::AuxiliaryDict;
+use super::AuxiliaryDict;
 use crate::types::{AlgoCandidate, CandidateTier};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};

@@ -1,14 +1,20 @@
 use crate::entity::EntityProtectionManager;
-use crate::prism_fsa::PrismFsa;
-use crate::prism_fuzzy::PrismFuzzy;
 use crate::syllables::{
     get_spatial_typo_corrections, get_typo_corrections, has_strictly_longer_syllable,
     has_syllable_prefix, is_valid_syllable,
 };
 use crate::types::FuzzyConfig;
 use std::str;
+pub mod fsa;
+pub mod fuzzy;
+pub mod types;
 
-pub use crate::prism_types::{SegmentPath, STANDARD_INITIALS};
+#[cfg(test)]
+mod tests;
+
+pub use fsa::PrismFsa;
+pub use fuzzy::PrismFuzzy;
+pub use types::{SegmentPath, STANDARD_INITIALS};
 
 /// 棱镜拼写图引擎 (Prism / Syllable Graph)
 ///
@@ -483,7 +489,3 @@ impl PrismEngine {
         PrismFuzzy::is_zero_initial_borrowing_split(prev, curr)
     }
 }
-
-#[cfg(test)]
-#[path = "prism_tests.rs"]
-mod tests;

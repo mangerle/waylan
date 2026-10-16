@@ -5,9 +5,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use super::compact::CompactPhraseTable;
 use super::{OpenCcDict, OPENCC_DICT_MAGIC};
 use crate::error::AlgoError;
-use crate::opencc_compact::CompactPhraseTable;
 
 impl OpenCcDict {
     /// 编译并持久化保存为紧凑二进制词库文件 (`WAYLAN_OPENCC001`)

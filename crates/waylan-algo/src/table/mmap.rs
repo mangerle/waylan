@@ -329,7 +329,7 @@ pub(crate) fn decode_compact_score(score_u16: u16) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder_compact::encode_compact_score;
+    use crate::builder::compact::encode_compact_score;
 
     #[test]
     fn test_compact_score_encode_decode_roundtrip() {

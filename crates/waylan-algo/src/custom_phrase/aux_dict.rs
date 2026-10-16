@@ -32,7 +32,7 @@ impl AuxiliaryDict {
 
     /// 获取默认英文高频词汇表
     pub fn default_english_words() -> Vec<(String, u32)> {
-        crate::custom_phrase_data::DEFAULT_ENGLISH_WORDS
+        super::data::DEFAULT_ENGLISH_WORDS
             .iter()
             .enumerate()
             .map(|(idx, w)| (w.to_string(), 100_000_u32.saturating_sub(idx as u32 * 100)))
@@ -41,7 +41,7 @@ impl AuxiliaryDict {
 
     /// 获取默认 Unicode 符号与表情映射表
     pub fn default_symbols() -> Vec<(String, String, String)> {
-        crate::custom_phrase_data::DEFAULT_SYMBOLS
+        super::data::DEFAULT_SYMBOLS
             .iter()
             .map(|(py, sym, desc)| (py.to_string(), sym.to_string(), desc.to_string()))
             .collect()

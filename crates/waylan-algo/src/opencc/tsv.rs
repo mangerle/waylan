@@ -1,5 +1,5 @@
+use super::OpenCcDict;
 use crate::error::AlgoError;
-use crate::opencc::OpenCcDict;
 use std::fs;
 use std::path::{Path, PathBuf};
 

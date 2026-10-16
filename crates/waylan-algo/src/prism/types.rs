@@ -1,4 +1,4 @@
-use crate::prism_fuzzy::PrismFuzzy;
+use super::fuzzy::PrismFuzzy;
 use crate::syllables::is_valid_syllable;
 use crate::types::FuzzyConfig;
 

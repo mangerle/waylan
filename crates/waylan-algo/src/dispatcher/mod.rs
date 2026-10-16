@@ -1,6 +1,8 @@
 use crate::evaluator::{DateTimeEvaluator, FinancialEvaluator};
 use crate::types::{AlgoCandidate, AlgoConfig};
 
+pub mod symbols;
+
 /// 模式分流器
 ///
 /// # 设计原理
@@ -318,12 +320,12 @@ impl ModeDispatcher {
 
     /// U 模式：拆字与笔画反查
     fn eval_u_mode(input: &str) -> Vec<AlgoCandidate> {
-        crate::dispatcher_symbols::query_u_mode(input)
+        symbols::query_u_mode(input)
     }
 
     /// I 模式：特殊序号与符号输出
     fn eval_i_mode(input: &str) -> Vec<AlgoCandidate> {
-        crate::dispatcher_symbols::query_i_mode(input)
+        symbols::query_i_mode(input)
     }
 }
 

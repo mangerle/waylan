@@ -2,15 +2,19 @@
 //!
 //! 整合 OpenCC 字符短语字典、正向最大匹配（FMM）分词转换与紧凑二进制持久化。
 
+pub mod compact;
 mod converter;
+mod data;
 mod storage;
+pub mod tsv;
 
+use self::compact::CompactPhraseTable;
 use crate::error::AlgoError;
-use crate::opencc_compact::CompactPhraseTable;
 use log::info;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+pub use tsv::OpenCcTsvParser;
 
 /// 简繁转换二进制词库魔数标识（16 字节）
 pub const OPENCC_DICT_MAGIC: &[u8; 16] = b"WAYLAN_OPENCC001";
@@ -135,10 +139,10 @@ impl OpenCcDict {
     /// 内置核心简繁单字与一简多繁短语兜底表（供无外部词库文件时的轻量环境使用）
     pub fn with_builtin_fallback() -> Self {
         let mut dict = Self::new();
-        for &(simp, trads) in crate::opencc_data::BUILTIN_CHARS {
+        for &(simp, trads) in self::data::BUILTIN_CHARS {
             dict.insert_char_mapping(simp, trads.to_vec());
         }
-        for &(simp, trad) in crate::opencc_data::BUILTIN_PHRASES {
+        for &(simp, trad) in self::data::BUILTIN_PHRASES {
             dict.insert_phrase_mapping(simp.to_string(), trad.to_string());
         }
 
@@ -173,19 +177,19 @@ impl OpenCcDict {
         chars_path: impl AsRef<Path>,
         phrases_path: impl AsRef<Path>,
     ) -> Result<Self, AlgoError> {
-        crate::opencc_tsv::OpenCcTsvParser::from_tsv_files(chars_path, phrases_path)
+        self::tsv::OpenCcTsvParser::from_tsv_files(chars_path, phrases_path)
     }
 
     /// 解析 `STCharacters.txt` 格式内容
     #[inline]
     pub fn parse_characters_tsv(&mut self, content: &str) {
-        crate::opencc_tsv::OpenCcTsvParser::parse_characters_tsv(self, content);
+        self::tsv::OpenCcTsvParser::parse_characters_tsv(self, content);
     }
 
     /// 解析 `STPhrases.txt` 格式内容
     #[inline]
     pub fn parse_phrases_tsv(&mut self, content: &str) {
-        crate::opencc_tsv::OpenCcTsvParser::parse_phrases_tsv(self, content);
+        self::tsv::OpenCcTsvParser::parse_phrases_tsv(self, content);
     }
 }
 

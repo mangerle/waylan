@@ -3,7 +3,7 @@
 //! 支持用户在纯文本文件 (~/.config/waylan/phrases.txt) 中维护个性化快捷短语。
 //! 格式支持 "缩写=展开短语" 或 "缩写 展开短语"（如 mymail=abc@domain.com）。
 
-use crate::custom_phrase_macro::expand_dynamic_macros;
+use super::dynamic_macro::expand_dynamic_macros;
 use crate::types::{AlgoCandidate, CandidateTier};
 use std::collections::HashMap;
 use std::fs;

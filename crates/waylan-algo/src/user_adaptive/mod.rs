@@ -222,5 +222,4 @@ impl UserAdaptiveModel {
 }
 
 #[cfg(test)]
-#[path = "user_adaptive_tests.rs"]
 mod tests;

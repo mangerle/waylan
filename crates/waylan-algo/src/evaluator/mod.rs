@@ -382,7 +382,8 @@ impl DateTimeEvaluator {
         Some((l_year, is_leap, l_month, l_day))
     }
 }
-pub use crate::evaluator_financial::FinancialEvaluator;
+pub mod financial;
+pub use financial::FinancialEvaluator;
 
 #[cfg(test)]
 mod tests {

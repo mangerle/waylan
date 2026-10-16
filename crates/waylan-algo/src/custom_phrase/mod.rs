@@ -3,12 +3,14 @@
 //! 整合用户文本短语映射（`phrases.txt`）与紧凑二进制辅助混输词库（`aux.dict.bin`）。
 
 mod aux_dict;
+pub mod aux_manager;
+mod data;
+mod dynamic_macro;
 mod manager;
 
 pub use aux_dict::{AuxiliaryDict, AUX_DICT_MAGIC};
+pub use aux_manager::{EnglishSuggestionManager, SymbolSuggestionManager};
 pub use manager::CustomPhraseManager;
-
-pub use crate::custom_phrase_aux::{EnglishSuggestionManager, SymbolSuggestionManager};
 
 #[cfg(test)]
 mod tests {
