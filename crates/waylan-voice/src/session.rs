@@ -67,6 +67,20 @@ enum WorkerCommand {
     Shutdown,
 }
 
+/// 语音会话主动停止与优雅排空提交参数上下文
+struct StopCommitContext<'a> {
+    capture: Option<AudioCapture>,
+    pcm_rx: &'a Receiver<Vec<f32>>,
+    recognizer: &'a mut dyn VoiceRecognizer,
+    afe: &'a mut AudioFrontEndPipeline,
+    pre_speech_buffer: &'a mut VecDeque<f32>,
+    last_partial_text: &'a mut String,
+    punct_restorer: Option<&'a PunctuationRestorer>,
+    voice_config: &'a VoiceConfig,
+    event_tx: &'a SyncSender<VoiceEvent>,
+    is_active: &'a Arc<AtomicBool>,
+}
+
 /// 语音会话状态纳管器（长生命周期常驻控制器）
 pub struct VoiceSessionController {
     /// 录音活动标志（供外界高频原子查询）
@@ -300,37 +314,31 @@ impl VoiceSessionController {
         let session_start_time = Instant::now();
         let mut pre_speech_buffer: VecDeque<f32> =
             VecDeque::with_capacity(PRE_SPEECH_BUFFER_CAPACITY);
+        let mut capture_opt = Some(_capture);
 
         loop {
             // 1. 优先检查外部主动停止、提交或取消命令，确保指令不因 is_active 竞态而被跳过
             if let Ok(cmd) = cmd_rx.try_recv() {
                 match cmd {
                     WorkerCommand::StopAndCommit => {
-                        info!("[语音会话] 收到外部主动提交指令，正在生成整句文字");
-                        if !pre_speech_buffer.is_empty() {
-                            let buffered: Vec<f32> = pre_speech_buffer.drain(..).collect();
-                            let _ = recognizer.feed_pcm(&buffered);
-                        }
-                        let mut final_text = Self::extract_final_text(
+                        let ctx = StopCommitContext {
+                            capture: capture_opt.take(),
+                            pcm_rx: &pcm_rx,
                             recognizer,
+                            afe: &mut afe,
+                            pre_speech_buffer: &mut pre_speech_buffer,
+                            last_partial_text: &mut last_partial_text,
                             punct_restorer,
-                            voice_config.auto_punctuation,
-                            &voice_config.itn,
-                        );
-                        if final_text.is_empty() && !last_partial_text.is_empty() {
-                            info!(
-                                "[语音会话] finish 结果为空，采用实时流式识别出的预览文本保底: \"{}\"",
-                                last_partial_text
-                            );
-                            final_text = last_partial_text.clone();
-                        }
-                        info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
-                        let _ = event_tx.send(VoiceEvent::FinalCommit(final_text));
-                        is_active.store(false, Ordering::Release);
+                            voice_config,
+                            event_tx,
+                            is_active,
+                        };
+                        Self::handle_stop_and_commit(ctx);
                         break;
                     }
                     WorkerCommand::Cancel => {
                         info!("[语音会话] 收到外部取消指令，放弃本次录音");
+                        drop(capture_opt.take());
                         pre_speech_buffer.clear();
                         recognizer.reset();
                         let _ = event_tx.send(VoiceEvent::Cancelled);
@@ -338,6 +346,7 @@ impl VoiceSessionController {
                         break;
                     }
                     WorkerCommand::Shutdown => {
+                        drop(capture_opt.take());
                         pre_speech_buffer.clear();
                         recognizer.reset();
                         is_active.store(false, Ordering::Release);
@@ -345,6 +354,7 @@ impl VoiceSessionController {
                     }
                     WorkerCommand::UnloadModels => {
                         info!("[语音会话] 录音过程中收到卸载指令，中止当前录音并退出");
+                        drop(capture_opt.take());
                         pre_speech_buffer.clear();
                         recognizer.reset();
                         is_active.store(false, Ordering::Release);
@@ -450,6 +460,95 @@ impl VoiceSessionController {
 
         is_active.store(false, Ordering::Release);
         info!("[语音会话] 录音会话结束，音频捕获硬件已释放");
+    }
+
+    /// 处理主动停止录音与优雅排空提交
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：解决用户讲完话松开按键瞬间，声卡硬件与通道缓冲区残留音频被截断丢失、
+    ///   以及流式神经网络模型右侧感受野（Right Context / Lookahead）因缺乏尾部静音而未完成最终出字的问题。
+    /// - **核心优势**：
+    ///   1. 毫秒级排空麦克风在途音频与通道积压切片，保证用户讲的最后几个字 100% 被送入 ASR 识别；
+    ///   2. 注入 200ms 的尾部静音 Padding，激活流式模型感受野将末尾汉字完整推出；
+    ///   3. 维持流式实时预览文本的最新状态，防止网络或模型异常时回退到陈旧的截断文本。
+    /// - **代价与局限**：在松开按键后会产生约 40ms ~ 80ms 的自然收敛等待，对用户交互无感且体验更自然。
+    fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
+        info!("[语音会话] 收到外部主动提交指令，正在执行音频管道排空与整句结算");
+
+        // 1. 等待并排空麦克风硬件驱动与管道中的在途音频（最长 80ms，单次 40ms 无新数据即快速跳出）
+        let drain_start = Instant::now();
+        while drain_start.elapsed() < Duration::from_millis(80) {
+            match ctx.pcm_rx.recv_timeout(Duration::from_millis(40)) {
+                Ok(mut samples) => {
+                    ctx.afe.process(&mut samples);
+                    let _ = Self::process_recognition_feed(
+                        ctx.recognizer,
+                        &samples,
+                        ctx.pre_speech_buffer,
+                        ctx.last_partial_text,
+                        ctx.event_tx,
+                        ctx.voice_config.interaction.real_time_preview,
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // 2. 显式释放音频捕获硬件，彻底终止麦克风录入
+        drop(ctx.capture.take());
+
+        // 3. 将通道中可能剩余的任何切片彻底清空并处理
+        while let Ok(mut samples) = ctx.pcm_rx.try_recv() {
+            ctx.afe.process(&mut samples);
+            let _ = Self::process_recognition_feed(
+                ctx.recognizer,
+                &samples,
+                ctx.pre_speech_buffer,
+                ctx.last_partial_text,
+                ctx.event_tx,
+                ctx.voice_config.interaction.real_time_preview,
+            );
+        }
+
+        // 若此前尚未检测到人声起音（短句），将预存的静音缓冲倒出送入识别器
+        if !ctx.pre_speech_buffer.is_empty() {
+            let buffered: Vec<f32> = ctx.pre_speech_buffer.drain(..).collect();
+            let _ = ctx.recognizer.feed_pcm(&buffered);
+        }
+
+        // 4. 注入约 200ms 的尾部静音 padding（3200 个 16kHz 零采样点）
+        // 激活流式神经网络（如 Zipformer / Paraformer）的右侧上下文感受野，迫使模型完整吐出末尾汉字
+        const TRAILING_SILENCE_SAMPLES: usize = 16_000 * 200 / 1000;
+        let silence = vec![0.0f32; TRAILING_SILENCE_SAMPLES];
+        let _ = Self::process_recognition_feed(
+            ctx.recognizer,
+            &silence,
+            ctx.pre_speech_buffer,
+            ctx.last_partial_text,
+            ctx.event_tx,
+            ctx.voice_config.interaction.real_time_preview,
+        );
+
+        // 5. 调用 finish 提取最终整句识别文字与标点预测
+        let mut final_text = Self::extract_final_text(
+            ctx.recognizer,
+            ctx.punct_restorer,
+            ctx.voice_config.auto_punctuation,
+            &ctx.voice_config.itn,
+        );
+
+        if final_text.is_empty() && !ctx.last_partial_text.is_empty() {
+            info!(
+                "[语音会话] finish 结果为空，采用实时流式识别出的预览文本保底: \"{}\"",
+                ctx.last_partial_text
+            );
+            final_text = ctx.last_partial_text.clone();
+        }
+
+        info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
+        let _ = ctx.event_tx.send(VoiceEvent::FinalCommit(final_text));
+        ctx.is_active.store(false, Ordering::Release);
     }
 
     /// 将静音音频采样压入前置环形队列，并维持最大容量限制
@@ -693,5 +792,52 @@ mod tests {
         // 验证通道已收到 UnloadModels 指令
         let received = cmd_rx.try_recv();
         assert!(matches!(received, Ok(WorkerCommand::UnloadModels)));
+    }
+
+    #[test]
+    fn test_handle_stop_and_commit_drains_audio_and_flushes_silence() {
+        let (pcm_tx, pcm_rx) = sync_channel::<Vec<f32>>(16);
+        // 模拟松开按键瞬间，管道中积压了 2 帧有效音频
+        pcm_tx.send(vec![0.1; 1600]).unwrap();
+        pcm_tx.send(vec![0.2; 1600]).unwrap();
+
+        let (event_tx, event_rx) = sync_channel::<VoiceEvent>(16);
+        let mut recognizer = MockVoiceRecognizer::new();
+        let voice_cfg = VoiceConfig::default();
+        let mut afe = AudioFrontEndPipeline::new(&voice_cfg.afe);
+        let mut pre_speech = VecDeque::new();
+        let mut last_partial = String::new();
+        let is_active = Arc::new(AtomicBool::new(true));
+
+        let ctx = StopCommitContext {
+            capture: None,
+            pcm_rx: &pcm_rx,
+            recognizer: &mut recognizer,
+            afe: &mut afe,
+            pre_speech_buffer: &mut pre_speech,
+            last_partial_text: &mut last_partial,
+            punct_restorer: None,
+            voice_config: &voice_cfg,
+            event_tx: &event_tx,
+            is_active: &is_active,
+        };
+
+        VoiceSessionController::handle_stop_and_commit(ctx);
+
+        // 验证通道内积压音频已被彻底排空
+        assert!(pcm_rx.try_recv().is_err(), "音频通道中的切片应已被全部排空");
+
+        // 验证活跃标志已安全复位
+        assert!(!is_active.load(Ordering::Acquire));
+
+        // 验证成功收到包含文本的 FinalCommit 事件
+        let mut final_commit_received = false;
+        while let Ok(evt) = event_rx.try_recv() {
+            if let VoiceEvent::FinalCommit(text) = evt {
+                assert!(!text.is_empty(), "结算文本不应为空");
+                final_commit_received = true;
+            }
+        }
+        assert!(final_commit_received, "必须收到 FinalCommit 终态事件");
     }
 }
