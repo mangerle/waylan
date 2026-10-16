@@ -12,7 +12,7 @@ use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_core::{CloudAsrConfig, CloudProfile, CloudProviderType};
 
-use crate::sync::sync_config_to_window;
+use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::SettingsWindow;
 
 /// 注册所有语音输入相关界面回调事件
@@ -33,12 +33,27 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                win.set_global_status(SharedString::from(format!("成功导入 ASR 模型: {}", name)));
                 let mut cfg = current_cfg_cell.borrow().clone();
+                update_config_from_window(&win, &mut cfg);
                 cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
+                match cfg.save_default() {
+                    Ok(()) => {
+                        *current_cfg_cell.borrow_mut() = cfg.clone();
+                        sync_config_to_window(&win, &cfg);
+                        win.set_global_status_is_error(false);
+                        win.set_global_status(SharedString::from(format!(
+                            "成功导入 ASR 模型: {}",
+                            name
+                        )));
+                    }
+                    Err(e) => {
+                        win.set_global_status_is_error(true);
+                        win.set_global_status(SharedString::from(format!(
+                            "保存 ASR 模型配置失败: {}",
+                            e
+                        )));
+                    }
+                }
             }
         }
     });
@@ -56,13 +71,28 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                win.set_global_status(SharedString::from(format!("成功导入 VAD 模型: {}", name)));
                 let mut cfg = current_cfg_cell.borrow().clone();
+                update_config_from_window(&win, &mut cfg);
                 cfg.voice.vad.model_path = Some(imported_path.to_string_lossy().to_string());
                 cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
+                match cfg.save_default() {
+                    Ok(()) => {
+                        *current_cfg_cell.borrow_mut() = cfg.clone();
+                        sync_config_to_window(&win, &cfg);
+                        win.set_global_status_is_error(false);
+                        win.set_global_status(SharedString::from(format!(
+                            "成功导入 VAD 模型: {}",
+                            name
+                        )));
+                    }
+                    Err(e) => {
+                        win.set_global_status_is_error(true);
+                        win.set_global_status(SharedString::from(format!(
+                            "保存 VAD 模型配置失败: {}",
+                            e
+                        )));
+                    }
+                }
             }
         }
     });
@@ -80,12 +110,27 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                win.set_global_status(SharedString::from(format!("成功导入标点模型: {}", name)));
                 let mut cfg = current_cfg_cell.borrow().clone();
+                update_config_from_window(&win, &mut cfg);
                 cfg.voice.punct_model_path = Some(imported_path.to_string_lossy().to_string());
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
+                match cfg.save_default() {
+                    Ok(()) => {
+                        *current_cfg_cell.borrow_mut() = cfg.clone();
+                        sync_config_to_window(&win, &cfg);
+                        win.set_global_status_is_error(false);
+                        win.set_global_status(SharedString::from(format!(
+                            "成功导入标点模型: {}",
+                            name
+                        )));
+                    }
+                    Err(e) => {
+                        win.set_global_status_is_error(true);
+                        win.set_global_status(SharedString::from(format!(
+                            "保存标点模型配置失败: {}",
+                            e
+                        )));
+                    }
+                }
             }
         }
     });
@@ -193,6 +238,7 @@ fn register_cloud_save_and_delete(
             };
 
             let mut cfg = current_cfg_cell.borrow().clone();
+            update_config_from_window(&win, &mut cfg);
             let target_id = editing_id_save.borrow_mut().take();
             if let Some(ref tid) = target_id {
                 if let Some(p) = cfg.voice.cloud_profiles.iter_mut().find(|p| &p.id == tid) {
@@ -218,15 +264,22 @@ fn register_cloud_save_and_delete(
                 });
             }
 
-            win.set_is_editing_cloud(false);
-            let _ = cfg.save_default();
-            *current_cfg_cell.borrow_mut() = cfg.clone();
-            sync_config_to_window(&win, &cfg);
-            win.set_global_status_is_error(false);
-            win.set_global_status(SharedString::from(format!(
-                "云端服务 [{}] 已保存生效！",
-                name_str
-            )));
+            match cfg.save_default() {
+                Ok(()) => {
+                    win.set_is_editing_cloud(false);
+                    *current_cfg_cell.borrow_mut() = cfg.clone();
+                    sync_config_to_window(&win, &cfg);
+                    win.set_global_status_is_error(false);
+                    win.set_global_status(SharedString::from(format!(
+                        "云端服务 [{}] 已保存生效！",
+                        name_str
+                    )));
+                }
+                Err(e) => {
+                    win.set_global_status_is_error(true);
+                    win.set_global_status(SharedString::from(format!("保存云端服务失败: {}", e)));
+                }
+            }
         }
     });
 
@@ -236,6 +289,7 @@ fn register_cloud_save_and_delete(
         if let Some(win) = window_weak.upgrade() {
             let index = idx as usize;
             let mut cfg = current_cfg_cell.borrow().clone();
+            update_config_from_window(&win, &mut cfg);
             if index < cfg.voice.cloud_profiles.len() {
                 let removed = cfg.voice.cloud_profiles.remove(index);
                 if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", removed.id)) {
@@ -244,13 +298,24 @@ fn register_cloud_save_and_delete(
                 }
                 editing_id.borrow_mut().take();
                 win.set_is_editing_cloud(false);
-                let _ = cfg.save_default();
-                *current_cfg_cell.borrow_mut() = cfg.clone();
-                sync_config_to_window(&win, &cfg);
-                win.set_global_status(SharedString::from(format!(
-                    "已删除云端服务: {}",
-                    removed.name
-                )));
+                match cfg.save_default() {
+                    Ok(()) => {
+                        *current_cfg_cell.borrow_mut() = cfg.clone();
+                        sync_config_to_window(&win, &cfg);
+                        win.set_global_status_is_error(false);
+                        win.set_global_status(SharedString::from(format!(
+                            "已删除云端服务: {}",
+                            removed.name
+                        )));
+                    }
+                    Err(e) => {
+                        win.set_global_status_is_error(true);
+                        win.set_global_status(SharedString::from(format!(
+                            "保存删除状态失败: {}",
+                            e
+                        )));
+                    }
+                }
             }
         }
     });
