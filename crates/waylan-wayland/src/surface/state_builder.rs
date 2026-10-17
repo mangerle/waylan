@@ -44,17 +44,32 @@ pub fn commit_candidate_surface<S>(
     );
 }
 
-/// 统一构建候选框渲染状态的核心数据（收敛 V1 和 V2 对 Candidate 与 ExpandedCardState 的转换）
+/// 构建候选框状态的配置参数对象
+#[derive(Clone, Copy)]
+pub struct CandidateBoxBuildOptions<'a> {
+    pub mode: InputMode,
+    pub is_active: bool,
+    pub is_grid_expanded: bool,
+    pub grid_selected_index: usize,
+    pub inline_preedit: bool,
+    pub voice_manager: Option<&'a VoiceInteractionManager>,
+}
+
+/// 统一构建候选框渲染状态的核心数据（收敛 V1 和 V2 对 Candidate 与 ExpandedCardState 的转换，使用参数对象收敛入参）
 pub fn build_common_candidate_box_state(
     engine: &AlgoEngine,
-    mode: InputMode,
-    is_active: bool,
-    is_grid_expanded: bool,
-    grid_selected_index: usize,
-    inline_preedit: bool,
-    voice_manager: Option<&VoiceInteractionManager>,
+    opts: CandidateBoxBuildOptions<'_>,
 ) -> CandidateBoxState {
     use waylan_core::{Candidate, ExpandedCardState};
+
+    let CandidateBoxBuildOptions {
+        mode,
+        is_active,
+        is_grid_expanded,
+        grid_selected_index,
+        inline_preedit,
+        voice_manager,
+    } = opts;
 
     // 若当前处于语音输入状态，优先呈现语音识别流式预览与动态波形（与 IBus 视觉契约 100% 对齐）
     if let Some(vm) = voice_manager {

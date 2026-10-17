@@ -148,8 +148,8 @@ impl TrayService {
         }
     }
 
-    /// 在独立线程中初始化 DBus 连接与注册 StatusNotifierItem 及 DBusMenu
-    fn run_dbus_loop(params: TrayLoopParams) {
+    /// 初始化 StatusNotifierItem 与 DBusMenu 实例
+    fn init_tray_objects(params: &TrayLoopParams) -> (StatusNotifierItem, DBusMenu) {
         let config = AppConfig::load_or_create();
         let loop_wakeup = params.coordinator.loop_wakeup();
         let sni = StatusNotifierItem::new(
@@ -162,51 +162,59 @@ impl TrayService {
         let menu = DBusMenu::new(DBusMenuOptions {
             is_chinese: Arc::clone(&params.is_chinese),
             is_caps_locked: Arc::clone(&params.is_caps_locked),
-            traditional_chinese: params.traditional_chinese,
-            full_width_punct: params.full_width_punct,
-            full_width_char: params.full_width_char,
-            reload_requested: params.reload_requested,
+            traditional_chinese: params.traditional_chinese.clone(),
+            full_width_punct: params.full_width_punct.clone(),
+            full_width_char: params.full_width_char.clone(),
+            reload_requested: params.reload_requested.clone(),
             coordinator: params.coordinator.clone(),
             settings_running: Arc::new(AtomicBool::new(false)),
-            icon_update_tx: params.icon_update_tx,
+            icon_update_tx: params.icon_update_tx.clone(),
         });
+        (sni, menu)
+    }
 
-        // 尝试连接用户 DBus 会话总线（依据 FreeDesktop/KDE 规范，使用基于当前 PID 的唯一名称以避免重启或多实例时的总线名抢占冲突）
-        let pid = process::id();
-        let item_service = format!("org.kde.StatusNotifierItem-{}-1", pid);
-
-        let conn = match Builder::session() {
-            Ok(builder) => match builder
-                .name(item_service.as_str())
-                .and_then(|b| b.serve_at("/StatusNotifierItem", sni.clone()))
-                .and_then(|b| b.serve_at("/MenuBar", menu))
-                .and_then(|b| b.build())
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(
-                        "[系统托盘 提示] 初始化托盘 DBus 对象失败 ({})，托盘指示器将安全降级。",
-                        e
-                    );
-                    return;
-                }
-            },
+    /// 尝试连接 DBus 会话总线并注册托盘服务对象
+    fn connect_dbus_session(
+        sni: StatusNotifierItem,
+        menu: DBusMenu,
+        item_service: &str,
+    ) -> Option<zbus::blocking::Connection> {
+        let builder = match Builder::session() {
+            Ok(b) => b,
             Err(e) => {
                 warn!(
                     "[系统托盘 提示] 无法连接到 DBus 会话总线 ({})，跳过任务栏托盘注册。",
                     e
                 );
-                return;
+                return None;
             }
         };
 
-        info!(
-            "[系统托盘] 成功注册 DBus 托盘与右键菜单服务对象: {} (路径: /StatusNotifierItem, /MenuBar)",
-            item_service
-        );
+        match builder
+            .name(item_service)
+            .and_then(|b| b.serve_at("/StatusNotifierItem", sni))
+            .and_then(|b| b.serve_at("/MenuBar", menu))
+            .and_then(|b| b.build())
+        {
+            Ok(conn) => {
+                info!(
+                    "[系统托盘] 成功注册 DBus 托盘与右键菜单服务对象: {} (路径: /StatusNotifierItem, /MenuBar)",
+                    item_service
+                );
+                Some(conn)
+            }
+            Err(e) => {
+                warn!(
+                    "[系统托盘 提示] 初始化托盘 DBus 对象失败 ({})，托盘指示器将安全降级。",
+                    e
+                );
+                None
+            }
+        }
+    }
 
-        // 尝试向系统托盘监视器注册自身：
-        // 先通过 D-Bus 原生 NameHasOwner 进行微秒级预检，若当前环境暂无 Watcher 则秒级跳过，杜绝无谓休眠
+    /// 探测并向系统托盘监视器 (StatusNotifierWatcher) 注册自身
+    fn register_to_watcher(conn: &zbus::blocking::Connection, item_service: &str) {
         let has_watcher: bool = conn
             .call_method(
                 Some("org.freedesktop.DBus"),
@@ -227,7 +235,7 @@ impl TrayService {
                         "/StatusNotifierWatcher",
                         Some("org.kde.StatusNotifierWatcher"),
                         "RegisterStatusNotifierItem",
-                        &(item_service.as_str(),),
+                        &(item_service,),
                     )
                     .is_ok()
                     || conn
@@ -251,8 +259,74 @@ impl TrayService {
         } else {
             info!("[系统托盘 提示] 当前环境暂未发现活跃 StatusNotifierWatcher，托盘服务保持后台就绪。");
         }
+    }
 
-        // 保持 DBus 事件处理循环运行，并在收到模式切换通知时发射 NewIcon、PropertiesChanged、NewToolTip 与 LayoutUpdated 信号
+    /// 向 DBus 发射图标、提示与菜单刷新信号
+    fn emit_tray_signals(
+        conn: &zbus::blocking::Connection,
+        sni: &StatusNotifierItem,
+        menu_revision: &mut u32,
+    ) {
+        let current_icon = sni.icon_name();
+
+        if let Err(e) = conn.emit_signal(
+            Option::<&str>::None,
+            "/StatusNotifierItem",
+            "org.kde.StatusNotifierItem",
+            "NewIcon",
+            &(),
+        ) {
+            warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
+        } else {
+            debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
+        }
+
+        let _ = conn.emit_signal(
+            Option::<&str>::None,
+            "/StatusNotifierItem",
+            "org.kde.StatusNotifierItem",
+            "NewToolTip",
+            &(),
+        );
+
+        let mut changed_props = HashMap::with_capacity(1);
+        changed_props.insert("IconName", Value::from(current_icon));
+        let invalidated_props: Vec<&str> = Vec::new();
+        let _ = conn.emit_signal(
+            Option::<&str>::None,
+            "/StatusNotifierItem",
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &(
+                "org.kde.StatusNotifierItem",
+                changed_props,
+                invalidated_props,
+            ),
+        );
+
+        *menu_revision = menu_revision.wrapping_add(1);
+        if let Err(e) = conn.emit_signal(
+            Option::<&str>::None,
+            "/MenuBar",
+            "com.canonical.dbusmenu",
+            "LayoutUpdated",
+            &(*menu_revision, 0i32),
+        ) {
+            warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
+        } else {
+            debug!(
+                "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
+                menu_revision
+            );
+        }
+    }
+
+    /// 保持 DBus 事件处理循环运行并在收到状态变更时广播信号
+    fn run_tray_event_loop(
+        params: TrayLoopParams,
+        sni: StatusNotifierItem,
+        conn: zbus::blocking::Connection,
+    ) {
         let mut menu_revision: u32 = 1;
         let mut last_emitted_is_chinese = params.is_chinese.load(Ordering::Acquire);
         let mut last_emitted_is_caps = params.is_caps_locked.load(Ordering::Acquire);
@@ -262,7 +336,6 @@ impl TrayService {
                 break;
             }
 
-            // 使用带超时的阻塞接收：在收到通道通知时即时响应，若无事件则每 500ms 检查一次原子标志以提供自愈兜底
             let received = params
                 .icon_update_rx
                 .recv_timeout(Duration::from_millis(500));
@@ -270,7 +343,6 @@ impl TrayService {
                 break;
             }
 
-            // 无论是由通道唤醒还是超时触发，排空通道内积压的多余唤醒通知，防止重复无效发射
             while params.icon_update_rx.try_recv().is_ok() {}
 
             let current_is_chinese = params.is_chinese.load(Ordering::Acquire);
@@ -283,61 +355,23 @@ impl TrayService {
             if should_emit {
                 last_emitted_is_chinese = current_is_chinese;
                 last_emitted_is_caps = current_is_caps;
-                let current_icon = sni.icon_name();
-
-                if let Err(e) = conn.emit_signal(
-                    Option::<&str>::None,
-                    "/StatusNotifierItem",
-                    "org.kde.StatusNotifierItem",
-                    "NewIcon",
-                    &(),
-                ) {
-                    warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
-                } else {
-                    debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
-                }
-
-                let _ = conn.emit_signal(
-                    Option::<&str>::None,
-                    "/StatusNotifierItem",
-                    "org.kde.StatusNotifierItem",
-                    "NewToolTip",
-                    &(),
-                );
-
-                // 发射标准 D-Bus PropertiesChanged 信号，强制让 GNOME AppIndicator 扩展刷新本地属性缓存
-                let mut changed_props = HashMap::with_capacity(1);
-                changed_props.insert("IconName", Value::from(current_icon));
-                let invalidated_props: Vec<&str> = Vec::new();
-                let _ = conn.emit_signal(
-                    Option::<&str>::None,
-                    "/StatusNotifierItem",
-                    "org.freedesktop.DBus.Properties",
-                    "PropertiesChanged",
-                    &(
-                        "org.kde.StatusNotifierItem",
-                        changed_props,
-                        invalidated_props,
-                    ),
-                );
-
-                menu_revision = menu_revision.wrapping_add(1);
-                if let Err(e) = conn.emit_signal(
-                    Option::<&str>::None,
-                    "/MenuBar",
-                    "com.canonical.dbusmenu",
-                    "LayoutUpdated",
-                    &(menu_revision, 0i32),
-                ) {
-                    warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
-                } else {
-                    debug!(
-                        "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
-                        menu_revision
-                    );
-                }
+                Self::emit_tray_signals(&conn, &sni, &mut menu_revision);
             }
         }
+    }
+
+    /// 在独立线程中初始化 DBus 连接与注册 StatusNotifierItem 及 DBusMenu
+    fn run_dbus_loop(params: TrayLoopParams) {
+        let (sni, menu) = Self::init_tray_objects(&params);
+        let pid = process::id();
+        let item_service = format!("org.kde.StatusNotifierItem-{}-1", pid);
+
+        let Some(conn) = Self::connect_dbus_session(sni.clone(), menu, &item_service) else {
+            return;
+        };
+
+        Self::register_to_watcher(&conn, &item_service);
+        Self::run_tray_event_loop(params, sni, conn);
     }
 }
 

@@ -71,14 +71,8 @@ impl IbusSessionCore {
         }
     }
 
-    /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
-    pub fn process_key_event(&mut self, keyval: u32, keycode: u32, state: u32) -> IbusKeyOutcome {
-        let _ = self.sync_shared_mode();
-        self.sync_shared_settings();
-        let is_press = (state & IBUS_RELEASE_MASK) == 0;
-        let evdev_key = ibus_keyval_to_evdev(keyval, keycode);
-
-        // 同步物理修饰键与事件修饰键掩码
+    /// 同步并计算最终的修饰键位掩码与 CapsLock 状态
+    fn sync_and_calculate_modifiers(&mut self, evdev_key: u32, is_press: bool, state: u32) -> u32 {
         update_modifier_masks(
             &mut self.core.modifiers.depressed,
             &mut self.phys_mods,
@@ -100,52 +94,39 @@ impl IbusSessionCore {
             event_mods |= MOD_SUPER;
         }
 
-        // 同步外部状态指示的 CapsLock 锁定标志
         if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked {
             self.update_caps_lock_state(true);
         }
 
-        // 语音听写优先拦截
-        if let Some(voice_outcome) = self.handle_voice_key(evdev_key, is_press, event_mods) {
-            return voice_outcome;
+        event_mods
+    }
+
+    /// 处理 CapsLock 键切换时的状态更新并计算生效的模式指示
+    fn handle_caps_lock_toggle(&mut self, evdev_key: u32, is_press: bool) -> Option<InputMode> {
+        if evdev_key != KEY_CAPSLOCK || !is_press {
+            return None;
         }
 
-        // 提取周围文本安全有效上下文切片
-        let surrounding_ctx = extract_surrounding_prefix(self.surrounding_text.as_ref(), 64);
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        let saved_mods = self.core.modifiers.depressed;
-        self.core.modifiers.depressed = event_mods;
-        let result = self.core.process_key(
-            KeyProcessContext {
-                keycode: evdev_key,
-                is_press,
-                is_password_or_locked: self.is_screen_locked || self.is_password_context,
-                surrounding_prefix: surrounding_ctx,
-            },
-            now,
-        );
-        self.core.modifiers.depressed = saved_mods;
-
-        // CapsLock 按下时同步切换桌面环境的锁定状态指示并通知模式指示
-        let mut caps_mode_changed = None;
-        if evdev_key == KEY_CAPSLOCK && is_press {
-            let next_locked = !self.is_caps_locked;
-            self.update_caps_lock_state(next_locked);
-            if self.core.mode != InputMode::English {
-                let effective_mode = if next_locked {
-                    InputMode::English
-                } else {
-                    self.core.mode
-                };
-                caps_mode_changed = Some(effective_mode);
-            }
+        let next_locked = !self.is_caps_locked;
+        self.update_caps_lock_state(next_locked);
+        if self.core.mode != InputMode::English {
+            let effective_mode = if next_locked {
+                InputMode::English
+            } else {
+                self.core.mode
+            };
+            Some(effective_mode)
+        } else {
+            None
         }
+    }
 
-        // 将统一按键决策结果映射为 IBus 输出
+    /// 将算法引擎统一按键决策结果映射为 IBus 输出
+    fn map_key_process_result(
+        &mut self,
+        result: KeyProcessResult,
+        caps_mode_changed: Option<InputMode>,
+    ) -> IbusKeyOutcome {
         match result {
             KeyProcessResult::PassThrough => IbusKeyOutcome {
                 consumed: false,
@@ -247,5 +228,43 @@ impl IbusSessionCore {
                 }
             }
         }
+    }
+
+    /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
+    pub fn process_key_event(&mut self, keyval: u32, keycode: u32, state: u32) -> IbusKeyOutcome {
+        let _ = self.sync_shared_mode();
+        self.sync_shared_settings();
+        let is_press = (state & IBUS_RELEASE_MASK) == 0;
+        let evdev_key = ibus_keyval_to_evdev(keyval, keycode);
+
+        let event_mods = self.sync_and_calculate_modifiers(evdev_key, is_press, state);
+
+        // 语音听写优先拦截
+        if let Some(voice_outcome) = self.handle_voice_key(evdev_key, is_press, event_mods) {
+            return voice_outcome;
+        }
+
+        // 提取周围文本安全有效上下文切片
+        let surrounding_ctx = extract_surrounding_prefix(self.surrounding_text.as_ref(), 64);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let saved_mods = self.core.modifiers.depressed;
+        self.core.modifiers.depressed = event_mods;
+        let result = self.core.process_key(
+            KeyProcessContext {
+                keycode: evdev_key,
+                is_press,
+                is_password_or_locked: self.is_screen_locked || self.is_password_context,
+                surrounding_prefix: surrounding_ctx,
+            },
+            now,
+        );
+        self.core.modifiers.depressed = saved_mods;
+
+        let caps_mode_changed = self.handle_caps_lock_toggle(evdev_key, is_press);
+        self.map_key_process_result(result, caps_mode_changed)
     }
 }

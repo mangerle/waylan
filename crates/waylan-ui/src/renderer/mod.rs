@@ -10,7 +10,7 @@ use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCach
 use draw::blend_swash_image;
 use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 use font::FontManager;
-use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, LayoutParams};
+use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, ItemMeasure, LayoutParams};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::sync::Mutex;
@@ -48,6 +48,35 @@ struct TextEngineState {
     swash_cache: SwashCache,
     buffer: Buffer,
     measure_cache: [MeasureCacheEntry; MEASURE_CACHE_SIZE],
+}
+
+/// 文本绘制选项参数对象
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DrawTextOptions<'a> {
+    pub text: &'a str,
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub color: Color,
+}
+
+/// 胶囊候选栏与展开浮层卡片几何布局度量结果
+struct CandidateBoxGeometry<'a> {
+    measured_items: Vec<ItemMeasure<'a>>,
+    total_bar_width: f32,
+    bar_height: f32,
+    padding_h: f32,
+    corner_radius: f32,
+    font_size: f32,
+    scale: f32,
+    has_active_sub: bool,
+    sub_candidates: &'a [String],
+    popup_x: f32,
+    popup_w: f32,
+    popup_h: f32,
+    row_height: f32,
+    canvas_w: u32,
+    canvas_h: u32,
 }
 
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
@@ -199,16 +228,15 @@ impl CandidateBoxRenderer {
         width
     }
 
-    /// 绘制文本（基线对齐，支持复杂连字、特殊符号与多色 Emoji）
-    pub(crate) fn draw_text(
-        &self,
-        pixmap: &mut Pixmap,
-        text: &str,
-        x: f32,
-        y: f32,
-        size: f32,
-        color: Color,
-    ) {
+    /// 绘制文本（基线对齐，支持复杂连字、特殊符号与多色 Emoji，使用参数对象收敛入参）
+    pub(crate) fn draw_text(&self, pixmap: &mut Pixmap, opts: DrawTextOptions<'_>) {
+        let DrawTextOptions {
+            text,
+            x,
+            y,
+            size,
+            color,
+        } = opts;
         let Ok(mut engine) = self.text_engine.lock() else {
             return;
         };
@@ -243,32 +271,11 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 渲染单行胶囊候选栏及二级展开浮层卡片
-    pub fn render(&self, state: &CandidateBoxState) -> Option<Pixmap> {
-        if state.candidates.is_empty() && !state.is_voice_active() {
-            return None;
-        }
-
-        // 若处于语音听写状态，优先渲染语音流式胶囊波形栏
-        if state.is_voice_active() {
-            let mut regions = Vec::with_capacity(4);
-            let pix = capsule::render_voice_capsule_bar(self, state, &mut regions);
-            if let Ok(mut lock) = self.hit_regions.lock() {
-                *lock = regions;
-            }
-            return pix;
-        }
-
-        // 若处于 5 行网格大面板展开状态，优先渲染网格面板
-        if state.is_grid_expanded {
-            let mut regions = Vec::with_capacity(36);
-            let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
-            if let Ok(mut lock) = self.hit_regions.lock() {
-                *lock = regions;
-            }
-            return pix;
-        }
-
+    /// 计算胶囊候选栏与展开浮层的几何尺寸与画布规格
+    fn calculate_geometry<'a>(
+        &self,
+        state: &'a CandidateBoxState,
+    ) -> Option<CandidateBoxGeometry<'a>> {
         let s = self.scale.max(0.5);
         let bar_height: f32 = 38.0 * s;
         let padding_h: f32 = self.theme.padding.max(4.0) * s;
@@ -358,39 +365,85 @@ impl CandidateBoxRenderer {
             return None;
         }
 
-        let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
+        Some(CandidateBoxGeometry {
+            measured_items,
+            total_bar_width,
+            bar_height,
+            padding_h,
+            corner_radius,
+            font_size,
+            scale: s,
+            has_active_sub,
+            sub_candidates,
+            popup_x,
+            popup_w,
+            popup_h,
+            row_height,
+            canvas_w,
+            canvas_h,
+        })
+    }
+
+    /// 渲染单行胶囊候选栏及二级展开浮层卡片
+    pub fn render(&self, state: &CandidateBoxState) -> Option<Pixmap> {
+        if state.candidates.is_empty() && !state.is_voice_active() {
+            return None;
+        }
+
+        // 若处于语音听写状态，优先渲染语音流式胶囊波形栏
+        if state.is_voice_active() {
+            let mut regions = Vec::with_capacity(4);
+            let pix = capsule::render_voice_capsule_bar(self, state, &mut regions);
+            if let Ok(mut lock) = self.hit_regions.lock() {
+                *lock = regions;
+            }
+            return pix;
+        }
+
+        // 若处于 5 行网格大面板展开状态，优先渲染网格面板
+        if state.is_grid_expanded {
+            let mut regions = Vec::with_capacity(36);
+            let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
+            if let Ok(mut lock) = self.hit_regions.lock() {
+                *lock = regions;
+            }
+            return pix;
+        }
+
+        let geom = self.calculate_geometry(state)?;
+        let mut pixmap = Pixmap::new(geom.canvas_w, geom.canvas_h)?;
 
         let mut regions = capsule::render_capsule_bar(
             self,
             &mut pixmap,
             state,
             capsule::CapsuleBarParams {
-                measured_items: &measured_items,
-                total_bar_width,
-                bar_height,
-                padding_h,
-                corner_radius,
-                font_size,
-                scale: s,
+                measured_items: &geom.measured_items,
+                total_bar_width: geom.total_bar_width,
+                bar_height: geom.bar_height,
+                padding_h: geom.padding_h,
+                corner_radius: geom.corner_radius,
+                font_size: geom.font_size,
+                scale: geom.scale,
             },
         );
 
-        if has_active_sub {
+        if geom.has_active_sub {
             render_expanded_popup_card(
                 self,
                 &mut pixmap,
                 &mut regions,
                 ExpandedCardRenderParams {
                     state,
-                    sub_candidates,
-                    popup_x,
-                    popup_top_y: bar_height + 6.0 * s,
-                    popup_w,
-                    popup_h,
-                    row_height,
-                    corner_radius,
-                    font_size,
-                    scale: s,
+                    sub_candidates: geom.sub_candidates,
+                    popup_x: geom.popup_x,
+                    popup_top_y: geom.bar_height + 6.0 * geom.scale,
+                    popup_w: geom.popup_w,
+                    popup_h: geom.popup_h,
+                    row_height: geom.row_height,
+                    corner_radius: geom.corner_radius,
+                    font_size: geom.font_size,
+                    scale: geom.scale,
                 },
             );
         }

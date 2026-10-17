@@ -20,12 +20,14 @@ pub(crate) use repeat::{drive_key_repeat, next_poll_timeout_ms};
 pub(crate) fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateBoxState {
     crate::session_common::build_common_candidate_box_state(
         &session.core.engine,
-        session.core.mode,
-        session.is_active,
-        session.is_grid_expanded,
-        session.grid_selected_index,
-        true,
-        session.voice_manager.as_ref(),
+        crate::session_common::CandidateBoxBuildOptions {
+            mode: session.core.mode,
+            is_active: session.is_active,
+            is_grid_expanded: session.is_grid_expanded,
+            grid_selected_index: session.grid_selected_index,
+            inline_preedit: true,
+            voice_manager: session.voice_manager.as_ref(),
+        },
     )
 }
 

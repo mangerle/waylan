@@ -365,24 +365,26 @@ pub fn draw_collapse_arrow(
     }
 }
 
-/// 绘制细长胶囊滚动条指示器
-pub fn draw_scrollbar(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radius: f32,
-    color: Color,
-) {
+/// 滚动条几何参数对象
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollbarParams {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub radius: f32,
+}
+
+/// 绘制细长胶囊滚动条指示器（采用参数对象收敛入参）
+pub fn draw_scrollbar(pixmap: &mut Pixmap, params: ScrollbarParams, color: Color) {
     draw_rounded_rect(
         pixmap,
         RoundedRectParams {
-            x,
-            y,
-            w: width,
-            h: height,
-            r: radius,
+            x: params.x,
+            y: params.y,
+            w: params.width,
+            h: params.height,
+            r: params.radius,
         },
         color,
     );

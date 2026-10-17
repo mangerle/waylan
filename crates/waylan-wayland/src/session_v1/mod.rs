@@ -199,12 +199,14 @@ impl WaylanV1Session {
     pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
         build_common_candidate_box_state(
             &self.core.engine,
-            self.core.mode,
-            true,
-            false,
-            0,
-            false,
-            self.voice_manager.as_ref(),
+            CandidateBoxBuildOptions {
+                mode: self.core.mode,
+                is_active: true,
+                is_grid_expanded: false,
+                grid_selected_index: 0,
+                inline_preedit: false,
+                voice_manager: self.voice_manager.as_ref(),
+            },
         )
     }
 

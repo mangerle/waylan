@@ -6,7 +6,7 @@ use super::draw::{
     draw_card_background_at, draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
 };
 use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
-use super::CandidateBoxRenderer;
+use super::{CandidateBoxRenderer, DrawTextOptions};
 use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
 
@@ -88,11 +88,13 @@ pub fn render_expanded_popup_card(
         };
         renderer.draw_text(
             pixmap,
-            sub_num_str,
-            sub_num_x,
-            sub_baseline_y,
-            params.font_size * 0.85,
-            num_color,
+            DrawTextOptions {
+                text: sub_num_str,
+                x: sub_num_x,
+                y: sub_baseline_y,
+                size: params.font_size * 0.85,
+                color: num_color,
+            },
         );
 
         let sub_text_x = sub_num_x + 14.0 * s;
@@ -103,11 +105,13 @@ pub fn render_expanded_popup_card(
         };
         renderer.draw_text(
             pixmap,
-            sub_str,
-            sub_text_x,
-            sub_baseline_y,
-            params.font_size,
-            text_color,
+            DrawTextOptions {
+                text: sub_str,
+                x: sub_text_x,
+                y: sub_baseline_y,
+                size: params.font_size,
+                color: text_color,
+            },
         );
     }
 }

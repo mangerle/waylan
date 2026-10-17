@@ -5,10 +5,10 @@
 
 use super::draw::{
     draw_card_background_at, draw_collapse_arrow, draw_rounded_rect, draw_scrollbar,
-    CardBackgroundParams, RoundedRectParams,
+    CardBackgroundParams, RoundedRectParams, ScrollbarParams,
 };
 use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
-use super::CandidateBoxRenderer;
+use super::{CandidateBoxRenderer, DrawTextOptions};
 use tiny_skia::Pixmap;
 use waylan_core::{Candidate, CandidateBoxState};
 
@@ -195,11 +195,13 @@ fn render_grid_items(
             let num_w = renderer.measure_text(num_str, font_size * 0.85);
             renderer.draw_text(
                 pixmap,
-                num_str,
-                cur_x,
-                baseline_y,
-                font_size * 0.85,
-                num_color,
+                DrawTextOptions {
+                    text: num_str,
+                    x: cur_x,
+                    y: baseline_y,
+                    size: font_size * 0.85,
+                    color: num_color,
+                },
             );
             cur_x += num_w + 4.0 * s;
         }
@@ -209,7 +211,16 @@ fn render_grid_items(
         } else {
             renderer.theme.candidate_text
         };
-        renderer.draw_text(pixmap, &cand.text, cur_x, baseline_y, font_size, text_color);
+        renderer.draw_text(
+            pixmap,
+            DrawTextOptions {
+                text: &cand.text,
+                x: cur_x,
+                y: baseline_y,
+                size: font_size,
+                color: text_color,
+            },
+        );
 
         regions.push(HitRegion::new(
             item_x,
@@ -263,11 +274,13 @@ fn render_grid_controls(
     };
     draw_scrollbar(
         pixmap,
-        scroll_x,
-        thumb_y,
-        3.0 * s,
-        thumb_h,
-        1.5 * s,
+        ScrollbarParams {
+            x: scroll_x,
+            y: thumb_y,
+            width: 3.0 * s,
+            height: thumb_h,
+            radius: 1.5 * s,
+        },
         renderer.theme.border,
     );
 

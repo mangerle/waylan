@@ -7,7 +7,7 @@ use super::draw::{
     CardBackgroundParams, RoundedRectParams,
 };
 use super::layout::{CandidateHitTarget, HitRegion, ItemMeasure};
-use super::CandidateBoxRenderer;
+use super::{CandidateBoxRenderer, DrawTextOptions};
 use tiny_skia::Pixmap;
 use waylan_core::{Candidate, CandidateBoxState};
 
@@ -148,11 +148,13 @@ fn render_capsule_prefix(
         );
         renderer.draw_text(
             pixmap,
-            &state.mode_badge,
-            prefix_draw_x + 5.0 * s,
-            (params.bar_height + badge_font_size * 0.72) / 2.0,
-            badge_font_size,
-            renderer.theme.highlight_text,
+            DrawTextOptions {
+                text: &state.mode_badge,
+                x: prefix_draw_x + 5.0 * s,
+                y: (params.bar_height + badge_font_size * 0.72) / 2.0,
+                size: badge_font_size,
+                color: renderer.theme.highlight_text,
+            },
         );
         prefix_draw_x += badge_w + 6.0 * s;
     }
@@ -161,11 +163,13 @@ fn render_capsule_prefix(
         let preedit_font_size = params.font_size * 0.9;
         renderer.draw_text(
             pixmap,
-            &state.preedit,
-            prefix_draw_x,
-            params.baseline_y,
-            preedit_font_size,
-            renderer.theme.preedit_text,
+            DrawTextOptions {
+                text: &state.preedit,
+                x: prefix_draw_x,
+                y: params.baseline_y,
+                size: preedit_font_size,
+                color: renderer.theme.preedit_text,
+            },
         );
     }
 }
@@ -209,11 +213,13 @@ fn render_candidate_item(
         let text_x = item.start_x + 8.0 * s;
         renderer.draw_text(
             pixmap,
-            item.index_str,
-            text_x,
-            params.baseline_y,
-            params.font_size * 0.85,
-            renderer.theme.highlight_text,
+            DrawTextOptions {
+                text: item.index_str,
+                x: text_x,
+                y: params.baseline_y,
+                size: params.font_size * 0.85,
+                color: renderer.theme.highlight_text,
+            },
         );
 
         let mut content_x = text_x + item.index_width + 3.0 * s;
@@ -231,20 +237,24 @@ fn render_candidate_item(
 
         renderer.draw_text(
             pixmap,
-            &cand.text,
-            content_x,
-            params.baseline_y,
-            params.font_size,
-            renderer.theme.highlight_text,
+            DrawTextOptions {
+                text: &cand.text,
+                x: content_x,
+                y: params.baseline_y,
+                size: params.font_size,
+                color: renderer.theme.highlight_text,
+            },
         );
     } else {
         renderer.draw_text(
             pixmap,
-            item.index_str,
-            item.start_x,
-            params.baseline_y,
-            params.font_size * 0.85,
-            renderer.theme.index_text,
+            DrawTextOptions {
+                text: item.index_str,
+                x: item.start_x,
+                y: params.baseline_y,
+                size: params.font_size * 0.85,
+                color: renderer.theme.index_text,
+            },
         );
 
         let mut content_x = item.start_x + item.index_width + 4.0 * s;
@@ -256,11 +266,13 @@ fn render_candidate_item(
 
         renderer.draw_text(
             pixmap,
-            &cand.text,
-            content_x,
-            params.baseline_y,
-            params.font_size,
-            renderer.theme.candidate_text,
+            DrawTextOptions {
+                text: &cand.text,
+                x: content_x,
+                y: params.baseline_y,
+                size: params.font_size,
+                color: renderer.theme.candidate_text,
+            },
         );
     }
 }
@@ -375,11 +387,13 @@ pub fn render_voice_capsule_bar(
     let baseline_y = (bar_height + font_size * 0.72) / 2.0;
     renderer.draw_text(
         &mut pixmap,
-        voice_text,
-        current_x,
-        baseline_y,
-        font_size,
-        renderer.theme.candidate_text,
+        DrawTextOptions {
+            text: voice_text,
+            x: current_x,
+            y: baseline_y,
+            size: font_size,
+            color: renderer.theme.candidate_text,
+        },
     );
 
     // 8. 记录命中区域
