@@ -9,7 +9,7 @@
 use log::{info, warn};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// 可供用户选择的模型项描述
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,11 +39,34 @@ pub fn ensure_user_models_dirs() -> Option<PathBuf> {
     Some(base)
 }
 
-/// 在系统文件管理器中打开用户模型存储目录（通过 xdg-open）
+/// 在系统文件管理器中打开用户模型存储目录（通过 xdg-open），并异步收割子进程以防僵尸进程残留
 pub fn open_user_models_directory() -> bool {
     if let Some(dir) = ensure_user_models_dirs() {
         info!("[模型管理] 正在系统文件管理器中打开用户模型目录: {:?}", dir);
-        Command::new("xdg-open").arg(&dir).spawn().is_ok()
+        match Command::new("xdg-open")
+            .arg(&dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                // 派发轻量收割线程等待子进程退出并释放进程控制块 (PCB)，杜绝僵尸进程残留
+                if let Err(e) = std::thread::Builder::new()
+                    .name("xdg-open-reaper".to_string())
+                    .spawn(move || {
+                        let _ = child.wait();
+                    })
+                {
+                    warn!("[模型管理 警告] 派发子进程收割线程失败: {}", e);
+                }
+                true
+            }
+            Err(e) => {
+                warn!("[模型管理 警告] 调用 xdg-open 打开目录失败: {}", e);
+                false
+            }
+        }
     } else {
         false
     }

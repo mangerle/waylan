@@ -7,13 +7,15 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_core::{CloudAsrConfig, CloudProfile, CloudProviderType};
 use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory};
 
-use crate::callbacks::{pick_directory_dialog, pick_file_dialog};
+use crate::callbacks::{pick_directory_dialog, pick_file_dialog, TaskRunningGuard};
 use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::SettingsWindow;
 
@@ -368,10 +370,22 @@ fn handle_delete_cloud_profile(
 
 /// 注册云端服务异步连通性测试回调
 fn register_cloud_test_callback(window: &SettingsWindow, loaded_config: Rc<RefCell<AppConfig>>) {
+    let is_testing = Arc::new(AtomicBool::new(false));
+    let testing_flag = is_testing.clone();
     let window_weak = window.as_weak();
     let current_cfg_cell = loaded_config;
     window.on_test_cloud_profile(move |idx| {
         if let Some(win) = window_weak.upgrade() {
+            if testing_flag
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                win.set_global_status_is_error(false);
+                win.set_global_status(SharedString::from(
+                    "已有云端连接测试任务正在执行，请稍候...",
+                ));
+                return;
+            }
             let index = idx as usize;
             let cfg = current_cfg_cell.borrow();
             if let Some(p) = cfg.voice.cloud_profiles.get(index) {
@@ -387,7 +401,14 @@ fn register_cloud_test_callback(window: &SettingsWindow, loaded_config: Rc<RefCe
                     "正在测试 [{}] 连接，请稍候...",
                     profile_name
                 )));
-                spawn_cloud_test_task(win.as_weak(), profile_name, test_config);
+                spawn_cloud_test_task(
+                    win.as_weak(),
+                    profile_name,
+                    test_config,
+                    testing_flag.clone(),
+                );
+            } else {
+                testing_flag.store(false, Ordering::Release);
             }
         }
     });
@@ -398,43 +419,54 @@ fn spawn_cloud_test_task(
     win_weak: slint::Weak<SettingsWindow>,
     profile_name: String,
     test_config: CloudAsrConfig,
+    running_flag: Arc<AtomicBool>,
 ) {
-    std::thread::spawn(move || {
-        let (result_msg, is_error) = match waylan_voice::test_cloud_profile_connection(&test_config)
-        {
-            Ok(resp) => {
-                let trimmed = resp.trim();
-                if trimmed.is_empty() {
-                    (
-                        format!("云端服务 [{}] 连接成功！远端接口响应正常。", profile_name),
-                        false,
-                    )
-                } else {
-                    (
-                        format!(
-                            "云端服务 [{}] 连接成功！远端转录返回: \"{}\"",
-                            profile_name, trimmed
-                        ),
-                        false,
-                    )
-                }
-            }
-            Err(e) => {
-                let detail = match &e {
-                    waylan_voice::VoiceError::RecognizerFailed { message, .. } => message.as_str(),
-                    _ => &e.to_string(),
+    let guard_flag = running_flag.clone();
+    if let Err(e) = std::thread::Builder::new()
+        .name("cloud-profile-tester".to_string())
+        .spawn(move || {
+            let _guard = TaskRunningGuard(guard_flag);
+            let (result_msg, is_error) =
+                match waylan_voice::test_cloud_profile_connection(&test_config) {
+                    Ok(resp) => {
+                        let trimmed = resp.trim();
+                        if trimmed.is_empty() {
+                            (
+                                format!("云端服务 [{}] 连接成功！远端接口响应正常。", profile_name),
+                                false,
+                            )
+                        } else {
+                            (
+                                format!(
+                                    "云端服务 [{}] 连接成功！远端转录返回: \"{}\"",
+                                    profile_name, trimmed
+                                ),
+                                false,
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        let detail = match &e {
+                            waylan_voice::VoiceError::RecognizerFailed { message, .. } => {
+                                message.as_str()
+                            }
+                            _ => &e.to_string(),
+                        };
+                        (
+                            format!("云端服务 [{}] 连接失败: {}", profile_name, detail),
+                            true,
+                        )
+                    }
                 };
-                (
-                    format!("云端服务 [{}] 连接失败: {}", profile_name, detail),
-                    true,
-                )
-            }
-        };
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = win_weak.upgrade() {
-                w.set_global_status_is_error(is_error);
-                w.set_global_status(SharedString::from(result_msg));
-            }
-        });
-    });
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = win_weak.upgrade() {
+                    w.set_global_status_is_error(is_error);
+                    w.set_global_status(SharedString::from(result_msg));
+                }
+            });
+        })
+    {
+        running_flag.store(false, Ordering::Release);
+        log::warn!("[偏好设置 警告] 派发云端测试线程失败: {}", e);
+    }
 }
