@@ -358,51 +358,54 @@ fn register_cloud_test_callback(window: &SettingsWindow, loaded_config: Rc<RefCe
                     "正在测试 [{}] 连接，请稍候...",
                     profile_name
                 )));
-                let win_clone = win.as_weak();
-                std::thread::spawn(move || {
-                    let (result_msg, is_error) =
-                        match waylan_voice::test_cloud_profile_connection(&test_config) {
-                            Ok(resp) => {
-                                let trimmed = resp.trim();
-                                if trimmed.is_empty() {
-                                    (
-                                        format!(
-                                            "云端服务 [{}] 连接成功！远端接口响应正常。",
-                                            profile_name
-                                        ),
-                                        false,
-                                    )
-                                } else {
-                                    (
-                                        format!(
-                                            "云端服务 [{}] 连接成功！远端转录返回: \"{}\"",
-                                            profile_name, trimmed
-                                        ),
-                                        false,
-                                    )
-                                }
-                            }
-                            Err(e) => {
-                                let detail = match &e {
-                                    waylan_voice::VoiceError::RecognizerFailed {
-                                        message, ..
-                                    } => message.as_str(),
-                                    _ => &e.to_string(),
-                                };
-                                (
-                                    format!("云端服务 [{}] 连接失败: {}", profile_name, detail),
-                                    true,
-                                )
-                            }
-                        };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = win_clone.upgrade() {
-                            w.set_global_status_is_error(is_error);
-                            w.set_global_status(SharedString::from(result_msg));
-                        }
-                    });
-                });
+                spawn_cloud_test_task(win.as_weak(), profile_name, test_config);
             }
         }
+    });
+}
+
+/// 异步执行云端语音服务连通性测试并回写主窗口状态
+fn spawn_cloud_test_task(
+    win_weak: slint::Weak<SettingsWindow>,
+    profile_name: String,
+    test_config: CloudAsrConfig,
+) {
+    std::thread::spawn(move || {
+        let (result_msg, is_error) = match waylan_voice::test_cloud_profile_connection(&test_config)
+        {
+            Ok(resp) => {
+                let trimmed = resp.trim();
+                if trimmed.is_empty() {
+                    (
+                        format!("云端服务 [{}] 连接成功！远端接口响应正常。", profile_name),
+                        false,
+                    )
+                } else {
+                    (
+                        format!(
+                            "云端服务 [{}] 连接成功！远端转录返回: \"{}\"",
+                            profile_name, trimmed
+                        ),
+                        false,
+                    )
+                }
+            }
+            Err(e) => {
+                let detail = match &e {
+                    waylan_voice::VoiceError::RecognizerFailed { message, .. } => message.as_str(),
+                    _ => &e.to_string(),
+                };
+                (
+                    format!("云端服务 [{}] 连接失败: {}", profile_name, detail),
+                    true,
+                )
+            }
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = win_weak.upgrade() {
+                w.set_global_status_is_error(is_error);
+                w.set_global_status(SharedString::from(result_msg));
+            }
+        });
     });
 }

@@ -141,32 +141,7 @@ pub fn register_settings_callbacks(
                 let path_str = path.to_string_lossy().to_string();
                 win.set_pinyin_import_path(SharedString::from(&path_str));
                 win.set_pinyin_import_status(SharedString::from("正在解析并合入词库，请稍候..."));
-                let win_clone = win.as_weak();
-                std::thread::spawn(move || {
-                    let result = import_pinyin_dict_file(&path_str);
-                    let count = UserAdaptiveModel::load_or_replay_wal(AppConfig::user_dict_path())
-                        .map(|m| m.total_entries())
-                        .unwrap_or(0);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = win_clone.upgrade() {
-                            match result {
-                                Ok(msg) => {
-                                    w.set_pinyin_import_status(SharedString::from(msg));
-                                    w.set_user_model_info(SharedString::from(format!(
-                                        "自适应个性化历史词模型: {} 条记忆",
-                                        count
-                                    )));
-                                }
-                                Err(err) => {
-                                    w.set_pinyin_import_status(SharedString::from(format!(
-                                        "导入失败: {}",
-                                        err
-                                    )));
-                                }
-                            }
-                        }
-                    });
-                });
+                spawn_pinyin_import_task(win.as_weak(), path_str);
             }
         }
     });
@@ -185,33 +160,7 @@ pub fn register_settings_callbacks(
                 let path_str = path.to_string_lossy().to_string();
                 win.set_english_import_path(SharedString::from(&path_str));
                 win.set_english_import_status(SharedString::from("正在解析英文词库，请稍候..."));
-                let win_clone = win.as_weak();
-                let aux_lock = aux_for_en.clone();
-                std::thread::spawn(move || {
-                    let result = {
-                        let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
-                        import_english_dict_file(&path_str, &mut aux)
-                    };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = win_clone.upgrade() {
-                            match result {
-                                Ok((msg, total)) => {
-                                    w.set_english_import_status(SharedString::from(msg));
-                                    w.set_english_dict_info(SharedString::from(format!(
-                                        "已就绪常用英文单词: {} 词",
-                                        total
-                                    )));
-                                }
-                                Err(err) => {
-                                    w.set_english_import_status(SharedString::from(format!(
-                                        "导入失败: {}",
-                                        err
-                                    )));
-                                }
-                            }
-                        }
-                    });
-                });
+                spawn_english_import_task(win.as_weak(), path_str, aux_for_en.clone());
             }
         }
     });
@@ -229,33 +178,7 @@ pub fn register_settings_callbacks(
                 let path_str = path.to_string_lossy().to_string();
                 win.set_symbols_import_path(SharedString::from(&path_str));
                 win.set_symbols_import_status(SharedString::from("正在解析特殊符号库，请稍候..."));
-                let win_clone = win.as_weak();
-                let aux_lock = aux_for_sym.clone();
-                std::thread::spawn(move || {
-                    let result = {
-                        let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
-                        import_symbols_dict_file(&path_str, &mut aux)
-                    };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = win_clone.upgrade() {
-                            match result {
-                                Ok((msg, total)) => {
-                                    w.set_symbols_import_status(SharedString::from(msg));
-                                    w.set_symbols_dict_info(SharedString::from(format!(
-                                        "已收录语义符号与表情: {} 项",
-                                        total
-                                    )));
-                                }
-                                Err(err) => {
-                                    w.set_symbols_import_status(SharedString::from(format!(
-                                        "导入失败: {}",
-                                        err
-                                    )));
-                                }
-                            }
-                        }
-                    });
-                });
+                spawn_symbols_import_task(win.as_weak(), path_str, aux_for_sym.clone());
             }
         }
     });
@@ -318,6 +241,101 @@ pub fn register_settings_callbacks(
             ));
             win.set_global_status(SharedString::from("用户历史自造词记忆已彻底清空。"));
         }
+    });
+}
+
+/// 异步执行拼音词库导入并在主界面刷新状态
+fn spawn_pinyin_import_task(win_weak: slint::Weak<SettingsWindow>, path_str: String) {
+    std::thread::spawn(move || {
+        let result = import_pinyin_dict_file(&path_str);
+        let count = UserAdaptiveModel::load_or_replay_wal(AppConfig::user_dict_path())
+            .map(|m| m.total_entries())
+            .unwrap_or(0);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = win_weak.upgrade() {
+                match result {
+                    Ok(msg) => {
+                        w.set_pinyin_import_status(SharedString::from(msg));
+                        w.set_user_model_info(SharedString::from(format!(
+                            "自适应个性化历史词模型: {} 条记忆",
+                            count
+                        )));
+                    }
+                    Err(err) => {
+                        w.set_pinyin_import_status(SharedString::from(format!(
+                            "导入失败: {}",
+                            err
+                        )));
+                    }
+                }
+            }
+        });
+    });
+}
+
+/// 异步执行英文词库导入并在主界面刷新状态
+fn spawn_english_import_task(
+    win_weak: slint::Weak<SettingsWindow>,
+    path_str: String,
+    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+) {
+    std::thread::spawn(move || {
+        let result = {
+            let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
+            import_english_dict_file(&path_str, &mut aux)
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = win_weak.upgrade() {
+                match result {
+                    Ok((msg, total)) => {
+                        w.set_english_import_status(SharedString::from(msg));
+                        w.set_english_dict_info(SharedString::from(format!(
+                            "已就绪常用英文单词: {} 词",
+                            total
+                        )));
+                    }
+                    Err(err) => {
+                        w.set_english_import_status(SharedString::from(format!(
+                            "导入失败: {}",
+                            err
+                        )));
+                    }
+                }
+            }
+        });
+    });
+}
+
+/// 异步执行特殊符号库导入并在主界面刷新状态
+fn spawn_symbols_import_task(
+    win_weak: slint::Weak<SettingsWindow>,
+    path_str: String,
+    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+) {
+    std::thread::spawn(move || {
+        let result = {
+            let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
+            import_symbols_dict_file(&path_str, &mut aux)
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = win_weak.upgrade() {
+                match result {
+                    Ok((msg, total)) => {
+                        w.set_symbols_import_status(SharedString::from(msg));
+                        w.set_symbols_dict_info(SharedString::from(format!(
+                            "已收录语义符号与表情: {} 项",
+                            total
+                        )));
+                    }
+                    Err(err) => {
+                        w.set_symbols_import_status(SharedString::from(format!(
+                            "导入失败: {}",
+                            err
+                        )));
+                    }
+                }
+            }
+        });
     });
 }
 
