@@ -11,6 +11,7 @@ use std::rc::Rc;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_core::{CloudAsrConfig, CloudProfile, CloudProviderType};
+use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory};
 
 use crate::callbacks::{pick_directory_dialog, pick_file_dialog};
 use crate::sync::{sync_config_to_window, update_config_from_window};
@@ -73,7 +74,7 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
                 "*.onnx",
             ) {
                 if let Some(imported_path) =
-                    waylan_voice::import_onnx_model_from_file("vad", &src_path)
+                    import_onnx_model_from_file(ModelSubdirectory::Vad, &src_path)
                 {
                     let name = imported_path
                         .file_name()
@@ -117,7 +118,7 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
                 "*.onnx",
             ) {
                 if let Some(imported_path) =
-                    waylan_voice::import_onnx_model_from_file("punct", &src_path)
+                    import_onnx_model_from_file(ModelSubdirectory::Punct, &src_path)
                 {
                     let name = imported_path
                         .file_name()

@@ -344,15 +344,41 @@ pub fn import_asr_model_from_dir(src_path: &Path) -> Option<PathBuf> {
     Some(target_dir)
 }
 
-/// 将指定的外部单个 ONNX 模型文件导入至用户模型的指定子目录 (vad 或 punct)
-pub fn import_onnx_model_from_file(subdir: &str, src_path: &Path) -> Option<PathBuf> {
+/// 用户模型分类子目录枚举，确保编译期类型安全与文件路径防穿越
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSubdirectory {
+    /// 语音活动检测模型目录
+    Vad,
+    /// 标点符号恢复模型目录
+    Punct,
+    /// 智能降噪模型目录
+    Ns,
+    /// 语音识别模型目录
+    Asr,
+}
+
+impl ModelSubdirectory {
+    /// 获取受控的相对路径目录名称
+    #[inline]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Vad => "vad",
+            Self::Punct => "punct",
+            Self::Ns => "ns",
+            Self::Asr => "asr",
+        }
+    }
+}
+
+/// 将指定的外部单个 ONNX 模型文件导入至用户模型的指定受控子目录
+pub fn import_onnx_model_from_file(subdir: ModelSubdirectory, src_path: &Path) -> Option<PathBuf> {
     ensure_user_models_dirs();
     if !src_path.is_file() {
         return None;
     }
 
     let file_name = src_path.file_name()?;
-    let target_file = user_models_dir()?.join(subdir).join(file_name);
+    let target_file = user_models_dir()?.join(subdir.as_str()).join(file_name);
 
     info!(
         "[模型管理] 正在将模型文件从 {:?} 导入至 {:?}",
@@ -444,7 +470,7 @@ mod tests {
 
         let src_onnx = temp_dir.path().join("dummy_vad.onnx");
         fs::write(&src_onnx, b"dummy vad onnx").unwrap();
-        let imported_vad = import_onnx_model_from_file("vad", &src_onnx);
+        let imported_vad = import_onnx_model_from_file(ModelSubdirectory::Vad, &src_onnx);
         assert!(imported_vad.is_some());
         let imported_vad_path = imported_vad.unwrap();
         assert!(imported_vad_path.exists());
