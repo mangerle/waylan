@@ -193,11 +193,11 @@ fn test_engine_reset_clears_all_candidates_cache() {
     for ch in "nihao".chars() {
         engine.push_char(ch);
     }
-    assert!(!engine.all_candidates_cache.is_empty());
+    assert!(!engine.all_candidates().is_empty());
     assert!(!engine.candidates().is_empty());
 
     engine.reset();
-    assert!(engine.all_candidates_cache.is_empty());
+    assert!(engine.all_candidates().is_empty());
     assert!(engine.candidates().is_empty());
     assert_eq!(engine.raw_input(), "");
 }
@@ -213,21 +213,21 @@ fn test_cursor_move_resets_pagination_and_expansion() {
     }
     assert!(engine.all_candidates().len() >= 3);
     engine.next_page();
-    engine.is_expanded = true;
-    assert_eq!(engine.page_index, 1);
-    assert!(engine.is_expanded);
+    engine.viewport.is_expanded = true;
+    assert_eq!(engine.page_index(), 1);
+    assert!(engine.is_expanded());
 
     engine.move_cursor_left();
-    assert_eq!(engine.page_index, 0);
-    assert_eq!(engine.selected_index, 0);
-    assert!(!engine.is_expanded);
+    assert_eq!(engine.page_index(), 0);
+    assert_eq!(engine.selected_index(), 0);
+    assert!(!engine.is_expanded());
 
     engine.next_page();
-    engine.is_expanded = true;
+    engine.viewport.is_expanded = true;
     engine.move_cursor_right();
-    assert_eq!(engine.page_index, 0);
-    assert_eq!(engine.selected_index, 0);
-    assert!(!engine.is_expanded);
+    assert_eq!(engine.page_index(), 0);
+    assert_eq!(engine.selected_index(), 0);
+    assert!(!engine.is_expanded());
 }
 
 #[test]
@@ -352,7 +352,7 @@ fn test_select_candidate_zero_consumed_len_fallback() {
     let mut mock_cand = engine.candidates()[0].clone();
     mock_cand.consumed_len = Some(0);
     mock_cand.pinyin = "qun'ze".to_string();
-    engine.current_candidates.insert(0, mock_cand);
+    engine.viewport.current_candidates.insert(0, mock_cand);
 
     // 选中该候选词上屏
     let result = engine.select_candidate(0, 1000);

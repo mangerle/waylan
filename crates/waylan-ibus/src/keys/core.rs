@@ -137,8 +137,8 @@ impl IbusSessionCore {
 
     /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
     pub fn current_candidates(&self) -> Vec<Candidate> {
-        if self.engine.is_expanded {
-            if let Some(cand) = self.engine.candidates().get(self.engine.selected_index) {
+        if self.engine.is_expanded() {
+            if let Some(cand) = self.engine.candidates().get(self.engine.selected_index()) {
                 if cand.is_expandable && !cand.sub_candidates.is_empty() {
                     let mut out = Vec::with_capacity(cand.sub_candidates.len());
                     for sub in &cand.sub_candidates {

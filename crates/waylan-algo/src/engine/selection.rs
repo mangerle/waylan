@@ -44,10 +44,10 @@ impl AlgoEngine {
         index: usize,
         current_timestamp: u64,
     ) -> Option<(String, usize)> {
-        if index >= self.current_candidates.len() {
+        if index >= self.viewport.current_candidates.len() {
             return None;
         }
-        let selected = self.current_candidates[index].clone();
+        let selected = self.viewport.current_candidates[index].clone();
         Some(self.commit_candidate_internal(selected, current_timestamp))
     }
 
@@ -57,10 +57,10 @@ impl AlgoEngine {
         global_index: usize,
         current_timestamp: u64,
     ) -> Option<(String, usize)> {
-        if global_index >= self.all_candidates_cache.len() {
+        if global_index >= self.viewport.all_candidates_cache.len() {
             return None;
         }
-        let selected = self.all_candidates_cache[global_index].clone();
+        let selected = self.viewport.all_candidates_cache[global_index].clone();
         Some(self.commit_candidate_internal(selected, current_timestamp))
     }
 
@@ -192,14 +192,10 @@ impl AlgoEngine {
             self.partial_commit_segments.clear();
         }
 
-        self.page_index = 0;
+        self.viewport.page_index = 0;
         if self.composition.is_empty() {
-            self.all_candidates_cache.clear();
-            self.current_candidates.clear();
+            self.viewport.reset();
             self.cached_preedit.clear();
-            self.selected_index = 0;
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
         } else {
             self.recompute_candidates();
         }
@@ -209,51 +205,17 @@ impl AlgoEngine {
 
     /// 切换二级扩展卡片的展开状态（若当前选中的项不可展开但存在可展开项，则自动聚焦并展开）
     pub fn toggle_expand(&mut self, selected_candidate_index: usize) -> bool {
-        if let Some(cand) = self.current_candidates.get(selected_candidate_index) {
-            if cand.is_expandable && !cand.sub_candidates.is_empty() {
-                self.is_expanded = !self.is_expanded;
-                self.expanded_selected_index = 0;
-                return self.is_expanded;
-            }
-        }
-        if !self.is_expanded {
-            if let Some((idx, _)) = self
-                .current_candidates
-                .iter()
-                .enumerate()
-                .find(|(_, c)| c.is_expandable && !c.sub_candidates.is_empty())
-            {
-                self.selected_index = idx;
-                self.is_expanded = true;
-                self.expanded_selected_index = 0;
-                return true;
-            }
-        }
-        self.is_expanded = false;
-        false
+        self.viewport.toggle_expand(selected_candidate_index)
     }
 
     /// 在二级展开卡片中向下移动选中项
     pub fn next_expanded_item(&mut self, selected_candidate_index: usize) {
-        if let Some(cand) = self.current_candidates.get(selected_candidate_index) {
-            if !cand.sub_candidates.is_empty() {
-                self.expanded_selected_index =
-                    (self.expanded_selected_index + 1) % cand.sub_candidates.len();
-            }
-        }
+        self.viewport.next_expanded_item(selected_candidate_index);
     }
 
     /// 在二级展开卡片中向上移动选中项
     pub fn prev_expanded_item(&mut self, selected_candidate_index: usize) {
-        if let Some(cand) = self.current_candidates.get(selected_candidate_index) {
-            if !cand.sub_candidates.is_empty() {
-                if self.expanded_selected_index == 0 {
-                    self.expanded_selected_index = cand.sub_candidates.len().saturating_sub(1);
-                } else {
-                    self.expanded_selected_index = self.expanded_selected_index.saturating_sub(1);
-                }
-            }
-        }
+        self.viewport.prev_expanded_item(selected_candidate_index);
     }
 
     /// 在二级展开卡片中选中子项上屏
@@ -262,7 +224,7 @@ impl AlgoEngine {
         main_index: usize,
         sub_index: usize,
     ) -> Option<(String, usize)> {
-        let cand = self.current_candidates.get(main_index)?;
+        let cand = self.viewport.current_candidates.get(main_index)?;
         let raw_text = cand.sub_candidates.get(sub_index)?.clone();
 
         // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
@@ -287,13 +249,8 @@ impl AlgoEngine {
 
         self.partial_commit_segments.clear();
         self.composition.clear();
-        self.page_index = 0;
-        self.all_candidates_cache.clear();
-        self.current_candidates.clear();
+        self.viewport.reset();
         self.cached_preedit.clear();
-        self.selected_index = 0;
-        self.is_expanded = false;
-        self.expanded_selected_index = 0;
 
         Some((commit_text, 0))
     }

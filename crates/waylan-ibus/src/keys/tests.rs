@@ -64,13 +64,13 @@ fn test_ibus_date_time_tab_expansion_and_selection() {
     assert_eq!(cands[0].text, "日期");
     assert!(cands[1].text.contains("年"));
     assert!(cands[1].is_expandable);
-    assert_eq!(core.engine.selected_index, 0);
+    assert_eq!(core.engine.selected_index(), 0);
 
     // 2. 按 Tab 键触发二级展开
     let tab_out = core.process_key_event(0xff09, KEY_TAB, 0);
     assert!(tab_out.consumed);
     assert!(tab_out.update_ui);
-    assert!(core.engine.is_expanded);
+    assert!(core.engine.is_expanded());
 
     // 3. 展开后 current_candidates 应返回全部 7 种细分日期格式
     let expanded_cands = core.current_candidates();
@@ -81,7 +81,7 @@ fn test_ibus_date_time_tab_expansion_and_selection() {
     let num_out = core.process_key_event(b'2' as u32, KEY_2, 0);
     assert!(num_out.consumed);
     assert_eq!(num_out.commit_text, Some(expanded_cands[1].text.clone()));
-    assert!(!core.engine.is_expanded);
+    assert!(!core.engine.is_expanded());
     assert!(core.engine.raw_input().is_empty());
 }
 

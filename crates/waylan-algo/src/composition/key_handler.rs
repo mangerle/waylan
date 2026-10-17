@@ -57,13 +57,13 @@ fn handle_expanded_tab_key(
     key: u32,
 ) -> Option<KeyProcessAction> {
     if key == KEY_TAB {
-        let sel = engine.selected_index;
+        let sel = engine.selected_index();
         engine.toggle_expand(sel);
         return Some(KeyProcessAction::Handled);
     }
 
-    if engine.is_expanded {
-        let sel = engine.selected_index;
+    if engine.is_expanded() {
+        let sel = engine.selected_index();
         if key == KEY_DOWN {
             engine.next_expanded_item(sel);
             return Some(KeyProcessAction::Handled);
@@ -74,7 +74,7 @@ fn handle_expanded_tab_key(
         }
         if key == KEY_ENTER || key == KEY_KPENTER || key == KEY_SPACE {
             if let Some((committed, _)) =
-                engine.select_expanded_item(sel, engine.expanded_selected_index)
+                engine.select_expanded_item(sel, engine.expanded_selected_index())
             {
                 punct_processor.record_commit(&committed);
                 return Some(KeyProcessAction::Commit(committed));
@@ -108,8 +108,8 @@ fn handle_smart_navigation_key(engine: &mut AlgoEngine, key: u32) -> Option<KeyP
             if is_cursor_at_end {
                 let cand_len = engine.candidates().len();
                 if cand_len > 0 {
-                    if engine.selected_index + 1 < cand_len {
-                        engine.selected_index += 1;
+                    if engine.viewport.selected_index + 1 < cand_len {
+                        engine.viewport.selected_index += 1;
                     } else if engine.can_next_page() {
                         engine.next_page();
                     }
@@ -121,11 +121,11 @@ fn handle_smart_navigation_key(engine: &mut AlgoEngine, key: u32) -> Option<KeyP
         }
         KEY_LEFT => {
             if is_cursor_at_end {
-                if engine.selected_index > 0 {
-                    engine.selected_index -= 1;
+                if engine.viewport.selected_index > 0 {
+                    engine.viewport.selected_index -= 1;
                 } else if engine.can_prev_page() {
                     engine.prev_page();
-                    engine.selected_index = engine.candidates().len().saturating_sub(1);
+                    engine.viewport.selected_index = engine.candidates().len().saturating_sub(1);
                 } else {
                     engine.move_cursor_left();
                 }
@@ -202,8 +202,8 @@ fn handle_digit_selection(
     }
 
     let digit = keycode_to_digit(key)?;
-    if engine.is_expanded {
-        let sel = engine.selected_index;
+    if engine.is_expanded() {
+        let sel = engine.selected_index();
         let sub_idx = digit.saturating_sub(1);
         if let Some((committed, _)) = engine.select_expanded_item(sel, sub_idx) {
             punct_processor.record_commit(&committed);
@@ -232,7 +232,7 @@ fn handle_action_keys(
             engine.move_cursor_to_end();
             return Some(KeyProcessAction::Handled);
         }
-        let sel = engine.selected_index;
+        let sel = engine.selected_index();
         return Some(select_candidate_action(engine, punct_processor, sel, now));
     }
     if key == KEY_ENTER || key == KEY_KPENTER {
@@ -241,9 +241,9 @@ fn handle_action_keys(
         return Some(KeyProcessAction::Commit(raw));
     }
     if key == KEY_ESC {
-        if engine.is_expanded {
-            engine.is_expanded = false;
-            engine.expanded_selected_index = 0;
+        if engine.is_expanded() {
+            engine.viewport.is_expanded = false;
+            engine.viewport.expanded_selected_index = 0;
             return Some(KeyProcessAction::Handled);
         }
         engine.reset();
@@ -312,7 +312,7 @@ pub fn handle_composition_key_with_params(
         return Some(act);
     }
 
-    if !engine.is_expanded {
+    if !engine.is_expanded() {
         if let Some(act) = handle_smart_navigation_key(engine, key) {
             return Some(act);
         }
@@ -455,17 +455,17 @@ mod tests {
             engine.push_char(ch);
         }
         assert_eq!(engine.cursor(), 4);
-        assert_eq!(engine.selected_index, 0);
+        assert_eq!(engine.selected_index(), 0);
         assert!(engine.candidates().len() >= 2);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
         assert_eq!(act, Some(KeyProcessAction::Handled));
-        assert_eq!(engine.selected_index, 1);
+        assert_eq!(engine.selected_index(), 1);
         assert_eq!(engine.cursor(), 4);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
         assert_eq!(act, Some(KeyProcessAction::Handled));
-        assert_eq!(engine.selected_index, 0);
+        assert_eq!(engine.selected_index(), 0);
         assert_eq!(engine.cursor(), 4);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
@@ -483,7 +483,7 @@ mod tests {
         let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
         assert_eq!(act, Some(KeyProcessAction::Handled));
         assert_eq!(engine.cursor(), 4);
-        assert_eq!(engine.selected_index, 0);
+        assert_eq!(engine.selected_index(), 0);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
         assert!(matches!(act, Some(KeyProcessAction::Commit(_))));

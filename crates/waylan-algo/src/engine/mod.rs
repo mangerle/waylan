@@ -1,27 +1,26 @@
 pub mod candidates;
 pub mod pangu;
 pub(crate) mod prefix_synthesis;
+pub mod resources;
 pub mod selection;
 pub mod typo;
+pub mod viewport;
 
 #[cfg(test)]
 mod tests;
 
 pub use pangu::PanguSpacing;
+pub use resources::LexiconResources;
+pub use viewport::CandidateViewport;
 
 use std::borrow::Cow;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::composition::Composition;
-use crate::custom_phrase::{
-    AuxiliaryDict, CustomPhraseManager, EnglishSuggestionManager, SymbolSuggestionManager,
-};
 use crate::dict_importer::ImportedDictEntry;
-use crate::entity::EntityProtectionManager;
 use crate::error::AlgoError;
-use crate::opencc::OpenCcDict;
 use crate::prism::PrismEngine;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, AlgoConfig};
@@ -36,40 +35,20 @@ use crate::user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};
 /// - **代价与局限**：门面结构体聚合了多个子模块状态，但在单进程输入法模型下保证了单一状态真实源（Single Source of Truth）。
 #[derive(Debug, Default)]
 pub struct AlgoEngine {
-    /// 静态系统词典表
-    pub table: LexiconTable,
+    /// 静态系统词典与语言学规则资源包
+    pub resources: LexiconResources,
+    /// 候选词展示视口与分页交互状态机
+    pub viewport: CandidateViewport,
     /// 用户自适应词频纯内存模型
     pub user_model: UserAdaptiveModel,
     /// 用户词库预写日志持久化管理器
     pub wal: UserAdaptiveWal,
-    /// 自定义短语管理器
-    pub custom_phrases: CustomPhraseManager,
-    /// 英文单词联想管理器
-    pub english_suggester: Arc<EnglishSuggestionManager>,
-    /// 符号表情联想管理器
-    pub symbol_suggester: Arc<SymbolSuggestionManager>,
-    /// 专有名词与实体保护管理器
-    pub entity_manager: EntityProtectionManager,
-    /// 简繁转换两级词库引擎（STPhrases + STCharacters）
-    pub opencc_dict: Arc<OpenCcDict>,
     /// 增量敲击编辑状态机
     pub(crate) composition: Composition,
     /// 全局算法配置
     pub config: AlgoConfig,
-    /// 当前候选词分页索引（0-indexed）
-    pub(crate) page_index: usize,
-    /// 当前页内高亮选中的候选词索引（0-indexed）
-    pub selected_index: usize,
-    /// 当前呈现的清洗后候选词缓存
-    pub(crate) current_candidates: Vec<AlgoCandidate>,
-    /// 全量候选词清洗与排序缓存池（翻页时直接切片，杜绝重复触发 Viterbi 与 DAG 重建）
-    pub(crate) all_candidates_cache: Vec<AlgoCandidate>,
     /// 上一次选词上屏的历史上下文词条（用于跨句 Bigram 语言模型联想预测）
     pub last_commit_context: Option<String>,
-    /// 二级扩展卡片是否展开
-    pub is_expanded: bool,
-    /// 二级扩展卡片中当前选中的子项索引（0-indexed）
-    pub expanded_selected_index: usize,
     /// 用户自适应词库 WAL 持久化文件路径（若设置则每次选词自动追加写盘）
     pub user_dict_path: Option<PathBuf>,
     /// 单次连续拼音输入过程中的分段选词累积器 (词条文本, 拼音片段)，用于整串消费完毕时自动合成用户自造新词
@@ -82,27 +61,33 @@ pub struct AlgoEngine {
     pub(crate) scratch_candidates: Vec<AlgoCandidate>,
 }
 
+impl Deref for AlgoEngine {
+    type Target = LexiconResources;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.resources
+    }
+}
+
+impl DerefMut for AlgoEngine {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.resources
+    }
+}
+
 impl AlgoEngine {
     /// 使用指定词典表与配置创建算法引擎
     pub fn new(table: LexiconTable, config: AlgoConfig) -> Self {
         Self {
-            table,
+            resources: LexiconResources::new(table),
+            viewport: CandidateViewport::new(),
             user_model: UserAdaptiveModel::new(),
             wal: UserAdaptiveWal::new(),
-            custom_phrases: CustomPhraseManager::new(),
-            english_suggester: EnglishSuggestionManager::default_global(),
-            symbol_suggester: SymbolSuggestionManager::default_global(),
-            entity_manager: EntityProtectionManager::new(),
-            opencc_dict: OpenCcDict::global(),
             composition: Composition::new(),
             config,
-            page_index: 0,
-            selected_index: 0,
-            current_candidates: Vec::new(),
-            all_candidates_cache: Vec::new(),
             last_commit_context: None,
-            is_expanded: false,
-            expanded_selected_index: 0,
             user_dict_path: None,
             partial_commit_segments: Vec::new(),
             last_timestamp: 0,
@@ -167,42 +152,6 @@ impl AlgoEngine {
         Self::new(LexiconTable::with_sample_data(), config)
     }
 
-    /// 载入外部辅助与混输二进制词库（包含英文词库与符号表情库）
-    pub fn load_auxiliary_dict(&mut self, dict: AuxiliaryDict) {
-        self.english_suggester = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
-        self.symbol_suggester = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
-    }
-
-    /// 设置外部预构建并以 Arc 共享的英文与符号建议管理器（零拷贝直接复用已分配内存）
-    pub fn set_suggestion_managers(
-        &mut self,
-        english: Arc<EnglishSuggestionManager>,
-        symbols: Arc<SymbolSuggestionManager>,
-    ) {
-        self.english_suggester = english;
-        self.symbol_suggester = symbols;
-    }
-
-    /// 载入外部简繁转换二进制词库（STPhrases + STCharacters）
-    pub fn load_opencc_dict(&mut self, dict: OpenCcDict) {
-        self.opencc_dict = Arc::new(dict);
-    }
-
-    /// 获取当前生效的高频英文混输词目数量
-    pub fn english_words_count(&self) -> usize {
-        self.english_suggester.len()
-    }
-
-    /// 获取当前生效的符号与表情映射条目数量
-    pub fn symbols_count(&self) -> usize {
-        self.symbol_suggester.len()
-    }
-
-    /// 动态注册新的受保护专有名词与实体
-    pub fn register_entity(&mut self, entity: &str) {
-        self.entity_manager.register_entity(entity);
-    }
-
     /// 键入一个字符
     pub fn push_char(&mut self, ch: char) -> &[AlgoCandidate] {
         // 若在光标非末尾处插入字符，说明破坏了原有连续分段拼音流，清空自造词累积器
@@ -210,137 +159,116 @@ impl AlgoEngine {
             self.partial_commit_segments.clear();
         }
         self.composition.push_char(ch);
-        self.page_index = 0;
+        self.viewport.page_index = 0;
         self.recompute_candidates();
-        &self.current_candidates
+        &self.viewport.current_candidates
     }
 
     /// 退格删除一个字符（修改输入时清空分段自造词累积器，防止拼装错误脏词）
     pub fn pop_char(&mut self) -> &[AlgoCandidate] {
         self.composition.pop_char();
         self.partial_commit_segments.clear();
-        self.page_index = 0;
+        self.viewport.page_index = 0;
         self.recompute_candidates();
-        &self.current_candidates
+        &self.viewport.current_candidates
     }
 
     /// 向后删除光标右侧的一个字符（Delete 键行为，并清空分段自造词累积器）
     pub fn delete_char_at_cursor(&mut self) -> &[AlgoCandidate] {
         self.composition.delete_char_at_cursor();
         self.partial_commit_segments.clear();
-        self.page_index = 0;
+        self.viewport.page_index = 0;
         self.recompute_candidates();
-        &self.current_candidates
+        &self.viewport.current_candidates
     }
 
     /// 光标左移
     pub fn move_cursor_left(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_cursor_left() {
-            self.page_index = 0;
-            self.selected_index = 0;
-            self.is_expanded = false;
+            self.viewport.page_index = 0;
+            self.viewport.reset_selection();
             self.recompute_candidates();
         }
-        &self.current_candidates
+        &self.viewport.current_candidates
     }
 
     /// 光标右移
     pub fn move_cursor_right(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_cursor_right() {
-            self.page_index = 0;
-            self.selected_index = 0;
-            self.is_expanded = false;
+            self.viewport.page_index = 0;
+            self.viewport.reset_selection();
             self.recompute_candidates();
         }
-        &self.current_candidates
+        &self.viewport.current_candidates
     }
 
     /// 候选翻下一页（若已处于末页则保持当前页不产生空白页）
     pub fn next_page(&mut self) -> &[AlgoCandidate] {
-        let page_size = self.config.page_size.max(1);
-        let max_page = self.all_candidates_cache.len().saturating_sub(1) / page_size;
-        if self.page_index < max_page {
-            self.page_index += 1;
-            self.selected_index = 0;
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
-            self.update_page_candidates();
-        }
-        &self.current_candidates
+        self.viewport.next_page(self.config.page_size)
     }
 
     /// 候选翻上一页
     pub fn prev_page(&mut self) -> &[AlgoCandidate] {
-        if self.page_index > 0 {
-            self.page_index -= 1;
-            self.selected_index = 0;
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
-            self.update_page_candidates();
-        }
-        &self.current_candidates
+        self.viewport.prev_page(self.config.page_size)
     }
 
     /// 检查是否能够向后（下一页）翻页
     pub fn can_next_page(&self) -> bool {
-        let page_size = self.config.page_size.max(1);
-        let max_page = self.all_candidates_cache.len().saturating_sub(1) / page_size;
-        self.page_index < max_page
+        self.viewport.can_next_page(self.config.page_size)
     }
 
     /// 检查是否能够向前（上一页）翻页
     pub fn can_prev_page(&self) -> bool {
-        self.page_index > 0
+        self.viewport.can_prev_page()
     }
 
     /// 获取当前展示页码（从 0 开始）
+    #[inline]
     pub fn page_index(&self) -> usize {
-        self.page_index
+        self.viewport.page_index
+    }
+
+    /// 获取当前页内高亮选中的候选词索引（从 0 开始）
+    #[inline]
+    pub fn selected_index(&self) -> usize {
+        self.viewport.selected_index
+    }
+
+    /// 二级扩展卡片是否展开
+    #[inline]
+    pub fn is_expanded(&self) -> bool {
+        self.viewport.is_expanded
+    }
+
+    /// 二级扩展卡片中当前选中的子项索引（从 0 开始）
+    #[inline]
+    pub fn expanded_selected_index(&self) -> usize {
+        self.viewport.expanded_selected_index
     }
 
     /// 将拼音编辑光标重置回末尾并刷新候选列表（恢复选词模式）
     pub fn move_cursor_to_end(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_to_end() {
-            self.page_index = 0;
-            self.selected_index = 0;
-            self.is_expanded = false;
+            self.viewport.page_index = 0;
+            self.viewport.reset_selection();
             self.recompute_candidates();
         }
-        &self.current_candidates
+        &self.viewport.current_candidates
     }
 
     /// 根据当前页码与页面大小从全量候选缓存池中截取当前展示页切片
     pub(crate) fn update_page_candidates(&mut self) {
-        let page_size = self.config.page_size.max(1);
-        let start = self.page_index.saturating_mul(page_size);
-        if start < self.all_candidates_cache.len() {
-            let end = (start + page_size).min(self.all_candidates_cache.len());
-            self.current_candidates = self.all_candidates_cache[start..end].to_vec();
-        } else {
-            self.current_candidates.clear();
-        }
+        self.viewport.update_page_candidates(self.config.page_size);
     }
 
     /// 在当前页候选词中向后（向下/向右）循环移动高亮选中项
     pub fn next_candidate(&mut self) {
-        if !self.current_candidates.is_empty() {
-            self.selected_index = (self.selected_index + 1) % self.current_candidates.len();
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
-        }
+        self.viewport.next_candidate();
     }
 
     /// 在当前页候选词中向前（向上/向左）循环移动高亮选中项
     pub fn prev_candidate(&mut self) {
-        if !self.current_candidates.is_empty() {
-            if self.selected_index == 0 {
-                self.selected_index = self.current_candidates.len().saturating_sub(1);
-            } else {
-                self.selected_index = self.selected_index.saturating_sub(1);
-            }
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
-        }
+        self.viewport.prev_candidate();
     }
 
     /// 批量导入外部词库条目到用户自适应模型
@@ -444,24 +372,34 @@ impl AlgoEngine {
         formatted.len()
     }
 
-    /// 获取内部词典表引用
+    /// 获取内部词典表不可变引用
+    #[inline]
     pub fn table(&self) -> &LexiconTable {
-        &self.table
+        &self.resources.table
+    }
+
+    /// 获取内部词典表可变引用
+    #[inline]
+    pub fn table_mut(&mut self) -> &mut LexiconTable {
+        &mut self.resources.table
     }
 
     /// 获取当前光标位置
+    #[inline]
     pub fn cursor(&self) -> usize {
         self.composition.cursor()
     }
 
     /// 获取当前呈现的候选词切片
+    #[inline]
     pub fn candidates(&self) -> &[AlgoCandidate] {
-        &self.current_candidates
+        self.viewport.candidates()
     }
 
     /// 获取当前输入下的全量候选词切片（用于展开大面板展示）
+    #[inline]
     pub fn all_candidates(&self) -> &[AlgoCandidate] {
-        &self.all_candidates_cache
+        self.viewport.all_candidates()
     }
 
     /// 清空上屏历史上下文缓存
@@ -469,15 +407,10 @@ impl AlgoEngine {
         self.last_commit_context = None;
     }
 
-    /// 清空并重置引擎
+    /// 清空并重置引擎状态机与候选词视口
     pub fn reset(&mut self) {
         self.composition.clear();
-        self.page_index = 0;
-        self.selected_index = 0;
-        self.is_expanded = false;
-        self.expanded_selected_index = 0;
-        self.current_candidates.clear();
-        self.all_candidates_cache.clear();
+        self.viewport.reset();
         self.last_commit_context = None;
         self.partial_commit_segments.clear();
         self.cached_preedit.clear();

@@ -77,8 +77,8 @@ fn test_engine_dynamic_date_expand_and_select() {
 
     // 验证展开控制（支持在 index 0 聚焦时按 Tab 自动定位并展开）
     assert!(engine.toggle_expand(0));
-    assert!(engine.is_expanded);
-    assert_eq!(engine.selected_index, 1);
+    assert!(engine.is_expanded());
+    assert_eq!(engine.selected_index(), 1);
 
     // 验证二级卡片选择
     let (chosen_text, remaining) = engine.select_expanded_item(1, 2).expect("选择连字符日期");

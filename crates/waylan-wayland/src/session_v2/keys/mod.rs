@@ -61,7 +61,7 @@ pub(super) fn process_key_press_inner(
         }
         ImeAction::ExpandGrid => {
             session.is_grid_expanded = true;
-            session.grid_selected_index = session.engine.selected_index;
+            session.grid_selected_index = session.engine.selected_index();
             session.refresh_candidate_surface();
             (true, None)
         }

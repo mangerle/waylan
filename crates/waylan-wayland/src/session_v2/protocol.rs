@@ -289,7 +289,7 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
         CandidateHitTarget::ToggleExpand => {
             state.is_grid_expanded = !state.is_grid_expanded;
             if state.is_grid_expanded {
-                state.grid_selected_index = state.engine.selected_index;
+                state.grid_selected_index = state.engine.selected_index();
             } else {
                 state.grid_selected_index = 0;
             }

@@ -189,9 +189,9 @@ pub fn build_common_candidate_box_state(
         Vec::new()
     };
 
-    let expanded_card = if engine.is_expanded {
+    let expanded_card = if engine.is_expanded() {
         ExpandedCardState::Expanded {
-            selected_index: engine.expanded_selected_index,
+            selected_index: engine.expanded_selected_index(),
         }
     } else {
         ExpandedCardState::Collapsed
@@ -220,7 +220,7 @@ pub fn build_common_candidate_box_state(
     let selected_index = if is_grid_expanded {
         grid_selected_index
     } else {
-        engine.selected_index
+        engine.selected_index()
     };
 
     CandidateBoxState {

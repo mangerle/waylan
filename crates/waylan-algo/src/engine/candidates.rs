@@ -10,18 +10,14 @@ impl AlgoEngine {
     pub(crate) fn recompute_candidates(&mut self) {
         let raw_input = self.composition.as_str();
         if raw_input.is_empty() {
-            self.selected_index = 0;
-            self.is_expanded = false;
-            self.expanded_selected_index = 0;
-            self.all_candidates_cache.clear();
-            self.current_candidates.clear();
+            self.viewport.reset_selection();
+            self.viewport.all_candidates_cache.clear();
+            self.viewport.current_candidates.clear();
             self.cached_preedit.clear();
             return;
         }
 
-        self.selected_index = 0;
-        self.is_expanded = false;
-        self.expanded_selected_index = 0;
+        self.viewport.reset_selection();
 
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
         if let Some(dispatched) = ModeDispatcher::try_dispatch(raw_input, &self.config) {
@@ -36,7 +32,7 @@ impl AlgoEngine {
                     c.consumed_len = Some(raw_input.len());
                 }
             }
-            self.all_candidates_cache = cands;
+            self.viewport.all_candidates_cache = cands;
             self.update_page_candidates();
             return;
         }
@@ -116,7 +112,7 @@ impl AlgoEngine {
             }
         }
 
-        let old_cache = std::mem::replace(&mut self.all_candidates_cache, candidates);
+        let old_cache = std::mem::replace(&mut self.viewport.all_candidates_cache, candidates);
         self.scratch_candidates = old_cache;
         self.update_page_candidates();
     }

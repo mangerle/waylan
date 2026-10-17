@@ -52,12 +52,12 @@ impl UiSnapshot {
         } else {
             core.engine.formatted_preedit()
         };
-        let is_expanded = core.engine.is_expanded;
+        let is_expanded = core.engine.is_expanded();
         let candidates = core.current_candidates();
         let (page_size, selected_index, orientation) = if is_expanded {
             (
                 candidates.len().max(1),
-                core.engine.expanded_selected_index,
+                core.engine.expanded_selected_index(),
                 super::super::types::IBUS_ORIENTATION_VERTICAL,
             )
         } else {
@@ -69,7 +69,7 @@ impl UiSnapshot {
             };
             (
                 core.engine.config.page_size,
-                core.engine.selected_index,
+                core.engine.selected_index(),
                 orientation,
             )
         };
