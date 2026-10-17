@@ -287,6 +287,7 @@ fn test_custom_phrase_traditional_conversion() {
         ..Default::default()
     });
     engine
+        .resources
         .custom_phrases
         .add_entry("csdy".to_string(), "测试短语".to_string());
 

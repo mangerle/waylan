@@ -45,7 +45,7 @@ pub fn build_algo_engine(
     let mut engine = AlgoEngine::new(table, algo_config);
 
     let phrase_path = CustomPhraseManager::default_path();
-    engine.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
+    engine.resources.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
     let user_dict = AppConfig::user_dict_path();
     engine.set_user_dict_path(&user_dict);
     if user_dict.exists() {
@@ -57,13 +57,13 @@ pub fn build_algo_engine(
     }
 
     let (english_suggester, symbol_suggester) = load_auxiliary_managers();
-    engine.english_suggester = english_suggester;
-    engine.symbol_suggester = symbol_suggester;
+    engine.resources.english_suggester = english_suggester;
+    engine.resources.symbol_suggester = symbol_suggester;
 
     info!(
         "[简繁词库] 全局简繁转换两级词库就绪 (单字映射: {} 个, 消歧短语: {} 组)",
-        engine.opencc_dict.chars.len(),
-        engine.opencc_dict.phrases_len()
+        engine.resources.opencc_dict.chars.len(),
+        engine.resources.opencc_dict.phrases_len()
     );
 
     Ok(Some(engine))

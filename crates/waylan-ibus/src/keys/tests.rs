@@ -37,7 +37,7 @@ fn test_ibus_session_pinyin_and_shift_toggle() {
         assert!(out.consumed);
         assert!(out.update_ui);
     }
-    assert_eq!(core.engine.raw_input(), "xian");
+    assert_eq!(core.core.engine.raw_input(), "xian");
 
     // 按下并释放 Shift 切换至英文模式并自动上屏残留编码
     let _ = core.process_key_event(0xffe1, KEY_LEFTSHIFT, 0);
@@ -64,13 +64,13 @@ fn test_ibus_date_time_tab_expansion_and_selection() {
     assert_eq!(cands[0].text, "日期");
     assert!(cands[1].text.contains("年"));
     assert!(cands[1].is_expandable);
-    assert_eq!(core.engine.selected_index(), 0);
+    assert_eq!(core.core.engine.selected_index(), 0);
 
     // 2. 按 Tab 键触发二级展开
     let tab_out = core.process_key_event(0xff09, KEY_TAB, 0);
     assert!(tab_out.consumed);
     assert!(tab_out.update_ui);
-    assert!(core.engine.is_expanded());
+    assert!(core.core.engine.is_expanded());
 
     // 3. 展开后 current_candidates 应返回全部 7 种细分日期格式
     let expanded_cands = core.current_candidates();
@@ -81,8 +81,8 @@ fn test_ibus_date_time_tab_expansion_and_selection() {
     let num_out = core.process_key_event(b'2' as u32, KEY_2, 0);
     assert!(num_out.consumed);
     assert_eq!(num_out.commit_text, Some(expanded_cands[1].text.clone()));
-    assert!(!core.engine.is_expanded());
-    assert!(core.engine.raw_input().is_empty());
+    assert!(!core.core.engine.is_expanded());
+    assert!(core.core.engine.raw_input().is_empty());
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn test_ibus_caps_lock_passthrough() {
         let out = core.process_key_event(ch as u32, 0, 0);
         assert!(out.consumed);
     }
-    assert_eq!(core.engine.raw_input(), "ai");
+    assert_eq!(core.core.engine.raw_input(), "ai");
 
     // 2. 按下 CapsLock 键：未完成拼音立即上屏，按键本身不被消费（透传给应用），且通知模式变更为英文
     let caps_out = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
@@ -106,7 +106,7 @@ fn test_ibus_caps_lock_passthrough() {
         Some(InputMode::English),
         "CapsLock 激活时模式应指示为英文"
     );
-    assert!(core.engine.raw_input().is_empty());
+    assert!(core.core.engine.raw_input().is_empty());
 
     // 3. 在 CapsLock 大写锁定状态下（state 带有 IBUS_LOCK_MASK），输入字母应原生透传
     let a_out = core.process_key_event(b'A' as u32, 0, IBUS_LOCK_MASK);
@@ -125,7 +125,7 @@ fn test_ibus_caps_lock_passthrough() {
     // 5. 验证此时按字母恢复中文拼音输入
     let ni_out = core.process_key_event(b'n' as u32, 0, 0);
     assert!(ni_out.consumed, "解除大写锁定后应恢复中文拼音输入");
-    assert_eq!(core.engine.raw_input(), "n");
+    assert_eq!(core.core.engine.raw_input(), "n");
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn test_ibus_caps_lock_with_shift_interaction() {
         core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK | IBUS_RELEASE_MASK);
     assert_eq!(shift_up.mode_changed, None);
     assert_eq!(
-        core.mode,
+        core.core.mode,
         InputMode::Chinese,
         "大写锁定时敲击 Shift 不得篡改基准中文模式"
     );
@@ -164,14 +164,14 @@ fn test_ibus_caps_lock_with_shift_interaction() {
     // 4. 后续输入正常进入拼音输入
     let letter = core.process_key_event(b'h' as u32, 0, 0);
     assert!(letter.consumed);
-    assert_eq!(core.engine.raw_input(), "h");
+    assert_eq!(core.core.engine.raw_input(), "h");
 }
 
 #[test]
 fn test_ibus_caps_lock_in_english_mode_no_flicker() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    core.mode = InputMode::English;
+    core.core.mode = InputMode::English;
 
     // 1. 在纯英文模式下开启 CapsLock：不触发任何 mode_changed 信号
     let caps_on = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
@@ -188,7 +188,7 @@ fn test_ibus_caps_lock_in_english_mode_no_flicker() {
         "英文模式下关闭 CapsLock 绝不应闪现中文模式"
     );
     assert!(!core.is_caps_locked);
-    assert_eq!(core.mode, InputMode::English, "始终保持纯英文模式");
+    assert_eq!(core.core.mode, InputMode::English, "始终保持纯英文模式");
 }
 
 #[test]
@@ -204,7 +204,11 @@ fn test_ibus_caps_lock_tray_flags_and_subsequent_keys() {
     let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
     assert!(core.is_caps_locked);
     assert!(caps_flag.load(Ordering::Acquire));
-    assert_eq!(core.mode, InputMode::Chinese, "基准中文模式状态不受篡改");
+    assert_eq!(
+        core.core.mode,
+        InputMode::Chinese,
+        "基准中文模式状态不受篡改"
+    );
 
     // 2. 随后的普通字符按键（即使客户端 state 未附带 IBUS_LOCK_MASK），大写状态绝不可被误冲刷
     let letter = core.process_key_event(b'A' as u32, 0, 0);
@@ -220,7 +224,7 @@ fn test_ibus_caps_lock_tray_flags_and_subsequent_keys() {
     assert!(!core.is_caps_locked);
     assert!(!caps_flag.load(Ordering::Acquire));
     assert_eq!(
-        core.mode,
+        core.core.mode,
         InputMode::Chinese,
         "退出大写锁定后丝滑保持中文模式"
     );
@@ -240,15 +244,15 @@ fn test_ibus_shared_settings_sync_and_full_width() {
     core.shared_full_width_char = Some(char_flag.clone());
 
     // 默认状态：简体、全角标点、半角字母
-    assert!(!core.engine.config.traditional_chinese);
-    assert!(core.punctuation_processor.full_width_punct);
+    assert!(!core.core.engine.config.traditional_chinese);
+    assert!(core.core.punctuation_processor.full_width_punct);
     assert!(!core.is_full_width_char());
 
     // 1. 托盘触发切换为繁体
     trad_flag.store(true, Ordering::Release);
     let _ = core.process_key_event(0, 0, 0);
     assert!(
-        core.engine.config.traditional_chinese,
+        core.core.engine.config.traditional_chinese,
         "引擎应自动同步繁体设置"
     );
 
@@ -263,7 +267,7 @@ fn test_ibus_shared_settings_sync_and_full_width() {
 
     // 3. 托盘触发切换为全角字符，并在英文模式下敲击字母
     char_flag.store(true, Ordering::Release);
-    core.mode = InputMode::English;
+    core.core.mode = InputMode::English;
     let letter_outcome = core.process_key_event(b'a' as u32, 30, 0);
     assert_eq!(
         letter_outcome.commit_text,
@@ -284,7 +288,7 @@ fn test_ibus_password_context_reset_and_recovery() {
         !outcome.consumed,
         "密码输入框中按键应直通放行，不被输入法消费"
     );
-    assert!(core.engine.raw_input().is_empty());
+    assert!(core.core.engine.raw_input().is_empty());
 
     // 2. 模拟切换窗口或失焦触发重置
     core.reset_context();
@@ -299,7 +303,7 @@ fn test_ibus_password_context_reset_and_recovery() {
         outcome2.consumed,
         "退出密码框后输入法应完全恢复可用并消费按键"
     );
-    assert_eq!(core.engine.raw_input(), "n");
+    assert_eq!(core.core.engine.raw_input(), "n");
 }
 
 #[test]
@@ -315,7 +319,7 @@ fn test_ibus_screen_lock_passthrough_and_recovery() {
         "系统锁屏状态下所有硬件按键必须完全直通放行，绝不消费"
     );
     assert!(
-        core.engine.raw_input().is_empty(),
+        core.core.engine.raw_input().is_empty(),
         "锁屏状态下严禁将按键录入算法引擎"
     );
 
@@ -326,7 +330,7 @@ fn test_ibus_screen_lock_passthrough_and_recovery() {
         outcome2.consumed,
         "解锁屏幕后应立即恢复拼音拦截与候选词处理"
     );
-    assert_eq!(core.engine.raw_input(), "a");
+    assert_eq!(core.core.engine.raw_input(), "a");
 }
 
 #[test]
@@ -342,13 +346,16 @@ fn test_ibus_global_shortcuts_toggle() {
     core.shared_full_width_char = Some(char_flag.clone());
 
     // 默认快捷键：Ctrl+Shift+F (简繁), Shift+Space (字符全半角), Ctrl+. (标点全半角)
-    assert_eq!(core.traditional_shortcut, TraditionalShortcut::CtrlShiftF);
     assert_eq!(
-        core.full_width_char_shortcut,
+        core.core.traditional_shortcut,
+        TraditionalShortcut::CtrlShiftF
+    );
+    assert_eq!(
+        core.core.full_width_char_shortcut,
         FullWidthCharShortcut::ShiftSpace
     );
     assert_eq!(
-        core.full_width_punct_shortcut,
+        core.core.full_width_punct_shortcut,
         FullWidthPunctShortcut::CtrlPeriod
     );
 
@@ -357,7 +364,7 @@ fn test_ibus_global_shortcuts_toggle() {
     let res_trad = core.process_key_event(b'f' as u32, KEY_F, state_ctrl_shift);
     assert!(res_trad.consumed, "简繁快捷键必须被输入法消费");
     assert!(
-        core.engine.config.traditional_chinese,
+        core.core.engine.config.traditional_chinese,
         "简繁状态应切换为繁体"
     );
     assert!(
@@ -369,7 +376,7 @@ fn test_ibus_global_shortcuts_toggle() {
     let res_trad2 = core.process_key_event(b'f' as u32, KEY_F, state_ctrl_shift);
     assert!(res_trad2.consumed);
     assert!(
-        !core.engine.config.traditional_chinese,
+        !core.core.engine.config.traditional_chinese,
         "简繁状态应切回简体"
     );
     assert!(!trad_flag.load(Ordering::Acquire));
@@ -390,7 +397,7 @@ fn test_ibus_global_shortcuts_toggle() {
     let res_punct = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
     assert!(res_punct.consumed, "标点全半角快捷键必须被消费");
     assert!(
-        !core.punctuation_processor.full_width_punct,
+        !core.core.punctuation_processor.full_width_punct,
         "标点状态应由全角切换为半角"
     );
     assert!(!punct_flag.load(Ordering::Acquire));
@@ -399,7 +406,7 @@ fn test_ibus_global_shortcuts_toggle() {
     let res_punct2 = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
     assert!(res_punct2.consumed);
     assert!(
-        core.punctuation_processor.full_width_punct,
+        core.core.punctuation_processor.full_width_punct,
         "标点状态应切回全角中文标点"
     );
     assert!(punct_flag.load(Ordering::Acquire));

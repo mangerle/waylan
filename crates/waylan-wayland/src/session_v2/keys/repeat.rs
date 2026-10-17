@@ -8,7 +8,7 @@ use super::process_key_event;
 /// 根据本次按键消费状态与连击设置更新连击计时器
 pub(super) fn update_key_repeat(session: &mut WaylanV2Session, key: u32, consumed: bool) {
     let (rate, delay) = session.repeat_info;
-    if consumed && rate > 0 && delay > 0 && !session.engine.raw_input().is_empty() {
+    if consumed && rate > 0 && delay > 0 && !session.core.engine.raw_input().is_empty() {
         let next_fire = Instant::now() + Duration::from_millis(delay.max(50) as u64);
         session.repeat_state = Some((key, next_fire));
     } else {
@@ -39,7 +39,7 @@ pub(crate) fn drive_key_repeat(session: &mut WaylanV2Session) {
         return;
     };
     let (rate, _) = session.repeat_info;
-    if rate <= 0 || !session.is_active || session.engine.raw_input().is_empty() {
+    if rate <= 0 || !session.is_active || session.core.engine.raw_input().is_empty() {
         session.repeat_state = None;
         return;
     };
@@ -47,7 +47,7 @@ pub(crate) fn drive_key_repeat(session: &mut WaylanV2Session) {
     let now = Instant::now();
     if now >= next_fire {
         let (consumed, _) = process_key_event(session, key, true);
-        if consumed && !session.engine.raw_input().is_empty() {
+        if consumed && !session.core.engine.raw_input().is_empty() {
             let interval_ms = (1000 / rate.max(1)).max(10) as u64;
             session.repeat_state = Some((key, now + Duration::from_millis(interval_ms)));
         } else {

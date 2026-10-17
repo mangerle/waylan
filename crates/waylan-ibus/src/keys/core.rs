@@ -5,7 +5,6 @@
 //! - **核心优势**：纯内存数据结构，加锁保护仅限于单次按键决策的微秒级临界区内。
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
-use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
@@ -50,21 +49,6 @@ pub struct IbusSessionCore {
     pub voice_manager: VoiceInteractionManager,
     /// 当前拥有焦点的活跃 IBus 引擎对象路径
     pub active_engine_path: Option<String>,
-}
-
-impl Deref for IbusSessionCore {
-    type Target = ImeCoreSession;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-impl DerefMut for IbusSessionCore {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.core
-    }
 }
 
 impl IbusSessionCore {
@@ -137,8 +121,13 @@ impl IbusSessionCore {
 
     /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
     pub fn current_candidates(&self) -> Vec<Candidate> {
-        if self.engine.is_expanded() {
-            if let Some(cand) = self.engine.candidates().get(self.engine.selected_index()) {
+        if self.core.engine.is_expanded() {
+            if let Some(cand) = self
+                .core
+                .engine
+                .candidates()
+                .get(self.core.engine.selected_index())
+            {
                 if cand.is_expandable && !cand.sub_candidates.is_empty() {
                     let mut out = Vec::with_capacity(cand.sub_candidates.len());
                     for sub in &cand.sub_candidates {
@@ -148,7 +137,7 @@ impl IbusSessionCore {
                 }
             }
         }
-        let cands = self.engine.candidates();
+        let cands = self.core.engine.candidates();
         cands.iter().map(Candidate::from).collect()
     }
 

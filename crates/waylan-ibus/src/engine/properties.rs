@@ -24,11 +24,11 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = match guard.mode {
+            let next = match guard.core.mode {
                 InputMode::Chinese | InputMode::VMode => InputMode::English,
                 InputMode::English => InputMode::Chinese,
             };
-            guard.mode = next;
+            guard.core.mode = next;
             if let Some(ref zh_flag) = guard.shared_is_chinese {
                 zh_flag.store(matches!(next, InputMode::Chinese), Ordering::Release);
             }
@@ -50,8 +50,8 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = !guard.engine.config.traditional_chinese;
-            guard.engine.config.traditional_chinese = next;
+            let next = !guard.core.engine.config.traditional_chinese;
+            guard.core.engine.config.traditional_chinese = next;
             if let Some(ref flag) = guard.shared_traditional_chinese {
                 flag.store(next, Ordering::Release);
             }
@@ -75,8 +75,8 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = !guard.punctuation_processor.full_width_punct;
-            guard.punctuation_processor.full_width_punct = next;
+            let next = !guard.core.punctuation_processor.full_width_punct;
+            guard.core.punctuation_processor.full_width_punct = next;
             if let Some(ref flag) = guard.shared_full_width_punct {
                 flag.store(next, Ordering::Release);
             }

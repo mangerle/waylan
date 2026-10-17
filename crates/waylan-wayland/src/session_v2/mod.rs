@@ -2,7 +2,6 @@ mod keys;
 mod lifecycle;
 mod surrounding;
 
-use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
 use std::time::{Instant, SystemTime};
@@ -120,22 +119,6 @@ pub struct WaylanV2Session {
     pub voice_manager: Option<VoiceInteractionManager>,
 }
 
-impl Deref for WaylanV2Session {
-    type Target = ImeCoreSession;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-impl DerefMut for WaylanV2Session {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.core
-    }
-}
-
 impl WaylanV2Session {
     /// 基于已加载并配置好的核心算法引擎构造 Wayland V2 输入法会话
     ///
@@ -206,7 +189,7 @@ impl WaylanV2Session {
                 let commit_opt = vm.poll_events();
                 if let Some(ref text) = commit_opt {
                     self.commit_text(text);
-                    self.punctuation_processor.record_commit(text);
+                    self.core.punctuation_processor.record_commit(text);
                     self.hide_candidate_surface();
                     return commit_opt;
                 } else {
@@ -276,7 +259,7 @@ impl WaylanV2Session {
             let cursor = if preedit.is_empty() {
                 0
             } else {
-                self.engine.formatted_cursor_byte_offset() as i32
+                self.core.engine.formatted_cursor_byte_offset() as i32
             };
             im.set_preedit_string(preedit.to_string(), cursor, cursor);
             im.commit(self.done_serial);
@@ -292,7 +275,7 @@ impl WaylanV2Session {
     pub(crate) fn commit_partial(&mut self, text: &str, remaining_preedit: &str) {
         if let Some(im) = &self.input_method {
             im.commit_string(text.to_string());
-            let cursor = self.engine.formatted_cursor_byte_offset() as i32;
+            let cursor = self.core.engine.formatted_cursor_byte_offset() as i32;
             im.set_preedit_string(remaining_preedit.to_string(), cursor, cursor);
             im.commit(self.done_serial);
         }
@@ -303,7 +286,7 @@ impl WaylanV2Session {
     pub(crate) fn cancel_input(&mut self) {
         self.is_grid_expanded = false;
         self.grid_selected_index = 0;
-        self.engine.reset();
+        self.core.engine.reset();
         self.update_preedit("");
     }
 

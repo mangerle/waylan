@@ -18,9 +18,9 @@ pub use resources::LexiconResources;
 pub use viewport::CandidateViewport;
 
 use std::borrow::Cow;
-use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
+use crate::custom_phrase::AuxiliaryDict;
 use crate::dict_importer::ImportedDictEntry;
 use crate::error::AlgoError;
 use crate::prism::PrismEngine;
@@ -54,23 +54,19 @@ pub struct AlgoEngine {
     pub(crate) scratch_candidates: Vec<AlgoCandidate>,
 }
 
-impl Deref for AlgoEngine {
-    type Target = LexiconResources;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.resources
-    }
-}
-
-impl DerefMut for AlgoEngine {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.resources
-    }
-}
-
 impl AlgoEngine {
+    /// 载入外部辅助与混输二进制词库（包含英文词库与符号表情库）
+    #[inline]
+    pub fn load_auxiliary_dict(&mut self, dict: AuxiliaryDict) {
+        self.resources.load_auxiliary_dict(dict);
+    }
+
+    /// 动态注册新的受保护专有名词与实体
+    #[inline]
+    pub fn register_entity(&mut self, entity: &str) {
+        self.resources.register_entity(entity);
+    }
+
     /// 使用指定词典表与配置创建算法引擎
     pub fn new(table: LexiconTable, config: AlgoConfig) -> Self {
         Self {
@@ -262,7 +258,7 @@ impl AlgoEngine {
         let paths = PrismEngine::build_paths_with_entities(
             raw,
             &self.config.fuzzy,
-            Some(&self.entity_manager),
+            Some(&self.resources.entity_manager),
         );
         if let Some(first_path) = paths.first() {
             return Cow::Owned(first_path.to_key_string());
@@ -317,7 +313,7 @@ impl AlgoEngine {
         let prefix_paths = PrismEngine::build_paths_with_entities(
             raw_prefix,
             &self.config.fuzzy,
-            Some(&self.entity_manager),
+            Some(&self.resources.entity_manager),
         );
         if let Some(first) = prefix_paths.first() {
             let key_len = first.to_key_string().len().min(formatted.len());

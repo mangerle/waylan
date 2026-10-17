@@ -34,10 +34,10 @@ impl AlgoEngine {
                 .cloned()
                 .collect();
             for mut spatial_cand in
-                SpatialTypoCorrector::generate_candidates(raw_input, &self.table)
+                SpatialTypoCorrector::generate_candidates(raw_input, &self.resources.table)
             {
                 if self.config.traditional_chinese {
-                    spatial_cand.text = self.opencc_dict.convert_text(&spatial_cand.text);
+                    spatial_cand.text = self.resources.opencc_dict.convert_text(&spatial_cand.text);
                 }
                 if !merged_typos.iter().any(|c| c.text == spatial_cand.text) {
                     merged_typos.push(spatial_cand);
@@ -67,10 +67,10 @@ impl AlgoEngine {
         let mut extensions: Vec<AlgoCandidate> = Vec::new();
 
         // 3.1 用户自定义短语（最高优先级，标记为 ProtectedEntity 置顶）
-        let phrase_cands = self.custom_phrases.lookup(raw_input);
+        let phrase_cands = self.resources.custom_phrases.lookup(raw_input);
         for mut phrase in phrase_cands {
             if self.config.traditional_chinese {
-                phrase.text = self.opencc_dict.convert_text(&phrase.text);
+                phrase.text = self.resources.opencc_dict.convert_text(&phrase.text);
             }
             phrase.tier = CandidateTier::ProtectedEntity;
             phrase.consumed_len = Some(raw_input.len());
@@ -80,9 +80,9 @@ impl AlgoEngine {
         // 3.2 动态扩展功能（日期、时间、干支等强相关功能卡片）
         if let Some(mut dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
             if self.config.traditional_chinese {
-                dynamic_cand.text = self.opencc_dict.convert_text(&dynamic_cand.text);
+                dynamic_cand.text = self.resources.opencc_dict.convert_text(&dynamic_cand.text);
                 for sub in &mut dynamic_cand.sub_candidates {
-                    *sub = self.opencc_dict.convert_text(sub);
+                    *sub = self.resources.opencc_dict.convert_text(sub);
                 }
             }
             dynamic_cand.consumed_len = Some(raw_input.len());
@@ -90,7 +90,7 @@ impl AlgoEngine {
         }
 
         // 3.3 英文单词联想（次要辅助建议，至多取 1 项避免污染候选列表）
-        let eng_cands = self.english_suggester.lookup(raw_input);
+        let eng_cands = self.resources.english_suggester.lookup(raw_input);
         for mut eng in eng_cands.into_iter().take(1) {
             if !candidates
                 .iter()
@@ -102,7 +102,7 @@ impl AlgoEngine {
         }
 
         // 3.4 符号与表情联想（次要辅助建议，至多取 1 项）
-        let sym_cands = self.symbol_suggester.lookup(raw_input);
+        let sym_cands = self.resources.symbol_suggester.lookup(raw_input);
         for mut sym in sym_cands.into_iter().take(1) {
             if !candidates.iter().any(|c| c.text == sym.text) {
                 sym.consumed_len = Some(raw_input.len());
@@ -152,7 +152,13 @@ impl AlgoEngine {
         // 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
         if total_syls >= 4 && best_path.syllables.len() >= 3 {
             let key_3 = best_path.syllables[..3].join("'");
-            if let Some(mut m) = self.table.lookup_top_k(&key_3, 1).into_iter().next() {
+            if let Some(mut m) = self
+                .resources
+                .table
+                .lookup_top_k(&key_3, 1)
+                .into_iter()
+                .next()
+            {
                 if m.pinyin == key_3 {
                     m.consumed_len = Some(Self::calculate_consumed_len(
                         self.composition.as_str(),
@@ -167,7 +173,13 @@ impl AlgoEngine {
         // 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，回退查简拼召回 Top-2 二字高频词）
         let key_2 = best_path.syllables[..2].join("'");
         let mut found_exact_2 = false;
-        if let Some(mut m) = self.table.lookup_top_k(&key_2, 1).into_iter().next() {
+        if let Some(mut m) = self
+            .resources
+            .table
+            .lookup_top_k(&key_2, 1)
+            .into_iter()
+            .next()
+        {
             if m.pinyin == key_2 {
                 m.consumed_len = Some(Self::calculate_consumed_len(
                     self.composition.as_str(),
@@ -180,7 +192,7 @@ impl AlgoEngine {
         }
         if !found_exact_2 {
             let acronym_2 = best_path.syllables[..2].concat();
-            for mut cand in self.table.lookup_acronym_top_k(&acronym_2, 2) {
+            for mut cand in self.resources.table.lookup_acronym_top_k(&acronym_2, 2) {
                 cand.consumed_len = Some(Self::calculate_consumed_len(
                     self.composition.as_str(),
                     &key_2,
@@ -227,7 +239,7 @@ impl AlgoEngine {
     /// 归一化前缀分段候选词的简繁文本、拼音注释与层级标签
     fn format_prefix_candidate(&self, mut cand: AlgoCandidate) -> AlgoCandidate {
         if self.config.traditional_chinese {
-            cand.text = self.opencc_dict.convert_text(&cand.text);
+            cand.text = self.resources.opencc_dict.convert_text(&cand.text);
         }
         if self.config.show_pinyin_comment && cand.comment.is_none() && !cand.pinyin.is_empty() {
             cand.comment = Some(format!("[{}]", cand.pinyin));
@@ -278,10 +290,12 @@ impl AlgoEngine {
             }
             let last_syl_idx = split_idx - 1;
             let tail_syl = &syllables[last_syl_idx..split_idx];
-            self.table.lookup_prefix_extension(tail_syl, remaining)
+            self.resources
+                .table
+                .lookup_prefix_extension(tail_syl, remaining)
         } else {
             let acronym_key = initial_chain.concat();
-            self.table.lookup_acronym(&acronym_key)
+            self.resources.table.lookup_acronym(&acronym_key)
         };
 
         if tail_cands.is_empty() {
@@ -309,13 +323,13 @@ impl AlgoEngine {
         if let Some(sentence) = ViterbiDecoder::decode_sentence_with_context(
             effective_head_syls,
             "",
-            &self.table,
+            &self.resources.table,
             self.composition.last_commit_context(),
         ) {
             head_options.push((sentence.text, head_key.clone(), sentence.score));
         }
 
-        let exact_matches = self.table.lookup_top_k(&head_key, 1);
+        let exact_matches = self.resources.table.lookup_top_k(&head_key, 1);
         if let Some(best_exact) = exact_matches.first() {
             if !head_options.iter().any(|(t, _, _)| t == &best_exact.text) {
                 head_options.push((best_exact.text.clone(), head_key, best_exact.score));
@@ -341,6 +355,7 @@ impl AlgoEngine {
                     .min(30_000_000);
 
                 let bigram_bonus = self
+                    .resources
                     .table
                     .get_bigram_affinity(head_text, &tail.text)
                     .unwrap_or_else(|| {
@@ -349,7 +364,8 @@ impl AlgoEngine {
                         if rule_score > 0 {
                             rule_score
                         } else {
-                            self.table
+                            self.resources
+                                .table
                                 .get_bigram_affinity(&head_last_char, &tail.text)
                                 .unwrap_or(0)
                         }

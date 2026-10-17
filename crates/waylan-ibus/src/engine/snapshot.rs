@@ -44,20 +44,20 @@ impl UiSnapshot {
 
     /// 提取常规键盘输入组词状态下的 UI 快照
     fn capture_input_snapshot(core: &IbusSessionCore) -> Self {
-        let is_v_mode = core.engine.raw_input().starts_with('v');
-        let preedit = if core.engine.raw_input().is_empty() {
+        let is_v_mode = core.core.engine.raw_input().starts_with('v');
+        let preedit = if core.core.engine.raw_input().is_empty() {
             String::new()
         } else if is_v_mode {
-            core.engine.raw_input().to_string()
+            core.core.engine.raw_input().to_string()
         } else {
-            core.engine.formatted_preedit()
+            core.core.engine.formatted_preedit()
         };
-        let is_expanded = core.engine.is_expanded();
+        let is_expanded = core.core.engine.is_expanded();
         let candidates = core.current_candidates();
         let (page_size, selected_index, orientation) = if is_expanded {
             (
                 candidates.len().max(1),
-                core.engine.expanded_selected_index(),
+                core.core.engine.expanded_selected_index(),
                 super::super::types::IBUS_ORIENTATION_VERTICAL,
             )
         } else {
@@ -68,8 +68,8 @@ impl UiSnapshot {
                 CandidateOrientation::Vertical => super::super::types::IBUS_ORIENTATION_VERTICAL,
             };
             (
-                core.engine.config.page_size,
-                core.engine.selected_index(),
+                core.core.engine.config.page_size,
+                core.core.engine.selected_index(),
                 orientation,
             )
         };

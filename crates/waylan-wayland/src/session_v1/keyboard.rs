@@ -24,6 +24,7 @@ fn handle_v1_keymap(state: &mut WaylanV1Session, fd: std::os::fd::OwnedFd, size:
     if file.read_exact(&mut buf).is_ok() {
         let text = String::from_utf8_lossy(&buf);
         state
+            .core
             .keymap_layout
             .update_from_xkb_text(text.trim_end_matches('\0'));
         debug!("[Wayland v1 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
@@ -40,9 +41,9 @@ fn handle_v1_modifiers(
     mods_locked: u32,
     group: u32,
 ) {
-    let prev_caps = state.is_caps_locked();
+    let prev_caps = state.core.is_caps_locked();
     state.core.set_modifiers(mods_depressed, mods_locked);
-    let curr_caps = state.is_caps_locked();
+    let curr_caps = state.core.is_caps_locked();
     if prev_caps != curr_caps {
         if let Some(ref caps_flag) = state.shared_is_caps_locked {
             caps_flag.store(curr_caps, Ordering::Release);
@@ -68,9 +69,9 @@ fn handle_v1_key_event(
         match vm.handle_key_event(key, is_press, state.core.mods_depressed()) {
             VoiceKeyAction::Consumed => {
                 if is_press {
-                    state.consumed_keys.record_press(key, true);
+                    state.core.consumed_keys.record_press(key, true);
                 } else {
-                    state.consumed_keys.take_release(key);
+                    state.core.consumed_keys.take_release(key);
                 }
                 state.refresh_candidate_surface();
                 return;
@@ -78,12 +79,12 @@ fn handle_v1_key_event(
             VoiceKeyAction::Commit(text) => {
                 context.commit_string(state.commit_serial, text.clone());
                 context.preedit_string(state.commit_serial, String::new(), String::new());
-                state.punctuation_processor.record_commit(&text);
+                state.core.punctuation_processor.record_commit(&text);
                 state.hide_candidate_surface();
                 if is_press {
-                    state.consumed_keys.record_press(key, true);
+                    state.core.consumed_keys.record_press(key, true);
                 } else {
-                    state.consumed_keys.take_release(key);
+                    state.core.consumed_keys.take_release(key);
                 }
                 return;
             }
@@ -98,21 +99,21 @@ fn handle_v1_key_event(
         match filter_outcome {
             crate::session_common::KeyFilterResult::Consumed => {
                 if is_press {
-                    state.consumed_keys.record_press(key, true);
+                    state.core.consumed_keys.record_press(key, true);
                 } else {
-                    state.consumed_keys.take_release(key);
+                    state.core.consumed_keys.take_release(key);
                 }
                 return;
             }
             crate::session_common::KeyFilterResult::Commit(text) => {
                 context.commit_string(state.commit_serial, text.clone());
                 context.preedit_string(state.commit_serial, String::new(), String::new());
-                state.punctuation_processor.record_commit(&text);
+                state.core.punctuation_processor.record_commit(&text);
                 state.hide_candidate_surface();
                 if is_press {
-                    state.consumed_keys.record_press(key, true);
+                    state.core.consumed_keys.record_press(key, true);
                 } else {
-                    state.consumed_keys.take_release(key);
+                    state.core.consumed_keys.take_release(key);
                 }
                 return;
             }
@@ -143,16 +144,16 @@ fn handle_v1_key_event(
         }
         KeyProcessResult::Handled { update_ui } => {
             if update_ui {
-                let preedit = state.engine.formatted_preedit();
-                let cursor = state.engine.formatted_cursor_byte_offset() as i32;
+                let preedit = state.core.engine.formatted_preedit();
+                let cursor = state.core.engine.formatted_cursor_byte_offset() as i32;
                 state.refresh_candidate_surface();
                 context.preedit_cursor(cursor);
                 context.preedit_string(state.commit_serial, preedit, String::new());
             }
         }
         KeyProcessResult::ExpandGrid => {
-            let preedit = state.engine.formatted_preedit();
-            let cursor = state.engine.formatted_cursor_byte_offset() as i32;
+            let preedit = state.core.engine.formatted_preedit();
+            let cursor = state.core.engine.formatted_cursor_byte_offset() as i32;
             state.refresh_candidate_surface();
             context.preedit_cursor(cursor);
             context.preedit_string(state.commit_serial, preedit, String::new());
@@ -189,7 +190,7 @@ fn handle_v1_key_event(
             committed,
             remaining_preedit,
         } => {
-            let cursor = state.engine.formatted_cursor_byte_offset() as i32;
+            let cursor = state.core.engine.formatted_cursor_byte_offset() as i32;
             context.commit_string(state.commit_serial, committed);
             state.refresh_candidate_surface();
             context.preedit_cursor(cursor);

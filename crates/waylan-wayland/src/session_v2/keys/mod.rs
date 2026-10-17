@@ -19,8 +19,8 @@ pub(crate) use repeat::{drive_key_repeat, next_poll_timeout_ms};
 /// 根据当前 V2 会话算法引擎与输入模式构建候选框渲染状态
 pub(crate) fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateBoxState {
     crate::session_common::build_common_candidate_box_state(
-        &session.engine,
-        session.mode,
+        &session.core.engine,
+        session.core.mode,
         session.is_active,
         session.is_grid_expanded,
         session.grid_selected_index,
@@ -40,21 +40,21 @@ pub(crate) fn process_key_event(
         match vm.handle_key_event(key, is_press, session.core.mods_depressed()) {
             VoiceKeyAction::Consumed => {
                 if is_press {
-                    session.consumed_keys.record_press(key, true);
+                    session.core.consumed_keys.record_press(key, true);
                 } else {
-                    session.consumed_keys.take_release(key);
+                    session.core.consumed_keys.take_release(key);
                 }
                 session.refresh_candidate_surface();
                 return (true, None);
             }
             VoiceKeyAction::Commit(text) => {
                 session.commit_text(&text);
-                session.punctuation_processor.record_commit(&text);
+                session.core.punctuation_processor.record_commit(&text);
                 session.refresh_candidate_surface();
                 if is_press {
-                    session.consumed_keys.record_press(key, true);
+                    session.core.consumed_keys.record_press(key, true);
                 } else {
-                    session.consumed_keys.take_release(key);
+                    session.core.consumed_keys.take_release(key);
                 }
                 return (true, Some(text));
             }
@@ -69,20 +69,20 @@ pub(crate) fn process_key_event(
         match filter_outcome {
             crate::session_common::KeyFilterResult::Consumed => {
                 if is_press {
-                    session.consumed_keys.record_press(key, true);
+                    session.core.consumed_keys.record_press(key, true);
                 } else {
-                    session.consumed_keys.take_release(key);
+                    session.core.consumed_keys.take_release(key);
                 }
                 return (true, None);
             }
             crate::session_common::KeyFilterResult::Commit(text) => {
                 session.commit_text(&text);
-                session.punctuation_processor.record_commit(&text);
+                session.core.punctuation_processor.record_commit(&text);
                 session.refresh_candidate_surface();
                 if is_press {
-                    session.consumed_keys.record_press(key, true);
+                    session.core.consumed_keys.record_press(key, true);
                 } else {
-                    session.consumed_keys.take_release(key);
+                    session.core.consumed_keys.take_release(key);
                 }
                 return (true, Some(text));
             }
@@ -98,7 +98,7 @@ pub(crate) fn process_key_event(
     // 3. 若大网格展开态且处于按下阶段，优先由大网格导航拦截
     if session.is_grid_expanded && is_press {
         if let Some(res) = grid::process_grid_expanded_key(session, key, now) {
-            session.consumed_keys.record_press(key, res.0);
+            session.core.consumed_keys.record_press(key, res.0);
             repeat::update_key_repeat(session, key, res.0);
             return res;
         }
@@ -122,14 +122,14 @@ pub(crate) fn process_key_event(
         KeyProcessResult::Handled { update_ui } => {
             if update_ui {
                 session.grid_selected_index = 0;
-                let preedit = session.engine.formatted_preedit();
+                let preedit = session.core.engine.formatted_preedit();
                 session.update_preedit(&preedit);
             }
             (true, None)
         }
         KeyProcessResult::ExpandGrid => {
             session.is_grid_expanded = true;
-            session.grid_selected_index = session.engine.selected_index();
+            session.grid_selected_index = session.core.engine.selected_index();
             session.refresh_candidate_surface();
             (true, None)
         }

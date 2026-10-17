@@ -9,14 +9,19 @@ fn commit_grid_candidate_by_index(
     target_idx: usize,
     now: u64,
 ) -> Option<(bool, Option<String>)> {
-    if let Some((committed_text, remaining_len)) =
-        session.engine.select_candidate_from_all(target_idx, now)
+    if let Some((committed_text, remaining_len)) = session
+        .core
+        .engine
+        .select_candidate_from_all(target_idx, now)
     {
         session.is_grid_expanded = false;
         session.grid_selected_index = 0;
-        session.punctuation_processor.record_commit(&committed_text);
+        session
+            .core
+            .punctuation_processor
+            .record_commit(&committed_text);
         if remaining_len > 0 {
-            let remaining_preedit = session.engine.formatted_preedit();
+            let remaining_preedit = session.core.engine.formatted_preedit();
             session.commit_partial(&committed_text, &remaining_preedit);
         } else {
             session.commit_text(&committed_text);
@@ -83,7 +88,7 @@ fn handle_grid_selection_key(
     total: usize,
     row: usize,
 ) -> Option<Option<(bool, Option<String>)>> {
-    if !session.is_shift_active() {
+    if !session.core.is_shift_active() {
         if let Some(digit) = keycode_to_digit(key) {
             if (1..=6).contains(&digit) {
                 let target_idx = row * 6 + (digit - 1);
@@ -107,7 +112,7 @@ pub(super) fn process_grid_expanded_key(
     key: u32,
     now: u64,
 ) -> Option<(bool, Option<String>)> {
-    let total = session.engine.all_candidates().len().min(30);
+    let total = session.core.engine.all_candidates().len().min(30);
     if total == 0 {
         return None;
     }

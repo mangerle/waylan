@@ -47,7 +47,7 @@ impl WaylanV2Session {
                 self.reset_focus_state();
             } else {
                 self.sync_atomic_state();
-                if self.is_password_context && !self.engine.raw_input().is_empty() {
+                if self.is_password_context && !self.core.engine.raw_input().is_empty() {
                     self.cancel_input();
                 }
             }
@@ -63,7 +63,7 @@ impl WaylanV2Session {
                     }
                 }
                 self.reset_focus_state();
-                let _ = self.engine.maybe_compact_user_dict();
+                let _ = self.core.engine.maybe_compact_user_dict();
             }
         }
         now_active
@@ -92,7 +92,7 @@ impl WaylanV2Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                apply_default_engine_reload(&mut self.engine);
+                apply_default_engine_reload(&mut self.core.engine);
             }
             info!("[微澜 Wayland V2] 已完成用户词库与运行配置热重载。");
         }
@@ -120,7 +120,7 @@ impl WaylanV2Session {
         if let Some(InputMode::English) =
             sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
         {
-            if !self.engine.raw_input().is_empty() {
+            if !self.core.engine.raw_input().is_empty() {
                 self.cancel_input();
             }
         }

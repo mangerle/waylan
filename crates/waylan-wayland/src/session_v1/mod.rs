@@ -1,4 +1,3 @@
-use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
 use std::time::SystemTime;
@@ -83,22 +82,6 @@ pub struct WaylanV1Session {
     pub voice_manager: Option<VoiceInteractionManager>,
 }
 
-impl Deref for WaylanV1Session {
-    type Target = ImeCoreSession;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-impl DerefMut for WaylanV1Session {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.core
-    }
-}
-
 impl WaylanV1Session {
     /// 创建默认配置的 Wayland V1 输入法会话实例
     ///
@@ -137,7 +120,7 @@ impl WaylanV1Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                apply_default_engine_reload(&mut self.engine);
+                apply_default_engine_reload(&mut self.core.engine);
             }
             info!("[微澜 Wayland V1] 已完成用户词库与运行配置热重载。");
         }
@@ -170,8 +153,8 @@ impl WaylanV1Session {
         if let Some(InputMode::English) =
             sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
         {
-            if !self.engine.raw_input().is_empty() {
-                self.engine.reset();
+            if !self.core.engine.raw_input().is_empty() {
+                self.core.engine.reset();
                 self.hide_candidate_surface();
                 if let Some(ref ctx) = self.active_context {
                     ctx.preedit_cursor(0);
@@ -201,7 +184,7 @@ impl WaylanV1Session {
                         ctx.preedit_cursor(0);
                         ctx.preedit_string(self.commit_serial, String::new(), String::new());
                     }
-                    self.punctuation_processor.record_commit(text);
+                    self.core.punctuation_processor.record_commit(text);
                     self.hide_candidate_surface();
                     return commit_opt;
                 } else {
@@ -215,8 +198,8 @@ impl WaylanV1Session {
     /// 构造当前候选框的渲染状态
     pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
         build_common_candidate_box_state(
-            &self.engine,
-            self.mode,
+            &self.core.engine,
+            self.core.mode,
             true,
             false,
             0,
@@ -309,9 +292,9 @@ impl WaylanV1Session {
                     old_kb.release();
                 }
             }
-            self.reset_input_state();
+            self.core.reset_input_state();
             self.hide_candidate_surface();
-            let _ = self.engine.maybe_compact_user_dict();
+            let _ = self.core.engine.maybe_compact_user_dict();
         }
     }
 }
@@ -348,9 +331,9 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
                 state.commit_serial = serial;
             }
             ContextEvent::Reset => {
-                state.shift_sm.reset();
-                state.punctuation_processor.reset();
-                state.engine.reset();
+                state.core.shift_sm.reset();
+                state.core.punctuation_processor.reset();
+                state.core.engine.reset();
                 state.hide_candidate_surface();
             }
             _ => {}

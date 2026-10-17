@@ -84,7 +84,7 @@ impl IbusEngineService {
         self.is_password.store(is_pwd, Ordering::Release);
         let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_password_context = is_pwd;
-        if is_pwd && !guard.engine.raw_input().is_empty() {
+        if is_pwd && !guard.core.engine.raw_input().is_empty() {
             guard.reset_context();
         }
     }
@@ -139,16 +139,18 @@ impl IbusEngineService {
                 update_ui: true,
                 ..Default::default()
             };
-            if guard.engine.is_expanded() {
-                let sel = guard.engine.selected_index();
-                if let Some((committed, _)) = guard.engine.select_expanded_item(sel, index as usize)
+            if guard.core.engine.is_expanded() {
+                let sel = guard.core.engine.selected_index();
+                if let Some((committed, _)) =
+                    guard.core.engine.select_expanded_item(sel, index as usize)
                 {
-                    guard.punctuation_processor.record_commit(&committed);
+                    guard.core.punctuation_processor.record_commit(&committed);
                     out.commit_text = Some(committed);
                 }
-            } else if let Some((committed, _)) = guard.engine.select_candidate(index as usize, now)
+            } else if let Some((committed, _)) =
+                guard.core.engine.select_candidate(index as usize, now)
             {
-                guard.punctuation_processor.record_commit(&committed);
+                guard.core.punctuation_processor.record_commit(&committed);
                 out.commit_text = Some(committed);
             }
             let snap = UiSnapshot::capture(&guard);
@@ -173,11 +175,11 @@ impl IbusEngineService {
             }
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
-            let trad = guard.engine.config.traditional_chinese;
-            let punct = guard.punctuation_processor.full_width_punct;
+            let trad = guard.core.engine.config.traditional_chinese;
+            let punct = guard.core.punctuation_processor.full_width_punct;
             let char_full = guard.is_full_width_char();
             (
-                guard.mode,
+                guard.core.mode,
                 guard.is_caps_locked,
                 trad,
                 punct,
@@ -234,8 +236,8 @@ impl IbusEngineService {
     async fn page_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if !guard.engine.is_expanded() {
-                let _ = guard.engine.prev_page();
+            if !guard.core.engine.is_expanded() {
+                let _ = guard.core.engine.prev_page();
             }
             UiSnapshot::capture(&guard)
         };
@@ -246,8 +248,8 @@ impl IbusEngineService {
     async fn page_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if !guard.engine.is_expanded() {
-                let _ = guard.engine.next_page();
+            if !guard.core.engine.is_expanded() {
+                let _ = guard.core.engine.next_page();
             }
             UiSnapshot::capture(&guard)
         };
@@ -258,11 +260,11 @@ impl IbusEngineService {
     async fn cursor_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.engine.is_expanded() {
-                let sel = guard.engine.selected_index();
-                guard.engine.prev_expanded_item(sel);
+            if guard.core.engine.is_expanded() {
+                let sel = guard.core.engine.selected_index();
+                guard.core.engine.prev_expanded_item(sel);
             } else {
-                guard.engine.prev_candidate();
+                guard.core.engine.prev_candidate();
             }
             UiSnapshot::capture(&guard)
         };
@@ -273,11 +275,11 @@ impl IbusEngineService {
     async fn cursor_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.engine.is_expanded() {
-                let sel = guard.engine.selected_index();
-                guard.engine.next_expanded_item(sel);
+            if guard.core.engine.is_expanded() {
+                let sel = guard.core.engine.selected_index();
+                guard.core.engine.next_expanded_item(sel);
             } else {
-                guard.engine.next_candidate();
+                guard.core.engine.next_candidate();
             }
             UiSnapshot::capture(&guard)
         };
@@ -310,7 +312,7 @@ impl IbusEngineService {
         self.is_password.store(is_pwd, Ordering::Release);
         let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_password_context = is_pwd;
-        if is_pwd && !guard.engine.raw_input().is_empty() {
+        if is_pwd && !guard.core.engine.raw_input().is_empty() {
             guard.reset_context();
         }
     }

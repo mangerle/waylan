@@ -28,7 +28,7 @@ impl AlgoEngine {
             let mut cands = CandidatePipeline::process_all_with_opencc(
                 dispatched,
                 &self.config,
-                Some(&self.opencc_dict),
+                Some(&self.resources.opencc_dict),
             );
             for c in &mut cands {
                 if c.consumed_len.is_none() {
@@ -46,7 +46,7 @@ impl AlgoEngine {
             let paths = PrismEngine::build_paths_with_entities(
                 raw,
                 &self.config.fuzzy,
-                Some(&self.entity_manager),
+                Some(&self.resources.entity_manager),
             );
             let preedit_str = paths
                 .first()
@@ -80,7 +80,7 @@ impl AlgoEngine {
         raw_candidates.clear();
 
         // 2.0 专名保护机制 (NER 原型)：精确命中受保护实体时注入置顶候选
-        if let Some(entity) = self.entity_manager.match_exact(raw_input) {
+        if let Some(entity) = self.resources.entity_manager.match_exact(raw_input) {
             let mut cand = AlgoCandidate::new(entity, raw_input, 999_999);
             cand.tier = CandidateTier::ProtectedEntity;
             cand.comment = Some("专名".to_string());
@@ -110,7 +110,7 @@ impl AlgoEngine {
         let mut candidates = CandidatePipeline::process_all_with_opencc(
             raw_candidates,
             &self.config,
-            Some(&self.opencc_dict),
+            Some(&self.resources.opencc_dict),
         );
 
         self.inject_page_zero_extensions(raw_input, &paths, &mut candidates);
@@ -151,7 +151,7 @@ impl AlgoEngine {
                 && (cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count);
 
             // 词典精确及倒排检索
-            let mut matches = self.table.lookup(&key);
+            let mut matches = self.resources.table.lookup(&key);
             if path.is_typo {
                 for m in &mut matches {
                     m.tier = CandidateTier::TypoCorrection;
@@ -209,7 +209,7 @@ impl AlgoEngine {
         let is_suboptimal = cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count;
 
         for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
-            let mut fuzzy_matches = self.table.lookup(&fuzzy_key);
+            let mut fuzzy_matches = self.resources.table.lookup(&fuzzy_key);
             for fm in &mut fuzzy_matches {
                 fm.consumed_len = Some(key_len);
                 let base = if is_suboptimal {
@@ -283,7 +283,7 @@ impl AlgoEngine {
             if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context(
                 &best_path.syllables,
                 &best_path.remaining,
-                &self.table,
+                &self.resources.table,
                 self.composition.last_commit_context(),
             ) {
                 sentence.score = sentence
@@ -296,6 +296,7 @@ impl AlgoEngine {
         // 前缀残存拼音补全与跨词短语合成
         if !best_path.remaining.is_empty() {
             let mut prefix_matches = self
+                .resources
                 .table
                 .lookup_prefix_extension(&best_path.syllables, &best_path.remaining);
             results.append(&mut prefix_matches);
@@ -306,6 +307,7 @@ impl AlgoEngine {
                     &self.config.fuzzy,
                 ) {
                     let mut fuzzy_prefix = self
+                        .resources
                         .table
                         .lookup_prefix_extension(&fuzzy_syls, &best_path.remaining);
                     for fp in &mut fuzzy_prefix {
@@ -321,7 +323,7 @@ impl AlgoEngine {
 
             if !best_path.syllables.is_empty() {
                 let base_key = best_path.syllables.join("'");
-                let mut base_matches = self.table.lookup_top_k(&base_key, 32);
+                let mut base_matches = self.resources.table.lookup_top_k(&base_key, 32);
                 for bm in &mut base_matches {
                     bm.tier = CandidateTier::PrefixPartial;
                 }
@@ -343,7 +345,10 @@ impl AlgoEngine {
         } else {
             raw_input.to_string()
         };
-        let mut acronym_matches = self.table.lookup_acronym_top_k(&acronym_query, 64);
+        let mut acronym_matches = self
+            .resources
+            .table
+            .lookup_acronym_top_k(&acronym_query, 64);
         if raw_input.contains('\'') {
             for am in &mut acronym_matches {
                 am.consumed_len = Some(raw_input.len());
@@ -355,12 +360,12 @@ impl AlgoEngine {
         if let Some(first_path) = paths.first() {
             if !first_path.syllables.is_empty() {
                 let first_syl = &first_path.syllables[0];
-                let mut first_matches = self.table.lookup_top_k(first_syl, 32);
+                let mut first_matches = self.resources.table.lookup_top_k(first_syl, 32);
                 if self.config.fuzzy.has_active_rules() {
                     for alt_syl in
                         PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy)
                     {
-                        let mut alt_matches = self.table.lookup_top_k(&alt_syl, 32);
+                        let mut alt_matches = self.resources.table.lookup_top_k(&alt_syl, 32);
                         for am in &mut alt_matches {
                             am.consumed_len = Some(first_syl.len());
                             am.score = am.score.saturating_sub(50);
@@ -369,7 +374,9 @@ impl AlgoEngine {
                     }
                 }
                 if first_matches.is_empty() {
-                    if let Some(initial_entries) = self.table.get_initial_raw_entries(first_syl) {
+                    if let Some(initial_entries) =
+                        self.resources.table.get_initial_raw_entries(first_syl)
+                    {
                         for (text, score, word_id) in initial_entries {
                             first_matches.push(
                                 AlgoCandidate::new(text, first_syl.clone(), score)
@@ -393,7 +400,7 @@ impl AlgoEngine {
         let prev_context_info = self
             .composition
             .last_commit_context()
-            .map(|prev| (prev, self.table.get_word_id(prev)));
+            .map(|prev| (prev, self.resources.table.get_word_id(prev)));
 
         for c in candidates {
             if c.tier != CandidateTier::UserHistory {
@@ -401,9 +408,12 @@ impl AlgoEngine {
             }
             if let Some((prev, prev_id_opt)) = prev_context_info {
                 let affinity = if let Some(prev_id) = prev_id_opt {
-                    let curr_id = c.word_id.or_else(|| self.table.get_word_id(&c.text));
+                    let curr_id = c
+                        .word_id
+                        .or_else(|| self.resources.table.get_word_id(&c.text));
                     if let Some(cid) = curr_id {
-                        self.table
+                        self.resources
+                            .table
                             .get_bigram_affinity_by_ids(prev_id, cid)
                             .unwrap_or_else(|| {
                                 BigramLanguageModel::estimate_bigram_affinity(prev, &c.text)

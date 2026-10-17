@@ -123,7 +123,7 @@ impl SessionConfigBundle {
         shift_sm.set_toggle_key(self.shift_mode);
         punct_processor.apply_options_from(&self.punct_processor);
         *page_keys = self.page_keys;
-        engine.custom_phrases = self.custom_phrases;
+        engine.resources.custom_phrases = self.custom_phrases;
         if self.user_dict_path.exists() {
             if let Ok(m) = fs::metadata(&self.user_dict_path) {
                 if m.len() == 0 {
@@ -139,8 +139,8 @@ impl SessionConfigBundle {
             engine.adaptive.model = UserAdaptiveModel::new();
             engine.set_user_dict_path(&self.user_dict_path);
         }
-        engine.english_suggester = self.english_suggester;
-        engine.symbol_suggester = self.symbol_suggester;
+        engine.resources.english_suggester = self.english_suggester;
+        engine.resources.symbol_suggester = self.symbol_suggester;
     }
 
     /// 将配置包原子应用到输入法核心会话状态中
@@ -174,7 +174,7 @@ impl ReloadableWaylandSession for WaylanV1Session {
     }
 
     fn refresh_surface_if_composing(&mut self) {
-        if !self.engine.raw_input().is_empty() {
+        if !self.core.engine.raw_input().is_empty() {
             self.refresh_candidate_surface();
         }
     }
@@ -190,7 +190,7 @@ impl ReloadableWaylandSession for WaylanV2Session {
     }
 
     fn refresh_surface_if_composing(&mut self) {
-        if !self.engine.raw_input().is_empty() {
+        if !self.core.engine.raw_input().is_empty() {
             self.refresh_candidate_surface();
         }
     }

@@ -151,6 +151,7 @@ fn handle_grab_keymap(
         if read_ok {
             let text = String::from_utf8_lossy(&buf);
             state
+                .core
                 .keymap_layout
                 .update_from_xkb_text(text.trim_end_matches('\0'));
             debug!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
@@ -170,7 +171,7 @@ fn handle_grab_modifiers(
     mods_locked: u32,
     group: u32,
 ) {
-    let prev_caps = state.is_caps_locked();
+    let prev_caps = state.core.is_caps_locked();
     state.core.set_modifiers(mods_depressed, mods_locked);
     state.mods_latched = mods_latched;
     state.mods_group = group;
@@ -179,7 +180,7 @@ fn handle_grab_modifiers(
             vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
         }
     }
-    let curr_caps = state.is_caps_locked();
+    let curr_caps = state.core.is_caps_locked();
     if prev_caps != curr_caps {
         if let Some(ref caps_flag) = state.shared_is_caps_locked {
             caps_flag.store(curr_caps, Ordering::Release);
@@ -257,18 +258,18 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let select_res = if state.is_grid_expanded {
-        state.engine.select_candidate_from_all(idx, now)
+        state.core.engine.select_candidate_from_all(idx, now)
     } else {
-        state.engine.select_candidate(idx, now)
+        state.core.engine.select_candidate(idx, now)
     };
     if let Some((commit_text, remaining_len)) = select_res {
         state.is_grid_expanded = false;
         state.grid_selected_index = 0;
-        state.punctuation_processor.record_commit(&commit_text);
+        state.core.punctuation_processor.record_commit(&commit_text);
         if remaining_len == 0 {
             state.commit_text(&commit_text);
         } else {
-            let formatted = state.engine.formatted_preedit();
+            let formatted = state.core.engine.formatted_preedit();
             state.commit_partial(&commit_text, &formatted);
         }
     }
@@ -289,7 +290,7 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
         CandidateHitTarget::ToggleExpand => {
             state.is_grid_expanded = !state.is_grid_expanded;
             if state.is_grid_expanded {
-                state.grid_selected_index = state.engine.selected_index();
+                state.grid_selected_index = state.core.engine.selected_index();
             } else {
                 state.grid_selected_index = 0;
             }
@@ -297,11 +298,11 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
         }
         CandidateHitTarget::Select(idx) => handle_pointer_select_candidate(state, idx),
         CandidateHitTarget::NextPage => {
-            state.engine.next_page();
+            state.core.engine.next_page();
             state.refresh_candidate_surface();
         }
         CandidateHitTarget::PrevPage => {
-            state.engine.prev_page();
+            state.core.engine.prev_page();
             state.refresh_candidate_surface();
         }
     }
