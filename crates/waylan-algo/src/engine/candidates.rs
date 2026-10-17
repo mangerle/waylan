@@ -8,20 +8,23 @@ use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 impl AlgoEngine {
     /// 重新计算当前输入序列的全量候选词列表并分页刷新
     pub(crate) fn recompute_candidates(&mut self) {
-        let raw_input = self.composition.as_str();
-        if raw_input.is_empty() {
+        if self.composition.is_empty() {
             self.viewport.reset_selection();
             self.viewport.all_candidates_cache.clear();
             self.viewport.current_candidates.clear();
-            self.cached_preedit.clear();
+            self.composition.clear_cached_preedit();
             return;
         }
 
         self.viewport.reset_selection();
 
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
-        if let Some(dispatched) = ModeDispatcher::try_dispatch(raw_input, &self.config) {
-            self.cached_preedit = raw_input.to_string();
+        if let Some(dispatched) =
+            ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config)
+        {
+            let input_len = self.composition.len();
+            let raw_str = self.composition.as_str().to_string();
+            self.composition.set_cached_preedit(raw_str);
             let mut cands = CandidatePipeline::process_all_with_opencc(
                 dispatched,
                 &self.config,
@@ -29,7 +32,7 @@ impl AlgoEngine {
             );
             for c in &mut cands {
                 if c.consumed_len.is_none() {
-                    c.consumed_len = Some(raw_input.len());
+                    c.consumed_len = Some(input_len);
                 }
             }
             self.viewport.all_candidates_cache = cands;
@@ -38,25 +41,32 @@ impl AlgoEngine {
         }
 
         // 2. 拼音模式：利用 Prism 构建 DAG 音节路径
-        let paths = PrismEngine::build_paths_with_entities(
-            raw_input,
-            &self.config.fuzzy,
-            Some(&self.entity_manager),
-        );
-        self.cached_preedit = paths
-            .first()
-            .map(|p| {
-                if p.is_broken_typo_fallback(&self.config.fuzzy) {
-                    paths
-                        .iter()
-                        .find(|tp| tp.is_typo && tp.remaining.is_empty())
-                        .and_then(|tp| tp.format_raw_with_spans(raw_input))
-                        .unwrap_or_else(|| p.to_key_string())
-                } else {
-                    p.to_key_string()
-                }
-            })
-            .unwrap_or_else(|| raw_input.to_string());
+        let (paths, preedit_str) = {
+            let raw = self.composition.as_str();
+            let paths = PrismEngine::build_paths_with_entities(
+                raw,
+                &self.config.fuzzy,
+                Some(&self.entity_manager),
+            );
+            let preedit_str = paths
+                .first()
+                .map(|p| {
+                    if p.is_broken_typo_fallback(&self.config.fuzzy) {
+                        paths
+                            .iter()
+                            .find(|tp| tp.is_typo && tp.remaining.is_empty())
+                            .and_then(|tp| tp.format_raw_with_spans(raw))
+                            .unwrap_or_else(|| p.to_key_string())
+                    } else {
+                        p.to_key_string()
+                    }
+                })
+                .unwrap_or_else(|| raw.to_string());
+            (paths, preedit_str)
+        };
+        self.composition.set_cached_preedit(preedit_str);
+
+        let raw_input = self.composition.as_str();
 
         let mut best_units: Vec<String> = Vec::new();
         if let Some(best) = paths.first() {
@@ -78,7 +88,11 @@ impl AlgoEngine {
             raw_candidates.push(cand);
         }
 
-        let eval_ts = self.user_model.latest_timestamp().max(self.last_timestamp);
+        let eval_ts = self
+            .adaptive
+            .model
+            .latest_timestamp()
+            .max(self.adaptive.last_timestamp);
 
         // 2.1 聚合 DAG 路径精确匹配与模糊音等价候选
         self.collect_path_matches(&paths, eval_ts, &mut raw_candidates);
@@ -156,7 +170,7 @@ impl AlgoEngine {
             results.append(&mut matches);
 
             // 用户自造词检索
-            let mut user_matches = self.user_model.lookup_user_words(&key, eval_ts);
+            let mut user_matches = self.adaptive.model.lookup_user_words(&key, eval_ts);
             if path.is_typo {
                 for m in &mut user_matches {
                     m.tier = CandidateTier::TypoCorrection;
@@ -212,7 +226,7 @@ impl AlgoEngine {
             }
             results.append(&mut fuzzy_matches);
 
-            let mut fuzzy_user_matches = self.user_model.lookup_user_words(&fuzzy_key, eval_ts);
+            let mut fuzzy_user_matches = self.adaptive.model.lookup_user_words(&fuzzy_key, eval_ts);
             for fum in &mut fuzzy_user_matches {
                 fum.consumed_len = Some(key_len);
                 fum.score = fum
@@ -258,7 +272,7 @@ impl AlgoEngine {
             return;
         }
 
-        let min_units = if self.last_commit_context.is_some() {
+        let min_units = if self.composition.last_commit_context().is_some() {
             1
         } else {
             2
@@ -270,7 +284,7 @@ impl AlgoEngine {
                 &best_path.syllables,
                 &best_path.remaining,
                 &self.table,
-                self.last_commit_context.as_deref(),
+                self.composition.last_commit_context(),
             ) {
                 sentence.score = sentence
                     .score
@@ -377,13 +391,13 @@ impl AlgoEngine {
     /// 应用自适应词频提权与上屏历史二元语言模型亲和度加权
     fn apply_user_and_context_boost(&self, candidates: &mut [AlgoCandidate], eval_ts: u64) {
         let prev_context_info = self
-            .last_commit_context
-            .as_deref()
+            .composition
+            .last_commit_context()
             .map(|prev| (prev, self.table.get_word_id(prev)));
 
         for c in candidates {
             if c.tier != CandidateTier::UserHistory {
-                self.user_model.apply_boost(c, eval_ts);
+                self.adaptive.model.apply_boost(c, eval_ts);
             }
             if let Some((prev, prev_id_opt)) = prev_context_info {
                 let affinity = if let Some(prev_id) = prev_id_opt {

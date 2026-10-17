@@ -52,7 +52,7 @@ pub fn build_algo_engine(
         info!(
             "[字库引擎] 成功载入用户自适应个性化历史词库: {:?} (词条数: {})",
             user_dict,
-            engine.user_model.total_entries()
+            engine.adaptive.model.total_entries()
         );
     }
 

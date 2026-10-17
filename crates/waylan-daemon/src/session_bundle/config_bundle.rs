@@ -128,7 +128,7 @@ impl SessionConfigBundle {
             if let Ok(m) = fs::metadata(&self.user_dict_path) {
                 if m.len() == 0 {
                     info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
-                    engine.user_model = UserAdaptiveModel::new();
+                    engine.adaptive.model = UserAdaptiveModel::new();
                     engine.set_user_dict_path(&self.user_dict_path);
                 } else if !engine.is_same_wal_file(&self.user_dict_path) {
                     engine.set_user_dict_path(&self.user_dict_path);
@@ -136,7 +136,7 @@ impl SessionConfigBundle {
             }
         } else {
             info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
-            engine.user_model = UserAdaptiveModel::new();
+            engine.adaptive.model = UserAdaptiveModel::new();
             engine.set_user_dict_path(&self.user_dict_path);
         }
         engine.english_suggester = self.english_suggester;

@@ -310,7 +310,7 @@ impl AlgoEngine {
             effective_head_syls,
             "",
             &self.table,
-            self.last_commit_context.as_deref(),
+            self.composition.last_commit_context(),
         ) {
             head_options.push((sentence.text, head_key.clone(), sentence.score));
         }

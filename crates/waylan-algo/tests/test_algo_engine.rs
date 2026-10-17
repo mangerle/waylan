@@ -178,7 +178,7 @@ fn test_engine_commit_context_association() {
     }
     assert_eq!(engine.candidates()[0].text, "事件");
     engine.reset();
-    assert!(engine.last_commit_context.is_none());
+    assert!(engine.last_commit_context().is_none());
 
     // 2. 用户先输入 beijing 并选择“北京”上屏
     for ch in "beijing".chars() {
@@ -187,7 +187,7 @@ fn test_engine_commit_context_association() {
     let (committed, remaining) = engine.select_candidate(0, 1_700_000_000).expect("选中北京");
     assert_eq!(committed, "北京");
     assert_eq!(remaining, 0);
-    assert_eq!(engine.last_commit_context.as_deref(), Some("北京"));
+    assert_eq!(engine.last_commit_context(), Some("北京"));
 
     // 3. 用户紧接着输入 shijian：跨句历史上下文生效，由于“北京时间”强亲和度，“时间”逆袭首选！
     for ch in "shijian".chars() {
@@ -202,7 +202,7 @@ fn test_engine_commit_context_association() {
 
     // 4. 用户按 Esc/reset，上下文重置清空
     engine.reset();
-    assert!(engine.last_commit_context.is_none());
+    assert!(engine.last_commit_context().is_none());
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn test_engine_auto_pangu_spacing_integration() {
     let (c2, _) = engine.select_candidate(0, 1_700_000_000).expect("选中Rust");
     assert_eq!(c2, " Rust", "中文接英文应自动补齐半角空格");
     assert_eq!(
-        engine.last_commit_context.as_deref(),
+        engine.last_commit_context(),
         Some("Rust"),
         "历史上下文应保存去除空格后的纯净词"
     );
@@ -631,7 +631,7 @@ fn test_engine_user_dict_wal_persistence_across_restart() {
         engine2.table.insert("ji'shu", "技术", 14_000);
         engine2.table.insert("ji'shu", "基数", 10_000);
         engine2.set_user_dict_path(&wal_path);
-        assert_eq!(engine2.user_model.total_entries(), 1);
+        assert_eq!(engine2.adaptive.model.total_entries(), 1);
 
         for ch in "jishu".chars() {
             engine2.push_char(ch);

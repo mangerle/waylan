@@ -1,4 +1,5 @@
 use super::*;
+use crate::user_adaptive::UserAdaptiveModel;
 
 #[test]
 fn test_pagination_truncate_and_last_page_guard() {
@@ -54,7 +55,10 @@ fn test_partial_commit_synthesizes_user_word() {
     assert_eq!(rem2, 0);
 
     // 再次输入 beijingxian，验证分段合成的自造新词 北京西安 已沉淀到用户模型并直接召回
-    let user_words = engine.user_model.lookup_user_words("bei'jing'xi'an", 202);
+    let user_words = engine
+        .adaptive
+        .model
+        .lookup_user_words("bei'jing'xi'an", 202);
     assert!(
         user_words.iter().any(|w| w.text == "北京西安"),
         "分段选词消费完整个拼音序列后应自动合成用户自造新词 北京西安"
@@ -76,12 +80,12 @@ fn test_partial_commit_segments_cleared_on_edit() {
     let (c1, rem1) = engine.select_candidate(idx1, 200).unwrap();
     assert_eq!(c1, "北京");
     assert_eq!(rem1, 4);
-    assert_eq!(engine.partial_commit_segments.len(), 1);
+    assert_eq!(engine.composition.partial_segments().len(), 1);
 
     // 用户在剩余的拼音中按下退格键修改拼音
     engine.pop_char();
     assert!(
-        engine.partial_commit_segments.is_empty(),
+        engine.composition.partial_segments().is_empty(),
         "修改剩余拼音时必须立即清空自造词累积器，防止拼音错位合成脏词"
     );
 }
@@ -130,7 +134,7 @@ fn test_special_and_traditional_candidates_do_not_pollute_user_dict() {
         .expect("应包含可展开日期项");
     engine.select_candidate(exp_idx, 1000).unwrap();
     assert_eq!(
-        engine.user_model.total_entries(),
+        engine.adaptive.model.total_entries(),
         0,
         "可展开动态功能项不得写入用户自适应词库"
     );
@@ -141,7 +145,7 @@ fn test_special_and_traditional_candidates_do_not_pollute_user_dict() {
     }
     engine.select_candidate(0, 1001).unwrap();
     assert_eq!(
-        engine.user_model.total_entries(),
+        engine.adaptive.model.total_entries(),
         0,
         "V 模式计算候选不得写入用户自适应词库"
     );
@@ -153,7 +157,7 @@ fn test_special_and_traditional_candidates_do_not_pollute_user_dict() {
     }
     engine.select_candidate(0, 1002).unwrap();
     assert_eq!(
-        engine.user_model.total_entries(),
+        engine.adaptive.model.total_entries(),
         1,
         "繁体中文模式下用户选词应正常记入自适应词库"
     );

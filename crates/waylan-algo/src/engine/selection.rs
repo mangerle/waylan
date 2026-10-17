@@ -70,7 +70,7 @@ impl AlgoEngine {
         selected: AlgoCandidate,
         current_timestamp: u64,
     ) -> (String, usize) {
-        self.last_timestamp = self.last_timestamp.max(current_timestamp);
+        self.adaptive.last_timestamp = self.adaptive.last_timestamp.max(current_timestamp);
         let should_record = self.should_record_to_user_dict(&selected);
 
         // 若选中的是可展开项，且直接按数字键确认（未展开时）：
@@ -83,23 +83,13 @@ impl AlgoEngine {
 
         // 当选中的候选词为合规中文拼音词条（支持简繁中文）时，记录用户选词并动态调频
         if should_record {
-            if let Some(ref path) = self.user_dict_path {
-                let _ = self.wal.append(
-                    &mut self.user_model,
-                    path,
-                    &selected.text,
-                    &selected.pinyin,
-                    current_timestamp,
-                );
-            } else {
-                self.user_model
-                    .record_commit(&selected.text, &selected.pinyin, current_timestamp);
-            }
+            self.adaptive
+                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
         }
 
         // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
         let commit_text = if self.config.auto_pangu_spacing {
-            if let Some(prev) = &self.last_commit_context {
+            if let Some(prev) = self.composition.last_commit_context() {
                 if PanguSpacing::should_insert_pangu_space(prev, &raw_commit) {
                     format!(" {}", raw_commit)
                 } else {
@@ -115,7 +105,8 @@ impl AlgoEngine {
         // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
         let trimmed_commit = raw_commit.trim();
         if !trimmed_commit.is_empty() {
-            self.last_commit_context = Some(trimmed_commit.to_string());
+            self.composition
+                .set_last_commit_context(Some(trimmed_commit.to_string()));
         }
 
         // 计算消费的拼音字母长度并执行分段确认（优先直接读取候选词产生时统一标记的 consumed_len，避免重复构图）
@@ -151,51 +142,43 @@ impl AlgoEngine {
         }
 
         if should_record {
-            self.partial_commit_segments
-                .push((selected.text.clone(), selected.pinyin.clone()));
+            self.composition
+                .record_partial_segment(selected.text.clone(), selected.pinyin.clone());
         } else {
-            self.partial_commit_segments.clear();
+            self.composition.clear_partial_segments();
         }
 
         self.composition.consume_prefix(consumed_len);
 
         // 若当前整串拼音已全部消费完毕，且通过 2 次及以上分段选词完成，自动合成为用户自造新词
         if self.composition.is_empty() {
-            if self.partial_commit_segments.len() >= 2 {
+            if self.composition.partial_segments().len() >= 2 {
                 let full_text: String = self
-                    .partial_commit_segments
+                    .composition
+                    .partial_segments()
                     .iter()
                     .map(|(t, _)| t.as_str())
                     .collect();
                 let full_pinyin: String = self
-                    .partial_commit_segments
+                    .composition
+                    .partial_segments()
                     .iter()
                     .map(|(_, p)| p.as_str())
                     .collect::<Vec<_>>()
                     .join("'");
                 let char_len = full_text.chars().count();
                 if (2..=8).contains(&char_len) {
-                    if let Some(ref path) = self.user_dict_path {
-                        let _ = self.wal.append(
-                            &mut self.user_model,
-                            path,
-                            &full_text,
-                            &full_pinyin,
-                            current_timestamp,
-                        );
-                    } else {
-                        self.user_model
-                            .record_commit(&full_text, &full_pinyin, current_timestamp);
-                    }
+                    self.adaptive
+                        .record_commit(&full_text, &full_pinyin, current_timestamp);
                 }
             }
-            self.partial_commit_segments.clear();
+            self.composition.clear_partial_segments();
         }
 
         self.viewport.page_index = 0;
         if self.composition.is_empty() {
             self.viewport.reset();
-            self.cached_preedit.clear();
+            self.composition.clear_cached_preedit();
         } else {
             self.recompute_candidates();
         }
@@ -229,7 +212,7 @@ impl AlgoEngine {
 
         // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
         let commit_text = if self.config.auto_pangu_spacing {
-            if let Some(prev) = &self.last_commit_context {
+            if let Some(prev) = self.composition.last_commit_context() {
                 if PanguSpacing::should_insert_pangu_space(prev, &raw_text) {
                     format!(" {}", raw_text)
                 } else {
@@ -244,13 +227,12 @@ impl AlgoEngine {
 
         let trimmed_text = raw_text.trim();
         if !trimmed_text.is_empty() {
-            self.last_commit_context = Some(trimmed_text.to_string());
+            self.composition
+                .set_last_commit_context(Some(trimmed_text.to_string()));
         }
 
-        self.partial_commit_segments.clear();
-        self.composition.clear();
+        self.composition.reset();
         self.viewport.reset();
-        self.cached_preedit.clear();
 
         Some((commit_text, 0))
     }

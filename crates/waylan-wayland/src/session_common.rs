@@ -82,7 +82,7 @@ pub fn init_session_inotify_watcher(
 pub fn apply_default_engine_reload(engine: &mut AlgoEngine) {
     let phrase_path = CustomPhraseManager::default_path();
     engine.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
-    let wal_opt = engine.user_dict_path.clone();
+    let wal_opt = engine.user_dict_path().map(|p| p.to_path_buf());
     if let Some(ref wal_path) = wal_opt {
         engine.set_user_dict_path(wal_path);
     }

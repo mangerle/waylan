@@ -104,7 +104,7 @@ fn handle_import_user(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut engine = AlgoEngine::default();
     engine.set_user_dict_path(user_dict_path);
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let count = DictBuilder::import_user_text_dict(input_path, &mut engine.user_model, now)?;
+    let count = DictBuilder::import_user_text_dict(input_path, &mut engine.adaptive.model, now)?;
     engine.persist_user_dict()?;
     info!("[用户词库] 成功导入 {} 条用户记录", count);
     Ok(())
