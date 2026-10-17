@@ -82,6 +82,7 @@ fn main() {
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
+        voice: None,
     };
 
     let start_render = Instant::now();

@@ -18,6 +18,7 @@ fn test_renderer_basic() {
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
+        voice: None,
     };
 
     let pixmap = renderer.render(&state);
@@ -43,6 +44,7 @@ fn test_render_expanded_popup_card() {
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
+        voice: None,
     };
 
     let pixmap = renderer.render(&state).expect("应成功渲染展开的二级卡片");
@@ -68,6 +70,7 @@ fn test_glyph_cache_hit_and_reuse() {
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
+        voice: None,
     };
 
     let pixmap_1 = renderer.render(&state);
@@ -95,6 +98,7 @@ fn test_hidpi_scale_rendering() {
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
         grid_candidates: Vec::new(),
+        voice: None,
     };
 
     let pixmap_1x = renderer.render(&state).expect("1x 渲染失败");
@@ -161,6 +165,7 @@ fn test_render_grid_expanded_and_hit_test() {
         mode_badge: String::new(),
         is_grid_expanded: true,
         grid_candidates: grid_cands,
+        voice: None,
     };
 
     let pixmap = renderer.render(&state).expect("5行网格面板应渲染成功");
@@ -222,4 +227,35 @@ fn test_measure_text_cache_hit_and_clear() {
     renderer.clear_glyph_cache();
     let w3 = renderer.measure_text("测试", 15.0);
     assert_eq!(w1, w3, "清空缓存后重新计算的测量宽度必须保持完全一致");
+}
+
+#[test]
+fn test_render_voice_capsule_bar() {
+    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let state = CandidateBoxState {
+        visible: true,
+        preedit: "你好".to_string(),
+        candidates: Vec::new(),
+        selected_index: 0,
+        expanded_card: ExpandedCardState::Collapsed,
+        mode_badge: String::new(),
+        is_grid_expanded: false,
+        grid_candidates: Vec::new(),
+        voice: Some(waylan_core::VoiceBoxState {
+            partial_text: "正在识别中...".to_string(),
+            waveform: " ▃▅▇█▇▅▃ ".to_string(),
+            display_text: None,
+            is_listening: true,
+        }),
+    };
+
+    assert!(state.is_voice_active(), "语音状态必须处于激活");
+    let pixmap = renderer.render(&state);
+    assert!(
+        pixmap.is_some(),
+        "即使 candidates 为空也必须成功渲染语音胶囊"
+    );
+    let pixmap = pixmap.expect("语音胶囊位图不可为空");
+    assert!(pixmap.width() >= 140, "语音胶囊卡片宽度应满足最小阈值");
+    assert_eq!(pixmap.height(), 38, "默认 1x 下语音胶囊高度为 38 像素");
 }

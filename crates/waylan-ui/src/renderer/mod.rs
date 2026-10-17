@@ -245,8 +245,18 @@ impl CandidateBoxRenderer {
 
     /// 渲染单行胶囊候选栏及二级展开浮层卡片
     pub fn render(&self, state: &CandidateBoxState) -> Option<Pixmap> {
-        if state.candidates.is_empty() {
+        if state.candidates.is_empty() && !state.is_voice_active() {
             return None;
+        }
+
+        // 若处于语音听写状态，优先渲染语音流式胶囊波形栏
+        if state.is_voice_active() {
+            let mut regions = Vec::with_capacity(4);
+            let pix = capsule::render_voice_capsule_bar(self, state, &mut regions);
+            if let Ok(mut lock) = self.hit_regions.lock() {
+                *lock = regions;
+            }
+            return pix;
         }
 
         // 若处于 5 行网格大面板展开状态，优先渲染网格面板

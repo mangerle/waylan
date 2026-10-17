@@ -181,25 +181,33 @@ pub fn build_common_candidate_box_state(
     // 若当前处于语音输入状态，优先呈现语音识别流式预览与动态波形（与 IBus 视觉契约 100% 对齐）
     if let Some(vm) = voice_manager {
         if vm.is_active() {
-            let candidates = if let Some(ref voice_text) = vm.display_text {
-                vec![Candidate::new(
-                    voice_text.clone(),
-                    vm.waveform.clone().unwrap_or_default(),
-                    1000,
-                )]
+            let partial_text = vm.partial_text.clone().unwrap_or_default();
+            let waveform = vm.waveform.clone().unwrap_or_default();
+            let display_text = vm.display_text.clone();
+
+            let voice_state = waylan_core::VoiceBoxState {
+                partial_text: partial_text.clone(),
+                waveform: waveform.clone(),
+                display_text: display_text.clone(),
+                is_listening: true,
+            };
+
+            let candidates = if let Some(ref voice_text) = display_text {
+                vec![Candidate::new(voice_text.clone(), waveform.clone(), 1000)]
             } else {
                 Vec::new()
             };
-            let preedit = vm.partial_text.clone().unwrap_or_default();
+
             return CandidateBoxState {
                 visible: is_active,
-                preedit,
+                preedit: partial_text,
                 candidates,
                 selected_index: 0,
                 expanded_card: ExpandedCardState::Collapsed,
-                mode_badge: "语".to_string(),
+                mode_badge: String::new(),
                 is_grid_expanded: false,
                 grid_candidates: Vec::new(),
+                voice: Some(voice_state),
             };
         }
     }
@@ -260,6 +268,7 @@ pub fn build_common_candidate_box_state(
         mode_badge,
         is_grid_expanded,
         grid_candidates,
+        voice: None,
     }
 }
 

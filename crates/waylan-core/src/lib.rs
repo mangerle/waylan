@@ -123,6 +123,19 @@ impl ExpandedCardState {
     }
 }
 
+/// 语音听写与动态波形渲染状态
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VoiceBoxState {
+    /// 正在流式听写的部分预编辑断句文本（如“正在聆听…”或“今天天气”）
+    pub partial_text: String,
+    /// 动态振幅波形字符序列（如“ ▂▃▄▅”）或归一化振幅序列
+    pub waveform: String,
+    /// 最终识别完成的展示文本
+    pub display_text: Option<String>,
+    /// 是否正处于录音聆听激活状态
+    pub is_listening: bool,
+}
+
 /// 候选框界面渲染状态
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateBoxState {
@@ -136,15 +149,24 @@ pub struct CandidateBoxState {
     pub selected_index: usize,
     /// 二级扩展卡片展开状态机
     pub expanded_card: ExpandedCardState,
-    /// 当前工作模式提示文字（如：“中”、“英”、“V”）
+    /// 当前工作模式提示文字（如：“中”、“英”、“V”、“语”）
     pub mode_badge: String,
     /// 是否处于 5 行大候选网格面板展开状态
     pub is_grid_expanded: bool,
     /// 展开状态下的多行网格候选词列表（通常预加载前 30 个候选词）
     pub grid_candidates: Vec<Candidate>,
+    /// 语音交互原生状态（若当前处于语音录音或展示模式则为 Some）
+    #[serde(default)]
+    pub voice: Option<VoiceBoxState>,
 }
 
 impl CandidateBoxState {
+    /// 查询当前是否处于语音听写激活状态
+    #[inline]
+    pub fn is_voice_active(&self) -> bool {
+        self.voice.as_ref().map(|v| v.is_listening).unwrap_or(false)
+    }
+
     /// 兼容便捷判断：是否处于二级扩展卡片展开状态
     #[inline]
     pub fn is_expanded(&self) -> bool {
