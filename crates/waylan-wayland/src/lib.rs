@@ -1,18 +1,20 @@
+#[macro_use]
+pub mod dispatch_macros;
 pub mod error;
-pub mod loop_wakeup;
 pub mod protocol_v1;
 pub mod runner;
 pub mod session_common;
 pub mod session_v1;
 pub mod session_v2;
 pub mod surface;
+pub mod watcher;
 
 pub use error::WaylandRunnerError;
 pub use runner::*;
 
-pub use loop_wakeup::LoopWakeup;
 pub use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
+pub use waylan_core::loop_wakeup::LoopWakeup;
 
 use std::error::Error;
 use std::fmt;

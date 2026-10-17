@@ -4,6 +4,11 @@
 
 pub mod cursor_rect;
 pub mod shm_slot;
+pub mod state_builder;
+
+pub use cursor_rect::CursorRect;
+pub(crate) use shm_slot::ShmSlot;
+pub use state_builder::*;
 
 use log::{debug, warn};
 use std::fs::File;
@@ -18,9 +23,6 @@ use wayland_client::protocol::{
     wl_surface::WlSurface,
 };
 use wayland_client::{Dispatch, QueueHandle};
-
-pub use cursor_rect::CursorRect;
-pub(crate) use shm_slot::ShmSlot;
 
 /// 候选框透明悬浮图层管理器
 pub struct CandidateSurfaceManager {

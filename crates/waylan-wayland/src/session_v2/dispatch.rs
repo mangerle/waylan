@@ -1,4 +1,3 @@
-use crate::impl_common_wayland_dispatch;
 use crate::session_v2::WaylanV2Session;
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;

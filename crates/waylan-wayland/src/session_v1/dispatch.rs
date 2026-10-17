@@ -1,4 +1,3 @@
-use crate::impl_common_wayland_dispatch;
 use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1;
 use crate::protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
 use crate::session_v1::WaylanV1Session;

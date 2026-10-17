@@ -19,12 +19,12 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::Zw
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
-use crate::loop_wakeup::LoopWakeup;
 use crate::session_common::*;
 use crate::surface::{CandidateSurfaceManager, CursorRect};
 use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
 pub use waylan_core::InputMode;
+use waylan_core::LoopWakeup;
 
 pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
 
