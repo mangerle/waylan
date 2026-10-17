@@ -5,7 +5,7 @@
 //! - **核心优势**：消除 `main.rs` 中大段的 Wayland 初始化与协议协商匹配代码，实现纯粹的关注点分离。
 //! - **代价与局限**：调用方需提供已初始化的渲染器与底层合成器能力探测快照。
 
-use std::error::Error;
+use crate::error::DaemonError;
 use std::path::PathBuf;
 use std::process;
 use std::time::SystemTime;
@@ -36,7 +36,7 @@ struct WaylandSessionParams<'a> {
 }
 
 /// 运行 Wayland V1 会话
-fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), Box<dyn Error>> {
+fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
     let mut session = WaylanV1Session::with_engine(params.engine);
     session.surface_manager.renderer = params.renderer;
     session.watched_paths = params.watched_paths;
@@ -64,7 +64,7 @@ fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), Box<dyn Error>
 }
 
 /// 运行 Wayland V2 会话，并在协议失败时自动降级至 V1 会话
-fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(), Box<dyn Error>> {
+fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
     info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
     let mut session_v2 = WaylanV2Session::new(params.engine);
     session_v2.surface_manager.renderer = params.renderer;
@@ -138,7 +138,7 @@ pub struct WaylandDispatchOptions<'a> {
 }
 
 /// 运行 Wayland 会话并处理异常退出
-pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), Box<dyn Error>> {
+pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), DaemonError> {
     let session_params = WaylandSessionParams {
         engine: opts.engine,
         renderer: opts.renderer,

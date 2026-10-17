@@ -7,7 +7,6 @@
 //! - **代价与局限**：强依赖宿主机上正常运行的 ibus-daemon 服务。
 
 use std::env;
-use std::error::Error;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +22,7 @@ use super::engine::{
     IbusEngineService, IbusFactoryService, IbusGenericService, WAYLAN_ENGINE_OBJECT_PATH,
     WAYLAN_FACTORY_OBJECT_PATH,
 };
+use super::error::IbusError;
 use super::keys::IbusSessionCore;
 use super::monitor::{run_ibus_monitor_loop, IbusMonitorParams};
 use super::types::build_waylan_ibus_component;
@@ -71,9 +71,8 @@ fn assemble_ibus_services(
 ///
 /// # Errors
 /// 当无法发现活跃 IBus 地址或 D-Bus 连接建立失败时返回错误。
-pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), Box<dyn Error>> {
-    let ibus_addr = discover_ibus_address()
-        .ok_or("未检测到活跃的 IBus 会话总线地址，请确认 ibus-daemon 正在运行")?;
+pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
+    let ibus_addr = discover_ibus_address().ok_or(IbusError::AddressNotFound)?;
     info!("[微澜 IBus] 成功探测到活跃 IBus 总线地址: {}", ibus_addr);
 
     let (shared_core, engine_srv, monitor_params, is_child, exclusive) =
@@ -106,7 +105,7 @@ fn build_ibus_connection(
     ibus_addr: &str,
     shared_core: &Arc<Mutex<IbusSessionCore>>,
     engine: IbusEngineService,
-) -> Result<Connection, Box<dyn Error>> {
+) -> Result<Connection, IbusError> {
     let factory_next_id = Arc::new(AtomicU32::new(2));
     let factory_conn_slot = Arc::new(Mutex::new(None::<Connection>));
 
@@ -142,7 +141,7 @@ fn register_or_activate_ibus_engine(
     conn: &Connection,
     is_ibus_child_mode: bool,
     exclusive: bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), IbusError> {
     let exe_path = env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))

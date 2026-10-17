@@ -5,7 +5,7 @@
 //! - **核心优势**：在装配各阶段检测停机中断信号，杜绝冷启动中途收到 SIGTERM/SIGINT 时无法即时退出的缺陷。
 //! - **代价与局限**：首次冷启动构建基础字库需要消耗数十毫秒级内存加载时间。
 
-use std::error::Error;
+use crate::error::DaemonError;
 
 use log::info;
 use waylan_algo::custom_phrase::CustomPhraseManager;
@@ -20,7 +20,7 @@ use crate::system::ShutdownCoordinator;
 pub fn build_algo_engine(
     cfg: &AppConfig,
     coordinator: &ShutdownCoordinator,
-) -> Result<Option<AlgoEngine>, Box<dyn Error>> {
+) -> Result<Option<AlgoEngine>, DaemonError> {
     let table = load_lexicon_table();
     if coordinator.is_shutting_down() {
         info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");

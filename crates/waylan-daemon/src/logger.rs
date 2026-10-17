@@ -1,7 +1,7 @@
 use crate::config::{env_var_non_empty, AppConfig};
+use crate::error::DaemonError;
 use chrono::Local;
 use log::LevelFilter;
-use std::error::Error;
 use std::fs;
 use std::io::{self, stdout, LineWriter, Write};
 #[cfg(unix)]
@@ -130,7 +130,7 @@ fn parse_log_level_filter() -> LevelFilter {
     }
 }
 
-pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
+pub fn init_logger() -> Result<PathBuf, DaemonError> {
     let log_path = log_file_path();
     ensure_log_directory(&log_path);
     let level_filter = parse_log_level_filter();
@@ -156,7 +156,8 @@ pub fn init_logger() -> Result<PathBuf, Box<dyn Error>> {
         .level_for("rustix", LevelFilter::Warn)
         .chain(stdout())
         .chain(Box::new(rolling_writer) as Box<dyn Write + Send>)
-        .apply()?;
+        .apply()
+        .map_err(|e| DaemonError::Logger(e.to_string()))?;
 
     Ok(log_path)
 }

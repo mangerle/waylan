@@ -17,7 +17,6 @@ pub mod voice_handlers;
 pub use importer::ImportError;
 
 use std::cell::RefCell;
-use std::error::Error;
 use std::rc::Rc;
 
 use slint::{ComponentHandle, SharedString};
@@ -27,11 +26,23 @@ use crate::callbacks::{populate_lexicon_statistics, register_settings_callbacks}
 use crate::sync::sync_config_to_window;
 use crate::voice_handlers::register_voice_callbacks;
 
+/// 设置中心运行与初始化强类型错误枚举
+#[derive(Debug, thiserror::Error)]
+pub enum SettingsError {
+    /// Slint 窗口或平台渲染层初始化失败
+    #[error("Slint 图形界面平台错误: {0}")]
+    Platform(#[from] slint::PlatformError),
+
+    /// 词库或配置文件底层 I/O 错误
+    #[error("设置中心 I/O 错误: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 /// 运行 Slint 偏好设置中心图形界面
 ///
 /// # Errors
 /// 当窗口初始化或事件循环运行失败时返回错误。
-pub fn run_settings_gui() -> Result<(), Box<dyn Error>> {
+pub fn run_settings_gui() -> Result<(), SettingsError> {
     let window = SettingsWindow::new()?;
 
     // 设置 XDG 应用标识（app_id / WM_CLASS），必须在窗口实例初始化后、首次呈现到桌面之前配置。

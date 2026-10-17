@@ -12,11 +12,14 @@
 pub mod desktop_integration;
 pub mod discovery;
 pub mod engine;
+pub mod error;
 pub mod keys;
 pub mod monitor;
 pub mod screensaver;
 pub mod session;
 pub mod types;
+
+pub use error::IbusError;
 
 use std::env;
 use std::io::{self, Write};

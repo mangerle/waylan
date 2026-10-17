@@ -5,8 +5,8 @@
 //! - **核心优势**：消除 `main.rs` 中的冗长适配样板代码，实现协议派发与主入口生命周期的明确解耦。
 //! - **代价与局限**：宿主配置变更需通过适配器回调映射至 `IbusSessionCore`。
 
+use crate::error::DaemonError;
 use std::env;
-use std::error::Error;
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,7 +95,7 @@ fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSession
 }
 
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
-pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Box<dyn Error>> {
+pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), DaemonError> {
     info!(
         "[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话 (展示形态: {}, 原生指示器属性上报就绪)。",
         if opts.should_spawn_tray {

@@ -6,10 +6,10 @@
 //! - **核心优势**：Linux `/proc` 原生属主 UID 匹配，杜绝多用户误判；环境变量全量继承拉起设置中心。
 //! - **代价与局限**：进程遍历依赖 Linux `/proc` 文件系统。
 
+use crate::error::DaemonError;
 use log::{info, warn};
 use rustix::fs::{flock, FlockOperation};
 use std::env;
-use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -149,7 +149,7 @@ pub fn determine_tray_and_exclusive(cfg: &AppConfig, use_ibus_backend: bool) -> 
 }
 
 /// 唤起独立的微澜偏好设置中心图形界面
-pub fn launch_settings_gui() -> Result<(), Box<dyn Error>> {
+pub fn launch_settings_gui() -> Result<(), DaemonError> {
     info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
     let mut cmd = build_settings_command();
     cmd.stdin(Stdio::null());

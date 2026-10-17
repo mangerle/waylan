@@ -1,5 +1,5 @@
+use crate::error::DaemonError;
 use log::{info, warn};
-use std::error::Error;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_algo::builder::DictBuilder;
@@ -27,7 +27,7 @@ pub fn print_main_usage() {
 ///
 /// # Errors
 /// 当词库源文件不存在、格式解析失败或目标二进制文件写入失败时返回错误。
-fn handle_build(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+fn handle_build(sub_args: &[String]) -> Result<(), DaemonError> {
     if sub_args.len() < 3 {
         print_dict_usage();
         return Ok(());
@@ -46,7 +46,7 @@ fn handle_build(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_build_opencc(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+fn handle_build_opencc(sub_args: &[String]) -> Result<(), DaemonError> {
     let default_chars = "/usr/share/opencc/STCharacters.txt".to_string();
     let default_phrases = "/usr/share/opencc/STPhrases.txt".to_string();
     let default_output = "opencc.dict.bin".to_string();
@@ -69,7 +69,7 @@ fn handle_build_opencc(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_build_aux(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+fn handle_build_aux(sub_args: &[String]) -> Result<(), DaemonError> {
     if sub_args.len() < 4 {
         print_dict_usage();
         return Ok(());
@@ -90,7 +90,7 @@ fn handle_build_aux(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_import_user(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+fn handle_import_user(sub_args: &[String]) -> Result<(), DaemonError> {
     if sub_args.len() < 3 {
         print_dict_usage();
         return Ok(());
@@ -103,14 +103,17 @@ fn handle_import_user(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
     );
     let mut engine = AlgoEngine::default();
     engine.set_user_dict_path(user_dict_path);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| DaemonError::Cli(e.to_string()))?
+        .as_secs();
     let count = DictBuilder::import_user_text_dict(input_path, &mut engine.adaptive.model, now)?;
     engine.persist_user_dict()?;
     info!("[用户词库] 成功导入 {} 条用户记录", count);
     Ok(())
 }
 
-pub fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), Box<dyn Error>> {
+pub fn handle_dict_subcommand(sub_args: &[String]) -> Result<(), DaemonError> {
     if sub_args.is_empty() {
         print_dict_usage();
         return Ok(());
@@ -147,7 +150,7 @@ pub fn print_dict_usage() {
 ///
 /// # Errors
 /// 当引擎内部状态异常或校验失败时返回错误。
-pub fn run_self_check(engine: &mut AlgoEngine) -> Result<(), Box<dyn Error>> {
+pub fn run_self_check(engine: &mut AlgoEngine) -> Result<(), DaemonError> {
     info!("=== 微澜核心算法引擎自检 ===");
     for ch in "xian".chars() {
         engine.push_char(ch);
@@ -166,7 +169,9 @@ pub fn run_self_check(engine: &mut AlgoEngine) -> Result<(), Box<dyn Error>> {
     let is_empty = cands.is_empty();
     engine.reset();
     if is_empty {
-        return Err("自检测试失败：键入 'xian' 未能召回任何候选词，请检查词库完整性！".into());
+        return Err(DaemonError::Validation(
+            "自检测试失败：键入 'xian' 未能召回任何候选词，请检查词库完整性！".into(),
+        ));
     }
     info!("自检测试通过！");
     Ok(())

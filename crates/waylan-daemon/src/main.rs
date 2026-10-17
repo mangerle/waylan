@@ -1,16 +1,17 @@
 mod cli;
+mod error;
 mod logger;
 mod session_bundle;
 mod system;
 mod tray;
 
+use error::DaemonError;
 use log::{info, warn};
 use session_bundle::{
     build_algo_engine, check_wayland_capabilities, dispatch_ibus_session, dispatch_wayland_session,
     IbusDispatchOptions, WaylandDispatchOptions,
 };
 use std::env;
-use std::error::Error;
 use std::process;
 use system::{
     check_another_instance_running, collect_watched_paths, determine_tray_and_exclusive,
@@ -23,7 +24,7 @@ use waylan_ibus::{print_ibus_component_xml, print_ibus_engines_xml};
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 
 /// 处理早期 CLI 选项（版本、XML 描述、偏好设置、帮助与词库子命令）
-fn handle_early_cli(args: &[String]) -> Result<Option<()>, Box<dyn Error>> {
+fn handle_early_cli(args: &[String]) -> Result<Option<()>, DaemonError> {
     if args.len() >= 2 && (args[1] == "--version" || args[1] == "-V" || args[1] == "-v") {
         println!("waylan {}", env!("CARGO_PKG_VERSION"));
         return Ok(Some(()));
@@ -51,7 +52,7 @@ fn handle_early_cli(args: &[String]) -> Result<Option<()>, Box<dyn Error>> {
     Ok(None)
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), DaemonError> {
     let args: Vec<String> = env::args().collect();
     if let Some(()) = handle_early_cli(&args)? {
         return Ok(());
