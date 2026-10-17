@@ -16,7 +16,6 @@ pub use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
 pub use waylan_core::loop_wakeup::LoopWakeup;
 
-use std::error::Error;
 use std::fmt;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -143,8 +142,8 @@ impl Dispatch<WlRegistry, GlobalListContents> for WaylandProbeState {
 /// - **代价与局限**：需发起一次短暂的同步 IPC 往返（Roundtrip），在合成器负载极高时可能存在毫秒级阻塞。
 ///
 /// # Errors
-/// 当未能连接至环境变量 `WAYLAND_DISPLAY` 指定的套接字，或初始注册表同步失败时返回底层错误。
-pub fn probe_wayland_environment() -> Result<WaylandCapabilities, Box<dyn Error>> {
+/// 当未能连接至环境变量 `WAYLAND_DISPLAY` 指定的套接字，或初始注册表同步失败时返回强类型错误。
+pub fn probe_wayland_environment() -> Result<WaylandCapabilities, WaylandRunnerError> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut event_queue) = registry_queue_init(&conn)?;
     let _qh = event_queue.handle();
@@ -190,5 +189,20 @@ mod tests {
         let caps = WaylandCapabilities::default();
         assert!(!caps.has_input_method_v2);
         assert!(!caps.has_layer_shell_v1);
+    }
+
+    #[test]
+    fn test_probe_wayland_environment_error_contract() {
+        // 在未指定或无效的 WAYLAND_DISPLAY 环境下，验证返回强类型错误枚举变体而非裸 Box<dyn Error>
+        std::env::set_var(
+            "WAYLAND_DISPLAY",
+            "nonexistent-wayland-socket-for-test-9999",
+        );
+        let result = probe_wayland_environment();
+        assert!(result.is_err(), "应探测失败并返回强类型错误");
+        match result.unwrap_err() {
+            WaylandRunnerError::Connect(_) => {}
+            other => panic!("预期返回 Connect 变体，实际返回: {:?}", other),
+        }
     }
 }
