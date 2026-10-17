@@ -31,8 +31,8 @@ pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;
 pub use session::{
-    extract_surrounding_prefix, ImeAction, ImeCoreSession, KeyProcessContext, KeyProcessResult,
-    ShortcutToggleAction,
+    extract_surrounding_prefix, ImeAction, ImeCoreSession, ImeOutputAction, KeyProcessContext,
+    KeyProcessResult, ShortcutToggleAction,
 };
 pub use table::{CompactMmapLexicon, LexiconTable};
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};

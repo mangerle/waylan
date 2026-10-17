@@ -12,7 +12,7 @@ mod dispatch;
 #[cfg(test)]
 mod tests;
 
-pub use dispatch::{KeyProcessContext, KeyProcessResult};
+pub use dispatch::KeyProcessContext;
 
 use crate::engine::AlgoEngine;
 use crate::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
@@ -30,16 +30,25 @@ pub enum ShortcutToggleAction {
     FullWidthPunct(bool),
 }
 
-/// 核心会话按键处理决策输出
+/// 核心输入法按键与会话事件统一决策动作 (IME Output Action)
+///
+/// # 设计原理
+/// - **消除概念膨胀**：统一拼音组词状态机、标点处理器、快捷键流转与各协议适配层的动作契约，
+///   彻底清除原 `KeyProcessAction`、`ImeAction` 与 `KeyProcessResult` 之间的多层机械映射与中间层。
+/// - **单一真相源**：单一动作枚举完整表达所有可能的输入法决策，上层协议（Wayland V1、V2、IBus）直接消费。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ImeAction {
-    /// 按键未被输入法内部消费，协议层需将硬件按键原生透传（PassThrough）给宿主/客户端
+pub enum ImeOutputAction {
+    /// 原生透传：按键未被输入法拦截，协议层需将硬件按键原生发送给客户端/应用程序
     PassThrough,
-    /// 按键已被消费，仅需刷新预编辑文本区与候选词 UI
-    Handled,
-    /// 触发文本直接上屏提交（如空格选词、数字选词、标点输入、CapsLock 截断提交等）
+    /// 内部已消费并处理：协议层需消费该按键，update_ui 指示是否需要刷新预编辑与候选框
+    Handled { update_ui: bool },
+    /// 请求展开大候选词网格卡片
+    ExpandGrid,
+    /// 触发纯文本直接上屏提交（如空格选词、数字选词等，按键已被消费）
     Commit(String),
-    /// 成对标点符号上屏并附带光标相对位移（如引号/括号自动配对后光标向左移动 1 格）
+    /// CapsLock 截断提交：有未上屏拼音需提交，但按键本身不消费，需透传给系统切换大小写
+    CommitAndPassThrough(String),
+    /// 成对标点符号上屏并附带光标相对位移（如引号/括号自动配对后光标向左移动若干字符）
     CommitPunctuation { text: String, cursor_offset: i32 },
     /// 分段选词部分上屏，包含本次已提交文本与剩余预编辑拼音
     CommitPartial {
@@ -48,11 +57,22 @@ pub enum ImeAction {
     },
     /// 取消/重置当前输入（如 Escape 取消）
     Reset,
-    /// 请求展开大候选词网格卡片（按下下方向键或自定义展开键）
-    ExpandGrid,
-    /// 快捷键触发并导致状态变更（如简繁切换、字符全半角、标点全半角）
+    /// 模式或功能快捷键切换（简繁切换、字符全半角、标点全半角）
     ShortcutToggled(ShortcutToggleAction),
+    /// 输入模式发生切换（如按 Shift 切换中英文）
+    ModeChanged {
+        new_mode: InputMode,
+        committed: Option<String>,
+        was_consumed: bool,
+    },
 }
+
+/// 兼容别名：核心会话决策结果类型
+pub type KeyProcessResult = ImeOutputAction;
+/// 兼容别名：核心按键动作类型
+pub type ImeAction = ImeOutputAction;
+/// 兼容别名：组词按键处理响应
+pub type KeyProcessAction = ImeOutputAction;
 
 /// 微澜输入法核心会话上下文与按键驱动状态机 (IME Core Session)
 #[derive(Debug)]

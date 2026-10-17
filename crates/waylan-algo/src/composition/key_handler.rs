@@ -16,30 +16,7 @@ use waylan_core::input::page_keys::PageKeyConfig;
 use crate::preprocessor::PunctuationProcessor;
 use crate::AlgoEngine;
 
-/// 核心按键决策结果
-///
-/// # 设计原理
-/// - **实现初衷**：解耦按键消费决策与具体的输入协议（Wayland zwp_input_method 与 IBus 等），
-///   将拼音预编辑与候选词选择的通用状态机决策收敛至领域核心层。
-/// - **核心优势**：消除不同协议实现之间高度重合的按键分支代码，防止逻辑分叉。
-#[derive(Debug, PartialEq, Eq)]
-pub enum KeyProcessAction {
-    /// 原样透传给客户端应用
-    PassThrough,
-    /// 内部消费，刷新候选表面（无需提交）
-    Handled,
-    /// 提交整段文字上屏，并隐藏候选表面与清空预编辑
-    Commit(String),
-    /// 提交部分文字，并保留/刷新剩余拼音预编辑
-    CommitPartial {
-        committed: String,
-        remaining_preedit: String,
-    },
-    /// 清空预编辑并重置状态（如 ESC）
-    Reset,
-    /// 唤出大网格候选面板
-    ExpandGrid,
-}
+pub use crate::session::{ImeOutputAction, KeyProcessAction};
 
 /// 拼音组词状态按键决策输入参数
 #[derive(Debug, Clone, Copy)]
@@ -55,31 +32,31 @@ fn handle_expanded_tab_key(
     engine: &mut AlgoEngine,
     punct_processor: &mut PunctuationProcessor,
     key: u32,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     if key == KEY_TAB {
         let sel = engine.selected_index();
         engine.toggle_expand(sel);
-        return Some(KeyProcessAction::Handled);
+        return Some(ImeOutputAction::Handled { update_ui: true });
     }
 
     if engine.is_expanded() {
         let sel = engine.selected_index();
         if key == KEY_DOWN {
             engine.next_expanded_item(sel);
-            return Some(KeyProcessAction::Handled);
+            return Some(ImeOutputAction::Handled { update_ui: true });
         }
         if key == KEY_UP {
             engine.prev_expanded_item(sel);
-            return Some(KeyProcessAction::Handled);
+            return Some(ImeOutputAction::Handled { update_ui: true });
         }
         if key == KEY_ENTER || key == KEY_KPENTER || key == KEY_SPACE {
             if let Some((committed, _)) =
                 engine.select_expanded_item(sel, engine.expanded_selected_index())
             {
                 punct_processor.record_commit(&committed);
-                return Some(KeyProcessAction::Commit(committed));
+                return Some(ImeOutputAction::Commit(committed));
             }
-            return Some(KeyProcessAction::Handled);
+            return Some(ImeOutputAction::Handled { update_ui: true });
         }
     }
     None
@@ -100,7 +77,7 @@ fn handle_expanded_tab_key(
 ///   - `KEY_RIGHT`：光标向右移动一个字符，移到末尾时自动恢复为选词模式；
 ///   - `KEY_DOWN`：翻下一页；末页时展开大网格；
 ///   - `KEY_UP`：翻上一页。
-fn handle_smart_navigation_key(engine: &mut AlgoEngine, key: u32) -> Option<KeyProcessAction> {
+fn handle_smart_navigation_key(engine: &mut AlgoEngine, key: u32) -> Option<ImeOutputAction> {
     let is_cursor_at_end = engine.cursor() >= engine.raw_input().len();
 
     match key {
@@ -117,7 +94,7 @@ fn handle_smart_navigation_key(engine: &mut AlgoEngine, key: u32) -> Option<KeyP
             } else {
                 engine.move_cursor_right();
             }
-            Some(KeyProcessAction::Handled)
+            Some(ImeOutputAction::Handled { update_ui: true })
         }
         KEY_LEFT => {
             if is_cursor_at_end {
@@ -132,21 +109,21 @@ fn handle_smart_navigation_key(engine: &mut AlgoEngine, key: u32) -> Option<KeyP
             } else {
                 engine.move_cursor_left();
             }
-            Some(KeyProcessAction::Handled)
+            Some(ImeOutputAction::Handled { update_ui: true })
         }
         KEY_DOWN => {
             if engine.can_next_page() {
                 engine.next_page();
-                Some(KeyProcessAction::Handled)
+                Some(ImeOutputAction::Handled { update_ui: true })
             } else {
-                Some(KeyProcessAction::ExpandGrid)
+                Some(ImeOutputAction::ExpandGrid)
             }
         }
         KEY_UP => {
             if engine.can_prev_page() {
                 engine.prev_page();
             }
-            Some(KeyProcessAction::Handled)
+            Some(ImeOutputAction::Handled { update_ui: true })
         }
         _ => None,
     }
@@ -158,19 +135,19 @@ fn select_candidate_action(
     punct_processor: &mut PunctuationProcessor,
     cand_idx: usize,
     now: u64,
-) -> KeyProcessAction {
+) -> ImeOutputAction {
     if let Some((committed_text, remaining_len)) = engine.select_candidate(cand_idx, now) {
         punct_processor.record_commit(&committed_text);
         if remaining_len > 0 {
-            KeyProcessAction::CommitPartial {
+            ImeOutputAction::CommitPartial {
                 committed: committed_text,
                 remaining_preedit: engine.formatted_preedit(),
             }
         } else {
-            KeyProcessAction::Commit(committed_text)
+            ImeOutputAction::Commit(committed_text)
         }
     } else {
-        KeyProcessAction::Handled
+        ImeOutputAction::Handled { update_ui: true }
     }
 }
 
@@ -179,11 +156,11 @@ fn handle_v_mode_key(
     engine: &mut AlgoEngine,
     key: u32,
     shift_active: bool,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     if engine.raw_input().starts_with('v') {
         if let Some(ch) = keycode_to_v_mode_char(key, shift_active) {
             engine.push_char(ch);
-            return Some(KeyProcessAction::Handled);
+            return Some(ImeOutputAction::Handled { update_ui: true });
         }
     }
     None
@@ -196,7 +173,7 @@ fn handle_digit_selection(
     key: u32,
     shift_active: bool,
     now: u64,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     if shift_active || engine.raw_input().starts_with('v') {
         return None;
     }
@@ -207,9 +184,9 @@ fn handle_digit_selection(
         let sub_idx = digit.saturating_sub(1);
         if let Some((committed, _)) = engine.select_expanded_item(sel, sub_idx) {
             punct_processor.record_commit(&committed);
-            return Some(KeyProcessAction::Commit(committed));
+            return Some(ImeOutputAction::Commit(committed));
         }
-        Some(KeyProcessAction::Handled)
+        Some(ImeOutputAction::Handled { update_ui: true })
     } else {
         Some(select_candidate_action(
             engine,
@@ -226,11 +203,11 @@ fn handle_action_keys(
     punct_processor: &mut PunctuationProcessor,
     key: u32,
     now: u64,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     if key == KEY_SPACE {
         if engine.cursor() < engine.raw_input().len() {
             engine.move_cursor_to_end();
-            return Some(KeyProcessAction::Handled);
+            return Some(ImeOutputAction::Handled { update_ui: true });
         }
         let sel = engine.selected_index();
         return Some(select_candidate_action(engine, punct_processor, sel, now));
@@ -238,16 +215,16 @@ fn handle_action_keys(
     if key == KEY_ENTER || key == KEY_KPENTER {
         let raw = engine.raw_input().to_string();
         engine.reset();
-        return Some(KeyProcessAction::Commit(raw));
+        return Some(ImeOutputAction::Commit(raw));
     }
     if key == KEY_ESC {
         if engine.is_expanded() {
             engine.viewport.is_expanded = false;
             engine.viewport.expanded_selected_index = 0;
-            return Some(KeyProcessAction::Handled);
+            return Some(ImeOutputAction::Handled { update_ui: true });
         }
         engine.reset();
-        return Some(KeyProcessAction::Reset);
+        return Some(ImeOutputAction::Reset);
     }
     None
 }
@@ -257,7 +234,7 @@ fn handle_editing_keys(
     engine: &mut AlgoEngine,
     key: u32,
     shift_active: bool,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     if key == KEY_BACKSPACE || key == KEY_DELETE {
         if key == KEY_BACKSPACE {
             engine.pop_char();
@@ -265,14 +242,14 @@ fn handle_editing_keys(
             engine.delete_char_at_cursor();
         }
         return Some(if engine.raw_input().is_empty() {
-            KeyProcessAction::Reset
+            ImeOutputAction::Reset
         } else {
-            KeyProcessAction::Handled
+            ImeOutputAction::Handled { update_ui: true }
         });
     }
     if !shift_active && key == KEY_APOSTROPHE {
         engine.push_char('\'');
-        return Some(KeyProcessAction::Handled);
+        return Some(ImeOutputAction::Handled { update_ui: true });
     }
     None
 }
@@ -283,14 +260,14 @@ fn handle_page_flip_keys(
     key: u32,
     shift_active: bool,
     page_keys: PageKeyConfig,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     if !shift_active && (page_keys.is_prev_page(key) || page_keys.is_next_page(key)) {
         if page_keys.is_prev_page(key) {
             engine.prev_page();
         } else {
             engine.next_page();
         }
-        return Some(KeyProcessAction::Handled);
+        return Some(ImeOutputAction::Handled { update_ui: true });
     }
     None
 }
@@ -375,39 +352,39 @@ mod tests {
         assert_eq!(engine.raw_input(), "ni");
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_ENTER, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Commit("ni".to_string())));
+        assert_eq!(act, Some(ImeOutputAction::Commit("ni".to_string())));
         assert!(engine.raw_input().is_empty());
 
         engine.push_char('x');
         engine.push_char('i');
         let act =
             handle_composition_key(&mut engine, &mut punct, KEY_APOSTROPHE, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.raw_input(), "xi'");
         engine.push_char('a');
         engine.push_char('n');
         assert_eq!(engine.raw_input(), "xi'an");
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_ESC, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Reset));
+        assert_eq!(act, Some(ImeOutputAction::Reset));
         assert!(engine.raw_input().is_empty());
 
         engine.push_char('h');
         engine.push_char('a');
         let act = handle_composition_key(&mut engine, &mut punct, KEY_KPENTER, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Commit("ha".to_string())));
+        assert_eq!(act, Some(ImeOutputAction::Commit("ha".to_string())));
         assert!(engine.raw_input().is_empty());
 
         engine.push_char('n');
         engine.push_char('i');
         let act = handle_composition_key(&mut engine, &mut punct, KEY_KP1, false, page_keys, 0);
-        assert!(matches!(act, Some(KeyProcessAction::Commit(_))));
+        assert!(matches!(act, Some(ImeOutputAction::Commit(_))));
         assert!(engine.raw_input().is_empty());
     }
 
@@ -421,19 +398,19 @@ mod tests {
         assert_eq!(engine.raw_input(), "v");
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_2, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.raw_input(), "v2");
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_0, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.raw_input(), "v20");
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_8, true, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.raw_input(), "v20*");
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_KP5, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.raw_input(), "v20*5");
 
         let cands = engine.candidates();
@@ -441,7 +418,7 @@ mod tests {
         assert_eq!(cands[0].text, "100");
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Commit("100".to_string())));
+        assert_eq!(act, Some(ImeOutputAction::Commit("100".to_string())));
         assert!(engine.raw_input().is_empty());
     }
 
@@ -459,34 +436,34 @@ mod tests {
         assert!(engine.candidates().len() >= 2);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.selected_index(), 1);
         assert_eq!(engine.cursor(), 4);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.selected_index(), 0);
         assert_eq!(engine.cursor(), 4);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.cursor(), 3);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_LEFT, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.cursor(), 2);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_RIGHT, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.cursor(), 3);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::Handled));
+        assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         assert_eq!(engine.cursor(), 4);
         assert_eq!(engine.selected_index(), 0);
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_SPACE, false, page_keys, 0);
-        assert!(matches!(act, Some(KeyProcessAction::Commit(_))));
+        assert!(matches!(act, Some(ImeOutputAction::Commit(_))));
         assert!(engine.raw_input().is_empty());
     }
 
@@ -502,15 +479,15 @@ mod tests {
         while engine.can_next_page() {
             let act =
                 handle_composition_key(&mut engine, &mut punct, KEY_DOWN, false, page_keys, 0);
-            assert_eq!(act, Some(KeyProcessAction::Handled));
+            assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         }
 
         let act = handle_composition_key(&mut engine, &mut punct, KEY_DOWN, false, page_keys, 0);
-        assert_eq!(act, Some(KeyProcessAction::ExpandGrid));
+        assert_eq!(act, Some(ImeOutputAction::ExpandGrid));
 
         if engine.can_prev_page() {
             let act = handle_composition_key(&mut engine, &mut punct, KEY_UP, false, page_keys, 0);
-            assert_eq!(act, Some(KeyProcessAction::Handled));
+            assert_eq!(act, Some(ImeOutputAction::Handled { update_ui: true }));
         }
     }
 }

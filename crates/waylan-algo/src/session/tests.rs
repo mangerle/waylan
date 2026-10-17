@@ -14,9 +14,9 @@ fn test_ime_core_session_input_and_commit() {
     let mut session = make_test_session();
     // 键入 "ni" (扫描码 49, 23)
     let act1 = session.handle_key_press(49, 1000, None);
-    assert_eq!(act1, ImeAction::Handled);
+    assert_eq!(act1, ImeOutputAction::Handled { update_ui: true });
     let act2 = session.handle_key_press(23, 1001, None);
-    assert_eq!(act2, ImeAction::Handled);
+    assert_eq!(act2, ImeOutputAction::Handled { update_ui: true });
     assert_eq!(session.engine.raw_input(), "ni");
 
     // 空格确认首选词 "你"
