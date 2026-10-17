@@ -11,7 +11,6 @@ use waylan_algo::ImeAction;
 use waylan_core::input::*;
 use waylan_core::{CandidateBoxState, InputMode};
 
-use super::surrounding::{clamp_char_boundary_ceil, clamp_char_boundary_floor};
 use super::WaylanV2Session;
 
 pub(crate) use repeat::{drive_key_repeat, next_poll_timeout_ms};
@@ -46,18 +45,11 @@ pub(super) fn process_key_press_inner(
     }
 
     // 2. 提取周围文本上下文（用于中文成对标点与数字上下文半角判定）
-    let context_buf = session.surrounding_text.as_ref().map(|(text, cursor, _)| {
-        let cursor_idx = (*cursor as usize).min(text.len());
-        let safe_cursor = clamp_char_boundary_floor(text, cursor_idx);
-        let start = safe_cursor.saturating_sub(64);
-        let safe_start = clamp_char_boundary_ceil(text, start);
-        text[safe_start..safe_cursor].to_string()
-    });
+    let context_prefix =
+        waylan_algo::extract_surrounding_prefix(session.surrounding_text.as_ref(), 64);
 
     // 3. 由输入法核心会话状态机做出统一按键决策
-    let action = session
-        .core
-        .handle_key_press(key, now, context_buf.as_deref());
+    let action = session.core.handle_key_press(key, now, context_prefix);
 
     match action {
         ImeAction::PassThrough => (false, None),
@@ -102,6 +94,13 @@ pub(super) fn process_key_press_inner(
         }
         ImeAction::Reset => {
             session.cancel_input();
+            (true, None)
+        }
+        ImeAction::ShortcutToggled(_toggle) => {
+            if let Some(ref notify_tx) = session.mode_notify_tx {
+                let _ = notify_tx.try_send(());
+            }
+            session.refresh_candidate_surface();
             (true, None)
         }
     }

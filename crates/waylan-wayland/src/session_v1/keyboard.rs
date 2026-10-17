@@ -174,6 +174,13 @@ fn handle_v1_key_press(
             context.preedit_string(state.commit_serial, String::new(), String::new());
             true
         }
+        ImeAction::ShortcutToggled(_toggle) => {
+            if let Some(ref notify_tx) = state.mode_notify_tx {
+                let _ = notify_tx.try_send(());
+            }
+            state.refresh_candidate_surface();
+            true
+        }
     }
 }
 

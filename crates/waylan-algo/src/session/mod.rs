@@ -14,7 +14,21 @@ use crate::composition::{
 use crate::engine::AlgoEngine;
 use crate::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_core::input::*;
-use waylan_core::{InputMode, TextAction};
+use waylan_core::{
+    to_full_width_char, to_full_width_string, FullWidthCharShortcut, FullWidthPunctShortcut,
+    InputMode, TextAction, TraditionalShortcut,
+};
+
+/// 全局模式与功能快捷键切换动作
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortcutToggleAction {
+    /// 简繁即时切换，包含切换后的布尔值（true 为繁体中文）
+    Traditional(bool),
+    /// 字符全角/半角切换，包含切换后的布尔值（true 为全角字符）
+    FullWidthChar(bool),
+    /// 标点全角/半角切换，包含切换后的布尔值（true 为全角标点）
+    FullWidthPunct(bool),
+}
 
 /// 核心会话按键处理决策输出
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +50,8 @@ pub enum ImeAction {
     Reset,
     /// 请求展开大候选词网格卡片（按下下方向键或自定义展开键）
     ExpandGrid,
+    /// 快捷键触发并导致状态变更（如简繁切换、字符全半角、标点全半角）
+    ShortcutToggled(ShortcutToggleAction),
 }
 
 /// 微澜输入法核心会话上下文与按键驱动状态机 (IME Core Session)
@@ -57,6 +73,14 @@ pub struct ImeCoreSession {
     pub consumed_keys: ConsumedKeyTracker,
     /// 统一修饰键状态跟踪器
     pub modifiers: ModifierState,
+    /// 简繁即时切换快捷键选项
+    pub traditional_shortcut: TraditionalShortcut,
+    /// 字符全角/半角切换快捷键选项
+    pub full_width_char_shortcut: FullWidthCharShortcut,
+    /// 标点全角/半角切换快捷键选项
+    pub full_width_punct_shortcut: FullWidthPunctShortcut,
+    /// 是否开启全角字符/字母输入
+    pub full_width_char: bool,
 }
 
 impl Default for ImeCoreSession {
@@ -79,7 +103,23 @@ impl ImeCoreSession {
             mode: InputMode::Chinese,
             consumed_keys: ConsumedKeyTracker::new(),
             modifiers: ModifierState::default(),
+            traditional_shortcut: TraditionalShortcut::default(),
+            full_width_char_shortcut: FullWidthCharShortcut::default(),
+            full_width_punct_shortcut: FullWidthPunctShortcut::default(),
+            full_width_char: false,
         }
+    }
+
+    /// 查询当前是否处于全角字符模式
+    #[inline]
+    pub fn is_full_width_char(&self) -> bool {
+        self.full_width_char
+    }
+
+    /// 设置全角字符模式
+    #[inline]
+    pub fn set_full_width_char(&mut self, enabled: bool) {
+        self.full_width_char = enabled;
     }
 
     /// 获取当前按下的修饰键位掩码
@@ -176,6 +216,66 @@ impl ImeCoreSession {
         (was_consumed, None, None)
     }
 
+    /// 匹配并执行用户配置的全局模式切换快捷键（简繁切换、字符全半角、标点全半角）
+    pub fn handle_global_shortcuts(&mut self, keycode: u32) -> Option<ShortcutToggleAction> {
+        let shift_active = self.is_shift_active();
+        let ctrl_active = (self.modifiers.depressed & MOD_CTRL) != 0;
+        let alt_active = (self.modifiers.depressed & MOD_ALT) != 0;
+
+        // 1. 尝试匹配简繁切换快捷键
+        let trad_match = match self.traditional_shortcut {
+            TraditionalShortcut::CtrlShiftF => {
+                ctrl_active && shift_active && !alt_active && keycode == KEY_F
+            }
+            TraditionalShortcut::CtrlAltF => {
+                ctrl_active && alt_active && !shift_active && keycode == KEY_F
+            }
+            TraditionalShortcut::CtrlShiftT => {
+                ctrl_active && shift_active && !alt_active && keycode == KEY_T
+            }
+            TraditionalShortcut::Disabled => false,
+        };
+        if trad_match {
+            let next_val = !self.engine.config.traditional_chinese;
+            self.engine.config.traditional_chinese = next_val;
+            return Some(ShortcutToggleAction::Traditional(next_val));
+        }
+
+        // 2. 尝试匹配字符全半角切换快捷键
+        let char_match = match self.full_width_char_shortcut {
+            FullWidthCharShortcut::ShiftSpace => {
+                shift_active && !ctrl_active && !alt_active && keycode == KEY_SPACE
+            }
+            FullWidthCharShortcut::CtrlShiftSpace => {
+                ctrl_active && shift_active && !alt_active && keycode == KEY_SPACE
+            }
+            FullWidthCharShortcut::Disabled => false,
+        };
+        if char_match {
+            let next_val = !self.full_width_char;
+            self.full_width_char = next_val;
+            return Some(ShortcutToggleAction::FullWidthChar(next_val));
+        }
+
+        // 3. 尝试匹配标点全半角切换快捷键
+        let punct_match = match self.full_width_punct_shortcut {
+            FullWidthPunctShortcut::CtrlPeriod => {
+                ctrl_active && !shift_active && !alt_active && keycode == KEY_DOT
+            }
+            FullWidthPunctShortcut::AltPeriod => {
+                alt_active && !ctrl_active && !shift_active && keycode == KEY_DOT
+            }
+            FullWidthPunctShortcut::Disabled => false,
+        };
+        if punct_match {
+            let next_val = !self.punctuation_processor.full_width_punct;
+            self.punctuation_processor.full_width_punct = next_val;
+            return Some(ShortcutToggleAction::FullWidthPunct(next_val));
+        }
+
+        None
+    }
+
     /// 处理核心按键按下事件，返回统一会话决策 ImeAction
     pub fn handle_key_press(
         &mut self,
@@ -183,8 +283,24 @@ impl ImeCoreSession {
         now: u64,
         context_surrounding: Option<&str>,
     ) -> ImeAction {
+        // 0. 全局模式与功能快捷键优先捕获
+        if let Some(toggle) = self.handle_global_shortcuts(keycode) {
+            return ImeAction::ShortcutToggled(toggle);
+        }
+
         // 英文模式、CapsLock 锁定或按住 Ctrl/Alt 时一律原生透传
-        if self.mode == InputMode::English || self.is_caps_locked() || self.has_ctrl_or_alt() {
+        if self.is_caps_locked() || self.has_ctrl_or_alt() {
+            return ImeAction::PassThrough;
+        }
+
+        // 若处于英文模式但开启了全角字符，直通字母转换为全角字符输出
+        if self.mode == InputMode::English {
+            if self.full_width_char && !self.is_shift_active() {
+                if let Some(ch) = self.keymap_layout.get_char(keycode) {
+                    let full = to_full_width_char(ch);
+                    return ImeAction::Commit(full.to_string());
+                }
+            }
             return ImeAction::PassThrough;
         }
 
@@ -205,14 +321,28 @@ impl ImeCoreSession {
                     KeyProcessAction::PassThrough => ImeAction::PassThrough,
                     KeyProcessAction::Handled => ImeAction::Handled,
                     KeyProcessAction::ExpandGrid => ImeAction::ExpandGrid,
-                    KeyProcessAction::Commit(text) => ImeAction::Commit(text),
+                    KeyProcessAction::Commit(text) => {
+                        let final_text = if self.full_width_char {
+                            to_full_width_string(&text)
+                        } else {
+                            text
+                        };
+                        ImeAction::Commit(final_text)
+                    }
                     KeyProcessAction::CommitPartial {
                         committed,
                         remaining_preedit,
-                    } => ImeAction::CommitPartial {
-                        committed,
-                        remaining_preedit,
-                    },
+                    } => {
+                        let final_committed = if self.full_width_char {
+                            to_full_width_string(&committed)
+                        } else {
+                            committed
+                        };
+                        ImeAction::CommitPartial {
+                            committed: final_committed,
+                            remaining_preedit,
+                        }
+                    }
                     KeyProcessAction::Reset => ImeAction::Reset,
                 };
             }
@@ -251,13 +381,18 @@ impl ImeCoreSession {
                         }
                     }
                     if !commit_str.is_empty() {
+                        let final_commit = if self.full_width_char {
+                            to_full_width_string(&commit_str)
+                        } else {
+                            commit_str
+                        };
                         if cursor_offset != 0 {
                             return ImeAction::CommitPunctuation {
-                                text: commit_str,
+                                text: final_commit,
                                 cursor_offset,
                             };
                         } else {
-                            return ImeAction::Commit(commit_str);
+                            return ImeAction::Commit(final_commit);
                         }
                     }
                 }
@@ -268,6 +403,10 @@ impl ImeCoreSession {
                 if let Some(digit_ch) = keycode_to_ascii_digit_char(keycode) {
                     self.punctuation_processor
                         .record_commit(&digit_ch.to_string());
+                    if self.full_width_char {
+                        let full = to_full_width_char(digit_ch);
+                        return ImeAction::Commit(full.to_string());
+                    }
                     return ImeAction::PassThrough;
                 }
             }
@@ -281,6 +420,25 @@ impl ImeCoreSession {
 
         ImeAction::PassThrough
     }
+}
+
+/// 从周围文本元组 (text, cursor, anchor) 中安全提取光标前至多 `max_bytes` 字节的上下文切片
+pub fn extract_surrounding_prefix(
+    surrounding: Option<&(String, u32, u32)>,
+    max_bytes: usize,
+) -> Option<&str> {
+    let (text, cursor, _) = surrounding?;
+    let len = text.len();
+    let mut cursor_idx = (*cursor as usize).min(len);
+    while cursor_idx > 0 && !text.is_char_boundary(cursor_idx) {
+        cursor_idx -= 1;
+    }
+    let start = cursor_idx.saturating_sub(max_bytes);
+    let mut start_idx = start.min(len);
+    while start_idx < len && !text.is_char_boundary(start_idx) {
+        start_idx += 1;
+    }
+    Some(&text[start_idx..cursor_idx])
 }
 
 #[cfg(test)]
@@ -330,5 +488,57 @@ mod tests {
         // 空闲状态下按逗号 (KEY_COMMA: 51)
         let act = session.handle_key_press(51, 1000, None);
         assert_eq!(act, ImeAction::Commit("，".to_string()));
+    }
+
+    #[test]
+    fn test_ime_core_session_shortcuts() {
+        let mut session = make_test_session();
+        // 模拟按下 Ctrl + Shift
+        session.set_modifiers(MOD_CTRL | MOD_SHIFT, 0);
+
+        // 按 F 键触发简繁切换 (默认配置为 CtrlShiftF)
+        let act = session.handle_key_press(KEY_F, 1000, None);
+        assert_eq!(
+            act,
+            ImeAction::ShortcutToggled(ShortcutToggleAction::Traditional(true))
+        );
+        assert!(session.engine.config.traditional_chinese);
+
+        // 再次按下反转回简体
+        let act2 = session.handle_key_press(KEY_F, 1001, None);
+        assert_eq!(
+            act2,
+            ImeAction::ShortcutToggled(ShortcutToggleAction::Traditional(false))
+        );
+        assert!(!session.engine.config.traditional_chinese);
+
+        // 模拟单独按住 Ctrl (无 Shift)
+        session.set_modifiers(MOD_CTRL, 0);
+        // 按句号 . 触发标点全半角切换 (默认 CtrlPeriod)
+        let act_punct = session.handle_key_press(KEY_DOT, 1002, None);
+        assert_eq!(
+            act_punct,
+            ImeAction::ShortcutToggled(ShortcutToggleAction::FullWidthPunct(false))
+        );
+        assert!(!session.punctuation_processor.full_width_punct);
+    }
+
+    #[test]
+    fn test_ime_core_session_full_width_char() {
+        let mut session = make_test_session();
+        session.set_full_width_char(true);
+        session.mode = InputMode::English;
+
+        // 英文模式下键入 'a' (扫描码 30)
+        let act = session.handle_key_press(30, 1000, None);
+        assert_eq!(act, ImeAction::Commit("ａ".to_string()));
+    }
+
+    #[test]
+    fn test_extract_surrounding_prefix_safety() {
+        let text = "你好，世界！abc".to_string();
+        let surrounding = (text, 15, 15); // "你好，世界！" 占用 18 字节，15 字节在 "界" 的中间或边界
+        let prefix = extract_surrounding_prefix(Some(&surrounding), 64);
+        assert!(prefix.is_some());
     }
 }

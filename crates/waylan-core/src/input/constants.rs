@@ -28,6 +28,11 @@ pub const KEY_APOSTROPHE: u32 = 40;
 pub const KEY_LEFTBRACE: u32 = 26;
 pub const KEY_RIGHTBRACE: u32 = 27;
 
+/// 字母 T 的 evdev 扫描码 (20)
+pub const KEY_T: u32 = 20;
+/// 字母 F 的 evdev 扫描码 (33)
+pub const KEY_F: u32 = 33;
+
 pub const KEY_1: u32 = 2;
 pub const KEY_2: u32 = 3;
 pub const KEY_3: u32 = 4;

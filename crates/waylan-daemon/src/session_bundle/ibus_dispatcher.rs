@@ -87,16 +87,11 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
 fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSessionCore) {
     core.candidate_index_style = bundle.candidate_index_style;
     core.candidate_orientation = bundle.candidate_orientation;
-    core.traditional_shortcut = bundle.traditional_shortcut;
-    core.full_width_char_shortcut = bundle.full_width_char_shortcut;
-    core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
+    core.core.traditional_shortcut = bundle.traditional_shortcut;
+    core.core.full_width_char_shortcut = bundle.full_width_char_shortcut;
+    core.core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
     core.voice_manager.update_config(bundle.voice.clone());
-    bundle.apply_to_engine_and_input(
-        &mut core.engine,
-        &mut core.shift_sm,
-        &mut core.punct_processor,
-        &mut core.page_keys,
-    );
+    bundle.apply_to_core(&mut core.core);
 }
 
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码

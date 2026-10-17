@@ -143,12 +143,12 @@ impl IbusEngineService {
                 let sel = guard.engine.selected_index;
                 if let Some((committed, _)) = guard.engine.select_expanded_item(sel, index as usize)
                 {
-                    guard.punct_processor.record_commit(&committed);
+                    guard.punctuation_processor.record_commit(&committed);
                     out.commit_text = Some(committed);
                 }
             } else if let Some((committed, _)) = guard.engine.select_candidate(index as usize, now)
             {
-                guard.punct_processor.record_commit(&committed);
+                guard.punctuation_processor.record_commit(&committed);
                 out.commit_text = Some(committed);
             }
             let snap = UiSnapshot::capture(&guard);
@@ -174,7 +174,7 @@ impl IbusEngineService {
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
             let trad = guard.engine.config.traditional_chinese;
-            let punct = guard.punct_processor.full_width_punct;
+            let punct = guard.punctuation_processor.full_width_punct;
             let char_full = guard.is_full_width_char();
             (
                 guard.mode,

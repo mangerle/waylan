@@ -11,7 +11,6 @@
 pub mod core;
 pub mod dispatcher;
 pub mod keyval;
-pub mod shortcuts;
 pub mod voice;
 
 #[cfg(test)]
