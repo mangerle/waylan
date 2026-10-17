@@ -86,103 +86,115 @@ mod tests {
     use super::*;
     use waylan_core::config::{
         CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
-        CandidateWindowMode, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules,
-        PageKeys, SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules,
+        CandidateWindowMode, DesktopConfig, FullWidthCharShortcut, FullWidthPunctShortcut,
+        FuzzyPinyinRules, PageKeys, PinyinConfig, ShortcutConfig, SwitchKey, ThemeMode,
+        TraditionalShortcut, TypoCorrectionRules, UiConfig,
     };
 
     #[test]
     fn test_config_roundtrip_logic() {
         let mut cfg = AppConfig {
-            init_chinese: true,
-            full_width_char: false,
-            full_width_punct: true,
-            page_size: 8,
-            font_size: 18.0,
-            switch_key: SwitchKey::Ctrl,
-            page_keys: PageKeys {
-                minus_equal: false,
-                bracket: true,
-                comma_period: true,
+            ui: UiConfig {
+                page_size: 8,
+                font_size: 18.0,
+                theme: ThemeMode::Dark,
+                candidate_orientation: CandidateOrientation::Vertical,
+                candidate_index_style: CandidateIndexStyle::Circled,
+                candidate_window_mode: CandidateWindowMode::WaylanCustom,
+                candidate_density: CandidateDensity::Normal,
+                candidate_theme: CandidateThemePreset::Emerald,
+                candidate_item_spacing: 10.0,
+                candidate_padding_v: 6.0,
+                candidate_padding_h: 12.0,
+                candidate_corner_radius: 10.0,
+                candidate_opacity: 90,
+                show_pinyin_comment: false,
             },
-            traditional_shortcut: TraditionalShortcut::CtrlShiftF,
-            full_width_char_shortcut: FullWidthCharShortcut::ShiftSpace,
-            full_width_punct_shortcut: FullWidthPunctShortcut::CtrlPeriod,
-            theme: ThemeMode::Dark,
-            candidate_orientation: CandidateOrientation::Vertical,
-            candidate_index_style: CandidateIndexStyle::Circled,
-            candidate_window_mode: CandidateWindowMode::WaylanCustom,
-            candidate_density: CandidateDensity::Normal,
-            candidate_theme: CandidateThemePreset::Emerald,
-            candidate_item_spacing: 10.0,
-            candidate_padding_v: 6.0,
-            candidate_padding_h: 12.0,
-            candidate_corner_radius: 10.0,
-            candidate_opacity: 90,
-            dynamic_adjust_freq: true,
-            enable_acronym: true,
-            shift_select_second: true,
-            slash_to_dunhao: true,
-            protect_digits_punctuation: true,
-            auto_complete_pairs: true,
-            v_mode: true,
-            fuzzy_pinyin: true,
-            fuzzy_rules: FuzzyPinyinRules {
-                c_ch: true,
-                g_k: true,
-                ..Default::default()
+            shortcuts: ShortcutConfig {
+                switch_key: SwitchKey::Ctrl,
+                page_keys: PageKeys {
+                    minus_equal: false,
+                    bracket: true,
+                    comma_period: true,
+                },
+                traditional_shortcut: TraditionalShortcut::CtrlShiftF,
+                full_width_char_shortcut: FullWidthCharShortcut::ShiftSpace,
+                full_width_punct_shortcut: FullWidthPunctShortcut::CtrlPeriod,
+                shift_select_second: true,
             },
-            typo_rules: TypoCorrectionRules {
-                enable: true,
-                gn_ng: true,
-                ..Default::default()
+            pinyin: PinyinConfig {
+                init_chinese: true,
+                full_width_char: false,
+                full_width_punct: true,
+                dynamic_adjust_freq: true,
+                enable_acronym: true,
+                slash_to_dunhao: true,
+                protect_digits_punctuation: true,
+                auto_complete_pairs: true,
+                v_mode: true,
+                fuzzy_pinyin: true,
+                fuzzy_rules: FuzzyPinyinRules {
+                    c_ch: true,
+                    g_k: true,
+                    ..Default::default()
+                },
+                typo_rules: TypoCorrectionRules {
+                    enable: true,
+                    gn_ng: true,
+                    ..Default::default()
+                },
+                traditional_chinese: false,
+                auto_pangu_spacing: true,
+                enable_u_mode: true,
+                enable_i_mode: true,
+                filter_uncommon_charset: true,
+                auto_dedup: true,
             },
-            traditional_chinese: false,
-            auto_pangu_spacing: true,
-            enable_tray: Some(true),
-            exclusive_input_source: true,
-            enable_u_mode: true,
-            enable_i_mode: true,
-            filter_uncommon_charset: true,
-            show_pinyin_comment: false,
-            auto_dedup: true,
-            tray_icon_theme_path: Some("/custom/icons".into()),
-            tray_icon_zh: Some("custom-zh".into()),
-            tray_icon_en: Some("custom-en".into()),
+            desktop: DesktopConfig {
+                enable_tray: Some(true),
+                exclusive_input_source: true,
+                tray_icon_theme_path: Some("/custom/icons".into()),
+                tray_icon_zh: Some("custom-zh".into()),
+                tray_icon_en: Some("custom-en".into()),
+            },
             voice: waylan_core::VoiceConfig::default(),
         };
         cfg.sanitize();
 
-        assert_eq!(cfg.page_size, 8);
-        assert_eq!(cfg.font_size, 18.0);
-        assert_eq!(cfg.switch_key, SwitchKey::Ctrl);
+        assert_eq!(cfg.ui.page_size, 8);
+        assert_eq!(cfg.ui.font_size, 18.0);
+        assert_eq!(cfg.shortcuts.switch_key, SwitchKey::Ctrl);
         assert_eq!(
-            cfg.page_keys,
+            cfg.shortcuts.page_keys,
             PageKeys {
                 minus_equal: false,
                 bracket: true,
                 comma_period: true,
             }
         );
-        assert_eq!(cfg.theme, ThemeMode::Dark);
-        assert_eq!(cfg.candidate_orientation, CandidateOrientation::Vertical);
-        assert_eq!(cfg.candidate_index_style, CandidateIndexStyle::Circled);
-        assert_eq!(cfg.candidate_item_spacing, 10.0);
-        assert_eq!(cfg.candidate_padding_v, 6.0);
-        assert_eq!(cfg.candidate_padding_h, 12.0);
-        assert_eq!(cfg.candidate_corner_radius, 10.0);
-        assert_eq!(cfg.candidate_opacity, 90);
-        assert!(cfg.fuzzy_rules.g_k);
-        assert!(cfg.typo_rules.gn_ng);
-        assert!(cfg.auto_pangu_spacing);
-        assert_eq!(cfg.enable_tray, Some(true));
-        assert!(cfg.exclusive_input_source);
-        assert!(cfg.enable_u_mode);
-        assert!(cfg.enable_i_mode);
-        assert!(cfg.filter_uncommon_charset);
-        assert!(!cfg.show_pinyin_comment);
-        assert!(cfg.auto_dedup);
-        assert_eq!(cfg.tray_icon_theme_path.as_deref(), Some("/custom/icons"));
-        assert_eq!(cfg.tray_icon_zh.as_deref(), Some("custom-zh"));
-        assert_eq!(cfg.tray_icon_en.as_deref(), Some("custom-en"));
+        assert_eq!(cfg.ui.theme, ThemeMode::Dark);
+        assert_eq!(cfg.ui.candidate_orientation, CandidateOrientation::Vertical);
+        assert_eq!(cfg.ui.candidate_index_style, CandidateIndexStyle::Circled);
+        assert_eq!(cfg.ui.candidate_item_spacing, 10.0);
+        assert_eq!(cfg.ui.candidate_padding_v, 6.0);
+        assert_eq!(cfg.ui.candidate_padding_h, 12.0);
+        assert_eq!(cfg.ui.candidate_corner_radius, 10.0);
+        assert_eq!(cfg.ui.candidate_opacity, 90);
+        assert!(cfg.pinyin.fuzzy_rules.g_k);
+        assert!(cfg.pinyin.typo_rules.gn_ng);
+        assert!(cfg.pinyin.auto_pangu_spacing);
+        assert_eq!(cfg.desktop.enable_tray, Some(true));
+        assert!(cfg.desktop.exclusive_input_source);
+        assert!(cfg.pinyin.enable_u_mode);
+        assert!(cfg.pinyin.enable_i_mode);
+        assert!(cfg.pinyin.filter_uncommon_charset);
+        assert!(!cfg.ui.show_pinyin_comment);
+        assert!(cfg.pinyin.auto_dedup);
+        assert_eq!(
+            cfg.desktop.tray_icon_theme_path.as_deref(),
+            Some("/custom/icons")
+        );
+        assert_eq!(cfg.desktop.tray_icon_zh.as_deref(), Some("custom-zh"));
+        assert_eq!(cfg.desktop.tray_icon_en.as_deref(), Some("custom-en"));
     }
 }

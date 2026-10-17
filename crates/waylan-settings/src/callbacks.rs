@@ -116,7 +116,7 @@ pub fn register_settings_callbacks(
             update_config_from_window(&win, &mut base_cfg);
             match base_cfg.save_default() {
                 Ok(()) => {
-                    let hide_ext = base_cfg.exclusive_input_source;
+                    let hide_ext = base_cfg.desktop.exclusive_input_source;
                     *current_cfg_cell.borrow_mut() = base_cfg;
                     sync_gnome_indicator_mode(hide_ext);
                     win.set_global_status_is_error(false);

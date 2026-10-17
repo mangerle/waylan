@@ -41,23 +41,32 @@ mod tests {
     use super::*;
     use waylan_core::config::{
         CandidateDensity, CandidateIndexStyle, CandidateThemePreset, CandidateWindowMode,
-        FullWidthCharShortcut, FullWidthPunctShortcut, TraditionalShortcut, VoiceVisualEffect,
+        DesktopConfig, FullWidthCharShortcut, FullWidthPunctShortcut, PinyinConfig,
+        TraditionalShortcut, UiConfig, VoiceVisualEffect,
     };
 
     #[test]
     fn test_sync_and_update_preserves_custom_icons() {
         let window = SettingsWindow::new().expect("创建窗口对象应成功");
         let initial_cfg = AppConfig {
-            tray_icon_theme_path: Some("/opt/my-theme".to_string()),
-            tray_icon_zh: Some("custom-zh.svg".to_string()),
-            tray_icon_en: Some("custom-en.svg".to_string()),
-            enable_tray: Some(true),
-            exclusive_input_source: true,
-            enable_u_mode: false,
-            enable_i_mode: false,
-            filter_uncommon_charset: true,
-            show_pinyin_comment: false,
-            auto_dedup: false,
+            desktop: DesktopConfig {
+                tray_icon_theme_path: Some("/opt/my-theme".to_string()),
+                tray_icon_zh: Some("custom-zh.svg".to_string()),
+                tray_icon_en: Some("custom-en.svg".to_string()),
+                enable_tray: Some(true),
+                exclusive_input_source: true,
+            },
+            pinyin: PinyinConfig {
+                enable_u_mode: false,
+                enable_i_mode: false,
+                filter_uncommon_charset: true,
+                auto_dedup: false,
+                ..Default::default()
+            },
+            ui: UiConfig {
+                show_pinyin_comment: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -106,47 +115,56 @@ mod tests {
         update_config_from_window(&window, &mut updated_cfg);
 
         // 验证修改生效
-        assert_eq!(updated_cfg.page_size, 8);
+        assert_eq!(updated_cfg.ui.page_size, 8);
         assert_eq!(
-            updated_cfg.candidate_window_mode,
+            updated_cfg.ui.candidate_window_mode,
             CandidateWindowMode::Native
         );
-        assert_eq!(updated_cfg.candidate_density, CandidateDensity::Compact);
-        assert_eq!(updated_cfg.candidate_theme, CandidateThemePreset::IceBlue);
-        assert_eq!(updated_cfg.candidate_item_spacing, 12.0);
-        assert_eq!(updated_cfg.candidate_padding_v, 6.0);
-        assert_eq!(updated_cfg.candidate_padding_h, 14.0);
-        assert_eq!(updated_cfg.candidate_corner_radius, 10.0);
-        assert_eq!(updated_cfg.candidate_opacity, 90);
+        assert_eq!(updated_cfg.ui.candidate_density, CandidateDensity::Compact);
+        assert_eq!(
+            updated_cfg.ui.candidate_theme,
+            CandidateThemePreset::IceBlue
+        );
+        assert_eq!(updated_cfg.ui.candidate_item_spacing, 12.0);
+        assert_eq!(updated_cfg.ui.candidate_padding_v, 6.0);
+        assert_eq!(updated_cfg.ui.candidate_padding_h, 14.0);
+        assert_eq!(updated_cfg.ui.candidate_corner_radius, 10.0);
+        assert_eq!(updated_cfg.ui.candidate_opacity, 90);
         assert_eq!(
             updated_cfg.voice.interaction.visual_effect,
             VoiceVisualEffect::BreathingPulse
         );
         assert_eq!(
-            updated_cfg.candidate_index_style,
+            updated_cfg.ui.candidate_index_style,
             CandidateIndexStyle::Circled
         );
-        assert_eq!(updated_cfg.enable_tray, Some(false));
-        assert!(!updated_cfg.exclusive_input_source);
+        assert_eq!(updated_cfg.desktop.enable_tray, Some(false));
+        assert!(!updated_cfg.desktop.exclusive_input_source);
         assert_eq!(
-            updated_cfg.traditional_shortcut,
+            updated_cfg.shortcuts.traditional_shortcut,
             TraditionalShortcut::CtrlAltF
         );
         assert_eq!(
-            updated_cfg.full_width_char_shortcut,
+            updated_cfg.shortcuts.full_width_char_shortcut,
             FullWidthCharShortcut::CtrlShiftSpace
         );
         assert_eq!(
-            updated_cfg.full_width_punct_shortcut,
+            updated_cfg.shortcuts.full_width_punct_shortcut,
             FullWidthPunctShortcut::AltPeriod
         );
         // 关键：未在界面展示的高级图标配置绝对不可被清空
         assert_eq!(
-            updated_cfg.tray_icon_theme_path.as_deref(),
+            updated_cfg.desktop.tray_icon_theme_path.as_deref(),
             Some("/opt/my-theme")
         );
-        assert_eq!(updated_cfg.tray_icon_zh.as_deref(), Some("custom-zh.svg"));
-        assert_eq!(updated_cfg.tray_icon_en.as_deref(), Some("custom-en.svg"));
+        assert_eq!(
+            updated_cfg.desktop.tray_icon_zh.as_deref(),
+            Some("custom-zh.svg")
+        );
+        assert_eq!(
+            updated_cfg.desktop.tray_icon_en.as_deref(),
+            Some("custom-en.svg")
+        );
 
         // 验证语音双独立快捷键与默认开关状态
         assert!(!window.get_voice_enabled());

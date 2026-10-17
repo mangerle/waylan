@@ -146,12 +146,12 @@ fn main() -> Result<(), DaemonError> {
             coordinator,
         })
     } else {
-        let theme = match cfg.theme {
+        let theme = match cfg.ui.theme {
             ThemeMode::Light => UiTheme::light(),
             ThemeMode::Dark => UiTheme::dark(),
         };
         let mut renderer = CandidateBoxRenderer::new(theme);
-        renderer.font_size = cfg.font_size;
+        renderer.font_size = cfg.ui.font_size;
 
         dispatch_wayland_session(WaylandDispatchOptions {
             engine,

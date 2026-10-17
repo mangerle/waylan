@@ -45,47 +45,47 @@ impl SessionConfigBundle {
     pub fn load_current() -> Self {
         let new_cfg = AppConfig::load_or_create();
         let algo_config = AlgoConfig {
-            page_size: new_cfg.page_size,
-            enable_v_mode: new_cfg.v_mode,
-            enable_u_mode: new_cfg.enable_u_mode,
-            enable_i_mode: new_cfg.enable_i_mode,
-            traditional_chinese: new_cfg.traditional_chinese,
-            filter_uncommon_charset: new_cfg.filter_uncommon_charset,
-            show_pinyin_comment: new_cfg.show_pinyin_comment,
-            auto_dedup: new_cfg.auto_dedup,
-            fuzzy: if new_cfg.fuzzy_pinyin {
+            page_size: new_cfg.ui.page_size,
+            enable_v_mode: new_cfg.pinyin.v_mode,
+            enable_u_mode: new_cfg.pinyin.enable_u_mode,
+            enable_i_mode: new_cfg.pinyin.enable_i_mode,
+            traditional_chinese: new_cfg.pinyin.traditional_chinese,
+            filter_uncommon_charset: new_cfg.pinyin.filter_uncommon_charset,
+            show_pinyin_comment: new_cfg.ui.show_pinyin_comment,
+            auto_dedup: new_cfg.pinyin.auto_dedup,
+            fuzzy: if new_cfg.pinyin.fuzzy_pinyin {
                 FuzzyConfig {
-                    z_zh: new_cfg.fuzzy_rules.z_zh,
-                    c_ch: new_cfg.fuzzy_rules.c_ch,
-                    s_sh: new_cfg.fuzzy_rules.s_sh,
-                    an_ang: new_cfg.fuzzy_rules.an_ang,
-                    en_eng: new_cfg.fuzzy_rules.en_eng,
-                    in_ing: new_cfg.fuzzy_rules.in_ing,
-                    l_n: new_cfg.fuzzy_rules.l_n,
-                    f_h: new_cfg.fuzzy_rules.f_h,
-                    r_l: new_cfg.fuzzy_rules.r_l,
-                    g_k: new_cfg.fuzzy_rules.g_k,
+                    z_zh: new_cfg.pinyin.fuzzy_rules.z_zh,
+                    c_ch: new_cfg.pinyin.fuzzy_rules.c_ch,
+                    s_sh: new_cfg.pinyin.fuzzy_rules.s_sh,
+                    an_ang: new_cfg.pinyin.fuzzy_rules.an_ang,
+                    en_eng: new_cfg.pinyin.fuzzy_rules.en_eng,
+                    in_ing: new_cfg.pinyin.fuzzy_rules.in_ing,
+                    l_n: new_cfg.pinyin.fuzzy_rules.l_n,
+                    f_h: new_cfg.pinyin.fuzzy_rules.f_h,
+                    r_l: new_cfg.pinyin.fuzzy_rules.r_l,
+                    g_k: new_cfg.pinyin.fuzzy_rules.g_k,
                 }
             } else {
                 FuzzyConfig::default()
             },
-            auto_pangu_spacing: new_cfg.auto_pangu_spacing,
+            auto_pangu_spacing: new_cfg.pinyin.auto_pangu_spacing,
         };
-        let theme = match new_cfg.theme {
+        let theme = match new_cfg.ui.theme {
             ThemeMode::Light => UiTheme::light(),
             ThemeMode::Dark => UiTheme::dark(),
         };
-        let shift_mode = match new_cfg.switch_key {
+        let shift_mode = match new_cfg.shortcuts.switch_key {
             SwitchKey::Shift => ToggleKeyMode::Shift,
             SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
         };
         let mut punct_processor = PunctuationProcessor::with_options(
-            new_cfg.slash_to_dunhao,
-            new_cfg.protect_digits_punctuation,
-            new_cfg.auto_complete_pairs,
+            new_cfg.pinyin.slash_to_dunhao,
+            new_cfg.pinyin.protect_digits_punctuation,
+            new_cfg.pinyin.auto_complete_pairs,
         );
-        punct_processor.full_width_punct = new_cfg.full_width_punct;
-        let page_keys = PageKeyConfig::from(new_cfg.page_keys);
+        punct_processor.full_width_punct = new_cfg.pinyin.full_width_punct;
+        let page_keys = PageKeyConfig::from(new_cfg.shortcuts.page_keys);
         let p_path = CustomPhraseManager::default_path();
         let custom_phrases = CustomPhraseManager::load_or_init(&p_path);
         let user_dict_path = AppConfig::user_dict_path();
@@ -93,7 +93,7 @@ impl SessionConfigBundle {
         Self {
             algo_config,
             theme,
-            font_size: new_cfg.font_size,
+            font_size: new_cfg.ui.font_size,
             shift_mode,
             punct_processor,
             page_keys,
@@ -101,12 +101,12 @@ impl SessionConfigBundle {
             user_dict_path,
             english_suggester,
             symbol_suggester,
-            exclusive_input_source: new_cfg.exclusive_input_source,
-            candidate_index_style: new_cfg.candidate_index_style,
-            candidate_orientation: new_cfg.candidate_orientation,
-            traditional_shortcut: new_cfg.traditional_shortcut,
-            full_width_char_shortcut: new_cfg.full_width_char_shortcut,
-            full_width_punct_shortcut: new_cfg.full_width_punct_shortcut,
+            exclusive_input_source: new_cfg.desktop.exclusive_input_source,
+            candidate_index_style: new_cfg.ui.candidate_index_style,
+            candidate_orientation: new_cfg.ui.candidate_orientation,
+            traditional_shortcut: new_cfg.shortcuts.traditional_shortcut,
+            full_width_char_shortcut: new_cfg.shortcuts.full_width_char_shortcut,
+            full_width_punct_shortcut: new_cfg.shortcuts.full_width_punct_shortcut,
             voice: new_cfg.voice,
         }
     }

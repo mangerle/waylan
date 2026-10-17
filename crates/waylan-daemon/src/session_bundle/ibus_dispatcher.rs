@@ -67,7 +67,7 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
         let is_gnome = env::var("XDG_CURRENT_DESKTOP")
             .map(|d| d.to_uppercase().contains("GNOME"))
             .unwrap_or(false);
-        let expected_tray = new_cfg.enable_tray.unwrap_or(!is_gnome);
+        let expected_tray = new_cfg.desktop.enable_tray.unwrap_or(!is_gnome);
 
         if expected_tray != current_has_tray {
             return true;
@@ -106,12 +106,14 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
     );
 
     let mut session_core = IbusSessionCore::new(opts.engine);
-    session_core.shared_is_chinese = opts.tray.as_ref().map(|t| t.mode_flag());
-    session_core.shared_is_caps_locked = opts.tray.as_ref().map(|t| t.caps_lock_flag());
-    session_core.shared_traditional_chinese =
-        opts.tray.as_ref().map(|t| t.traditional_chinese_flag());
-    session_core.shared_full_width_punct = opts.tray.as_ref().map(|t| t.full_width_punct_flag());
-    session_core.shared_full_width_char = opts.tray.as_ref().map(|t| t.full_width_char_flag());
+    if let Some(tray) = opts.tray {
+        let flags = tray.shared_flags();
+        session_core.shared_is_chinese = Some(flags.is_chinese_flag());
+        session_core.shared_is_caps_locked = Some(flags.is_caps_locked_flag());
+        session_core.shared_traditional_chinese = Some(flags.traditional_chinese_flag());
+        session_core.shared_full_width_punct = Some(flags.full_width_punct_flag());
+        session_core.shared_full_width_char = Some(flags.full_width_char_flag());
+    }
     session_core.mode_notify_tx = opts.tray.as_ref().map(|t| t.icon_notifier());
     let initial_bundle = SessionConfigBundle::load_current();
     apply_bundle_to_ibus_core(initial_bundle, &mut session_core);

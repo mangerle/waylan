@@ -56,7 +56,7 @@ fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
 
     let explicit_theme = env_theme
         .or(path_parent)
-        .or_else(|| config.tray_icon_theme_path.clone());
+        .or_else(|| config.desktop.tray_icon_theme_path.clone());
 
     let (icon_theme_path, has_custom_theme) = if let Some(p) = explicit_theme {
         (p, true)
@@ -71,7 +71,7 @@ fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
     let env_en_caps = env_var_non_empty("WAYLAN_ICON_EN_CAPS");
 
     let icon_zh = env_zh
-        .or_else(|| config.tray_icon_zh.clone())
+        .or_else(|| config.desktop.tray_icon_zh.clone())
         .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
         .unwrap_or_else(|| {
             if has_custom_theme {
@@ -82,7 +82,7 @@ fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
         });
 
     let icon_en = env_en
-        .or_else(|| config.tray_icon_en.clone())
+        .or_else(|| config.desktop.tray_icon_en.clone())
         .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
         .unwrap_or_else(|| {
             if has_custom_theme {
@@ -246,9 +246,12 @@ mod tests {
         let is_caps_locked = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = mpsc::sync_channel(1);
         let cfg = AppConfig {
-            tray_icon_theme_path: Some("/opt/waylan/icons".to_string()),
-            tray_icon_zh: Some("waylan-zh-custom".to_string()),
-            tray_icon_en: Some("waylan-en-custom".to_string()),
+            desktop: waylan_core::config::DesktopConfig {
+                tray_icon_theme_path: Some("/opt/waylan/icons".to_string()),
+                tray_icon_zh: Some("waylan-zh-custom".to_string()),
+                tray_icon_en: Some("waylan-en-custom".to_string()),
+                ..Default::default()
+            },
             ..Default::default()
         };
 

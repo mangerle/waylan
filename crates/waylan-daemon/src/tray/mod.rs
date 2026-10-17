@@ -7,11 +7,14 @@ use log::{debug, info, warn};
 use menu::{DBusMenu, DBusMenuOptions};
 use std::collections::HashMap;
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use waylan_core::state::SharedInputFlags;
 #[cfg(test)]
 use waylan_core::InputMode;
 use zbus::blocking::connection::Builder;
@@ -21,11 +24,7 @@ pub use item::StatusNotifierItem;
 
 /// 托盘后台事件循环参数包
 struct TrayLoopParams {
-    is_chinese: Arc<AtomicBool>,
-    is_caps_locked: Arc<AtomicBool>,
-    traditional_chinese: Arc<AtomicBool>,
-    full_width_punct: Arc<AtomicBool>,
-    full_width_char: Arc<AtomicBool>,
+    shared_flags: SharedInputFlags,
     reload_requested: Arc<AtomicBool>,
     coordinator: ShutdownCoordinator,
     icon_update_tx: SyncSender<()>,
@@ -39,11 +38,7 @@ struct TrayLoopParams {
 /// - **核心优势**：通过 D-Bus StatusNotifierItem 与 DBusMenu 规范集成，支持右键菜单、平滑重启与即时中英切换。
 /// - **代价与局限**：依赖 D-Bus 用户会话总线，若当前环境无 DBus 则自动优雅降级。
 pub struct TrayService {
-    is_chinese: Arc<AtomicBool>,
-    is_caps_locked: Arc<AtomicBool>,
-    traditional_chinese: Arc<AtomicBool>,
-    full_width_punct: Arc<AtomicBool>,
-    full_width_char: Arc<AtomicBool>,
+    shared_flags: SharedInputFlags,
     reload_requested: Arc<AtomicBool>,
     coordinator: ShutdownCoordinator,
     icon_update_tx: SyncSender<()>,
@@ -54,20 +49,17 @@ impl TrayService {
     /// 使用停机协调器启动后台系统托盘常驻服务
     pub fn spawn(coordinator: ShutdownCoordinator) -> Self {
         let config = AppConfig::load_or_create();
-        let is_chinese = Arc::new(AtomicBool::new(config.init_chinese));
-        let is_caps_locked = Arc::new(AtomicBool::new(false));
-        let traditional_chinese = Arc::new(AtomicBool::new(config.traditional_chinese));
-        let full_width_punct = Arc::new(AtomicBool::new(config.full_width_punct));
-        let full_width_char = Arc::new(AtomicBool::new(config.full_width_char));
+        let shared_flags = SharedInputFlags::new(
+            config.pinyin.init_chinese,
+            config.pinyin.traditional_chinese,
+            config.pinyin.full_width_punct,
+            config.pinyin.full_width_char,
+        );
         let reload_requested = Arc::new(AtomicBool::new(false));
         let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(64);
 
         let params = TrayLoopParams {
-            is_chinese: Arc::clone(&is_chinese),
-            is_caps_locked: Arc::clone(&is_caps_locked),
-            traditional_chinese: Arc::clone(&traditional_chinese),
-            full_width_punct: Arc::clone(&full_width_punct),
-            full_width_char: Arc::clone(&full_width_char),
+            shared_flags: shared_flags.clone(),
             reload_requested: Arc::clone(&reload_requested),
             coordinator: coordinator.clone(),
             icon_update_tx: icon_update_tx.clone(),
@@ -79,11 +71,7 @@ impl TrayService {
         });
 
         Self {
-            is_chinese,
-            is_caps_locked,
-            traditional_chinese,
-            full_width_punct,
-            full_width_char,
+            shared_flags,
             reload_requested,
             coordinator,
             icon_update_tx,
@@ -91,29 +79,19 @@ impl TrayService {
         }
     }
 
+    /// 获取输入法共享状态标志集合句柄
+    pub fn shared_flags(&self) -> &SharedInputFlags {
+        &self.shared_flags
+    }
+
     /// 获取中英文模式共享原子标志句柄
     pub fn mode_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.is_chinese)
+        self.shared_flags.is_chinese_flag()
     }
 
     /// 获取 CapsLock 大写锁定状态共享原子标志句柄
     pub fn caps_lock_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.is_caps_locked)
-    }
-
-    /// 获取简繁切换共享原子标志句柄
-    pub fn traditional_chinese_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.traditional_chinese)
-    }
-
-    /// 获取全角/半角标点共享原子标志句柄
-    pub fn full_width_punct_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.full_width_punct)
-    }
-
-    /// 获取全角/半角字符共享原子标志句柄
-    pub fn full_width_char_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.full_width_char)
+        self.shared_flags.is_caps_locked_flag()
     }
 
     /// 获取配置与词库重载请求共享原子标志句柄
@@ -135,14 +113,17 @@ impl TrayService {
     /// 获取当前是否处于中文模式（供单元测试断言使用）
     #[cfg(test)]
     pub fn is_chinese(&self) -> bool {
-        self.is_chinese.load(Ordering::Acquire)
+        self.shared_flags.is_chinese()
     }
 
     /// 更新当前输入模式并触发托盘图标变动通知（供单元测试验证使用）
     #[cfg(test)]
     pub fn update_mode(&self, mode: InputMode) {
         let is_zh = matches!(mode, InputMode::Chinese);
-        let prev = self.is_chinese.swap(is_zh, Ordering::AcqRel);
+        let prev = self
+            .shared_flags
+            .is_chinese_flag()
+            .swap(is_zh, Ordering::AcqRel);
         if prev != is_zh {
             let _ = self.icon_update_tx.try_send(());
         }
@@ -153,18 +134,18 @@ impl TrayService {
         let config = AppConfig::load_or_create();
         let loop_wakeup = params.coordinator.loop_wakeup();
         let sni = StatusNotifierItem::new(
-            Arc::clone(&params.is_chinese),
-            Arc::clone(&params.is_caps_locked),
+            params.shared_flags.is_chinese_flag(),
+            params.shared_flags.is_caps_locked_flag(),
             params.icon_update_tx.clone(),
             &config,
             loop_wakeup,
         );
         let menu = DBusMenu::new(DBusMenuOptions {
-            is_chinese: Arc::clone(&params.is_chinese),
-            is_caps_locked: Arc::clone(&params.is_caps_locked),
-            traditional_chinese: params.traditional_chinese.clone(),
-            full_width_punct: params.full_width_punct.clone(),
-            full_width_char: params.full_width_char.clone(),
+            is_chinese: params.shared_flags.is_chinese_flag(),
+            is_caps_locked: params.shared_flags.is_caps_locked_flag(),
+            traditional_chinese: params.shared_flags.traditional_chinese_flag(),
+            full_width_punct: params.shared_flags.full_width_punct_flag(),
+            full_width_char: params.shared_flags.full_width_char_flag(),
             reload_requested: params.reload_requested.clone(),
             coordinator: params.coordinator.clone(),
             settings_running: Arc::new(AtomicBool::new(false)),
@@ -328,8 +309,8 @@ impl TrayService {
         conn: zbus::blocking::Connection,
     ) {
         let mut menu_revision: u32 = 1;
-        let mut last_emitted_is_chinese = params.is_chinese.load(Ordering::Acquire);
-        let mut last_emitted_is_caps = params.is_caps_locked.load(Ordering::Acquire);
+        let mut last_emitted_is_chinese = params.shared_flags.is_chinese();
+        let mut last_emitted_is_caps = params.shared_flags.is_caps_locked();
 
         loop {
             if params.coordinator.is_shutting_down() {
@@ -345,8 +326,8 @@ impl TrayService {
 
             while params.icon_update_rx.try_recv().is_ok() {}
 
-            let current_is_chinese = params.is_chinese.load(Ordering::Acquire);
-            let current_is_caps = params.is_caps_locked.load(Ordering::Acquire);
+            let current_is_chinese = params.shared_flags.is_chinese();
+            let current_is_caps = params.shared_flags.is_caps_locked();
 
             let should_emit = received.is_ok()
                 || current_is_chinese != last_emitted_is_chinese

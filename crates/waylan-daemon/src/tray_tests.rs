@@ -1,20 +1,17 @@
 use super::*;
 use std::sync::mpsc::sync_channel;
+use waylan_core::state::SharedInputFlags;
 use zbus::zvariant::Value;
 
 #[test]
 fn test_tray_mode_toggle() {
-    let is_chinese = Arc::new(AtomicBool::new(true));
+    let shared_flags = SharedInputFlags::new(true, false, true, false);
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, icon_update_rx) = sync_channel::<()>(8);
     let coordinator = ShutdownCoordinator::from_parts(exit_requested, None);
     let tray = TrayService {
-        is_chinese: Arc::clone(&is_chinese),
-        is_caps_locked: Arc::new(AtomicBool::new(false)),
-        traditional_chinese: Arc::new(AtomicBool::new(false)),
-        full_width_punct: Arc::new(AtomicBool::new(true)),
-        full_width_char: Arc::new(AtomicBool::new(false)),
+        shared_flags,
         reload_requested,
         coordinator,
         icon_update_tx,

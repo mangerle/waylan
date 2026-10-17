@@ -27,20 +27,20 @@ pub fn build_algo_engine(
         return Ok(None);
     }
     let algo_config = AlgoConfig {
-        page_size: cfg.page_size,
-        enable_v_mode: cfg.v_mode,
-        enable_u_mode: cfg.enable_u_mode,
-        enable_i_mode: cfg.enable_i_mode,
-        traditional_chinese: cfg.traditional_chinese,
-        filter_uncommon_charset: cfg.filter_uncommon_charset,
-        show_pinyin_comment: cfg.show_pinyin_comment,
-        auto_dedup: cfg.auto_dedup,
-        fuzzy: if cfg.fuzzy_pinyin {
+        page_size: cfg.ui.page_size,
+        enable_v_mode: cfg.pinyin.v_mode,
+        enable_u_mode: cfg.pinyin.enable_u_mode,
+        enable_i_mode: cfg.pinyin.enable_i_mode,
+        traditional_chinese: cfg.pinyin.traditional_chinese,
+        filter_uncommon_charset: cfg.pinyin.filter_uncommon_charset,
+        show_pinyin_comment: cfg.ui.show_pinyin_comment,
+        auto_dedup: cfg.pinyin.auto_dedup,
+        fuzzy: if cfg.pinyin.fuzzy_pinyin {
             FuzzyConfig::all_enabled()
         } else {
             FuzzyConfig::default()
         },
-        auto_pangu_spacing: cfg.auto_pangu_spacing,
+        auto_pangu_spacing: cfg.pinyin.auto_pangu_spacing,
     };
     let mut engine = AlgoEngine::new(table, algo_config);
 

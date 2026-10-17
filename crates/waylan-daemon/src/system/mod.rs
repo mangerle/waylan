@@ -135,12 +135,12 @@ pub fn determine_tray_and_exclusive(cfg: &AppConfig, use_ibus_backend: bool) -> 
     let is_gnome = env::var("XDG_CURRENT_DESKTOP")
         .map(|d| d.to_uppercase().contains("GNOME"))
         .unwrap_or(false);
-    let force_tray = cfg.enable_tray.unwrap_or_else(|| {
+    let force_tray = cfg.desktop.enable_tray.unwrap_or_else(|| {
         env::var("WAYLAN_ENABLE_TRAY")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     });
-    let exclusive_source = cfg.exclusive_input_source
+    let exclusive_source = cfg.desktop.exclusive_input_source
         || env::var("WAYLAN_EXCLUSIVE_INPUT_SOURCE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);

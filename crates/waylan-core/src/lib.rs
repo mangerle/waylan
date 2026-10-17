@@ -5,6 +5,7 @@ pub mod config_types;
 pub mod fs_watcher;
 pub mod input;
 pub mod loop_wakeup;
+pub mod state;
 pub use candidate_format::{format_candidate_display, CIRCLED_NUMBERS};
 pub use config::{
     AppConfig, AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
@@ -19,6 +20,7 @@ pub use fs_watcher::{
 };
 pub use input::*;
 pub use loop_wakeup::LoopWakeup;
+pub use state::{InputStateSnapshot, SharedInputFlags};
 
 use serde::{Deserialize, Serialize};
 
