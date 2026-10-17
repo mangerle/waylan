@@ -146,30 +146,14 @@ impl IbusSessionCore {
                 if cand.is_expandable && !cand.sub_candidates.is_empty() {
                     let mut out = Vec::with_capacity(cand.sub_candidates.len());
                     for sub in &cand.sub_candidates {
-                        out.push(Candidate {
-                            text: sub.clone(),
-                            pinyin: cand.pinyin.clone(),
-                            score: cand.score,
-                            is_expandable: false,
-                            sub_candidates: Vec::new(),
-                        });
+                        out.push(Candidate::new(sub.clone(), cand.pinyin.clone(), cand.score));
                     }
                     return out;
                 }
             }
         }
         let cands = self.engine.candidates();
-        let mut out = Vec::with_capacity(cands.len());
-        for c in cands {
-            out.push(Candidate {
-                text: c.text.clone(),
-                pinyin: c.pinyin.clone(),
-                score: c.score,
-                is_expandable: c.is_expandable,
-                sub_candidates: c.sub_candidates.clone(),
-            });
-        }
-        out
+        cands.iter().map(Candidate::from).collect()
     }
 
     /// 同步 CapsLock 大写锁定状态至共享标志并唤醒托盘刷新

@@ -204,8 +204,29 @@ impl AlgoCandidate {
 
     /// 转换为 Core 层定义的公共候选词结构体
     pub fn to_core_candidate(&self) -> Candidate {
-        Candidate::new(&self.text, &self.pinyin, self.score)
-            .with_sub_candidates(self.sub_candidates.clone())
+        let mut c = Candidate::new(&self.text, &self.pinyin, self.score)
+            .with_sub_candidates(self.sub_candidates.clone());
+        if let Some(ref comment) = self.comment {
+            c = c.with_comment(comment);
+        }
+        c
+    }
+}
+
+impl From<&AlgoCandidate> for Candidate {
+    fn from(algo: &AlgoCandidate) -> Self {
+        algo.to_core_candidate()
+    }
+}
+
+impl From<AlgoCandidate> for Candidate {
+    fn from(algo: AlgoCandidate) -> Self {
+        let mut c = Candidate::new(algo.text, algo.pinyin, algo.score)
+            .with_sub_candidates(algo.sub_candidates);
+        if let Some(comment) = algo.comment {
+            c = c.with_comment(comment);
+        }
+        c
     }
 }
 

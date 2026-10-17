@@ -35,6 +35,9 @@ pub struct Candidate {
     pub is_expandable: bool,
     /// 二级子候选列表（如多种展开的日期或时间格式）
     pub sub_candidates: Vec<String>,
+    /// 候选附加注释信息（如多音字、反查或注音提示）
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 impl Candidate {
@@ -45,6 +48,7 @@ impl Candidate {
             score,
             is_expandable: false,
             sub_candidates: Vec::new(),
+            comment: None,
         }
     }
 
@@ -52,6 +56,12 @@ impl Candidate {
     pub fn with_sub_candidates(mut self, sub_candidates: Vec<String>) -> Self {
         self.is_expandable = !sub_candidates.is_empty();
         self.sub_candidates = sub_candidates;
+        self
+    }
+
+    /// 附加注释说明（如多音字注音或来源提示）
+    pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = Some(comment.into());
         self
     }
 }

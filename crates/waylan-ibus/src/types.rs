@@ -431,20 +431,8 @@ mod tests {
     #[test]
     fn test_ibus_lookup_table_signature() {
         let cands = vec![
-            Candidate {
-                text: "微澜".to_string(),
-                pinyin: "wei'lan".to_string(),
-                score: 1000,
-                is_expandable: false,
-                sub_candidates: Vec::new(),
-            },
-            Candidate {
-                text: "未来".to_string(),
-                pinyin: "wei'lai".to_string(),
-                score: 900,
-                is_expandable: false,
-                sub_candidates: Vec::new(),
-            },
+            Candidate::new("微澜", "wei'lan", 1000),
+            Candidate::new("未来", "wei'lai", 900),
         ];
         let table = build_ibus_lookup_table(
             &cands,

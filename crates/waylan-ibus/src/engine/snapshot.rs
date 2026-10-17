@@ -23,13 +23,11 @@ impl UiSnapshot {
     /// 提取处于语音录入或语音展示期间的 UI 快照
     fn capture_voice_snapshot(core: &IbusSessionCore) -> Self {
         let candidates = if let Some(ref voice_text) = core.voice_manager.display_text {
-            vec![Candidate {
-                text: voice_text.clone(),
-                pinyin: core.voice_manager.waveform.clone().unwrap_or_default(),
-                score: 1000,
-                is_expandable: false,
-                sub_candidates: Vec::new(),
-            }]
+            vec![Candidate::new(
+                voice_text.clone(),
+                core.voice_manager.waveform.clone().unwrap_or_default(),
+                1000,
+            )]
         } else {
             Vec::new()
         };

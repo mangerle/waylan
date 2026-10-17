@@ -136,30 +136,14 @@ pub fn build_common_candidate_box_state(
 ) -> CandidateBoxState {
     use waylan_core::{Candidate, ExpandedCardState};
 
-    let core_candidates: Vec<Candidate> = engine
-        .candidates()
-        .iter()
-        .map(|c| Candidate {
-            text: c.text.clone(),
-            pinyin: c.pinyin.clone(),
-            score: c.score,
-            is_expandable: c.is_expandable,
-            sub_candidates: c.sub_candidates.clone(),
-        })
-        .collect();
+    let core_candidates: Vec<Candidate> = engine.candidates().iter().map(Candidate::from).collect();
 
     let grid_candidates: Vec<Candidate> = if is_grid_expanded {
         engine
             .all_candidates()
             .iter()
             .take(30)
-            .map(|c| Candidate {
-                text: c.text.clone(),
-                pinyin: c.pinyin.clone(),
-                score: c.score,
-                is_expandable: c.is_expandable,
-                sub_candidates: c.sub_candidates.clone(),
-            })
+            .map(Candidate::from)
             .collect()
     } else {
         Vec::new()
