@@ -30,7 +30,10 @@ pub use custom_phrase::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestio
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;
-pub use session::{extract_surrounding_prefix, ImeAction, ImeCoreSession, ShortcutToggleAction};
+pub use session::{
+    extract_surrounding_prefix, ImeAction, ImeCoreSession, KeyProcessContext, KeyProcessResult,
+    ShortcutToggleAction,
+};
 pub use table::{CompactMmapLexicon, LexiconTable};
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 pub use user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};

@@ -5,19 +5,19 @@
 //!   CapsLock 截断提交、中英 Shift 模式切换与智能成对标点处理上的样板代码重复。
 //! - **核心优势**：纯逻辑抽象，零特定协议依赖；单一状态真实源（Single Source of Truth）；
 //!   多协议端共享相同业务输入法决策，彻底规避平台行为不一致与维护失步。
-//! - **代价与局限**：协议适配层需消费本模块产出的 [`ImeAction`] 动作并映射为各协议具体调用，
+//! - **代价与局限**：协议适配层需消费本模块产出的 [`ImeAction`] 或 [`KeyProcessResult`] 动作，
 //!   增加了单层轻量结果解构，但彻底隔绝了平台底层对复杂打字业务逻辑的污染。
 
-use crate::composition::{
-    handle_composition_key_with_params, CompositionKeyParams, KeyProcessAction,
-};
+mod dispatch;
+#[cfg(test)]
+mod tests;
+
+pub use dispatch::{KeyProcessContext, KeyProcessResult};
+
 use crate::engine::AlgoEngine;
 use crate::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_core::input::*;
-use waylan_core::{
-    to_full_width_char, to_full_width_string, FullWidthCharShortcut, FullWidthPunctShortcut,
-    InputMode, TextAction, TraditionalShortcut,
-};
+use waylan_core::{FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TraditionalShortcut};
 
 /// 全局模式与功能快捷键切换动作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,151 +275,6 @@ impl ImeCoreSession {
 
         None
     }
-
-    /// 处理核心按键按下事件，返回统一会话决策 ImeAction
-    pub fn handle_key_press(
-        &mut self,
-        keycode: u32,
-        now: u64,
-        context_surrounding: Option<&str>,
-    ) -> ImeAction {
-        // 0. 全局模式与功能快捷键优先捕获
-        if let Some(toggle) = self.handle_global_shortcuts(keycode) {
-            return ImeAction::ShortcutToggled(toggle);
-        }
-
-        // 英文模式、CapsLock 锁定或按住 Ctrl/Alt 时一律原生透传
-        if self.is_caps_locked() || self.has_ctrl_or_alt() {
-            return ImeAction::PassThrough;
-        }
-
-        // 若处于英文模式但开启了全角字符，直通字母转换为全角字符输出
-        if self.mode == InputMode::English {
-            if self.full_width_char && !self.is_shift_active() {
-                if let Some(ch) = self.keymap_layout.get_char(keycode) {
-                    let full = to_full_width_char(ch);
-                    return ImeAction::Commit(full.to_string());
-                }
-            }
-            return ImeAction::PassThrough;
-        }
-
-        // 1. 若处于拼音组词状态，优先流转拼音状态机
-        if !self.engine.raw_input().is_empty() {
-            let params = CompositionKeyParams {
-                key: keycode,
-                shift_active: self.is_shift_active(),
-                page_keys: self.page_keys,
-                now,
-            };
-            if let Some(action) = handle_composition_key_with_params(
-                &mut self.engine,
-                &mut self.punctuation_processor,
-                params,
-            ) {
-                return match action {
-                    KeyProcessAction::PassThrough => ImeAction::PassThrough,
-                    KeyProcessAction::Handled => ImeAction::Handled,
-                    KeyProcessAction::ExpandGrid => ImeAction::ExpandGrid,
-                    KeyProcessAction::Commit(text) => {
-                        let final_text = if self.full_width_char {
-                            to_full_width_string(&text)
-                        } else {
-                            text
-                        };
-                        ImeAction::Commit(final_text)
-                    }
-                    KeyProcessAction::CommitPartial {
-                        committed,
-                        remaining_preedit,
-                    } => {
-                        let final_committed = if self.full_width_char {
-                            to_full_width_string(&committed)
-                        } else {
-                            committed
-                        };
-                        ImeAction::CommitPartial {
-                            committed: final_committed,
-                            remaining_preedit,
-                        }
-                    }
-                    KeyProcessAction::Reset => ImeAction::Reset,
-                };
-            }
-        }
-
-        // 2. 若输入缓冲区为空（空闲输入），拦截并处理智能标点
-        if self.engine.raw_input().is_empty() {
-            // 空闲下的退格与空格保持透传
-            if keycode == KEY_BACKSPACE || keycode == KEY_SPACE {
-                return ImeAction::PassThrough;
-            }
-
-            // 检查标点符号映射
-            if let Some(punct_char) =
-                keycode_to_punctuation_with_shift(keycode, self.is_shift_active())
-            {
-                let actions_opt = match context_surrounding {
-                    Some(ctx) => self
-                        .punctuation_processor
-                        .process_punctuation_with_context(punct_char, ctx),
-                    None => self.punctuation_processor.process_punctuation(punct_char),
-                };
-                if let Some(actions) = actions_opt {
-                    let mut commit_str = String::new();
-                    let mut cursor_offset = 0;
-                    for act in actions {
-                        match act {
-                            TextAction::Commit(t) => {
-                                self.punctuation_processor.record_commit(&t);
-                                commit_str.push_str(&t);
-                            }
-                            TextAction::MoveCursor(off) => {
-                                cursor_offset += off;
-                            }
-                            _ => {}
-                        }
-                    }
-                    if !commit_str.is_empty() {
-                        let final_commit = if self.full_width_char {
-                            to_full_width_string(&commit_str)
-                        } else {
-                            commit_str
-                        };
-                        if cursor_offset != 0 {
-                            return ImeAction::CommitPunctuation {
-                                text: final_commit,
-                                cursor_offset,
-                            };
-                        } else {
-                            return ImeAction::Commit(final_commit);
-                        }
-                    }
-                }
-            }
-
-            // 空闲下的数字按键记录上下文（用于小数点等数字语境智能半角判定）
-            if !self.is_shift_active() {
-                if let Some(digit_ch) = keycode_to_ascii_digit_char(keycode) {
-                    self.punctuation_processor
-                        .record_commit(&digit_ch.to_string());
-                    if self.full_width_char {
-                        let full = to_full_width_char(digit_ch);
-                        return ImeAction::Commit(full.to_string());
-                    }
-                    return ImeAction::PassThrough;
-                }
-            }
-        }
-
-        // 3. 拼音字母键录入
-        if let Some(ch) = self.keymap_layout.get_char(keycode) {
-            self.engine.push_char(ch);
-            return ImeAction::Handled;
-        }
-
-        ImeAction::PassThrough
-    }
 }
 
 /// 从周围文本元组 (text, cursor, anchor) 中安全提取光标前至多 `max_bytes` 字节的上下文切片
@@ -439,106 +294,4 @@ pub fn extract_surrounding_prefix(
         start_idx += 1;
     }
     Some(&text[start_idx..cursor_idx])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::table::LexiconTable;
-    use crate::types::AlgoConfig;
-
-    fn make_test_session() -> ImeCoreSession {
-        let engine = AlgoEngine::new(LexiconTable::with_sample_data(), AlgoConfig::default());
-        ImeCoreSession::new(engine)
-    }
-
-    #[test]
-    fn test_ime_core_session_input_and_commit() {
-        let mut session = make_test_session();
-        // 键入 "ni" (扫描码 49, 23)
-        let act1 = session.handle_key_press(49, 1000, None);
-        assert_eq!(act1, ImeAction::Handled);
-        let act2 = session.handle_key_press(23, 1001, None);
-        assert_eq!(act2, ImeAction::Handled);
-        assert_eq!(session.engine.raw_input(), "ni");
-
-        // 空格确认首选词 "你"
-        let act_space = session.handle_key_press(KEY_SPACE, 1002, None);
-        assert_eq!(act_space, ImeAction::Commit("你".to_string()));
-        assert!(session.engine.raw_input().is_empty());
-    }
-
-    #[test]
-    fn test_ime_core_session_capslock_commit_raw() {
-        let mut session = make_test_session();
-        session.handle_key_press(49, 1000, None);
-        session.handle_key_press(23, 1001, None);
-        assert_eq!(session.engine.raw_input(), "ni");
-
-        // 按下 CapsLock，应立即提交原拼音 "ni"
-        let (consumed, committed) = session.handle_capslock(true);
-        assert!(!consumed);
-        assert_eq!(committed.as_deref(), Some("ni"));
-        assert!(session.engine.raw_input().is_empty());
-    }
-
-    #[test]
-    fn test_ime_core_session_idle_punctuation() {
-        let mut session = make_test_session();
-        // 空闲状态下按逗号 (KEY_COMMA: 51)
-        let act = session.handle_key_press(51, 1000, None);
-        assert_eq!(act, ImeAction::Commit("，".to_string()));
-    }
-
-    #[test]
-    fn test_ime_core_session_shortcuts() {
-        let mut session = make_test_session();
-        // 模拟按下 Ctrl + Shift
-        session.set_modifiers(MOD_CTRL | MOD_SHIFT, 0);
-
-        // 按 F 键触发简繁切换 (默认配置为 CtrlShiftF)
-        let act = session.handle_key_press(KEY_F, 1000, None);
-        assert_eq!(
-            act,
-            ImeAction::ShortcutToggled(ShortcutToggleAction::Traditional(true))
-        );
-        assert!(session.engine.config.traditional_chinese);
-
-        // 再次按下反转回简体
-        let act2 = session.handle_key_press(KEY_F, 1001, None);
-        assert_eq!(
-            act2,
-            ImeAction::ShortcutToggled(ShortcutToggleAction::Traditional(false))
-        );
-        assert!(!session.engine.config.traditional_chinese);
-
-        // 模拟单独按住 Ctrl (无 Shift)
-        session.set_modifiers(MOD_CTRL, 0);
-        // 按句号 . 触发标点全半角切换 (默认 CtrlPeriod)
-        let act_punct = session.handle_key_press(KEY_DOT, 1002, None);
-        assert_eq!(
-            act_punct,
-            ImeAction::ShortcutToggled(ShortcutToggleAction::FullWidthPunct(false))
-        );
-        assert!(!session.punctuation_processor.full_width_punct);
-    }
-
-    #[test]
-    fn test_ime_core_session_full_width_char() {
-        let mut session = make_test_session();
-        session.set_full_width_char(true);
-        session.mode = InputMode::English;
-
-        // 英文模式下键入 'a' (扫描码 30)
-        let act = session.handle_key_press(30, 1000, None);
-        assert_eq!(act, ImeAction::Commit("ａ".to_string()));
-    }
-
-    #[test]
-    fn test_extract_surrounding_prefix_safety() {
-        let text = "你好，世界！abc".to_string();
-        let surrounding = (text, 15, 15); // "你好，世界！" 占用 18 字节，15 字节在 "界" 的中间或边界
-        let prefix = extract_surrounding_prefix(Some(&surrounding), 64);
-        assert!(prefix.is_some());
-    }
 }

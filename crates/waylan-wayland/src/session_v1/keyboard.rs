@@ -1,10 +1,12 @@
+//! V1 协议键盘事件分发与协议交互实现
+
 use std::fs::File;
 use std::io::Read;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::debug;
-use waylan_algo::ImeAction;
+use waylan_algo::{KeyProcessContext, KeyProcessResult};
 use waylan_core::input::*;
 use waylan_core::InputMode;
 use waylan_voice::VoiceKeyAction;
@@ -25,65 +27,6 @@ fn handle_v1_keymap(state: &mut WaylanV1Session, fd: std::os::fd::OwnedFd, size:
             .keymap_layout
             .update_from_xkb_text(text.trim_end_matches('\0'));
         debug!("[Wayland v1 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
-    }
-}
-
-/// 处理 CapsLock 按键事件并在有拼音未上屏时提交英文字符
-fn handle_v1_capslock(
-    state: &mut WaylanV1Session,
-    context: &ZwpInputMethodContextV1,
-    serial: u32,
-    time: u32,
-    key: u32,
-    is_press: bool,
-) {
-    let (was_consumed, committed) = state.core.handle_capslock(is_press);
-    if let Some(raw) = committed {
-        state.hide_candidate_surface();
-        context.commit_string(state.commit_serial, raw);
-        context.preedit_string(state.commit_serial, String::new(), String::new());
-    }
-    if is_press {
-        context.key(serial, time, key, 1);
-    } else if !was_consumed {
-        context.key(serial, time, key, 0);
-    }
-}
-
-/// 处理按键释放阶段的 Shift/Ctrl 状态机模式切换
-fn handle_v1_key_release(
-    state: &mut WaylanV1Session,
-    context: &ZwpInputMethodContextV1,
-    serial: u32,
-    time: u32,
-    key: u32,
-) {
-    let (was_press_consumed, toggled_mode, committed) = state.core.handle_key_release(key);
-    if let Some(new_mode) = toggled_mode {
-        if let Some(ref zh_flag) = state.shared_is_chinese {
-            zh_flag.store(
-                matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                Ordering::Release,
-            );
-        }
-        if let Some(ref notify_tx) = state.mode_notify_tx {
-            let _ = notify_tx.try_send(());
-        }
-        let mode_str = match new_mode {
-            InputMode::Chinese => "中文",
-            InputMode::English => "英文",
-            InputMode::VMode => "V模式",
-        };
-        debug!("[微澜] 切换输入模式为：{}", mode_str);
-
-        if let Some(raw) = committed {
-            state.hide_candidate_surface();
-            context.commit_string(state.commit_serial, raw);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-        }
-    }
-    if !was_press_consumed {
-        context.key(serial, time, key, 0);
     }
 }
 
@@ -111,38 +54,123 @@ fn handle_v1_modifiers(
     context.modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
 }
 
-/// 处理 V1 协议下的按键按下事件，返回该按键是否被输入法内部消费（true=已消费，false=需原样透传给客户端）
-fn handle_v1_key_press(
+/// 统一分发 V1 键盘按键事件
+fn handle_v1_key_event(
     state: &mut WaylanV1Session,
     context: &ZwpInputMethodContextV1,
     serial: u32,
     time: u32,
     key: u32,
-) -> bool {
+    is_press: bool,
+) {
+    // 1. 统一语音按键状态机优先分发（与 IBus 体验对齐）
+    if let Some(ref mut vm) = state.voice_manager {
+        match vm.handle_key_event(key, is_press, state.core.mods_depressed()) {
+            VoiceKeyAction::Consumed => {
+                if is_press {
+                    state.consumed_keys.record_press(key, true);
+                } else {
+                    state.consumed_keys.take_release(key);
+                }
+                state.refresh_candidate_surface();
+                return;
+            }
+            VoiceKeyAction::Commit(text) => {
+                context.commit_string(state.commit_serial, text.clone());
+                context.preedit_string(state.commit_serial, String::new(), String::new());
+                state.punctuation_processor.record_commit(&text);
+                state.hide_candidate_surface();
+                if is_press {
+                    state.consumed_keys.record_press(key, true);
+                } else {
+                    state.consumed_keys.take_release(key);
+                }
+                return;
+            }
+            VoiceKeyAction::PassThrough => {}
+        }
+    }
+
+    // 2. 外部快捷键拦截器优先捕获
+    if let Some(mut filter) = state.key_filter.take() {
+        let filter_outcome = filter(key, is_press, state.core.mods_depressed());
+        state.key_filter = Some(filter);
+        match filter_outcome {
+            crate::session_common::KeyFilterResult::Consumed => {
+                if is_press {
+                    state.consumed_keys.record_press(key, true);
+                } else {
+                    state.consumed_keys.take_release(key);
+                }
+                return;
+            }
+            crate::session_common::KeyFilterResult::Commit(text) => {
+                context.commit_string(state.commit_serial, text.clone());
+                context.preedit_string(state.commit_serial, String::new(), String::new());
+                state.punctuation_processor.record_commit(&text);
+                state.hide_candidate_surface();
+                if is_press {
+                    state.consumed_keys.record_press(key, true);
+                } else {
+                    state.consumed_keys.take_release(key);
+                }
+                return;
+            }
+            crate::session_common::KeyFilterResult::PassThrough => {}
+        }
+    }
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let action = state.core.handle_key_press(key, now, None);
-    match action {
-        ImeAction::PassThrough => false,
-        ImeAction::Handled | ImeAction::ExpandGrid => {
+    // 3. 调用统一核心会话决策流水线
+    let result = state.core.process_key(
+        KeyProcessContext {
+            keycode: key,
+            is_press,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        now,
+    );
+
+    // 4. 将决策结果映射为 V1 协议操作
+    match result {
+        KeyProcessResult::PassThrough => {
+            context.key(serial, time, key, if is_press { 1 } else { 0 });
+        }
+        KeyProcessResult::Handled { update_ui } => {
+            if update_ui {
+                let preedit = state.engine.formatted_preedit();
+                let cursor = state.engine.formatted_cursor_byte_offset() as i32;
+                state.refresh_candidate_surface();
+                context.preedit_cursor(cursor);
+                context.preedit_string(state.commit_serial, preedit, String::new());
+            }
+        }
+        KeyProcessResult::ExpandGrid => {
             let preedit = state.engine.formatted_preedit();
             let cursor = state.engine.formatted_cursor_byte_offset() as i32;
             state.refresh_candidate_surface();
             context.preedit_cursor(cursor);
             context.preedit_string(state.commit_serial, preedit, String::new());
-            true
         }
-        ImeAction::Commit(text) => {
+        KeyProcessResult::Commit(text) => {
             state.hide_candidate_surface();
             context.commit_string(state.commit_serial, text);
             context.preedit_cursor(0);
             context.preedit_string(state.commit_serial, String::new(), String::new());
-            true
         }
-        ImeAction::CommitPunctuation {
+        KeyProcessResult::CommitAndPassThrough(text) => {
+            state.hide_candidate_surface();
+            context.commit_string(state.commit_serial, text);
+            context.preedit_cursor(0);
+            context.preedit_string(state.commit_serial, String::new(), String::new());
+            context.key(serial, time, key, if is_press { 1 } else { 0 });
+        }
+        KeyProcessResult::CommitPunctuation {
             text,
             cursor_offset,
         } => {
@@ -156,9 +184,8 @@ fn handle_v1_key_press(
                 context.key(serial, time, dir_key, 1);
                 context.key(serial, time, dir_key, 0);
             }
-            true
         }
-        ImeAction::CommitPartial {
+        KeyProcessResult::CommitPartial {
             committed,
             remaining_preedit,
         } => {
@@ -167,20 +194,47 @@ fn handle_v1_key_press(
             state.refresh_candidate_surface();
             context.preedit_cursor(cursor);
             context.preedit_string(state.commit_serial, remaining_preedit, String::new());
-            true
         }
-        ImeAction::Reset => {
+        KeyProcessResult::Reset => {
             state.hide_candidate_surface();
             context.preedit_cursor(0);
             context.preedit_string(state.commit_serial, String::new(), String::new());
-            true
         }
-        ImeAction::ShortcutToggled(_toggle) => {
+        KeyProcessResult::ShortcutToggled(_toggle) => {
             if let Some(ref notify_tx) = state.mode_notify_tx {
                 let _ = notify_tx.try_send(());
             }
             state.refresh_candidate_surface();
-            true
+        }
+        KeyProcessResult::ModeChanged {
+            new_mode,
+            committed,
+            was_consumed,
+        } => {
+            if let Some(ref zh_flag) = state.shared_is_chinese {
+                zh_flag.store(
+                    matches!(new_mode, InputMode::Chinese | InputMode::VMode),
+                    Ordering::Release,
+                );
+            }
+            if let Some(ref notify_tx) = state.mode_notify_tx {
+                let _ = notify_tx.try_send(());
+            }
+            let mode_str = match new_mode {
+                InputMode::Chinese => "中文",
+                InputMode::English => "英文",
+                InputMode::VMode => "V模式",
+            };
+            debug!("[微澜] 切换输入模式为：{}", mode_str);
+
+            if let Some(raw) = committed {
+                state.hide_candidate_surface();
+                context.commit_string(state.commit_serial, raw);
+                context.preedit_string(state.commit_serial, String::new(), String::new());
+            }
+            if !was_consumed {
+                context.key(serial, time, key, 0);
+            }
         }
     }
 }
@@ -214,88 +268,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
             } => {
                 state.current_serial = serial;
                 let is_press = matches!(key_state, WEnum::Value(KeyState::Pressed));
-                state.update_modifier_by_key(key, is_press);
-
-                // 统一语音按键状态机优先分发（与 IBus 体验对齐）
-                if let Some(ref mut vm) = state.voice_manager {
-                    match vm.handle_key_event(key, is_press, state.core.mods_depressed()) {
-                        VoiceKeyAction::Consumed => {
-                            if is_press {
-                                state.consumed_keys.record_press(key, true);
-                            } else {
-                                state.consumed_keys.take_release(key);
-                            }
-                            state.refresh_candidate_surface();
-                            return;
-                        }
-                        VoiceKeyAction::Commit(text) => {
-                            context.commit_string(state.commit_serial, text.clone());
-                            context.preedit_string(
-                                state.commit_serial,
-                                String::new(),
-                                String::new(),
-                            );
-                            state.punctuation_processor.record_commit(&text);
-                            state.hide_candidate_surface();
-                            if is_press {
-                                state.consumed_keys.record_press(key, true);
-                            } else {
-                                state.consumed_keys.take_release(key);
-                            }
-                            return;
-                        }
-                        VoiceKeyAction::PassThrough => {}
-                    }
-                }
-
-                // 外部快捷键拦截器优先捕获
-                if let Some(mut filter) = state.key_filter.take() {
-                    let filter_outcome = filter(key, is_press, state.core.mods_depressed());
-                    state.key_filter = Some(filter);
-                    match filter_outcome {
-                        crate::session_common::KeyFilterResult::Consumed => {
-                            if is_press {
-                                state.consumed_keys.record_press(key, true);
-                            } else {
-                                state.consumed_keys.take_release(key);
-                            }
-                            return;
-                        }
-                        crate::session_common::KeyFilterResult::Commit(text) => {
-                            context.commit_string(state.commit_serial, text.clone());
-                            context.preedit_string(
-                                state.commit_serial,
-                                String::new(),
-                                String::new(),
-                            );
-                            state.punctuation_processor.record_commit(&text);
-                            state.hide_candidate_surface();
-                            if is_press {
-                                state.consumed_keys.record_press(key, true);
-                            } else {
-                                state.consumed_keys.take_release(key);
-                            }
-                            return;
-                        }
-                        crate::session_common::KeyFilterResult::PassThrough => {}
-                    }
-                }
-
-                if key == KEY_CAPSLOCK {
-                    handle_v1_capslock(state, &context, serial, time, key, is_press);
-                    return;
-                }
-
-                if !is_press {
-                    handle_v1_key_release(state, &context, serial, time, key);
-                    return;
-                }
-
-                let consumed = handle_v1_key_press(state, &context, serial, time, key);
-                state.consumed_keys.record_press(key, consumed);
-                if !consumed {
-                    context.key(serial, time, key, 1);
-                }
+                handle_v1_key_event(state, &context, serial, time, key, is_press);
             }
             KeyboardEvent::Modifiers {
                 serial,

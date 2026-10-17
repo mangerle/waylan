@@ -1,14 +1,18 @@
-//! IBus 按键事件核心分发与状态流转
+//! IBus 按键事件核心分发与协议适配
 //!
 //! # 设计原理
-//! - **实现初衷**：将归一化后的 evdev 扫描码分发给密码模式过滤、CapsLock、快捷键、组词中输入与标点处理器。
-//! - **核心优势**：职责高度分离，每个按键处理分支单一清晰，遵循“微秒级纯内存处理”准则。
-//! - **代价与局限**：对多修饰键组合需统一通过 update_modifier_masks 状态跟踪。
+//! - **实现初衷**：将 IBus 协议层传入的 (keyval, keycode, state) 转换为标准 evdev 扫描码，
+//!   委托统一的 [`ImeCoreSession::process_key`] 决策流水线处理，并将统一响应映射为 IBus 上屏与 D-Bus 信号。
+//! - **核心优势**：彻底消除 IBus 与 Wayland 端按键处理逻辑的不一致，使 IBus 端降级为纯粹的协议转接器；
+//!   密码框保护、CapsLock 截断提交、中英模式切换与全局快捷键全部由核心状态机单一真实源驱动。
+//! - **代价与局限**：需将 X11 修饰键状态位映射至统一修饰键位掩码。
 
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use waylan_algo::{extract_surrounding_prefix, ImeAction, ShortcutToggleAction};
+use waylan_algo::{
+    extract_surrounding_prefix, KeyProcessContext, KeyProcessResult, ShortcutToggleAction,
+};
 use waylan_core::input::modifiers::update_modifier_masks;
 use waylan_core::input::*;
 use waylan_core::InputMode;
@@ -21,64 +25,6 @@ use super::keyval::{
 };
 
 impl IbusSessionCore {
-    /// 检查并处理系统锁屏或密码输入框状态下的按键直通逻辑
-    pub(crate) fn handle_lock_or_password_state(
-        &mut self,
-        evdev_key: u32,
-        is_press: bool,
-    ) -> Option<IbusKeyOutcome> {
-        if !self.is_screen_locked && !self.is_password_context {
-            return None;
-        }
-        self.core.shift_sm.reset();
-        if !is_press {
-            let was_consumed = self.core.consumed_keys.take_release(evdev_key);
-            return Some(IbusKeyOutcome {
-                consumed: was_consumed,
-                ..Default::default()
-            });
-        }
-        self.core.consumed_keys.record_press(evdev_key, false);
-        Some(IbusKeyOutcome::default())
-    }
-
-    /// 处理 CapsLock 键按下与释放状态变迁
-    pub(crate) fn handle_capslock_event(
-        &mut self,
-        _evdev_key: u32,
-        is_press: bool,
-    ) -> IbusKeyOutcome {
-        self.core.shift_sm.reset();
-        if is_press {
-            let (was_consumed, committed) = self.core.handle_capslock(true);
-            let next_locked = !self.is_caps_locked;
-            self.update_caps_lock_state(next_locked);
-
-            let mut outcome = IbusKeyOutcome {
-                consumed: was_consumed,
-                commit_text: committed,
-                update_ui: true,
-                ..Default::default()
-            };
-
-            if self.core.mode != InputMode::English {
-                let effective_mode = if next_locked {
-                    InputMode::English
-                } else {
-                    self.core.mode
-                };
-                outcome.mode_changed = Some(effective_mode);
-            }
-            outcome
-        } else {
-            let (was_consumed, _) = self.core.handle_capslock(false);
-            IbusKeyOutcome {
-                consumed: was_consumed,
-                ..Default::default()
-            }
-        }
-    }
-
     /// 统一调用 VoiceInteractionManager 处理语音按键交互（启动、停止、断句、取消）
     pub(crate) fn handle_voice_key(
         &mut self,
@@ -131,24 +77,14 @@ impl IbusSessionCore {
         self.sync_shared_settings();
         let is_press = (state & IBUS_RELEASE_MASK) == 0;
         let evdev_key = ibus_keyval_to_evdev(keyval, keycode);
+
+        // 同步物理修饰键与事件修饰键掩码
         update_modifier_masks(
             &mut self.core.modifiers.depressed,
             &mut self.phys_mods,
             evdev_key,
             is_press,
         );
-
-        if let Some(outcome) = self.handle_lock_or_password_state(evdev_key, is_press) {
-            return outcome;
-        }
-
-        if evdev_key == KEY_CAPSLOCK {
-            return self.handle_capslock_event(evdev_key, is_press);
-        }
-
-        if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked {
-            self.update_caps_lock_state(true);
-        }
 
         let mut event_mods = self.core.modifiers.depressed;
         if (state & IBUS_SHIFT_MASK) != 0 {
@@ -164,22 +100,13 @@ impl IbusSessionCore {
             event_mods |= MOD_SUPER;
         }
 
-        if !is_press {
-            if let Some(outcome) = self.handle_voice_key(evdev_key, false, event_mods) {
-                return outcome;
-            }
-            return self.handle_key_release(evdev_key);
+        // 同步外部状态指示的 CapsLock 锁定标志
+        if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked {
+            self.update_caps_lock_state(true);
         }
 
-        if self.is_caps_locked {
-            self.core.shift_sm.reset();
-        } else {
-            self.core
-                .shift_sm
-                .on_key_event(evdev_key, true, self.core.mode);
-        }
-
-        if let Some(voice_outcome) = self.handle_voice_key(evdev_key, true, event_mods) {
+        // 语音听写优先拦截
+        if let Some(voice_outcome) = self.handle_voice_key(evdev_key, is_press, event_mods) {
             return voice_outcome;
         }
 
@@ -192,31 +119,64 @@ impl IbusSessionCore {
 
         let saved_mods = self.core.modifiers.depressed;
         self.core.modifiers.depressed = event_mods;
-        let action = self.core.handle_key_press(evdev_key, now, surrounding_ctx);
+        let result = self.core.process_key(
+            KeyProcessContext {
+                keycode: evdev_key,
+                is_press,
+                is_password_or_locked: self.is_screen_locked || self.is_password_context,
+                surrounding_prefix: surrounding_ctx,
+            },
+            now,
+        );
         self.core.modifiers.depressed = saved_mods;
 
-        let outcome = match action {
-            ImeAction::PassThrough => IbusKeyOutcome {
+        // CapsLock 按下时同步切换桌面环境的锁定状态指示并通知模式指示
+        let mut caps_mode_changed = None;
+        if evdev_key == KEY_CAPSLOCK && is_press {
+            let next_locked = !self.is_caps_locked;
+            self.update_caps_lock_state(next_locked);
+            if self.core.mode != InputMode::English {
+                let effective_mode = if next_locked {
+                    InputMode::English
+                } else {
+                    self.core.mode
+                };
+                caps_mode_changed = Some(effective_mode);
+            }
+        }
+
+        // 将统一按键决策结果映射为 IBus 输出
+        match result {
+            KeyProcessResult::PassThrough => IbusKeyOutcome {
                 consumed: false,
+                mode_changed: caps_mode_changed,
+                update_ui: caps_mode_changed.is_some(),
                 ..Default::default()
             },
-            ImeAction::Handled => IbusKeyOutcome {
+            KeyProcessResult::Handled { update_ui } => IbusKeyOutcome {
+                consumed: true,
+                update_ui,
+                ..Default::default()
+            },
+            KeyProcessResult::ExpandGrid => IbusKeyOutcome {
                 consumed: true,
                 update_ui: true,
                 ..Default::default()
             },
-            ImeAction::ExpandGrid => IbusKeyOutcome {
-                consumed: true,
-                update_ui: true,
-                ..Default::default()
-            },
-            ImeAction::Commit(text) => IbusKeyOutcome {
+            KeyProcessResult::Commit(text) => IbusKeyOutcome {
                 consumed: true,
                 commit_text: Some(text),
                 update_ui: true,
                 ..Default::default()
             },
-            ImeAction::CommitPunctuation {
+            KeyProcessResult::CommitAndPassThrough(text) => IbusKeyOutcome {
+                consumed: false,
+                commit_text: Some(text),
+                mode_changed: caps_mode_changed,
+                update_ui: true,
+                ..Default::default()
+            },
+            KeyProcessResult::CommitPunctuation {
                 text,
                 cursor_offset,
             } => IbusKeyOutcome {
@@ -226,18 +186,18 @@ impl IbusSessionCore {
                 update_ui: true,
                 ..Default::default()
             },
-            ImeAction::CommitPartial { committed, .. } => IbusKeyOutcome {
+            KeyProcessResult::CommitPartial { committed, .. } => IbusKeyOutcome {
                 consumed: true,
                 commit_text: Some(committed),
                 update_ui: true,
                 ..Default::default()
             },
-            ImeAction::Reset => IbusKeyOutcome {
+            KeyProcessResult::Reset => IbusKeyOutcome {
                 consumed: true,
                 update_ui: true,
                 ..Default::default()
             },
-            ImeAction::ShortcutToggled(toggle) => {
+            KeyProcessResult::ShortcutToggled(toggle) => {
                 match toggle {
                     ShortcutToggleAction::Traditional(trad) => {
                         if let Some(ref flag) = self.shared_traditional_chinese {
@@ -264,48 +224,28 @@ impl IbusSessionCore {
                     ..Default::default()
                 }
             }
-        };
-
-        self.core
-            .consumed_keys
-            .record_press(evdev_key, outcome.consumed);
-        outcome
-    }
-
-    /// 处理按键释放阶段（含 Shift/Ctrl 防误触中英文切换判定）
-    pub(crate) fn handle_key_release(&mut self, evdev_key: u32) -> IbusKeyOutcome {
-        if self.is_caps_locked {
-            self.core.shift_sm.reset();
-            let was_press_consumed = self.core.consumed_keys.take_release(evdev_key);
-            return IbusKeyOutcome {
-                consumed: was_press_consumed,
-                ..Default::default()
-            };
-        }
-
-        let (was_press_consumed, toggled_mode, committed) = self.core.handle_key_release(evdev_key);
-        let mut outcome = IbusKeyOutcome {
-            consumed: was_press_consumed,
-            ..Default::default()
-        };
-
-        if let Some(new_mode) = toggled_mode {
-            self.core.mode = new_mode;
-            outcome.mode_changed = Some(new_mode);
-            if let Some(ref zh_flag) = self.shared_is_chinese {
-                zh_flag.store(
-                    matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                    Ordering::Release,
-                );
-            }
-            if let Some(ref notify_tx) = self.mode_notify_tx {
-                let _ = notify_tx.try_send(());
-            }
-            if let Some(raw) = committed {
-                outcome.commit_text = Some(raw);
-                outcome.update_ui = true;
+            KeyProcessResult::ModeChanged {
+                new_mode,
+                committed,
+                was_consumed,
+            } => {
+                if let Some(ref zh_flag) = self.shared_is_chinese {
+                    zh_flag.store(
+                        matches!(new_mode, InputMode::Chinese | InputMode::VMode),
+                        Ordering::Release,
+                    );
+                }
+                if let Some(ref notify_tx) = self.mode_notify_tx {
+                    let _ = notify_tx.try_send(());
+                }
+                IbusKeyOutcome {
+                    consumed: was_consumed,
+                    mode_changed: Some(new_mode),
+                    commit_text: committed,
+                    update_ui: true,
+                    ..Default::default()
+                }
             }
         }
-        outcome
     }
 }
