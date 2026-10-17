@@ -108,13 +108,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     info!("============================================================");
 
     let cfg = AppConfig::load_or_create();
-    let theme = match cfg.theme {
-        ThemeMode::Light => UiTheme::light(),
-        ThemeMode::Dark => UiTheme::dark(),
-    };
-    let mut renderer = CandidateBoxRenderer::new(theme);
-    renderer.font_size = cfg.font_size;
-
     let Some(mut engine) = build_algo_engine(&cfg, &coordinator)? else {
         return Ok(());
     };
@@ -152,6 +145,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             coordinator,
         })
     } else {
+        let theme = match cfg.theme {
+            ThemeMode::Light => UiTheme::light(),
+            ThemeMode::Dark => UiTheme::dark(),
+        };
+        let mut renderer = CandidateBoxRenderer::new(theme);
+        renderer.font_size = cfg.font_size;
+
         dispatch_wayland_session(WaylandDispatchOptions {
             engine,
             renderer,
