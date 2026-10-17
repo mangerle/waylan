@@ -29,38 +29,7 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     let current_cfg_cell = loaded_config.clone();
     window.on_import_asr_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            if let Some(src_path) =
-                pick_directory_dialog("请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)")
-            {
-                if let Some(imported_path) = waylan_voice::import_asr_model_from_dir(&src_path) {
-                    let name = imported_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    let mut cfg = current_cfg_cell.borrow().clone();
-                    update_config_from_window(&win, &mut cfg);
-                    cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
-                    match cfg.save_default() {
-                        Ok(()) => {
-                            *current_cfg_cell.borrow_mut() = cfg.clone();
-                            sync_config_to_window(&win, &cfg);
-                            win.set_global_status_is_error(false);
-                            win.set_global_status(SharedString::from(format!(
-                                "成功导入 ASR 模型: {}",
-                                name
-                            )));
-                        }
-                        Err(e) => {
-                            win.set_global_status_is_error(true);
-                            win.set_global_status(SharedString::from(format!(
-                                "保存 ASR 模型配置失败: {}",
-                                e
-                            )));
-                        }
-                    }
-                }
-            }
+            handle_import_asr_model(&win, &current_cfg_cell);
         }
     });
 
@@ -68,43 +37,16 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     let current_cfg_cell = loaded_config.clone();
     window.on_import_vad_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            if let Some(src_path) = pick_file_dialog(
+            handle_import_onnx_model(
+                &win,
+                &current_cfg_cell,
+                ModelSubdirectory::Vad,
                 "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
-                "ONNX 神经网络模型 (*.onnx)",
-                "*.onnx",
-            ) {
-                if let Some(imported_path) =
-                    import_onnx_model_from_file(ModelSubdirectory::Vad, &src_path)
-                {
-                    let name = imported_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    let mut cfg = current_cfg_cell.borrow().clone();
-                    update_config_from_window(&win, &mut cfg);
-                    cfg.voice.vad.model_path = Some(imported_path.to_string_lossy().to_string());
+                |cfg, path| {
+                    cfg.voice.vad.model_path = Some(path.to_string());
                     cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
-                    match cfg.save_default() {
-                        Ok(()) => {
-                            *current_cfg_cell.borrow_mut() = cfg.clone();
-                            sync_config_to_window(&win, &cfg);
-                            win.set_global_status_is_error(false);
-                            win.set_global_status(SharedString::from(format!(
-                                "成功导入 VAD 模型: {}",
-                                name
-                            )));
-                        }
-                        Err(e) => {
-                            win.set_global_status_is_error(true);
-                            win.set_global_status(SharedString::from(format!(
-                                "保存 VAD 模型配置失败: {}",
-                                e
-                            )));
-                        }
-                    }
-                }
-            }
+                },
+            );
         }
     });
 
@@ -112,42 +54,15 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     let current_cfg_cell = loaded_config.clone();
     window.on_import_punct_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            if let Some(src_path) = pick_file_dialog(
+            handle_import_onnx_model(
+                &win,
+                &current_cfg_cell,
+                ModelSubdirectory::Punct,
                 "请选择要导入的标点符号预测模型文件 (.onnx)",
-                "ONNX 神经网络模型 (*.onnx)",
-                "*.onnx",
-            ) {
-                if let Some(imported_path) =
-                    import_onnx_model_from_file(ModelSubdirectory::Punct, &src_path)
-                {
-                    let name = imported_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    let mut cfg = current_cfg_cell.borrow().clone();
-                    update_config_from_window(&win, &mut cfg);
-                    cfg.voice.punct_model_path = Some(imported_path.to_string_lossy().to_string());
-                    match cfg.save_default() {
-                        Ok(()) => {
-                            *current_cfg_cell.borrow_mut() = cfg.clone();
-                            sync_config_to_window(&win, &cfg);
-                            win.set_global_status_is_error(false);
-                            win.set_global_status(SharedString::from(format!(
-                                "成功导入标点模型: {}",
-                                name
-                            )));
-                        }
-                        Err(e) => {
-                            win.set_global_status_is_error(true);
-                            win.set_global_status(SharedString::from(format!(
-                                "保存标点模型配置失败: {}",
-                                e
-                            )));
-                        }
-                    }
-                }
-            }
+                |cfg, path| {
+                    cfg.voice.punct_model_path = Some(path.to_string());
+                },
+            );
         }
     });
 
@@ -163,6 +78,93 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     window.on_open_models_directory(move || {
         waylan_voice::open_user_models_directory();
     });
+}
+
+/// 执行 ASR 复合模型包目录导入
+fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Rc<RefCell<AppConfig>>) {
+    let Some(src_path) =
+        pick_directory_dialog("请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)")
+    else {
+        return;
+    };
+    let Some(imported_path) = waylan_voice::import_asr_model_from_dir(&src_path) else {
+        return;
+    };
+    let name = imported_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut cfg = current_cfg_cell.borrow().clone();
+    update_config_from_window(win, &mut cfg);
+    cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
+    save_config_and_notify_status(
+        win,
+        current_cfg_cell,
+        cfg,
+        &format!("成功导入 ASR 模型: {}", name),
+        "保存 ASR 模型配置失败",
+    );
+}
+
+/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改
+fn handle_import_onnx_model<F>(
+    win: &SettingsWindow,
+    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    category: ModelSubdirectory,
+    title: &str,
+    mut apply_fn: F,
+) where
+    F: FnMut(&mut AppConfig, &str),
+{
+    let Some(src_path) = pick_file_dialog(title, "ONNX 神经网络模型 (*.onnx)", "*.onnx")
+    else {
+        return;
+    };
+    let Some(imported_path) = import_onnx_model_from_file(category, &src_path) else {
+        return;
+    };
+    let name = imported_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut cfg = current_cfg_cell.borrow().clone();
+    update_config_from_window(win, &mut cfg);
+    apply_fn(&mut cfg, &imported_path.to_string_lossy());
+    save_config_and_notify_status(
+        win,
+        current_cfg_cell,
+        cfg,
+        &format!(
+            "成功导入 {} 模型: {}",
+            category.as_str().to_uppercase(),
+            name
+        ),
+        &format!("保存 {} 模型配置失败", category.as_str().to_uppercase()),
+    );
+}
+
+/// 保存配置并更新主窗口全局状态栏提示
+fn save_config_and_notify_status(
+    win: &SettingsWindow,
+    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    cfg: AppConfig,
+    success_msg: &str,
+    fail_prefix: &str,
+) {
+    match cfg.save_default() {
+        Ok(()) => {
+            *current_cfg_cell.borrow_mut() = cfg.clone();
+            sync_config_to_window(win, &cfg);
+            win.set_global_status_is_error(false);
+            win.set_global_status(SharedString::from(success_msg));
+        }
+        Err(e) => {
+            win.set_global_status_is_error(true);
+            win.set_global_status(SharedString::from(format!("{}: {}", fail_prefix, e)));
+        }
+    }
 }
 
 /// 注册云端语音服务管理相关回调（新增、编辑、删除、保存、取消、连接测试）
@@ -238,64 +240,15 @@ fn register_cloud_save_and_delete(
     let editing_id_save = editing_id.clone();
     window.on_save_cloud_profile(move |name, endpoint, key, model| {
         if let Some(win) = window_weak.upgrade() {
-            let name_str = name.trim().to_string();
-            let endpoint_str = endpoint.trim().to_string();
-            let model_str = model.trim().to_string();
-            if name_str.is_empty() || endpoint_str.is_empty() || model_str.is_empty() {
-                win.set_global_status_is_error(true);
-                win.set_global_status(SharedString::from("服务名称、接口地址和模型标识不能为空！"));
-                return;
-            }
-            let key_str = key.trim();
-            let api_key = if key_str.is_empty() {
-                None
-            } else {
-                Some(key_str.to_string())
-            };
-
-            let mut cfg = current_cfg_cell.borrow().clone();
-            update_config_from_window(&win, &mut cfg);
-            let target_id = editing_id_save.borrow_mut().take();
-            if let Some(ref tid) = target_id {
-                if let Some(p) = cfg.voice.cloud_profiles.iter_mut().find(|p| &p.id == tid) {
-                    p.name = name_str.clone();
-                    p.endpoint = endpoint_str.clone();
-                    p.api_key = api_key.clone();
-                    p.model = model_str.clone();
-                }
-                if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", tid)) {
-                    cfg.voice.cloud.endpoint = endpoint_str;
-                    cfg.voice.cloud.api_key = api_key;
-                    cfg.voice.cloud.model = model_str;
-                }
-            } else {
-                let new_id = format!("cloud_{}", chrono::Utc::now().timestamp_millis());
-                cfg.voice.cloud_profiles.push(CloudProfile {
-                    id: new_id,
-                    name: name_str.clone(),
-                    provider: CloudProviderType::OpenAiCompatible,
-                    endpoint: endpoint_str,
-                    api_key,
-                    model: model_str,
-                });
-            }
-
-            match cfg.save_default() {
-                Ok(()) => {
-                    win.set_is_editing_cloud(false);
-                    *current_cfg_cell.borrow_mut() = cfg.clone();
-                    sync_config_to_window(&win, &cfg);
-                    win.set_global_status_is_error(false);
-                    win.set_global_status(SharedString::from(format!(
-                        "云端服务 [{}] 已保存生效！",
-                        name_str
-                    )));
-                }
-                Err(e) => {
-                    win.set_global_status_is_error(true);
-                    win.set_global_status(SharedString::from(format!("保存云端服务失败: {}", e)));
-                }
-            }
+            handle_save_cloud_profile(
+                &win,
+                &current_cfg_cell,
+                &editing_id_save,
+                &name,
+                &endpoint,
+                &key,
+                &model,
+            );
         }
     });
 
@@ -303,38 +256,114 @@ fn register_cloud_save_and_delete(
     let current_cfg_cell = loaded_config;
     window.on_delete_cloud_profile(move |idx| {
         if let Some(win) = window_weak.upgrade() {
-            let index = idx as usize;
-            let mut cfg = current_cfg_cell.borrow().clone();
-            update_config_from_window(&win, &mut cfg);
-            if index < cfg.voice.cloud_profiles.len() {
-                let removed = cfg.voice.cloud_profiles.remove(index);
-                if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", removed.id)) {
-                    cfg.voice.selected_asr = None;
-                    cfg.voice.engine_type = waylan_core::VoiceEngineType::Offline;
-                }
-                editing_id.borrow_mut().take();
-                win.set_is_editing_cloud(false);
-                match cfg.save_default() {
-                    Ok(()) => {
-                        *current_cfg_cell.borrow_mut() = cfg.clone();
-                        sync_config_to_window(&win, &cfg);
-                        win.set_global_status_is_error(false);
-                        win.set_global_status(SharedString::from(format!(
-                            "已删除云端服务: {}",
-                            removed.name
-                        )));
-                    }
-                    Err(e) => {
-                        win.set_global_status_is_error(true);
-                        win.set_global_status(SharedString::from(format!(
-                            "保存删除状态失败: {}",
-                            e
-                        )));
-                    }
-                }
-            }
+            handle_delete_cloud_profile(&win, &current_cfg_cell, &editing_id, idx as usize);
         }
     });
+}
+
+/// 处理保存/更新云端语音服务配置
+fn handle_save_cloud_profile(
+    win: &SettingsWindow,
+    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    editing_id_save: &Rc<RefCell<Option<String>>>,
+    name: &str,
+    endpoint: &str,
+    key: &str,
+    model: &str,
+) {
+    let name_str = name.trim().to_string();
+    let endpoint_str = endpoint.trim().to_string();
+    let model_str = model.trim().to_string();
+    if name_str.is_empty() || endpoint_str.is_empty() || model_str.is_empty() {
+        win.set_global_status_is_error(true);
+        win.set_global_status(SharedString::from("服务名称、接口地址和模型标识不能为空！"));
+        return;
+    }
+    let key_str = key.trim();
+    let api_key = if key_str.is_empty() {
+        None
+    } else {
+        Some(key_str.to_string())
+    };
+
+    let mut cfg = current_cfg_cell.borrow().clone();
+    update_config_from_window(win, &mut cfg);
+    let target_id = editing_id_save.borrow_mut().take();
+    if let Some(ref tid) = target_id {
+        if let Some(p) = cfg.voice.cloud_profiles.iter_mut().find(|p| &p.id == tid) {
+            p.name = name_str.clone();
+            p.endpoint = endpoint_str.clone();
+            p.api_key = api_key.clone();
+            p.model = model_str.clone();
+        }
+        if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", tid)) {
+            cfg.voice.cloud.endpoint = endpoint_str;
+            cfg.voice.cloud.api_key = api_key;
+            cfg.voice.cloud.model = model_str;
+        }
+    } else {
+        let new_id = format!("cloud_{}", chrono::Utc::now().timestamp_millis());
+        cfg.voice.cloud_profiles.push(CloudProfile {
+            id: new_id,
+            name: name_str.clone(),
+            provider: CloudProviderType::OpenAiCompatible,
+            endpoint: endpoint_str,
+            api_key,
+            model: model_str,
+        });
+    }
+
+    match cfg.save_default() {
+        Ok(()) => {
+            win.set_is_editing_cloud(false);
+            *current_cfg_cell.borrow_mut() = cfg.clone();
+            sync_config_to_window(win, &cfg);
+            win.set_global_status_is_error(false);
+            win.set_global_status(SharedString::from(format!(
+                "云端服务 [{}] 已保存生效！",
+                name_str
+            )));
+        }
+        Err(e) => {
+            win.set_global_status_is_error(true);
+            win.set_global_status(SharedString::from(format!("保存云端服务失败: {}", e)));
+        }
+    }
+}
+
+/// 处理删除指定云端语音服务配置
+fn handle_delete_cloud_profile(
+    win: &SettingsWindow,
+    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    editing_id: &Rc<RefCell<Option<String>>>,
+    index: usize,
+) {
+    let mut cfg = current_cfg_cell.borrow().clone();
+    update_config_from_window(win, &mut cfg);
+    if index < cfg.voice.cloud_profiles.len() {
+        let removed = cfg.voice.cloud_profiles.remove(index);
+        if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", removed.id)) {
+            cfg.voice.selected_asr = None;
+            cfg.voice.engine_type = waylan_core::VoiceEngineType::Offline;
+        }
+        editing_id.borrow_mut().take();
+        win.set_is_editing_cloud(false);
+        match cfg.save_default() {
+            Ok(()) => {
+                *current_cfg_cell.borrow_mut() = cfg.clone();
+                sync_config_to_window(win, &cfg);
+                win.set_global_status_is_error(false);
+                win.set_global_status(SharedString::from(format!(
+                    "已删除云端服务: {}",
+                    removed.name
+                )));
+            }
+            Err(e) => {
+                win.set_global_status_is_error(true);
+                win.set_global_status(SharedString::from(format!("保存删除状态失败: {}", e)));
+            }
+        }
+    }
 }
 
 /// 注册云端服务异步连通性测试回调
