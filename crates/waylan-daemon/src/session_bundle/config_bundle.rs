@@ -154,24 +154,63 @@ impl SessionConfigBundle {
     }
 }
 
+/// 支持主题与核心算法热重载的 Wayland 会话抽象
+pub trait ReloadableWaylandSession {
+    /// 获取候选表面渲染器的可变引用
+    fn renderer_mut(&mut self) -> &mut waylan_ui::CandidateBoxRenderer;
+    /// 获取核心输入会话的可变引用
+    fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession;
+    /// 当拼音输入非空时刷新候选框表面
+    fn refresh_surface_if_composing(&mut self);
+}
+
+impl ReloadableWaylandSession for WaylanV1Session {
+    fn renderer_mut(&mut self) -> &mut waylan_ui::CandidateBoxRenderer {
+        &mut self.surface_manager.renderer
+    }
+
+    fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession {
+        &mut self.core
+    }
+
+    fn refresh_surface_if_composing(&mut self) {
+        if !self.engine.raw_input().is_empty() {
+            self.refresh_candidate_surface();
+        }
+    }
+}
+
+impl ReloadableWaylandSession for WaylanV2Session {
+    fn renderer_mut(&mut self) -> &mut waylan_ui::CandidateBoxRenderer {
+        &mut self.surface_manager.renderer
+    }
+
+    fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession {
+        &mut self.core
+    }
+
+    fn refresh_surface_if_composing(&mut self) {
+        if !self.engine.raw_input().is_empty() {
+            self.refresh_candidate_surface();
+        }
+    }
+}
+
+/// 统一执行 Wayland 会话的配置与词库热重载（单一真相源）
+pub fn apply_wayland_session_reload<S: ReloadableWaylandSession>(session: &mut S) {
+    let bundle = SessionConfigBundle::load_current();
+    session.renderer_mut().theme = bundle.theme.clone();
+    session.renderer_mut().font_size = bundle.font_size;
+    bundle.apply_to_core(session.core_mut());
+    session.refresh_surface_if_composing();
+}
+
 /// 执行 V2 会话的配置与词库热重载
 pub fn apply_reload_v2(s: &mut WaylanV2Session) {
-    let b = SessionConfigBundle::load_current();
-    s.surface_manager.renderer.theme = b.theme.clone();
-    s.surface_manager.renderer.font_size = b.font_size;
-    b.apply_to_core(&mut s.core);
-    if !s.engine.raw_input().is_empty() {
-        s.refresh_candidate_surface();
-    }
+    apply_wayland_session_reload(s);
 }
 
 /// 执行 V1 会话的配置与词库热重载
 pub fn apply_reload_v1(s: &mut WaylanV1Session) {
-    let b = SessionConfigBundle::load_current();
-    s.surface_manager.renderer.theme = b.theme.clone();
-    s.surface_manager.renderer.font_size = b.font_size;
-    b.apply_to_core(&mut s.core);
-    if !s.engine.raw_input().is_empty() {
-        s.refresh_candidate_surface();
-    }
+    apply_wayland_session_reload(s);
 }
