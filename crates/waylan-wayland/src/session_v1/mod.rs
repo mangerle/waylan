@@ -22,9 +22,9 @@ use crate::protocol_v1::input_method_v1::zwp_input_method_v1::{
 use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1;
 use crate::surface::CandidateSurfaceManager;
 
-use crate::fs_watcher::InotifyWatcher;
 use crate::loop_wakeup::LoopWakeup;
 use crate::session_common::*;
+use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
 
 /// V1 会话配置与词库热重载回调函数类型

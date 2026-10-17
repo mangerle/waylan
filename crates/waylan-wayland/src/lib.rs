@@ -1,5 +1,4 @@
 pub mod error;
-pub mod fs_watcher;
 pub mod loop_wakeup;
 pub mod protocol_v1;
 pub mod runner;
@@ -11,8 +10,8 @@ pub mod surface;
 pub use error::WaylandRunnerError;
 pub use runner::*;
 
-pub use fs_watcher::InotifyWatcher;
 pub use loop_wakeup::LoopWakeup;
+pub use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
 
 use std::error::Error;
