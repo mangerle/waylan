@@ -201,7 +201,9 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRu
         event_queue.dispatch_pending(&mut session)?;
         event_queue.flush()?;
 
-        let default_poll_timeout = if session.inotify_watcher.is_some() {
+        let default_poll_timeout = if session.is_voice_active() {
+            40
+        } else if session.inotify_watcher.is_some() {
             -1
         } else {
             2000
@@ -211,7 +213,9 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRu
         let wakeup_fd = session.loop_wakeup.as_ref().map(|w| w.as_fd());
 
         if let Some(guard) = event_queue.prepare_read() {
-            match poll_and_read_events(guard, timeout_ms, inotify_fd, wakeup_fd)? {
+            let outcome = poll_and_read_events(guard, timeout_ms, inotify_fd, wakeup_fd)?;
+            session.poll_voice_cycle();
+            match outcome {
                 PollEventOutcome::TimedOut => {
                     if session.inotify_watcher.is_none() {
                         session.sync_external_state();
@@ -349,7 +353,9 @@ pub fn run_session_v2_loop_fallible(
             return Err((e.into(), Box::new(session)));
         }
 
-        let default_poll_timeout = if session.inotify_watcher.is_some() {
+        let default_poll_timeout = if session.is_voice_active() {
+            40
+        } else if session.inotify_watcher.is_some() {
             -1
         } else {
             2000
@@ -364,6 +370,7 @@ pub fn run_session_v2_loop_fallible(
                 Err(e) => return Err((e, Box::new(session))),
             };
             session.drive_key_repeat();
+            session.poll_voice_cycle();
             match outcome {
                 PollEventOutcome::TimedOut => {
                     if session.inotify_watcher.is_none() {

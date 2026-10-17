@@ -7,6 +7,7 @@ use log::debug;
 use waylan_algo::ImeAction;
 use waylan_core::input::*;
 use waylan_core::InputMode;
+use waylan_voice::VoiceKeyAction;
 use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, WlKeyboard};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
@@ -215,7 +216,39 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                 let is_press = matches!(key_state, WEnum::Value(KeyState::Pressed));
                 state.update_modifier_by_key(key, is_press);
 
-                // 外部快捷键拦截器（如语音听写）优先捕获
+                // 统一语音按键状态机优先分发（与 IBus 体验对齐）
+                if let Some(ref mut vm) = state.voice_manager {
+                    match vm.handle_key_event(key, is_press, state.core.mods_depressed()) {
+                        VoiceKeyAction::Consumed => {
+                            if is_press {
+                                state.consumed_keys.record_press(key, true);
+                            } else {
+                                state.consumed_keys.take_release(key);
+                            }
+                            state.refresh_candidate_surface();
+                            return;
+                        }
+                        VoiceKeyAction::Commit(text) => {
+                            context.commit_string(state.commit_serial, text.clone());
+                            context.preedit_string(
+                                state.commit_serial,
+                                String::new(),
+                                String::new(),
+                            );
+                            state.punctuation_processor.record_commit(&text);
+                            state.hide_candidate_surface();
+                            if is_press {
+                                state.consumed_keys.record_press(key, true);
+                            } else {
+                                state.consumed_keys.take_release(key);
+                            }
+                            return;
+                        }
+                        VoiceKeyAction::PassThrough => {}
+                    }
+                }
+
+                // 外部快捷键拦截器优先捕获
                 if let Some(mut filter) = state.key_filter.take() {
                     let filter_outcome = filter(key, is_press, state.core.mods_depressed());
                     state.key_filter = Some(filter);

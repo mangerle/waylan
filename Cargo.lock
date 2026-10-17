@@ -6248,6 +6248,7 @@ dependencies = [
  "waylan-algo",
  "waylan-core",
  "waylan-ui",
+ "waylan-voice",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",

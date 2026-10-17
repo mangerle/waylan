@@ -10,6 +10,7 @@ use std::time::{Instant, SystemTime};
 use log::{debug, warn};
 use waylan_algo::{AlgoEngine, ImeCoreSession};
 use waylan_core::CandidateBoxState;
+use waylan_voice::VoiceInteractionManager;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_pointer::WlPointer, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -115,6 +116,8 @@ pub struct WaylanV2Session {
     pub loop_wakeup: Option<LoopWakeup>,
     /// 外部按键事件拦截回调（用于语音听写快捷键等扩展）
     pub key_filter: Option<KeyFilterCallback>,
+    /// 统一语音按键交互与录音流式管理器
+    pub voice_manager: Option<VoiceInteractionManager>,
 }
 
 impl Deref for WaylanV2Session {
@@ -183,7 +186,35 @@ impl WaylanV2Session {
             inotify_watcher: None,
             loop_wakeup: None,
             key_filter: None,
+            voice_manager: None,
         }
+    }
+
+    /// 查询当前是否处于语音录音或语音浮条激活状态
+    #[inline]
+    pub fn is_voice_active(&self) -> bool {
+        self.voice_manager
+            .as_ref()
+            .map(|v| v.is_active())
+            .unwrap_or(false)
+    }
+
+    /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
+    pub fn poll_voice_cycle(&mut self) -> Option<String> {
+        if let Some(ref mut vm) = self.voice_manager {
+            if vm.is_active() {
+                let commit_opt = vm.poll_events();
+                if let Some(ref text) = commit_opt {
+                    self.commit_text(text);
+                    self.punctuation_processor.record_commit(text);
+                    self.hide_candidate_surface();
+                    return commit_opt;
+                } else {
+                    self.refresh_candidate_surface();
+                }
+            }
+        }
+        None
     }
 
     /// 设置关联的 V2 输入法实例

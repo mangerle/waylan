@@ -17,6 +17,7 @@ use waylan_algo::AlgoEngine;
 use waylan_core::fs_watcher::{DirEventFilter, InotifyWatcher};
 use waylan_core::input::{update_modifier_masks, ModifierState, MOD_CAPS};
 use waylan_core::{CandidateBoxState, InputMode};
+use waylan_voice::VoiceInteractionManager;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_shm::WlShm, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
@@ -173,8 +174,35 @@ pub fn build_common_candidate_box_state(
     is_grid_expanded: bool,
     grid_selected_index: usize,
     inline_preedit: bool,
+    voice_manager: Option<&VoiceInteractionManager>,
 ) -> CandidateBoxState {
     use waylan_core::{Candidate, ExpandedCardState};
+
+    // 若当前处于语音输入状态，优先呈现语音识别流式预览与动态波形（与 IBus 视觉契约 100% 对齐）
+    if let Some(vm) = voice_manager {
+        if vm.is_active() {
+            let candidates = if let Some(ref voice_text) = vm.display_text {
+                vec![Candidate::new(
+                    voice_text.clone(),
+                    vm.waveform.clone().unwrap_or_default(),
+                    1000,
+                )]
+            } else {
+                Vec::new()
+            };
+            let preedit = vm.partial_text.clone().unwrap_or_default();
+            return CandidateBoxState {
+                visible: is_active,
+                preedit,
+                candidates,
+                selected_index: 0,
+                expanded_card: ExpandedCardState::Collapsed,
+                mode_badge: "语".to_string(),
+                is_grid_expanded: false,
+                grid_candidates: Vec::new(),
+            };
+        }
+    }
 
     let core_candidates: Vec<Candidate> = engine.candidates().iter().map(Candidate::from).collect();
 

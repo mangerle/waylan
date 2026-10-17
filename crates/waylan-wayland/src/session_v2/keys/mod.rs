@@ -10,6 +10,7 @@ use log::debug;
 use waylan_algo::ImeAction;
 use waylan_core::input::*;
 use waylan_core::{CandidateBoxState, InputMode};
+use waylan_voice::VoiceKeyAction;
 
 use super::WaylanV2Session;
 
@@ -24,6 +25,7 @@ pub(crate) fn build_candidate_box_state(session: &WaylanV2Session) -> CandidateB
         session.is_grid_expanded,
         session.grid_selected_index,
         true,
+        session.voice_manager.as_ref(),
     )
 }
 
@@ -114,7 +116,34 @@ pub(crate) fn process_key_event(
 ) -> (bool, Option<String>) {
     session.update_modifier_by_key(key, is_press);
 
-    // 外部快捷键拦截器（如语音听写）优先捕获
+    // 统一语音按键状态机优先分发（与 IBus 体验对齐）
+    if let Some(ref mut vm) = session.voice_manager {
+        match vm.handle_key_event(key, is_press, session.core.mods_depressed()) {
+            VoiceKeyAction::Consumed => {
+                if is_press {
+                    session.consumed_keys.record_press(key, true);
+                } else {
+                    session.consumed_keys.take_release(key);
+                }
+                session.refresh_candidate_surface();
+                return (true, None);
+            }
+            VoiceKeyAction::Commit(text) => {
+                session.commit_text(&text);
+                session.punctuation_processor.record_commit(&text);
+                session.refresh_candidate_surface();
+                if is_press {
+                    session.consumed_keys.record_press(key, true);
+                } else {
+                    session.consumed_keys.take_release(key);
+                }
+                return (true, Some(text));
+            }
+            VoiceKeyAction::PassThrough => {}
+        }
+    }
+
+    // 外部快捷键拦截器优先捕获
     if let Some(mut filter) = session.key_filter.take() {
         let filter_outcome = filter(key, is_press, session.core.mods_depressed());
         session.key_filter = Some(filter);

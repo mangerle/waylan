@@ -20,7 +20,7 @@ use waylan_wayland::session_v2::WaylanV2Session;
 use waylan_wayland::{run_session_v1_loop, run_session_v2_loop_fallible, WaylandCapabilities};
 
 use super::config_bundle::{apply_reload_v1, apply_reload_v2};
-use super::voice_filter::build_wayland_voice_filter;
+use super::voice_filter::{build_wayland_voice_filter, build_wayland_voice_manager};
 use crate::system::ShutdownCoordinator;
 use crate::tray::TrayService;
 
@@ -58,6 +58,7 @@ fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), Box<dyn Error>
     session.exit_requested = Some(params.coordinator.flag());
     session.loop_wakeup = params.coordinator.loop_wakeup();
     session.reload_callback = Some(Box::new(apply_reload_v1));
+    session.voice_manager = build_wayland_voice_manager(&params.cfg.voice);
     session.key_filter = build_wayland_voice_filter(&params.cfg.voice);
     run_session_v1_loop(session).map_err(Into::into)
 }
@@ -89,6 +90,7 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
     session_v2.exit_requested = Some(params.coordinator.flag());
     session_v2.loop_wakeup = params.coordinator.loop_wakeup();
     session_v2.reload_callback = Some(Box::new(apply_reload_v2));
+    session_v2.voice_manager = build_wayland_voice_manager(&params.cfg.voice);
     session_v2.key_filter = build_wayland_voice_filter(&params.cfg.voice);
     let v2_result = run_session_v2_loop_fallible(session_v2);
     match v2_result {
@@ -114,6 +116,7 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
                 exit_requested: Some(params.coordinator.flag()),
                 loop_wakeup: params.coordinator.loop_wakeup(),
                 reload_callback: Some(Box::new(apply_reload_v1)),
+                voice_manager: build_wayland_voice_manager(&params.cfg.voice),
                 key_filter: build_wayland_voice_filter(&params.cfg.voice),
                 ..WaylanV1Session::default()
             };

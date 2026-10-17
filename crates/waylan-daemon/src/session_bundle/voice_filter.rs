@@ -9,6 +9,21 @@ use waylan_core::VoiceConfig;
 use waylan_voice::{VoiceInteractionManager, VoiceKeyAction};
 use waylan_wayland::{KeyFilterCallback, KeyFilterResult};
 
+/// 为 Wayland 原生会话构建统一语音交互状态机
+pub fn build_wayland_voice_manager(voice_config: &VoiceConfig) -> Option<VoiceInteractionManager> {
+    if !voice_config.enabled {
+        return None;
+    }
+
+    let ptt_shortcut = voice_config.get_effective_ptt_shortcut();
+    let toggle_shortcut = voice_config.get_effective_toggle_shortcut();
+    if ptt_shortcut.is_none() && toggle_shortcut.is_none() {
+        return None;
+    }
+
+    Some(VoiceInteractionManager::new(voice_config.clone()))
+}
+
 /// 为 Wayland 原生会话构建语音按键拦截器
 pub fn build_wayland_voice_filter(voice_config: &VoiceConfig) -> Option<KeyFilterCallback> {
     if !voice_config.enabled {
