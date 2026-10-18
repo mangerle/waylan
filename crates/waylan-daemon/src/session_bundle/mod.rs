@@ -93,4 +93,28 @@ mod tests {
         let res = filter(waylan_core::input::KEY_SPACE, true, 0);
         assert_eq!(res, waylan_wayland::KeyFilterResult::PassThrough);
     }
+
+    #[test]
+    fn test_apply_wayland_session_reload_updates_voice_config() {
+        use super::config_bundle::apply_reload_v2;
+        use waylan_core::config::AppConfig;
+        use waylan_wayland::session_v2::WaylanV2Session;
+        let engine = AlgoEngine::with_sample_data(Default::default());
+        let mut session = WaylanV2Session::new(engine);
+
+        let initial_voice = VoiceConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        session.voice_manager = Some(waylan_voice::VoiceInteractionManager::new(initial_voice));
+
+        apply_reload_v2(&mut session);
+
+        // 验证热重载后，Wayland 会话内部的 voice_manager 配置已同步为磁盘当前配置
+        let disk_cfg = AppConfig::load_or_create();
+        assert_eq!(
+            session.voice_manager.as_ref().unwrap().config.enabled,
+            disk_cfg.voice.enabled
+        );
+    }
 }

@@ -159,12 +159,14 @@ impl SessionConfigBundle {
     }
 }
 
-/// 支持主题与核心算法热重载的 Wayland 会话抽象
+/// 支持主题、核心算法与语音管线热重载的 Wayland 会话抽象
 pub trait ReloadableWaylandSession {
     /// 获取候选表面渲染器的可变引用
     fn renderer_mut(&mut self) -> &mut waylan_ui::CandidateBoxRenderer;
     /// 获取核心输入会话的可变引用
     fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession;
+    /// 获取可选语音交互管理器的可变引用
+    fn voice_manager_mut(&mut self) -> Option<&mut waylan_voice::VoiceInteractionManager>;
     /// 当拼音输入非空时刷新候选框表面
     fn refresh_surface_if_composing(&mut self);
 }
@@ -176,6 +178,10 @@ impl ReloadableWaylandSession for WaylanV1Session {
 
     fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession {
         &mut self.core
+    }
+
+    fn voice_manager_mut(&mut self) -> Option<&mut waylan_voice::VoiceInteractionManager> {
+        self.voice_manager.as_mut()
     }
 
     fn refresh_surface_if_composing(&mut self) {
@@ -194,6 +200,10 @@ impl ReloadableWaylandSession for WaylanV2Session {
         &mut self.core
     }
 
+    fn voice_manager_mut(&mut self) -> Option<&mut waylan_voice::VoiceInteractionManager> {
+        self.voice_manager.as_mut()
+    }
+
     fn refresh_surface_if_composing(&mut self) {
         if !self.core.engine.raw_input().is_empty() {
             self.refresh_candidate_surface();
@@ -206,6 +216,9 @@ pub fn apply_wayland_session_reload<S: ReloadableWaylandSession>(session: &mut S
     let bundle = SessionConfigBundle::load_current();
     session.renderer_mut().theme = bundle.theme.clone();
     session.renderer_mut().font_size = bundle.font_size;
+    if let Some(vm) = session.voice_manager_mut() {
+        vm.update_config(bundle.voice.clone());
+    }
     bundle.apply_to_core(session.core_mut());
     session.refresh_surface_if_composing();
 }
