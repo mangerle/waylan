@@ -11,7 +11,7 @@ use waylan_core::input::{update_modifier_masks, ModifierState, MOD_CAPS};
 
 pub use crate::surface::state_builder::*;
 pub use crate::watcher::*;
-pub use waylan_core::input::sync_mode_from_shared_flag;
+pub use waylan_core::input::{sync_mode_from_shared_flag, sync_mode_from_shared_flags};
 
 /// 判断热重载原子标志是否被触发（用于按键热路径轻量检测，避免高频系统调用）
 #[inline]

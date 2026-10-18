@@ -3,13 +3,12 @@ use super::keyval::{
     ibus_keyval_to_evdev, IBUS_CONTROL_MASK, IBUS_LOCK_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK,
     IBUS_SHIFT_MASK, KEY_F,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
+use waylan_core::state::SharedInputFlags;
 use waylan_core::{
     FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TraditionalShortcut, VoiceEngineType,
 };
@@ -195,15 +194,13 @@ fn test_ibus_caps_lock_in_english_mode_no_flicker() {
 fn test_ibus_caps_lock_tray_flags_and_subsequent_keys() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    let zh_flag = Arc::new(AtomicBool::new(true));
-    let caps_flag = Arc::new(AtomicBool::new(false));
-    core.shared_is_chinese = Some(zh_flag.clone());
-    core.shared_is_caps_locked = Some(caps_flag.clone());
+    let flags = SharedInputFlags::new(true, false, true, false);
+    core.shared_flags = Some(flags.clone());
 
     // 1. 中文状态下按下 CapsLock：大写标志权威置为 true（托盘读取该标志直接展现 A 大写图标与大写菜单项）
     let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
     assert!(core.is_caps_locked);
-    assert!(caps_flag.load(Ordering::Acquire));
+    assert!(flags.is_caps_locked());
     assert_eq!(
         core.core.mode,
         InputMode::Chinese,
@@ -217,31 +214,26 @@ fn test_ibus_caps_lock_tray_flags_and_subsequent_keys() {
         core.is_caps_locked,
         "后续未带Lock掩码的按键绝不能冲刷掉大写状态"
     );
-    assert!(caps_flag.load(Ordering::Acquire));
+    assert!(flags.is_caps_locked());
 
     // 3. 再次按下 CapsLock 退出大写：大写标志关闭，无缝回到中文模式
     let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_LOCK_MASK);
     assert!(!core.is_caps_locked);
-    assert!(!caps_flag.load(Ordering::Acquire));
+    assert!(!flags.is_caps_locked());
     assert_eq!(
         core.core.mode,
         InputMode::Chinese,
         "退出大写锁定后丝滑保持中文模式"
     );
-    assert!(zh_flag.load(Ordering::Acquire));
+    assert!(flags.is_chinese());
 }
 
 #[test]
 fn test_ibus_shared_settings_sync_and_full_width() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    let trad_flag = Arc::new(AtomicBool::new(false));
-    let punct_flag = Arc::new(AtomicBool::new(true));
-    let char_flag = Arc::new(AtomicBool::new(false));
-
-    core.shared_traditional_chinese = Some(trad_flag.clone());
-    core.shared_full_width_punct = Some(punct_flag.clone());
-    core.shared_full_width_char = Some(char_flag.clone());
+    let flags = SharedInputFlags::new(true, false, true, false);
+    core.shared_flags = Some(flags.clone());
 
     // 默认状态：简体、全角标点、半角字母
     assert!(!core.core.engine.config.traditional_chinese);
@@ -249,7 +241,7 @@ fn test_ibus_shared_settings_sync_and_full_width() {
     assert!(!core.is_full_width_char());
 
     // 1. 托盘触发切换为繁体
-    trad_flag.store(true, Ordering::Release);
+    flags.set_traditional(true);
     let _ = core.process_key_event(0, 0, 0);
     assert!(
         core.core.engine.config.traditional_chinese,
@@ -257,7 +249,7 @@ fn test_ibus_shared_settings_sync_and_full_width() {
     );
 
     // 2. 托盘触发切换为半角标点
-    punct_flag.store(false, Ordering::Release);
+    flags.set_full_width_punct(false);
     let outcome = core.process_key_event(b',' as u32, 51, 0);
     assert_eq!(
         outcome.commit_text,
@@ -266,8 +258,8 @@ fn test_ibus_shared_settings_sync_and_full_width() {
     );
 
     // 3. 托盘触发切换为全角字符，并在英文模式下敲击字母
-    char_flag.store(true, Ordering::Release);
-    core.core.mode = InputMode::English;
+    flags.set_full_width_char(true);
+    flags.set_chinese(false);
     let letter_outcome = core.process_key_event(b'a' as u32, 30, 0);
     assert_eq!(
         letter_outcome.commit_text,
@@ -337,13 +329,8 @@ fn test_ibus_screen_lock_passthrough_and_recovery() {
 fn test_ibus_global_shortcuts_toggle() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    let trad_flag = Arc::new(AtomicBool::new(false));
-    let punct_flag = Arc::new(AtomicBool::new(true));
-    let char_flag = Arc::new(AtomicBool::new(false));
-
-    core.shared_traditional_chinese = Some(trad_flag.clone());
-    core.shared_full_width_punct = Some(punct_flag.clone());
-    core.shared_full_width_char = Some(char_flag.clone());
+    let flags = SharedInputFlags::new(true, false, true, false);
+    core.shared_flags = Some(flags.clone());
 
     // 默认快捷键：Ctrl+Shift+F (简繁), Shift+Space (字符全半角), Ctrl+. (标点全半角)
     assert_eq!(
@@ -367,10 +354,7 @@ fn test_ibus_global_shortcuts_toggle() {
         core.core.engine.config.traditional_chinese,
         "简繁状态应切换为繁体"
     );
-    assert!(
-        trad_flag.load(Ordering::Acquire),
-        "共享托盘标志应同步为繁体"
-    );
+    assert!(flags.is_traditional(), "共享托盘标志应同步为繁体");
 
     // 再次按下切回简体
     let res_trad2 = core.process_key_event(b'f' as u32, KEY_F, state_ctrl_shift);
@@ -379,19 +363,19 @@ fn test_ibus_global_shortcuts_toggle() {
         !core.core.engine.config.traditional_chinese,
         "简繁状态应切回简体"
     );
-    assert!(!trad_flag.load(Ordering::Acquire));
+    assert!(!flags.is_traditional());
 
     // 2. 测试字符全半角切换快捷键 (Shift + Space)
     let res_char = core.process_key_event(0x20, KEY_SPACE, IBUS_SHIFT_MASK);
     assert!(res_char.consumed, "字符全半角快捷键必须被消费");
     assert!(core.is_full_width_char(), "字符全半角状态应切换为全角");
-    assert!(char_flag.load(Ordering::Acquire));
+    assert!(flags.is_full_width_char());
 
     // 再次按下切回半角
     let res_char2 = core.process_key_event(0x20, KEY_SPACE, IBUS_SHIFT_MASK);
     assert!(res_char2.consumed);
     assert!(!core.is_full_width_char(), "字符全半角状态应切回半角");
-    assert!(!char_flag.load(Ordering::Acquire));
+    assert!(!flags.is_full_width_char());
 
     // 3. 测试标点全半角切换快捷键 (Ctrl + .)
     let res_punct = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
@@ -400,7 +384,7 @@ fn test_ibus_global_shortcuts_toggle() {
         !core.core.punctuation_processor.full_width_punct,
         "标点状态应由全角切换为半角"
     );
-    assert!(!punct_flag.load(Ordering::Acquire));
+    assert!(!flags.is_full_width_punct());
 
     // 再次按下切回全角
     let res_punct2 = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
@@ -409,7 +393,7 @@ fn test_ibus_global_shortcuts_toggle() {
         core.core.punctuation_processor.full_width_punct,
         "标点状态应切回全角中文标点"
     );
-    assert!(punct_flag.load(Ordering::Acquire));
+    assert!(flags.is_full_width_punct());
 }
 
 #[test]

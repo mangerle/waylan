@@ -132,18 +132,13 @@ impl TrayService {
         let config = AppConfig::load_or_create();
         let loop_wakeup = params.coordinator.loop_wakeup();
         let sni = StatusNotifierItem::new(
-            params.shared_flags.is_chinese_flag(),
-            params.shared_flags.is_caps_locked_flag(),
+            params.shared_flags.clone(),
             params.icon_update_tx.clone(),
             &config,
             loop_wakeup,
         );
         let menu = DBusMenu::new(DBusMenuOptions {
-            is_chinese: params.shared_flags.is_chinese_flag(),
-            is_caps_locked: params.shared_flags.is_caps_locked_flag(),
-            traditional_chinese: params.shared_flags.traditional_chinese_flag(),
-            full_width_punct: params.shared_flags.full_width_punct_flag(),
-            full_width_char: params.shared_flags.full_width_char_flag(),
+            shared_flags: params.shared_flags.clone(),
             reload_requested: params.reload_requested.clone(),
             coordinator: params.coordinator.clone(),
             settings_running: Arc::new(AtomicBool::new(false)),

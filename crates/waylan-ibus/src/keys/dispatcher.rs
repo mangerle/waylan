@@ -7,7 +7,6 @@
 //!   密码框保护、CapsLock 截断提交、中英模式切换与全局快捷键全部由核心状态机单一真实源驱动。
 //! - **代价与局限**：需将 X11 修饰键状态位映射至统一修饰键位掩码。
 
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use waylan_algo::{
@@ -179,20 +178,16 @@ impl IbusSessionCore {
                 ..Default::default()
             },
             KeyProcessResult::ShortcutToggled(toggle) => {
-                match toggle {
-                    ShortcutToggleAction::Traditional(trad) => {
-                        if let Some(ref flag) = self.shared_traditional_chinese {
-                            flag.store(trad, Ordering::Release);
+                if let Some(ref flags) = self.shared_flags {
+                    match toggle {
+                        ShortcutToggleAction::Traditional(trad) => {
+                            flags.set_traditional(trad);
                         }
-                    }
-                    ShortcutToggleAction::FullWidthChar(fw) => {
-                        if let Some(ref flag) = self.shared_full_width_char {
-                            flag.store(fw, Ordering::Release);
+                        ShortcutToggleAction::FullWidthChar(fw) => {
+                            flags.set_full_width_char(fw);
                         }
-                    }
-                    ShortcutToggleAction::FullWidthPunct(fw) => {
-                        if let Some(ref flag) = self.shared_full_width_punct {
-                            flag.store(fw, Ordering::Release);
+                        ShortcutToggleAction::FullWidthPunct(fw) => {
+                            flags.set_full_width_punct(fw);
                         }
                     }
                 }
@@ -210,11 +205,8 @@ impl IbusSessionCore {
                 committed,
                 was_consumed,
             } => {
-                if let Some(ref zh_flag) = self.shared_is_chinese {
-                    zh_flag.store(
-                        matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                        Ordering::Release,
-                    );
+                if let Some(ref flags) = self.shared_flags {
+                    flags.set_chinese(matches!(new_mode, InputMode::Chinese | InputMode::VMode));
                 }
                 if let Some(ref notify_tx) = self.mode_notify_tx {
                     let _ = notify_tx.try_send(());

@@ -31,21 +31,13 @@ fn test_tray_mode_toggle() {
 
 #[test]
 fn test_tray_menu_layout_and_event() {
-    let is_chinese = Arc::new(AtomicBool::new(true));
-    let is_caps_locked = Arc::new(AtomicBool::new(false));
-    let traditional_chinese = Arc::new(AtomicBool::new(false));
-    let full_width_punct = Arc::new(AtomicBool::new(true));
-    let full_width_char = Arc::new(AtomicBool::new(false));
+    let shared_flags = SharedInputFlags::new(true, false, true, false);
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, icon_update_rx) = sync_channel::<()>(8);
     let coordinator = ShutdownCoordinator::from_parts(exit_requested, None);
     let menu = DBusMenu::new(DBusMenuOptions {
-        is_chinese: Arc::clone(&is_chinese),
-        is_caps_locked: Arc::clone(&is_caps_locked),
-        traditional_chinese: Arc::clone(&traditional_chinese),
-        full_width_punct: Arc::clone(&full_width_punct),
-        full_width_char: Arc::clone(&full_width_char),
+        shared_flags: shared_flags.clone(),
         reload_requested: Arc::clone(&reload_requested),
         coordinator,
         settings_running: Arc::new(AtomicBool::new(false)),
@@ -57,27 +49,27 @@ fn test_tray_menu_layout_and_event() {
 
     // 模拟点击菜单第1项（模式切换）
     menu.event(1, "clicked".to_string(), Value::from(0), 0);
-    assert!(!is_chinese.load(Ordering::Relaxed));
+    assert!(!shared_flags.is_chinese());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击第6项（简繁切换）
     menu.event(6, "clicked".to_string(), Value::from(0), 0);
-    assert!(traditional_chinese.load(Ordering::Relaxed));
+    assert!(shared_flags.is_traditional());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击第7项（标点全半角切换）
     menu.event(7, "clicked".to_string(), Value::from(0), 0);
-    assert!(!full_width_punct.load(Ordering::Relaxed));
+    assert!(!shared_flags.is_full_width_punct());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击第8项（字符全半角切换）
     menu.event(8, "clicked".to_string(), Value::from(0), 0);
-    assert!(full_width_char.load(Ordering::Relaxed));
+    assert!(shared_flags.is_full_width_char());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 再次点击切回中文
     menu.event(1, "clicked".to_string(), Value::from(0), 0);
-    assert!(is_chinese.load(Ordering::Relaxed));
+    assert!(shared_flags.is_chinese());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击菜单第2项（重新加载词库与配置）
@@ -88,21 +80,13 @@ fn test_tray_menu_layout_and_event() {
 
 #[test]
 fn test_tray_menu_exit_event() {
-    let is_chinese = Arc::new(AtomicBool::new(true));
-    let is_caps_locked = Arc::new(AtomicBool::new(false));
-    let traditional_chinese = Arc::new(AtomicBool::new(false));
-    let full_width_punct = Arc::new(AtomicBool::new(true));
-    let full_width_char = Arc::new(AtomicBool::new(false));
+    let shared_flags = SharedInputFlags::new(true, false, true, false);
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, _icon_update_rx) = sync_channel::<()>(8);
     let coordinator = ShutdownCoordinator::from_parts(Arc::clone(&exit_requested), None);
     let menu = DBusMenu::new(DBusMenuOptions {
-        is_chinese,
-        is_caps_locked,
-        traditional_chinese,
-        full_width_punct,
-        full_width_char,
+        shared_flags,
         reload_requested,
         coordinator,
         settings_running: Arc::new(AtomicBool::new(false)),
@@ -117,12 +101,10 @@ fn test_tray_menu_exit_event() {
 
 #[test]
 fn test_status_notifier_item_activate_sends_icon_update() {
-    let is_chinese = Arc::new(AtomicBool::new(true));
-    let is_caps_locked = Arc::new(AtomicBool::new(false));
+    let shared_flags = SharedInputFlags::new(true, false, false, false);
     let (icon_update_tx, icon_update_rx) = sync_channel::<()>(8);
     let sni = StatusNotifierItem::new(
-        Arc::clone(&is_chinese),
-        is_caps_locked,
+        shared_flags,
         icon_update_tx,
         &crate::config::AppConfig::default(),
         None,

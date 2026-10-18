@@ -182,7 +182,9 @@ fn handle_grab_modifiers(
     }
     let curr_caps = state.core.is_caps_locked();
     if prev_caps != curr_caps {
-        if let Some(ref caps_flag) = state.shared_is_caps_locked {
+        if let Some(ref flags) = state.shared_flags {
+            flags.set_caps_locked(curr_caps);
+        } else if let Some(ref caps_flag) = state.shared_is_caps_locked {
             caps_flag.store(curr_caps, Ordering::Release);
         }
         if let Some(ref notify_tx) = state.mode_notify_tx {

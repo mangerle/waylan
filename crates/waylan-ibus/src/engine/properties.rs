@@ -29,8 +29,8 @@ impl IbusEngineService {
                 InputMode::English => InputMode::Chinese,
             };
             guard.core.mode = next;
-            if let Some(ref zh_flag) = guard.shared_is_chinese {
-                zh_flag.store(matches!(next, InputMode::Chinese), Ordering::Release);
+            if let Some(ref flags) = guard.shared_flags {
+                flags.set_chinese(matches!(next, InputMode::Chinese));
             }
             if let Some(ref tx) = guard.mode_notify_tx {
                 let _ = tx.try_send(());
@@ -52,8 +52,8 @@ impl IbusEngineService {
             };
             let next = !guard.core.engine.config.traditional_chinese;
             guard.core.engine.config.traditional_chinese = next;
-            if let Some(ref flag) = guard.shared_traditional_chinese {
-                flag.store(next, Ordering::Release);
+            if let Some(ref flags) = guard.shared_flags {
+                flags.set_traditional(next);
             }
             if let Some(ref tx) = guard.mode_notify_tx {
                 let _ = tx.try_send(());
@@ -77,8 +77,8 @@ impl IbusEngineService {
             };
             let next = !guard.core.punctuation_processor.full_width_punct;
             guard.core.punctuation_processor.full_width_punct = next;
-            if let Some(ref flag) = guard.shared_full_width_punct {
-                flag.store(next, Ordering::Release);
+            if let Some(ref flags) = guard.shared_flags {
+                flags.set_full_width_punct(next);
             }
             if let Some(ref tx) = guard.mode_notify_tx {
                 let _ = tx.try_send(());
@@ -101,17 +101,18 @@ impl IbusEngineService {
     /// 响应状态栏点击切换字符全半角模式
     pub(crate) async fn on_prop_full_width_char(&self, ctxt: &SignalContext<'_>) {
         let is_full = {
-            let Ok(guard) = self.core.lock() else {
+            let Ok(mut guard) = self.core.lock() else {
                 return;
             };
             let current = guard
-                .shared_full_width_char
+                .shared_flags
                 .as_ref()
-                .map(|f| f.load(Ordering::Acquire))
-                .unwrap_or(false);
+                .map(|f| f.is_full_width_char())
+                .unwrap_or(guard.core.full_width_char);
             let next = !current;
-            if let Some(ref flag) = guard.shared_full_width_char {
-                flag.store(next, Ordering::Release);
+            guard.core.full_width_char = next;
+            if let Some(ref flags) = guard.shared_flags {
+                flags.set_full_width_char(next);
             }
             if let Some(ref tx) = guard.mode_notify_tx {
                 let _ = tx.try_send(());

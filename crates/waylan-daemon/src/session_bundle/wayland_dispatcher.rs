@@ -51,6 +51,7 @@ fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
         params.cfg.pinyin.auto_complete_pairs,
     );
     session.core.page_keys = params.cfg.shortcuts.page_keys.into();
+    session.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
     session.shared_is_chinese = params.tray.as_ref().map(|t| t.mode_flag());
     session.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
     session.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
@@ -82,6 +83,7 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
     session_v2_punct.full_width_punct = params.cfg.pinyin.full_width_punct;
     session_v2.core.punctuation_processor = session_v2_punct;
     session_v2.core.page_keys = params.cfg.shortcuts.page_keys.into();
+    session_v2.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
     session_v2.shared_is_chinese = params.tray.as_ref().map(|t| t.mode_flag());
     session_v2.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
     session_v2.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
@@ -107,6 +109,7 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
                 surface_manager: returned_session.surface_manager,
                 watched_paths: returned_session.watched_paths,
                 last_watched_mtime: returned_session.last_watched_mtime,
+                shared_flags: params.tray.as_ref().map(|t| t.shared_flags().clone()),
                 shared_is_chinese: params.tray.as_ref().map(|t| t.mode_flag()),
                 shared_is_caps_locked: params.tray.as_ref().map(|t| t.caps_lock_flag()),
                 mode_notify_tx: params.tray.as_ref().map(|t| t.icon_notifier()),

@@ -62,7 +62,7 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn reload(&self, core: &mut IbusSessionCore) -> bool {
         let bundle = SessionConfigBundle::load_current();
         let hide_ext = bundle.exclusive_input_source;
-        let current_has_tray = core.shared_is_chinese.is_some();
+        let current_has_tray = core.shared_flags.is_some();
         let new_cfg = AppConfig::load_or_create();
         let is_gnome = env::var("XDG_CURRENT_DESKTOP")
             .map(|d| d.to_uppercase().contains("GNOME"))
@@ -115,12 +115,7 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
 
     let mut session_core = IbusSessionCore::new(opts.engine);
     if let Some(tray) = opts.tray {
-        let flags = tray.shared_flags();
-        session_core.shared_is_chinese = Some(flags.is_chinese_flag());
-        session_core.shared_is_caps_locked = Some(flags.is_caps_locked_flag());
-        session_core.shared_traditional_chinese = Some(flags.traditional_chinese_flag());
-        session_core.shared_full_width_punct = Some(flags.full_width_punct_flag());
-        session_core.shared_full_width_char = Some(flags.full_width_char_flag());
+        session_core.shared_flags = Some(tray.shared_flags().clone());
     }
     session_core.mode_notify_tx = opts.tray.as_ref().map(|t| t.icon_notifier());
     let initial_bundle = SessionConfigBundle::load_current();

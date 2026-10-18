@@ -23,14 +23,11 @@ pub(crate) fn make_menu_item(id: i32, label: &str) -> Value<'static> {
 }
 
 pub use crate::system::SubprocessManager;
+use waylan_core::state::SharedInputFlags;
 
 /// DBusMenu 构造配置参数包
 pub(crate) struct DBusMenuOptions {
-    pub(crate) is_chinese: Arc<AtomicBool>,
-    pub(crate) is_caps_locked: Arc<AtomicBool>,
-    pub(crate) traditional_chinese: Arc<AtomicBool>,
-    pub(crate) full_width_punct: Arc<AtomicBool>,
-    pub(crate) full_width_char: Arc<AtomicBool>,
+    pub(crate) shared_flags: SharedInputFlags,
     pub(crate) reload_requested: Arc<AtomicBool>,
     pub(crate) coordinator: ShutdownCoordinator,
     pub(crate) settings_running: Arc<AtomicBool>,
@@ -39,11 +36,7 @@ pub(crate) struct DBusMenuOptions {
 
 /// 标准 FreeDesktop DBusMenu 菜单实现
 pub struct DBusMenu {
-    pub(crate) is_chinese: Arc<AtomicBool>,
-    pub(crate) is_caps_locked: Arc<AtomicBool>,
-    pub(crate) traditional_chinese: Arc<AtomicBool>,
-    pub(crate) full_width_punct: Arc<AtomicBool>,
-    pub(crate) full_width_char: Arc<AtomicBool>,
+    pub(crate) shared_flags: SharedInputFlags,
     pub(crate) reload_requested: Arc<AtomicBool>,
     pub(crate) coordinator: ShutdownCoordinator,
     pub(crate) settings_running: Arc<AtomicBool>,
@@ -55,11 +48,7 @@ impl DBusMenu {
     pub(crate) fn new(opts: DBusMenuOptions) -> Self {
         let subprocess_manager = Arc::new(SubprocessManager::new(opts.coordinator.flag()));
         Self {
-            is_chinese: opts.is_chinese,
-            is_caps_locked: opts.is_caps_locked,
-            traditional_chinese: opts.traditional_chinese,
-            full_width_punct: opts.full_width_punct,
-            full_width_char: opts.full_width_char,
+            shared_flags: opts.shared_flags,
             reload_requested: opts.reload_requested,
             coordinator: opts.coordinator,
             settings_running: opts.settings_running,
@@ -77,24 +66,11 @@ impl DBusMenu {
         self.subprocess_manager.launch_view_log();
     }
 
-    /// 切换原子标志并在通道唤醒托盘与 Wayland 事件循环，同时输出中文日志反馈
-    fn toggle_flag_with_feedback(
-        &self,
-        flag: &AtomicBool,
-        label: &'static str,
-        val_true: &'static str,
-        val_false: &'static str,
-    ) {
-        let current = flag.load(Ordering::Acquire);
-        let next = !current;
-        flag.store(next, Ordering::Release);
+    /// 唤醒托盘与 Wayland 事件循环，同时输出中文日志反馈
+    fn notify_flag_changed(&self, label: &'static str, val_str: &'static str) {
         let _ = self.icon_update_tx.try_send(());
         self.coordinator.wake();
-        info!(
-            "[系统托盘] 右键菜单切换{}为: {}",
-            label,
-            if next { val_true } else { val_false }
-        );
+        info!("[系统托盘] 右键菜单切换{}为: {}", label, val_str);
     }
 
     /// 响应点击菜单“重新加载词库与配置”
@@ -138,24 +114,25 @@ impl DBusMenu {
         _recursion_depth: i32,
         _property_names: Vec<String>,
     ) -> DbusMenuLayout {
-        let mode_text = if self.is_caps_locked.load(Ordering::Acquire) {
+        let snap = self.shared_flags.snapshot();
+        let mode_text = if snap.is_caps_locked {
             "当前输入: 英文大写"
-        } else if self.is_chinese.load(Ordering::Acquire) {
+        } else if snap.is_chinese {
             "当前输入: 中文拼音"
         } else {
             "当前输入: 英文模式"
         };
-        let trad_text = if self.traditional_chinese.load(Ordering::Acquire) {
+        let trad_text = if snap.traditional_chinese {
             "简繁切换: 繁体"
         } else {
             "简繁切换: 简体"
         };
-        let punct_text = if self.full_width_punct.load(Ordering::Acquire) {
+        let punct_text = if snap.full_width_punct {
             "标点切换: 全角 (中文标点)"
         } else {
             "标点切换: 半角 (英文标点)"
         };
-        let char_text = if self.full_width_char.load(Ordering::Acquire) {
+        let char_text = if snap.full_width_char {
             "字符切换: 全角 (英文字母)"
         } else {
             "字符切换: 半角 (英文字母)"
@@ -182,29 +159,44 @@ impl DBusMenu {
         }
 
         match id {
-            1 => self.toggle_flag_with_feedback(&self.is_chinese, "输入模式", "中文", "英文"),
+            1 => {
+                let next = !self.shared_flags.is_chinese();
+                self.shared_flags.set_chinese(next);
+                self.notify_flag_changed("输入模式", if next { "中文" } else { "英文" });
+            }
             2 => self.on_menu_reload(),
             3 => self.launch_settings(),
             4 => self.launch_view_log(),
             5 => self.on_menu_exit(),
-            6 => self.toggle_flag_with_feedback(
-                &self.traditional_chinese,
-                "简繁模式",
-                "繁体",
-                "简体",
-            ),
-            7 => self.toggle_flag_with_feedback(
-                &self.full_width_punct,
-                "标点模式",
-                "全角 (中文标点)",
-                "半角 (英文标点)",
-            ),
-            8 => self.toggle_flag_with_feedback(
-                &self.full_width_char,
-                "字符全半角",
-                "全角 (英文字母)",
-                "半角 (英文字母)",
-            ),
+            6 => {
+                let next = !self.shared_flags.is_traditional();
+                self.shared_flags.set_traditional(next);
+                self.notify_flag_changed("简繁模式", if next { "繁体" } else { "简体" });
+            }
+            7 => {
+                let next = !self.shared_flags.is_full_width_punct();
+                self.shared_flags.set_full_width_punct(next);
+                self.notify_flag_changed(
+                    "标点模式",
+                    if next {
+                        "全角 (中文标点)"
+                    } else {
+                        "半角 (英文标点)"
+                    },
+                );
+            }
+            8 => {
+                let next = !self.shared_flags.is_full_width_char();
+                self.shared_flags.set_full_width_char(next);
+                self.notify_flag_changed(
+                    "字符全半角",
+                    if next {
+                        "全角 (英文字母)"
+                    } else {
+                        "半角 (英文字母)"
+                    },
+                );
+            }
             9 => self.on_menu_restart(),
             _ => {}
         }
@@ -226,25 +218,15 @@ mod tests {
 
     #[test]
     fn test_menu_layout_contains_dynamic_log_path() {
-        let is_chinese = Arc::new(AtomicBool::new(true));
-        let is_caps = Arc::new(AtomicBool::new(false));
+        let flags = SharedInputFlags::new(true, false, true, false);
         let reload = Arc::new(AtomicBool::new(false));
         let exit = Arc::new(AtomicBool::new(false));
         let settings = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = mpsc::sync_channel(1);
-
-        let is_trad = Arc::new(AtomicBool::new(false));
-        let is_full_punct = Arc::new(AtomicBool::new(true));
-        let is_full_char = Arc::new(AtomicBool::new(false));
-
         let coordinator = ShutdownCoordinator::from_parts(exit, None);
 
         let menu = DBusMenu::new(DBusMenuOptions {
-            is_chinese: is_chinese.clone(),
-            is_caps_locked: is_caps.clone(),
-            traditional_chinese: is_trad.clone(),
-            full_width_punct: is_full_punct.clone(),
-            full_width_char: is_full_char.clone(),
+            shared_flags: flags.clone(),
             reload_requested: reload,
             coordinator,
             settings_running: settings,
@@ -267,12 +249,12 @@ mod tests {
 
         // 测试点击切换简繁
         menu.event(6, "clicked".to_string(), Value::from(0), 0);
-        assert!(is_trad.load(Ordering::Acquire));
+        assert!(flags.is_traditional());
         let (_rev, (_root_id, _props, items_updated)) = menu.get_layout(0, -1, Vec::new());
         assert!(format!("{:?}", items_updated[1]).contains("简繁切换: 繁体"));
 
         // 开启大写锁定，验证菜单第1项文本正确变为英文大写
-        is_caps.store(true, Ordering::Release);
+        flags.set_caps_locked(true);
         let (_rev, (_root_id, _props, items_caps)) = menu.get_layout(0, -1, Vec::new());
         let item1_caps_str = format!("{:?}", items_caps[0]);
         assert!(item1_caps_str.contains("当前输入: 英文大写"));

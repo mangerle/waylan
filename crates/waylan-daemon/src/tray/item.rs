@@ -1,9 +1,7 @@
 use crate::config::{env_var_non_empty, AppConfig};
 use log::{info, warn};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 use waylan_wayland::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
@@ -13,14 +11,13 @@ use zbus::zvariant::OwnedObjectPath;
 type ToolTipData = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 
 pub use waylan_core::assets::{detect_default_assets_path, resolve_icon_path_or_name};
+use waylan_core::state::SharedInputFlags;
 
 /// 系统托盘状态项实现 (StatusNotifierItem)
 #[derive(Clone)]
 pub struct StatusNotifierItem {
-    /// 当前是否处于中文模式
-    pub(crate) is_chinese: Arc<AtomicBool>,
-    /// 当前是否处于 CapsLock 大写锁定状态
-    pub(crate) is_caps_locked: Arc<AtomicBool>,
+    /// 共享输入状态原子容器
+    pub(crate) shared_flags: SharedInputFlags,
     /// 图标与状态刷新通知发送端
     pub(crate) icon_update_tx: SyncSender<()>,
     /// 自定义图标主题目录
@@ -112,16 +109,14 @@ fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
 
 impl StatusNotifierItem {
     pub(crate) fn new(
-        is_chinese: Arc<AtomicBool>,
-        is_caps_locked: Arc<AtomicBool>,
+        shared_flags: SharedInputFlags,
         icon_update_tx: SyncSender<()>,
         config: &AppConfig,
         loop_wakeup: Option<LoopWakeup>,
     ) -> Self {
         let icons = resolve_tray_icons(config);
         Self {
-            is_chinese,
-            is_caps_locked,
+            shared_flags,
             icon_update_tx,
             icon_theme_path: icons.theme_path,
             icon_zh: icons.icon_zh,
@@ -167,9 +162,10 @@ impl StatusNotifierItem {
     /// 图标名称（根据中英文与 CapsLock 大写状态动态切换，支持自定义图标）
     #[zbus(property)]
     pub(crate) fn icon_name(&self) -> String {
-        if self.is_caps_locked.load(Ordering::Acquire) {
+        let snap = self.shared_flags.snapshot();
+        if snap.is_caps_locked {
             self.icon_en_caps.clone()
-        } else if self.is_chinese.load(Ordering::Acquire) {
+        } else if snap.is_chinese {
             self.icon_zh.clone()
         } else {
             self.icon_en.clone()
@@ -179,9 +175,10 @@ impl StatusNotifierItem {
     /// 提示文本结构
     #[zbus(property)]
     fn tool_tip(&self) -> ToolTipData {
-        let mode_str = if self.is_caps_locked.load(Ordering::Acquire) {
+        let snap = self.shared_flags.snapshot();
+        let mode_str = if snap.is_caps_locked {
             "英文大写 (CapsLock)"
-        } else if self.is_chinese.load(Ordering::Acquire) {
+        } else if snap.is_chinese {
             "中文拼音"
         } else {
             "英文模式"
@@ -208,9 +205,9 @@ impl StatusNotifierItem {
 
     /// 用户左键点击托盘图标：触发中英文快速切换
     pub(crate) fn activate(&self, _x: i32, _y: i32) {
-        let current = self.is_chinese.load(Ordering::Acquire);
+        let current = self.shared_flags.is_chinese();
         let next = !current;
-        self.is_chinese.store(next, Ordering::Release);
+        self.shared_flags.set_chinese(next);
         let _ = self.icon_update_tx.try_send(());
         if let Some(ref wakeup) = self.loop_wakeup {
             wakeup.wake();
@@ -242,8 +239,7 @@ mod tests {
 
     #[test]
     fn test_custom_tray_icon_and_theme_path() {
-        let is_chinese = Arc::new(AtomicBool::new(true));
-        let is_caps_locked = Arc::new(AtomicBool::new(false));
+        let flags = SharedInputFlags::new(true, false, false, false);
         let (tx, _rx) = mpsc::sync_channel(1);
         let cfg = AppConfig {
             desktop: waylan_core::config::DesktopConfig {
@@ -255,37 +251,24 @@ mod tests {
             ..Default::default()
         };
 
-        let item = StatusNotifierItem::new(
-            Arc::clone(&is_chinese),
-            Arc::clone(&is_caps_locked),
-            tx,
-            &cfg,
-            None,
-        );
+        let item = StatusNotifierItem::new(flags.clone(), tx, &cfg, None);
         assert_eq!(item.icon_theme_path(), "/opt/waylan/icons");
         assert_eq!(item.icon_name(), "waylan-zh-custom");
 
-        is_chinese.store(false, Ordering::Release);
+        flags.set_chinese(false);
         assert_eq!(item.icon_name(), "waylan-en-custom");
 
-        is_caps_locked.store(true, Ordering::Release);
+        flags.set_caps_locked(true);
         assert_eq!(item.icon_name(), "tray-en-caps");
     }
 
     #[test]
     fn test_auto_detected_assets_path() {
-        let is_chinese = Arc::new(AtomicBool::new(true));
-        let is_caps_locked = Arc::new(AtomicBool::new(false));
+        let flags = SharedInputFlags::new(true, false, false, false);
         let (tx, _rx) = mpsc::sync_channel(1);
         let cfg = AppConfig::default();
 
-        let item = StatusNotifierItem::new(
-            Arc::clone(&is_chinese),
-            Arc::clone(&is_caps_locked),
-            tx,
-            &cfg,
-            None,
-        );
+        let item = StatusNotifierItem::new(flags.clone(), tx, &cfg, None);
 
         assert!(item.icon_theme_path().ends_with("assets"));
         assert!(
@@ -293,10 +276,10 @@ mod tests {
             "应优先返回规范绝对路径以确保各桌面托盘直接加载"
         );
 
-        is_chinese.store(false, Ordering::Release);
+        flags.set_chinese(false);
         assert!(item.icon_name().ends_with("tray-en.svg") || item.icon_name() == "tray-en");
 
-        is_caps_locked.store(true, Ordering::Release);
+        flags.set_caps_locked(true);
         assert!(
             item.icon_name().ends_with("tray-en-caps.svg") || item.icon_name() == "tray-en-caps"
         );

@@ -183,11 +183,11 @@ pub(crate) fn process_key_event(
             committed,
             was_consumed,
         } => {
-            if let Some(ref zh_flag) = session.shared_is_chinese {
-                zh_flag.store(
-                    matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                    Ordering::Release,
-                );
+            let is_zh = matches!(new_mode, InputMode::Chinese | InputMode::VMode);
+            if let Some(ref flags) = session.shared_flags {
+                flags.set_chinese(is_zh);
+            } else if let Some(ref zh_flag) = session.shared_is_chinese {
+                zh_flag.store(is_zh, Ordering::Release);
             }
             if let Some(ref notify_tx) = session.mode_notify_tx {
                 let _ = notify_tx.try_send(());

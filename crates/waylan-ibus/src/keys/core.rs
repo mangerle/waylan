@@ -5,12 +5,11 @@
 //! - **核心优势**：纯内存数据结构，加锁保护仅限于单次按键决策的微秒级临界区内。
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
 use waylan_algo::{AlgoEngine, ImeCoreSession};
-use waylan_core::input::sync_mode_from_shared_flag;
+use waylan_core::input::sync_mode_from_shared_flags;
+use waylan_core::state::SharedInputFlags;
 use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode, VoiceConfig};
 use waylan_voice::VoiceInteractionManager;
 
@@ -33,11 +32,8 @@ pub struct IbusKeyOutcome {
 pub struct IbusSessionCore {
     /// 组合算法核心通用会话状态机（算法引擎、标点处理器、修饰键、Shift、快捷键）
     pub core: ImeCoreSession,
-    pub shared_is_chinese: Option<Arc<AtomicBool>>,
-    pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
-    pub shared_traditional_chinese: Option<Arc<AtomicBool>>,
-    pub shared_full_width_punct: Option<Arc<AtomicBool>>,
-    pub shared_full_width_char: Option<Arc<AtomicBool>>,
+    /// 共享输入状态原子容器
+    pub shared_flags: Option<SharedInputFlags>,
     pub mode_notify_tx: Option<SyncSender<()>>,
     pub is_caps_locked: bool,
     pub phys_mods: u8,
@@ -56,11 +52,7 @@ impl IbusSessionCore {
     pub fn new(engine: AlgoEngine) -> Self {
         Self {
             core: ImeCoreSession::new(engine),
-            shared_is_chinese: None,
-            shared_is_caps_locked: None,
-            shared_traditional_chinese: None,
-            shared_full_width_punct: None,
-            shared_full_width_char: None,
+            shared_flags: None,
             mode_notify_tx: None,
             is_caps_locked: false,
             phys_mods: 0,
@@ -76,27 +68,21 @@ impl IbusSessionCore {
 
     /// 同步来自系统托盘的共享中英文状态标志
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
-        sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
+        sync_mode_from_shared_flags(self.shared_flags.as_ref(), &mut self.core.mode)
     }
 
     /// 同步来自托盘与全局状态的简繁与标点/字符全半角配置
     pub fn sync_shared_settings(&mut self) {
-        if let Some(ref trad) = self.shared_traditional_chinese {
-            let val = trad.load(Ordering::Acquire);
-            if self.core.engine.config.traditional_chinese != val {
-                self.core.engine.config.traditional_chinese = val;
+        if let Some(ref flags) = self.shared_flags {
+            let snap = flags.snapshot();
+            if self.core.engine.config.traditional_chinese != snap.traditional_chinese {
+                self.core.engine.config.traditional_chinese = snap.traditional_chinese;
             }
-        }
-        if let Some(ref punct) = self.shared_full_width_punct {
-            let val = punct.load(Ordering::Acquire);
-            if self.core.punctuation_processor.full_width_punct != val {
-                self.core.punctuation_processor.full_width_punct = val;
+            if self.core.punctuation_processor.full_width_punct != snap.full_width_punct {
+                self.core.punctuation_processor.full_width_punct = snap.full_width_punct;
             }
-        }
-        if let Some(ref full_char) = self.shared_full_width_char {
-            let val = full_char.load(Ordering::Acquire);
-            if self.core.full_width_char != val {
-                self.core.full_width_char = val;
+            if self.core.full_width_char != snap.full_width_char {
+                self.core.full_width_char = snap.full_width_char;
             }
         }
     }
@@ -150,8 +136,8 @@ impl IbusSessionCore {
             } else {
                 self.core.modifiers.locked &= !waylan_core::input::MOD_CAPS;
             }
-            if let Some(ref flag) = self.shared_is_caps_locked {
-                flag.store(is_locked, Ordering::Release);
+            if let Some(ref flags) = self.shared_flags {
+                flags.set_caps_locked(is_locked);
             }
             if let Some(ref tx) = self.mode_notify_tx {
                 let _ = tx.try_send(());

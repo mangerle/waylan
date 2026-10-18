@@ -23,6 +23,7 @@ use crate::session_common::*;
 use crate::surface::{CandidateSurfaceManager, CursorRect};
 use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
+use waylan_core::state::SharedInputFlags;
 pub use waylan_core::InputMode;
 use waylan_core::LoopWakeup;
 
@@ -57,6 +58,8 @@ pub struct WaylanV2Session {
     pub qhandle: Option<QueueHandle<Self>>,
     /// 当前跟踪的光标坐标
     pub current_cursor: CursorRect,
+    /// 共享输入状态原子容器
+    pub shared_flags: Option<SharedInputFlags>,
     /// 与外部系统托盘共享的中英文状态标志
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
     /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
@@ -140,6 +143,7 @@ impl WaylanV2Session {
             active_buffer: None,
             qhandle: None,
             current_cursor: CursorRect::default(),
+            shared_flags: None,
             shared_is_chinese: None,
             shared_is_caps_locked: None,
             mode_notify_tx: None,

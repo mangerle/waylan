@@ -23,6 +23,7 @@ use crate::surface::CandidateSurfaceManager;
 use crate::session_common::*;
 use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
+use waylan_core::state::SharedInputFlags;
 use waylan_core::LoopWakeup;
 
 /// V1 会话配置与词库热重载回调函数类型
@@ -35,6 +36,8 @@ pub struct WaylanV1Session {
     pub core: ImeCoreSession,
     /// 候选框悬浮图层管理器
     pub surface_manager: CandidateSurfaceManager,
+    /// 共享输入状态原子容器
+    pub shared_flags: Option<SharedInputFlags>,
     /// 与外部系统托盘共享的中英文状态标志
     pub shared_is_chinese: Option<Arc<AtomicBool>>,
     /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
@@ -149,9 +152,12 @@ impl WaylanV1Session {
 
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即清理残留预编辑与候选框
     fn sync_mode_from_shared_flag(&mut self) {
-        if let Some(InputMode::English) =
+        let changed = if let Some(ref flags) = self.shared_flags {
+            sync_mode_from_shared_flags(Some(flags), &mut self.core.mode)
+        } else {
             sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
-        {
+        };
+        if let Some(InputMode::English) = changed {
             if !self.core.engine.raw_input().is_empty() {
                 self.core.engine.reset();
                 self.hide_candidate_surface();

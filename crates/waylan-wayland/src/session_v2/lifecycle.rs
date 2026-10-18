@@ -4,6 +4,7 @@ use waylan_core::InputMode;
 use crate::session_common::{
     apply_default_engine_reload, check_reload_requested_or_files_changed,
     init_session_inotify_watcher, is_reload_requested, sync_mode_from_shared_flag,
+    sync_mode_from_shared_flags,
 };
 
 use super::WaylanV2Session;
@@ -117,9 +118,12 @@ impl WaylanV2Session {
 
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即取消输入并隐藏候选框
     pub(crate) fn sync_mode_from_shared_flag(&mut self) {
-        if let Some(InputMode::English) =
+        let changed = if let Some(ref flags) = self.shared_flags {
+            sync_mode_from_shared_flags(Some(flags), &mut self.core.mode)
+        } else {
             sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
-        {
+        };
+        if let Some(InputMode::English) = changed {
             if !self.core.engine.raw_input().is_empty() {
                 self.cancel_input();
             }

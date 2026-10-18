@@ -4,7 +4,31 @@ use super::constants::{
     KEY_LEFTALT, KEY_LEFTCTRL, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_RIGHTALT, KEY_RIGHTCTRL,
     KEY_RIGHTMETA, KEY_RIGHTSHIFT, MOD_ALT, MOD_CAPS, MOD_CTRL, MOD_SHIFT, MOD_SUPER,
 };
+use crate::state::SharedInputFlags;
 use crate::InputMode;
+
+/// 从聚合共享输入状态容器同步输入语言模式
+///
+/// 若模式发生变更，返回 `Some(new_mode)`；若未变更，返回 `None`。
+pub fn sync_mode_from_shared_flags(
+    shared_flags: Option<&SharedInputFlags>,
+    current_mode: &mut InputMode,
+) -> Option<InputMode> {
+    if let Some(flags) = shared_flags {
+        let external_zh = flags.is_chinese();
+        let current_zh = matches!(*current_mode, InputMode::Chinese | InputMode::VMode);
+        if external_zh != current_zh {
+            let new_mode = if external_zh {
+                InputMode::Chinese
+            } else {
+                InputMode::English
+            };
+            *current_mode = new_mode;
+            return Some(new_mode);
+        }
+    }
+    None
+}
 
 /// 从共享原子标志同步输入语言模式
 ///

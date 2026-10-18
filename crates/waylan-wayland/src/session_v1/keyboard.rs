@@ -45,7 +45,9 @@ fn handle_v1_modifiers(
     state.core.set_modifiers(mods_depressed, mods_locked);
     let curr_caps = state.core.is_caps_locked();
     if prev_caps != curr_caps {
-        if let Some(ref caps_flag) = state.shared_is_caps_locked {
+        if let Some(ref flags) = state.shared_flags {
+            flags.set_caps_locked(curr_caps);
+        } else if let Some(ref caps_flag) = state.shared_is_caps_locked {
             caps_flag.store(curr_caps, Ordering::Release);
         }
         if let Some(ref notify_tx) = state.mode_notify_tx {
@@ -212,11 +214,11 @@ fn handle_v1_key_event(
             committed,
             was_consumed,
         } => {
-            if let Some(ref zh_flag) = state.shared_is_chinese {
-                zh_flag.store(
-                    matches!(new_mode, InputMode::Chinese | InputMode::VMode),
-                    Ordering::Release,
-                );
+            let is_zh = matches!(new_mode, InputMode::Chinese | InputMode::VMode);
+            if let Some(ref flags) = state.shared_flags {
+                flags.set_chinese(is_zh);
+            } else if let Some(ref zh_flag) = state.shared_is_chinese {
+                zh_flag.store(is_zh, Ordering::Release);
             }
             if let Some(ref notify_tx) = state.mode_notify_tx {
                 let _ = notify_tx.try_send(());
