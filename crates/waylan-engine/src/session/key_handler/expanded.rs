@@ -5,11 +5,11 @@
 //! - **核心优势**：将二级卡片特定的复杂状态转移与基础选词流程解耦，保持状态机正交。
 //! - **代价与局限**：依赖 AlgoEngine 的 expanded 状态机与标点处理器。
 
+use waylan_algo::preprocessor::PunctuationProcessor;
+use waylan_algo::AlgoEngine;
 use waylan_core::input::constants::{KEY_DOWN, KEY_ENTER, KEY_KPENTER, KEY_SPACE, KEY_TAB, KEY_UP};
 
-use crate::preprocessor::PunctuationProcessor;
 use crate::session::ImeOutputAction;
-use crate::AlgoEngine;
 
 /// 处理二级展开卡片导航（Tab 键展开）
 pub(crate) fn handle_expanded_tab_key(

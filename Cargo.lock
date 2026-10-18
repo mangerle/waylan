@@ -6169,11 +6169,24 @@ dependencies = [
  "toml 0.8.23",
  "waylan-algo",
  "waylan-core",
+ "waylan-engine",
  "waylan-ibus",
  "waylan-ui",
  "waylan-voice",
  "waylan-wayland",
  "zbus 4.4.0",
+]
+
+[[package]]
+name = "waylan-engine"
+version = "1.2.0"
+dependencies = [
+ "log",
+ "tempfile",
+ "thiserror 1.0.69",
+ "waylan-algo",
+ "waylan-core",
+ "waylan-voice",
 ]
 
 [[package]]
@@ -6185,9 +6198,8 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 1.0.69",
- "waylan-algo",
  "waylan-core",
- "waylan-voice",
+ "waylan-engine",
  "zbus 4.4.0",
 ]
 
@@ -6246,10 +6258,9 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "thiserror 1.0.69",
- "waylan-algo",
  "waylan-core",
+ "waylan-engine",
  "waylan-ui",
- "waylan-voice",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",

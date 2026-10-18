@@ -7,10 +7,11 @@
 //!   任何按键处理的改进或修复仅需在此单一模块中维护即可全局生效。
 //! - **代价与局限**：协议适配层需将平台特定事件参数包装为 [`KeyProcessContext`] 并消费 [`KeyProcessResult`]。
 
-use crate::composition::{handle_composition_key_with_params, CompositionKeyParams};
-use crate::session::{ImeCoreSession, ImeOutputAction};
 use waylan_core::input::*;
 use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
+
+use super::key_handler::{handle_composition_key_with_params, CompositionKeyParams};
+use super::{ImeCoreSession, ImeOutputAction};
 
 /// 核心输入法按键处理上下文
 #[derive(Debug, Clone, Copy, Default)]

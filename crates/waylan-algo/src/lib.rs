@@ -13,7 +13,6 @@ pub mod opencc;
 pub mod pipeline;
 pub mod preprocessor;
 pub mod prism;
-pub mod session;
 pub mod syllables;
 pub mod table;
 pub mod types;
@@ -22,18 +21,11 @@ pub mod viterbi;
 pub mod vocab;
 
 pub use bigram::CompactMmapBigram;
-pub use composition::{
-    handle_composition_key, handle_composition_key_with_params, Composition, CompositionKeyParams,
-    KeyProcessAction,
-};
+pub use composition::Composition;
 pub use custom_phrase::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;
-pub use session::{
-    extract_surrounding_prefix, ImeAction, ImeCoreSession, ImeOutputAction, KeyProcessContext,
-    KeyProcessResult, ShortcutToggleAction,
-};
 pub use table::{CompactMmapLexicon, LexiconTable};
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 pub use user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};

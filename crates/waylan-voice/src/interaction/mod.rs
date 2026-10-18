@@ -28,26 +28,50 @@ pub enum VoiceKeyAction {
     Commit(String),
 }
 
+/// 语音交互会话显式状态机枚举
+///
+/// # 设计原理
+/// - **非法状态不可表示**：彻底消除此前散落的 `is_push_to_talk_active`、`is_finalizing`、`is_fallback_committed`
+///   等互斥布尔值标志位，确保状态组合在编译期具备数学确定性。
+/// - **明确状态闭环**：录音通道 (`Receiver<VoiceEvent>`) 与活跃阶段绑定，空闲时生命周期自然结束。
+#[derive(Debug, Default)]
+pub enum VoiceSessionState {
+    /// 空闲就绪状态，无活跃录音或结算任务
+    #[default]
+    Idle,
+    /// 长按对讲机 (Push-to-Talk) 录音中
+    PushToTalkRecording {
+        /// 触发对讲机录音的物理扫描码
+        trigger_key: u32,
+        /// 后台事件接收通道
+        rx: Receiver<VoiceEvent>,
+    },
+    /// 开关点按 (Toggle) 连续听写录音中
+    ToggleRecording {
+        /// 后台事件接收通道
+        rx: Receiver<VoiceEvent>,
+    },
+    /// 录音已结束，等待后台最终识别文本结算 (FinalCommit) 或超时
+    Finalizing {
+        /// 后台事件接收通道
+        rx: Receiver<VoiceEvent>,
+        /// 进入结算状态的时间戳（用于 2 秒超时防挂死保底）
+        start_time: Instant,
+        /// 是否已在录音停止瞬间提前将流式预览文字提交上屏
+        fallback_committed: bool,
+    },
+}
+
 /// 统一语音按键交互状态机与控制器 (Voice Interaction Manager)
 pub struct VoiceInteractionManager {
     /// 语音识别与采集底层会话控制器
     pub controller: VoiceSessionController,
     /// 语音识别与快捷键配置
     pub config: VoiceConfig,
-    /// 是否处于长按对讲机 (Push-to-Talk) 录音模式
-    pub is_push_to_talk_active: bool,
-    /// 长按对讲机模式下的触发主键扫描码
-    pub push_to_talk_key: Option<u32>,
-    /// 是否处于停止录音后等待最终结算状态
-    pub is_finalizing: bool,
-    /// 是否已将保底流式文本提交上屏（防止最终结算到达时重复提交）
-    pub is_fallback_committed: bool,
-    /// 进入最终结算状态的时间戳（用于超时防挂死保底）
-    pub finalize_start_time: Option<Instant>,
+    /// 显式语音会话状态机
+    pub state: VoiceSessionState,
     /// 上次切换开关模式的时间戳（用于按键防抖）
     pub last_toggle_time: Instant,
-    /// 后台语音事件接收通道
-    pub voice_rx: Option<Receiver<VoiceEvent>>,
     /// 当前实时识别的流式预览文字
     pub partial_text: Option<String>,
     /// 状态栏/悬浮条展示文案（如 "正在聆听中..." 或 "正在转录中..."）
@@ -68,13 +92,8 @@ impl VoiceInteractionManager {
         Self {
             controller: VoiceSessionController::new(),
             config,
-            is_push_to_talk_active: false,
-            push_to_talk_key: None,
-            is_finalizing: false,
-            is_fallback_committed: false,
-            finalize_start_time: None,
+            state: VoiceSessionState::Idle,
             last_toggle_time: Instant::now() - Duration::from_secs(10),
-            voice_rx: None,
             partial_text: None,
             display_text: None,
             waveform: None,
@@ -84,29 +103,39 @@ impl VoiceInteractionManager {
     /// 查询当前是否处于语音激活状态（录音中、等待转录结算中或有展示浮条）
     #[inline]
     pub fn is_active(&self) -> bool {
-        self.controller.is_recording()
-            || self.is_finalizing
+        !matches!(self.state, VoiceSessionState::Idle)
+            || self.controller.is_recording()
             || self.display_text.is_some()
-            || self.voice_rx.is_some()
     }
 
     /// 查询当前是否正在执行底层音频录制
     #[inline]
     pub fn is_recording(&self) -> bool {
-        self.controller.is_recording()
+        matches!(
+            self.state,
+            VoiceSessionState::PushToTalkRecording { .. }
+                | VoiceSessionState::ToggleRecording { .. }
+        )
+    }
+
+    /// 查询当前是否处于长按说话模式录音中
+    #[inline]
+    pub fn is_push_to_talk_recording(&self) -> bool {
+        matches!(self.state, VoiceSessionState::PushToTalkRecording { .. })
+    }
+
+    /// 查询当前是否正处于转录结算等待状态
+    #[inline]
+    pub fn is_finalizing(&self) -> bool {
+        matches!(self.state, VoiceSessionState::Finalizing { .. })
     }
 
     /// 清空语音运行状态与临时缓存
     pub fn clear_state(&mut self) {
-        self.is_push_to_talk_active = false;
-        self.push_to_talk_key = None;
-        self.is_finalizing = false;
-        self.is_fallback_committed = false;
-        self.finalize_start_time = None;
+        self.state = VoiceSessionState::Idle;
         self.display_text = None;
         self.waveform = None;
         self.partial_text = None;
-        self.voice_rx = None;
     }
 
     /// 卸载内存中预载的模型权重并释放资源
@@ -124,93 +153,114 @@ impl VoiceInteractionManager {
 
     /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字（完全非阻塞）
     pub fn poll_events(&mut self) -> Option<String> {
+        let is_finalizing_before = self.is_finalizing();
         let mut final_commit = None;
-        if let Some(ref rx) = self.voice_rx {
-            while let Ok(event) = rx.try_recv() {
-                match event {
-                    VoiceEvent::WaveformUpdated { waveform, .. } => {
-                        if !self.is_finalizing && self.config.interaction.show_floating_bar {
-                            self.display_text = Some("正在聆听中...".to_string());
-                            self.waveform = Some(waveform);
-                        } else if self.is_finalizing {
-                            self.waveform = None;
-                        } else {
-                            self.display_text = None;
-                            self.waveform = None;
-                        }
-                    }
-                    VoiceEvent::PartialText(text) => {
-                        if self.config.interaction.real_time_preview {
-                            self.partial_text = Some(text);
-                        } else {
-                            self.partial_text = None;
-                        }
-                    }
-                    VoiceEvent::SegmentCommit(text) => {
-                        let trimmed = text.trim().to_string();
-                        if !trimmed.is_empty() {
-                            final_commit = Some(trimmed);
-                            self.partial_text = None;
-                            break;
-                        }
-                    }
-                    VoiceEvent::FinalCommit(text) => {
-                        let trimmed = text.trim().to_string();
-                        // 若此前停止录音时已经把保底文本上屏过，静默吸收最终事件，避免重复出字
-                        if self.is_fallback_committed {
-                            debug!("[微澜语音] 收到后台最终结算，此前已保底上屏，静默同步状态");
-                            self.clear_state();
-                            break;
-                        }
 
-                        let commit_text = if !trimmed.is_empty() {
-                            trimmed
-                        } else if let Some(fallback) = self.partial_text.take() {
-                            let fb_trimmed = fallback.trim().to_string();
-                            if !fb_trimmed.is_empty() {
-                                debug!(
-                                    "[微澜语音] 最终识别文本为空，启用流式预览保底上屏: \"{}\"",
-                                    fb_trimmed
-                                );
-                            }
-                            fb_trimmed
-                        } else {
-                            String::new()
-                        };
+        // 1. 尝试从当前活跃状态通道提取事件
+        let events = match &self.state {
+            VoiceSessionState::PushToTalkRecording { rx, .. }
+            | VoiceSessionState::ToggleRecording { rx }
+            | VoiceSessionState::Finalizing { rx, .. } => {
+                let mut evts = Vec::new();
+                while let Ok(event) = rx.try_recv() {
+                    evts.push(event);
+                }
+                evts
+            }
+            VoiceSessionState::Idle => Vec::new(),
+        };
 
+        for event in events {
+            match event {
+                VoiceEvent::WaveformUpdated { waveform, .. } => {
+                    if !is_finalizing_before && self.config.interaction.show_floating_bar {
+                        self.display_text = Some("正在聆听中...".to_string());
+                        self.waveform = Some(waveform);
+                    } else if is_finalizing_before {
+                        self.waveform = None;
+                    } else {
+                        self.display_text = None;
+                        self.waveform = None;
+                    }
+                }
+                VoiceEvent::PartialText(text) => {
+                    if self.config.interaction.real_time_preview {
+                        self.partial_text = Some(text);
+                    } else {
+                        self.partial_text = None;
+                    }
+                }
+                VoiceEvent::SegmentCommit(text) => {
+                    let trimmed = text.trim().to_string();
+                    if !trimmed.is_empty() {
+                        final_commit = Some(trimmed);
+                        self.partial_text = None;
+                        break;
+                    }
+                }
+                VoiceEvent::FinalCommit(text) => {
+                    let trimmed = text.trim().to_string();
+                    let fallback_already = match self.state {
+                        VoiceSessionState::Finalizing {
+                            fallback_committed, ..
+                        } => fallback_committed,
+                        _ => false,
+                    };
+
+                    // 若此前停止录音时已经把保底文本上屏过，静默吸收最终事件，避免重复出字
+                    if fallback_already {
+                        debug!("[微澜语音] 收到后台最终结算，此前已保底上屏，静默同步状态");
                         self.clear_state();
-                        if !commit_text.is_empty() {
-                            info!("[微澜语音] 成功生成文字上屏: \"{}\"", commit_text);
-                            final_commit = Some(commit_text);
+                        break;
+                    }
+
+                    let commit_text = if !trimmed.is_empty() {
+                        trimmed
+                    } else if let Some(fallback) = self.partial_text.take() {
+                        let fb_trimmed = fallback.trim().to_string();
+                        if !fb_trimmed.is_empty() {
+                            debug!(
+                                "[微澜语音] 最终识别文本为空，启用流式预览保底上屏: \"{}\"",
+                                fb_trimmed
+                            );
                         }
-                        break;
+                        fb_trimmed
+                    } else {
+                        String::new()
+                    };
+
+                    self.clear_state();
+                    if !commit_text.is_empty() {
+                        info!("[微澜语音] 成功生成文字上屏: \"{}\"", commit_text);
+                        final_commit = Some(commit_text);
                     }
-                    VoiceEvent::Cancelled => {
-                        debug!("[微澜语音] 语音会话已取消");
-                        self.clear_state();
-                        break;
-                    }
-                    VoiceEvent::Error(err) => {
-                        error!("[微澜语音] 识别发生异常: {}", err);
-                        self.clear_state();
-                        break;
-                    }
+                    break;
+                }
+                VoiceEvent::Cancelled => {
+                    debug!("[微澜语音] 语音会话已取消");
+                    self.clear_state();
+                    break;
+                }
+                VoiceEvent::Error(err) => {
+                    error!("[微澜语音] 识别发生异常: {}", err);
+                    self.clear_state();
+                    break;
                 }
             }
         }
 
-        // 超时防假死保底检测：若处于等待最终结算状态超过 2 秒未收到 FinalCommit 则安全降级
-        if self.is_finalizing {
-            let is_timeout = self
-                .finalize_start_time
-                .map(|t| t.elapsed() >= Duration::from_millis(2000))
-                .unwrap_or(false);
-            if is_timeout {
+        // 2. 超时防假死保底检测：若处于等待最终结算状态超过 2 秒未收到 FinalCommit 则安全降级
+        if let VoiceSessionState::Finalizing {
+            start_time,
+            fallback_committed,
+            ..
+        } = self.state
+        {
+            if start_time.elapsed() >= Duration::from_millis(2000) {
                 warn!("[微澜语音] 等待最终结算超时(2s)，启用流式预览兜底并强制重置状态");
                 let fallback = self.partial_text.take();
-                let already_committed = self.is_fallback_committed;
                 self.clear_state();
-                if !already_committed {
+                if !fallback_committed {
                     if let Some(fb) = fallback {
                         let trimmed = fb.trim().to_string();
                         if !trimmed.is_empty() {
@@ -234,16 +284,18 @@ impl VoiceInteractionManager {
             warn!("[微澜语音] 启动语音录音失败: {}", e);
             false
         } else {
-            self.is_push_to_talk_active = is_ptt;
-            self.push_to_talk_key = main_key;
-            self.is_finalizing = false;
-            self.is_fallback_committed = false;
-            self.finalize_start_time = None;
-            self.voice_rx = Some(rx);
             self.partial_text = None;
             if self.config.interaction.show_floating_bar {
                 self.display_text = Some("正在聆听中...".to_string());
             }
+            self.state = if is_ptt {
+                VoiceSessionState::PushToTalkRecording {
+                    trigger_key: main_key.unwrap_or(0),
+                    rx,
+                }
+            } else {
+                VoiceSessionState::ToggleRecording { rx }
+            };
             true
         }
     }
@@ -251,8 +303,6 @@ impl VoiceInteractionManager {
     /// 停止录音并触发非阻塞最终结算
     pub fn stop_and_resolve_commit(&mut self) -> Option<String> {
         self.controller.stop_and_commit();
-        self.is_push_to_talk_active = false;
-        self.push_to_talk_key = None;
         self.waveform = None;
         self.display_text = None;
 
@@ -261,25 +311,39 @@ impl VoiceInteractionManager {
             return Some(text);
         }
 
-        // 若当前已存在流式部分识别文本，立即作为保底文字上屏提交（零延迟交互），并保持通道开启等待结算吸收
-        if let Some(preview) = self.partial_text.take() {
-            let trimmed = preview.trim().to_string();
-            if !trimmed.is_empty() {
-                self.is_fallback_committed = true;
-                self.is_finalizing = true;
-                self.finalize_start_time = Some(Instant::now());
-                info!(
-                    "[微澜语音] 录音停止立即启用流式预览保底上屏: \"{}\"",
-                    trimmed
-                );
-                return Some(trimmed);
+        // 提取当前的事件通道，将录音状态安全转换为结算等待状态
+        let active_rx = match std::mem::take(&mut self.state) {
+            VoiceSessionState::PushToTalkRecording { rx, .. }
+            | VoiceSessionState::ToggleRecording { rx } => Some(rx),
+            VoiceSessionState::Finalizing { rx, .. } => Some(rx),
+            VoiceSessionState::Idle => None,
+        };
+
+        if let Some(rx) = active_rx {
+            // 若当前已存在流式部分识别文本，立即作为保底文字上屏提交（零延迟交互），并保持通道开启等待结算吸收
+            if let Some(preview) = self.partial_text.take() {
+                let trimmed = preview.trim().to_string();
+                if !trimmed.is_empty() {
+                    self.state = VoiceSessionState::Finalizing {
+                        rx,
+                        start_time: Instant::now(),
+                        fallback_committed: true,
+                    };
+                    info!(
+                        "[微澜语音] 录音停止立即启用流式预览保底上屏: \"{}\"",
+                        trimmed
+                    );
+                    return Some(trimmed);
+                }
             }
+
+            self.state = VoiceSessionState::Finalizing {
+                rx,
+                start_time: Instant::now(),
+                fallback_committed: false,
+            };
         }
 
-        // 若当前尚无流式文字（如整句云端识别），进入结算等待状态
-        self.is_fallback_committed = false;
-        self.is_finalizing = true;
-        self.finalize_start_time = Some(Instant::now());
         None
     }
 
@@ -314,33 +378,38 @@ impl VoiceInteractionManager {
         let super_active = (mods_depressed & MOD_SUPER) != 0;
 
         // 1. 若处于对讲机长按录音态，检测主键或修饰键松开
-        if !is_press && self.is_push_to_talk_active && self.controller.is_recording() {
-            let is_main_release = self.push_to_talk_key == Some(evdev_key);
-            let is_mod_release = matches!(
-                evdev_key,
-                KEY_LEFTCTRL
-                    | KEY_RIGHTCTRL
-                    | KEY_LEFTALT
-                    | KEY_RIGHTALT
-                    | KEY_LEFTSHIFT
-                    | KEY_RIGHTSHIFT
-                    | KEY_LEFTMETA
-                    | KEY_RIGHTMETA
-            );
-            if is_main_release || is_mod_release {
-                info!("[微澜语音] 对讲机快捷键松开，进入转录结算");
-                if let Some(text) = self.stop_and_resolve_commit() {
-                    let trimmed = text.trim().to_string();
-                    if !trimmed.is_empty() {
-                        return VoiceKeyAction::Commit(trimmed);
+        if !is_press {
+            if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state {
+                let is_main_release = trigger_key == evdev_key;
+                let is_mod_release = matches!(
+                    evdev_key,
+                    KEY_LEFTCTRL
+                        | KEY_RIGHTCTRL
+                        | KEY_LEFTALT
+                        | KEY_RIGHTALT
+                        | KEY_LEFTSHIFT
+                        | KEY_RIGHTSHIFT
+                        | KEY_LEFTMETA
+                        | KEY_RIGHTMETA
+                );
+                if is_main_release || is_mod_release {
+                    info!("[微澜语音] 对讲机快捷键松开，进入转录结算");
+                    if let Some(text) = self.stop_and_resolve_commit() {
+                        let trimmed = text.trim().to_string();
+                        if !trimmed.is_empty() {
+                            return VoiceKeyAction::Commit(trimmed);
+                        }
                     }
+                    return VoiceKeyAction::Consumed;
                 }
-                return VoiceKeyAction::Consumed;
             }
         }
 
         // 2. 录音或转录结算过程中的按键拦截（按下阶段）
-        if is_press && (self.controller.is_recording() || self.is_finalizing) {
+        let is_recording = self.is_recording();
+        let is_finalizing = self.is_finalizing();
+
+        if is_press && (is_recording || is_finalizing) {
             if evdev_key == KEY_ESC {
                 info!("[微澜语音] 收到 Esc 键，取消语音录制或转录");
                 self.cancel();
@@ -348,7 +417,7 @@ impl VoiceInteractionManager {
             }
 
             // 若处于转录结算阶段，非 Esc 按键一律静默拦截，防止按键误打字抢先上屏
-            if self.is_finalizing {
+            if is_finalizing {
                 return VoiceKeyAction::Consumed;
             }
 
@@ -364,8 +433,10 @@ impl VoiceInteractionManager {
             }
 
             // 对讲机模式下若重复按下 PTT 主键（如键盘硬件 Auto-Repeat 连发），静默消费保持录音
-            if self.is_push_to_talk_active && self.push_to_talk_key == Some(evdev_key) {
-                return VoiceKeyAction::Consumed;
+            if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state {
+                if trigger_key == evdev_key {
+                    return VoiceKeyAction::Consumed;
+                }
             }
 
             let toggle_shortcut = self.config.get_effective_toggle_shortcut();

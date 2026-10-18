@@ -8,15 +8,19 @@
 //! - **代价与局限**：协议适配层需消费本模块产出的 [`ImeAction`] 或 [`KeyProcessResult`] 动作，
 //!   增加了单层轻量结果解构，但彻底隔绝了平台底层对复杂打字业务逻辑的污染。
 
-mod dispatch;
-mod grid;
+pub mod dispatch;
+pub mod grid;
+pub mod key_handler;
 #[cfg(test)]
 mod tests;
 
 pub use dispatch::KeyProcessContext;
+pub use key_handler::{
+    handle_composition_key, handle_composition_key_with_params, CompositionKeyParams,
+};
 
-use crate::engine::AlgoEngine;
-use crate::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
+use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
+use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
 use waylan_core::{FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TraditionalShortcut};
 
@@ -111,7 +115,7 @@ pub struct ImeCoreSession {
 impl Default for ImeCoreSession {
     fn default() -> Self {
         Self::new(AlgoEngine::with_sample_data(
-            crate::types::AlgoConfig::default(),
+            waylan_algo::types::AlgoConfig::default(),
         ))
     }
 }
