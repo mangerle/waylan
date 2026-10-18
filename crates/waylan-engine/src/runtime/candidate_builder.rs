@@ -5,10 +5,13 @@
 //! - **核心优势**：职责单一（SRP），消除单文件超标坏味道；方便针对候选框构建与模式徽章格式化编写高覆盖单元测试。
 //! - **代价与局限**：对算法引擎与语音管理器采用借用传递。
 
+#[cfg(not(feature = "voice"))]
+use super::voice_stub::VoiceInteractionManager;
 use waylan_algo::AlgoEngine;
 use waylan_core::{
     Candidate, CandidateBoxState, ExpandedCardState, GridState, InputMode, VoiceBoxState,
 };
+#[cfg(feature = "voice")]
 use waylan_voice::VoiceInteractionManager;
 
 /// 候选词卡片构建参数配置

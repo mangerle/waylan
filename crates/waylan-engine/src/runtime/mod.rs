@@ -17,7 +17,13 @@ use waylan_core::input::sync_mode_from_shared_flags;
 use waylan_core::input::MOD_CAPS;
 use waylan_core::state::SharedInputFlags;
 use waylan_core::{CandidateBoxState, InputMode, VoiceConfig};
+#[cfg(feature = "voice")]
 use waylan_voice::{VoiceInteractionManager, VoiceKeyAction};
+
+#[cfg(not(feature = "voice"))]
+pub mod voice_stub;
+#[cfg(not(feature = "voice"))]
+pub use voice_stub::{VoiceInteractionManager, VoiceKeyAction};
 
 use crate::frontend::InputMethodFrontend;
 use crate::session::{

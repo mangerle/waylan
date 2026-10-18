@@ -5,10 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "微澜 (WayLan) 输入法统一交互运行时与多协议会话引擎"
 
+[features]
+default = ["voice"]
+voice = ["dep:waylan-voice"]
+
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 waylan-algo = { path = "../waylan-algo" }
-waylan-voice = { path = "../waylan-voice" }
+waylan-voice = { path = "../waylan-voice", optional = true }
 log.workspace = true
 
 [dev-dependencies]

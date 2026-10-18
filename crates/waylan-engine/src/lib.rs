@@ -17,6 +17,8 @@ pub use factory::{
     reload_engine_resources,
 };
 pub use frontend::InputMethodFrontend;
+#[cfg(not(feature = "voice"))]
+pub use runtime::voice_stub::{VoiceInteractionManager, VoiceKeyAction};
 pub use runtime::{build_common_candidate_box_state, CandidateBoxBuildOptions, ImeRuntime};
 pub use session::{
     extract_surrounding_prefix, handle_composition_key, handle_composition_key_with_params,
@@ -24,5 +26,7 @@ pub use session::{
 };
 pub use waylan_algo as algo;
 pub use waylan_algo::{AlgoConfig, AlgoEngine};
+#[cfg(feature = "voice")]
 pub use waylan_voice as voice;
+#[cfg(feature = "voice")]
 pub use waylan_voice::{VoiceInteractionManager, VoiceKeyAction};
