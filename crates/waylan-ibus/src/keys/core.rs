@@ -5,13 +5,10 @@
 //! - **核心优势**：纯内存数据结构，加锁保护仅限于单次按键决策的微秒级临界区内。
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
-use std::sync::mpsc::SyncSender;
+use std::ops::{Deref, DerefMut};
 
-use waylan_algo::{AlgoEngine, ImeCoreSession};
-use waylan_core::input::sync_mode_from_shared_flags;
-use waylan_core::state::SharedInputFlags;
-use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode, VoiceConfig};
-use waylan_voice::VoiceInteractionManager;
+use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
+use waylan_engine::{AlgoEngine, ImeRuntime};
 
 /// 单次 IBus 按键或交互事件的决策输出
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -28,13 +25,10 @@ pub struct IbusKeyOutcome {
     pub cursor_offset: i32,
 }
 
-/// 微澜 IBus 会话内部核心状态机（受互斥锁保护，组合底层 ImeCoreSession 并扩展协议特定状态）
+/// 微澜 IBus 会话内部核心状态机（受互斥锁保护，组合底层 ImeRuntime 并扩展协议特定状态）
 pub struct IbusSessionCore {
-    /// 组合算法核心通用会话状态机（算法引擎、标点处理器、修饰键、Shift、快捷键）
-    pub core: ImeCoreSession,
-    /// 共享输入状态原子容器
-    pub shared_flags: Option<SharedInputFlags>,
-    pub mode_notify_tx: Option<SyncSender<()>>,
+    /// 统一输入法交互运行时 (IME Runtime)
+    pub runtime: ImeRuntime,
     pub is_caps_locked: bool,
     pub phys_mods: u8,
     pub is_password_context: bool,
@@ -42,18 +36,29 @@ pub struct IbusSessionCore {
     pub surrounding_text: Option<(String, u32, u32)>,
     pub candidate_index_style: CandidateIndexStyle,
     pub candidate_orientation: CandidateOrientation,
-    pub voice_manager: VoiceInteractionManager,
     /// 当前拥有焦点的活跃 IBus 引擎对象路径
     pub active_engine_path: Option<String>,
+}
+
+impl Deref for IbusSessionCore {
+    type Target = ImeRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+impl DerefMut for IbusSessionCore {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.runtime
+    }
 }
 
 impl IbusSessionCore {
     /// 使用预加载的算法引擎构造 IBus 会话状态核心
     pub fn new(engine: AlgoEngine) -> Self {
         Self {
-            core: ImeCoreSession::new(engine),
-            shared_flags: None,
-            mode_notify_tx: None,
+            runtime: ImeRuntime::with_engine(engine),
             is_caps_locked: false,
             phys_mods: 0,
             is_password_context: false,
@@ -61,14 +66,13 @@ impl IbusSessionCore {
             surrounding_text: None,
             candidate_index_style: CandidateIndexStyle::default(),
             candidate_orientation: CandidateOrientation::default(),
-            voice_manager: VoiceInteractionManager::new(VoiceConfig::default()),
             active_engine_path: None,
         }
     }
 
     /// 同步来自系统托盘的共享中英文状态标志
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
-        sync_mode_from_shared_flags(self.shared_flags.as_ref(), &mut self.core.mode)
+        self.runtime.sync_shared_mode()
     }
 
     /// 同步来自托盘与全局状态的简繁与标点/字符全半角配置
@@ -94,11 +98,13 @@ impl IbusSessionCore {
 
     /// 重置当前预编辑与修饰键跟踪状态（用于失焦 `FocusOut` 或 `Reset`）
     pub fn reset_context(&mut self) {
-        if self.voice_manager.is_recording() {
-            self.voice_manager.cancel();
+        if let Some(ref mut vm) = self.runtime.voice_manager {
+            if vm.is_recording() {
+                vm.cancel();
+            }
+            vm.clear_state();
         }
-        self.voice_manager.clear_state();
-        self.core.reset_input_state();
+        self.runtime.core.reset_input_state();
         self.is_caps_locked = false;
         self.phys_mods = 0;
         self.is_password_context = false;
@@ -131,17 +137,7 @@ impl IbusSessionCore {
     pub(crate) fn update_caps_lock_state(&mut self, is_locked: bool) {
         if self.is_caps_locked != is_locked {
             self.is_caps_locked = is_locked;
-            if is_locked {
-                self.core.modifiers.locked |= waylan_core::input::MOD_CAPS;
-            } else {
-                self.core.modifiers.locked &= !waylan_core::input::MOD_CAPS;
-            }
-            if let Some(ref flags) = self.shared_flags {
-                flags.set_caps_locked(is_locked);
-            }
-            if let Some(ref tx) = self.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
+            self.runtime.update_caps_lock_state(is_locked);
         }
     }
 }

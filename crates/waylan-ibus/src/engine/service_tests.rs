@@ -3,8 +3,7 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
+use waylan_engine::{AlgoConfig, AlgoEngine};
 
 use crate::keys::IbusSessionCore;
 

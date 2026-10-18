@@ -11,12 +11,16 @@ impl IbusSessionCore {
     /// 判断当前是否处于语音输入或语音展示激活状态
     #[inline]
     pub fn is_voice_active(&self) -> bool {
-        self.voice_manager.is_active()
+        self.runtime.is_voice_active()
     }
 
     /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
     #[inline]
     pub fn poll_voice_events(&mut self) -> Option<String> {
-        self.voice_manager.poll_events()
+        if let Some(ref mut vm) = self.runtime.voice_manager {
+            vm.poll_events()
+        } else {
+            None
+        }
     }
 }

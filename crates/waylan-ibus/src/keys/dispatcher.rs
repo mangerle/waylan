@@ -2,20 +2,15 @@
 //!
 //! # 设计原理
 //! - **实现初衷**：将 IBus 协议层传入的 (keyval, keycode, state) 转换为标准 evdev 扫描码，
-//!   委托统一的 [`ImeCoreSession::process_key`] 决策流水线处理，并将统一响应映射为 IBus 上屏与 D-Bus 信号。
+//!   全权委托统一的 [`ImeRuntime::process_key_event`] 决策流水线处理，并将统一响应映射为 IbusKeyOutcome。
 //! - **核心优势**：彻底消除 IBus 与 Wayland 端按键处理逻辑的不一致，使 IBus 端降级为纯粹的协议转接器；
-//!   密码框保护、CapsLock 截断提交、中英模式切换与全局快捷键全部由核心状态机单一真实源驱动。
+//!   密码框保护、CapsLock 截断提交、中英模式切换、语音听写与全局快捷键全部由核心运行时单一真实源驱动。
 //! - **代价与局限**：需将 X11 修饰键状态位映射至统一修饰键位掩码。
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use waylan_algo::{
-    extract_surrounding_prefix, KeyProcessContext, KeyProcessResult, ShortcutToggleAction,
-};
 use waylan_core::input::modifiers::update_modifier_masks;
 use waylan_core::input::*;
-use waylan_core::InputMode;
-use waylan_voice::VoiceKeyAction;
+use waylan_core::{CandidateBoxState, InputMode};
+use waylan_engine::InputMethodFrontend;
 
 use super::core::{IbusKeyOutcome, IbusSessionCore};
 use super::keyval::{
@@ -23,56 +18,49 @@ use super::keyval::{
     IBUS_SHIFT_MASK, IBUS_SUPER_MASK,
 };
 
-impl IbusSessionCore {
-    /// 统一调用 VoiceInteractionManager 处理语音按键交互（启动、停止、断句、取消）
-    pub(crate) fn handle_voice_key(
-        &mut self,
-        evdev_key: u32,
-        is_press: bool,
-        effective_mods: u32,
-    ) -> Option<IbusKeyOutcome> {
-        let action = self.voice_manager.dispatch_voice_key(
-            evdev_key,
-            is_press,
-            effective_mods,
-            &mut self.core.consumed_keys,
-        );
-        match action {
-            VoiceKeyAction::PassThrough => None,
-            VoiceKeyAction::Consumed => {
-                if is_press && !self.core.engine.raw_input().is_empty() {
-                    self.core.engine.reset();
-                }
-                Some(IbusKeyOutcome {
-                    consumed: true,
-                    update_ui: true,
-                    ..Default::default()
-                })
-            }
-            VoiceKeyAction::Commit(text) => {
-                if is_press && !self.core.engine.raw_input().is_empty() {
-                    self.core.engine.reset();
-                }
-                Some(IbusKeyOutcome {
-                    consumed: true,
-                    commit_text: Some(text),
-                    update_ui: true,
-                    ..Default::default()
-                })
-            }
-        }
+/// 针对 IBus 会话结果收集的轻量前端管道适配器
+pub struct IbusFrontend<'a> {
+    pub outcome: &'a mut IbusKeyOutcome,
+}
+
+impl<'a> InputMethodFrontend for IbusFrontend<'a> {
+    fn commit_text(&mut self, text: &str) {
+        self.outcome.commit_text = Some(text.to_string());
     }
 
+    fn update_preedit(&mut self, _text: &str, _cursor_byte_idx: usize) {
+        self.outcome.update_ui = true;
+    }
+
+    fn update_candidates(&mut self, _state: &CandidateBoxState) {
+        self.outcome.update_ui = true;
+    }
+
+    fn hide_candidates(&mut self) {
+        self.outcome.update_ui = true;
+    }
+
+    fn move_cursor(&mut self, offset: i32) {
+        self.outcome.cursor_offset += offset;
+    }
+
+    fn sync_input_mode(&mut self, mode: InputMode) {
+        self.outcome.mode_changed = Some(mode);
+        self.outcome.update_ui = true;
+    }
+}
+
+impl IbusSessionCore {
     /// 同步并计算最终的修饰键位掩码与 CapsLock 状态
     fn sync_and_calculate_modifiers(&mut self, evdev_key: u32, is_press: bool, state: u32) -> u32 {
         update_modifier_masks(
-            &mut self.core.modifiers.depressed,
+            &mut self.runtime.core.modifiers.depressed,
             &mut self.phys_mods,
             evdev_key,
             is_press,
         );
 
-        let mut event_mods = self.core.modifiers.depressed;
+        let mut event_mods = self.runtime.core.modifiers.depressed;
         if (state & IBUS_SHIFT_MASK) != 0 {
             event_mods |= MOD_SHIFT;
         }
@@ -101,117 +89,15 @@ impl IbusSessionCore {
 
         let next_locked = !self.is_caps_locked;
         self.update_caps_lock_state(next_locked);
-        if self.core.mode != InputMode::English {
+        if self.runtime.core.mode != InputMode::English {
             let effective_mode = if next_locked {
                 InputMode::English
             } else {
-                self.core.mode
+                self.runtime.core.mode
             };
             Some(effective_mode)
         } else {
             None
-        }
-    }
-
-    /// 将算法引擎统一按键决策结果映射为 IBus 输出
-    fn map_key_process_result(
-        &mut self,
-        result: KeyProcessResult,
-        caps_mode_changed: Option<InputMode>,
-    ) -> IbusKeyOutcome {
-        match result {
-            KeyProcessResult::PassThrough => IbusKeyOutcome {
-                consumed: false,
-                mode_changed: caps_mode_changed,
-                update_ui: caps_mode_changed.is_some(),
-                ..Default::default()
-            },
-            KeyProcessResult::Handled { update_ui } => IbusKeyOutcome {
-                consumed: true,
-                update_ui,
-                ..Default::default()
-            },
-            KeyProcessResult::ExpandGrid => IbusKeyOutcome {
-                consumed: true,
-                update_ui: true,
-                ..Default::default()
-            },
-            KeyProcessResult::Commit(text) => IbusKeyOutcome {
-                consumed: true,
-                commit_text: Some(text),
-                update_ui: true,
-                ..Default::default()
-            },
-            KeyProcessResult::CommitAndPassThrough(text) => IbusKeyOutcome {
-                consumed: false,
-                commit_text: Some(text),
-                mode_changed: caps_mode_changed,
-                update_ui: true,
-                ..Default::default()
-            },
-            KeyProcessResult::CommitPunctuation {
-                text,
-                cursor_offset,
-            } => IbusKeyOutcome {
-                consumed: true,
-                commit_text: Some(text),
-                cursor_offset,
-                update_ui: true,
-                ..Default::default()
-            },
-            KeyProcessResult::CommitPartial { committed, .. } => IbusKeyOutcome {
-                consumed: true,
-                commit_text: Some(committed),
-                update_ui: true,
-                ..Default::default()
-            },
-            KeyProcessResult::Reset => IbusKeyOutcome {
-                consumed: true,
-                update_ui: true,
-                ..Default::default()
-            },
-            KeyProcessResult::ShortcutToggled(toggle) => {
-                if let Some(ref flags) = self.shared_flags {
-                    match toggle {
-                        ShortcutToggleAction::Traditional(trad) => {
-                            flags.set_traditional(trad);
-                        }
-                        ShortcutToggleAction::FullWidthChar(fw) => {
-                            flags.set_full_width_char(fw);
-                        }
-                        ShortcutToggleAction::FullWidthPunct(fw) => {
-                            flags.set_full_width_punct(fw);
-                        }
-                    }
-                }
-                if let Some(ref tx) = self.mode_notify_tx {
-                    let _ = tx.try_send(());
-                }
-                IbusKeyOutcome {
-                    consumed: true,
-                    update_ui: !self.core.engine.raw_input().is_empty(),
-                    ..Default::default()
-                }
-            }
-            KeyProcessResult::ModeChanged {
-                new_mode,
-                committed,
-                was_consumed,
-            } => {
-                if let Some(ref flags) = self.shared_flags {
-                    flags.set_chinese(matches!(new_mode, InputMode::Chinese | InputMode::VMode));
-                }
-                if let Some(ref notify_tx) = self.mode_notify_tx {
-                    let _ = notify_tx.try_send(());
-                }
-                IbusKeyOutcome {
-                    consumed: was_consumed,
-                    mode_changed: Some(new_mode),
-                    commit_text: committed,
-                    update_ui: true,
-                    ..Default::default()
-                }
-            }
         }
     }
 
@@ -224,32 +110,39 @@ impl IbusSessionCore {
 
         let event_mods = self.sync_and_calculate_modifiers(evdev_key, is_press, state);
 
-        // 语音听写优先拦截
-        if let Some(voice_outcome) = self.handle_voice_key(evdev_key, is_press, event_mods) {
-            return voice_outcome;
+        let saved_mods = self.runtime.core.modifiers.depressed;
+        self.runtime.core.modifiers.depressed = event_mods;
+
+        let mut outcome = IbusKeyOutcome::default();
+        let is_password_or_locked = self.is_screen_locked || self.is_password_context;
+        let surrounding = self.surrounding_text.clone();
+
+        let (consumed, commit_text) = {
+            let mut frontend = IbusFrontend {
+                outcome: &mut outcome,
+            };
+            self.runtime.process_key_event(
+                &mut frontend,
+                evdev_key,
+                is_press,
+                is_password_or_locked,
+                surrounding.as_ref(),
+                false,
+            )
+        };
+        self.runtime.core.modifiers.depressed = saved_mods;
+
+        outcome.consumed = consumed;
+        if outcome.commit_text.is_none() {
+            outcome.commit_text = commit_text;
         }
 
-        // 提取周围文本安全有效上下文切片
-        let surrounding_ctx = extract_surrounding_prefix(self.surrounding_text.as_ref(), 64);
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        let saved_mods = self.core.modifiers.depressed;
-        self.core.modifiers.depressed = event_mods;
-        let result = self.core.process_key(
-            KeyProcessContext {
-                keycode: evdev_key,
-                is_press,
-                is_password_or_locked: self.is_screen_locked || self.is_password_context,
-                surrounding_prefix: surrounding_ctx,
-            },
-            now,
-        );
-        self.core.modifiers.depressed = saved_mods;
-
         let caps_mode_changed = self.handle_caps_lock_toggle(evdev_key, is_press);
-        self.map_key_process_result(result, caps_mode_changed)
+        if let Some(caps_mode) = caps_mode_changed {
+            outcome.mode_changed = Some(caps_mode);
+            outcome.update_ui = true;
+        }
+
+        outcome
     }
 }

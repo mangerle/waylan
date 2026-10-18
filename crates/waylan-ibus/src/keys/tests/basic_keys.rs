@@ -1,9 +1,8 @@
 use super::super::core::IbusSessionCore;
 use super::super::keyval::{ibus_keyval_to_evdev, IBUS_RELEASE_MASK};
-use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
 use waylan_core::InputMode;
+use waylan_engine::{AlgoConfig, AlgoEngine};
 
 #[test]
 fn test_ibus_keyval_mapping() {

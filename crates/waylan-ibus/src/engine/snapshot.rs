@@ -22,18 +22,22 @@ pub(crate) struct UiSnapshot {
 impl UiSnapshot {
     /// 提取处于语音录入或语音展示期间的 UI 快照
     fn capture_voice_snapshot(core: &IbusSessionCore) -> Self {
-        let candidates = if let Some(ref voice_text) = core.voice_manager.display_text {
-            vec![Candidate::new(
-                voice_text.clone(),
-                core.voice_manager.waveform.clone().unwrap_or_default(),
-                1000,
-            )]
+        let (display_text, waveform, partial_text) = if let Some(ref vm) = core.voice_manager {
+            (
+                vm.display_text.clone(),
+                vm.waveform.clone().unwrap_or_default(),
+                vm.partial_text.clone().unwrap_or_default(),
+            )
+        } else {
+            (None, String::new(), String::new())
+        };
+        let candidates = if let Some(ref voice_text) = display_text {
+            vec![Candidate::new(voice_text.clone(), waveform, 1000)]
         } else {
             Vec::new()
         };
-        let preedit = core.voice_manager.partial_text.clone().unwrap_or_default();
         Self {
-            preedit,
+            preedit: partial_text,
             candidates,
             page_size: 1,
             selected_index: 0,
@@ -96,7 +100,7 @@ impl UiSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use waylan_algo::{AlgoConfig, AlgoEngine};
+    use waylan_engine::{AlgoConfig, AlgoEngine};
 
     #[test]
     fn test_ui_snapshot_voice_isolation() {
@@ -110,8 +114,8 @@ mod tests {
         assert!(!normal_snap.candidates.is_empty());
 
         // 模拟语音激活状态：正在聆听中...
-        core.voice_manager.display_text = Some("正在聆听中...".to_string());
-        core.voice_manager.waveform = Some(" ▂▃▄▅".to_string());
+        core.voice_manager.as_mut().unwrap().display_text = Some("正在聆听中...".to_string());
+        core.voice_manager.as_mut().unwrap().waveform = Some(" ▂▃▄▅".to_string());
         let voice_snap = UiSnapshot::capture(&core);
 
         // 核心断言：输入框预编辑必须完全为空，严禁将波形塞入输入框光标处

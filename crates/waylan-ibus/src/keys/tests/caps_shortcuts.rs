@@ -2,11 +2,10 @@ use super::super::core::IbusSessionCore;
 use super::super::keyval::{
     IBUS_CONTROL_MASK, IBUS_LOCK_MASK, IBUS_RELEASE_MASK, IBUS_SHIFT_MASK, KEY_F,
 };
-use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
 use waylan_core::state::SharedInputFlags;
 use waylan_core::{FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TraditionalShortcut};
+use waylan_engine::{AlgoConfig, AlgoEngine};
 
 #[test]
 fn test_ibus_caps_lock_passthrough() {
