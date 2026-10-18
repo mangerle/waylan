@@ -68,13 +68,11 @@ fn test_screen_locked_recovery_on_plain_context() {
         guard.is_password_context = false;
     }
 
-    // 2. 模拟普通窗口在按键或焦点自愈探测下解除锁屏保护
+    // 2. 模拟普通窗口在按键或焦点自愈探测下解除锁屏保护（模拟屏幕保护程序处于未激活态）
     {
         let mut guard = core.lock().unwrap();
-        if !guard.is_password_context
-            && guard.is_screen_locked
-            && !query_current_screen_saver_active()
-        {
+        let is_saver_active = false;
+        if !guard.is_password_context && guard.is_screen_locked && !is_saver_active {
             guard.is_screen_locked = false;
         }
     }

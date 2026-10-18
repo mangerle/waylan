@@ -6183,7 +6183,6 @@ version = "1.2.0"
 dependencies = [
  "log",
  "tempfile",
- "thiserror 1.0.69",
  "waylan-algo",
  "waylan-core",
  "waylan-voice",
@@ -6196,7 +6195,6 @@ dependencies = [
  "log",
  "rustix 0.38.44",
  "serde",
- "tempfile",
  "thiserror 1.0.69",
  "waylan-core",
  "waylan-engine",

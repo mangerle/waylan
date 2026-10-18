@@ -25,9 +25,11 @@ fern.workspace = true
 chrono.workspace = true
 zbus.workspace = true
 signal-hook.workspace = true
-tempfile.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [package.metadata.deb]
 name = "waylan"

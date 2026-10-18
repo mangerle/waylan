@@ -7,8 +7,8 @@ license.workspace = true
 description = "微澜 (WayLan) - 纯 Rust 现代中文拼音输入核心算法库"
 
 [features]
-default = ["corpus-builder"]
-corpus-builder = ["dep:jieba-rs", "dep:rayon", "dep:regex"]
+default = []
+corpus-builder = ["dep:jieba-rs", "dep:rayon", "dep:regex", "dep:serde_json"]
 
 [[bin]]
 name = "build_bigram"
@@ -25,6 +25,6 @@ memmap2.workspace = true
 chrono.workspace = true
 jieba-rs = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 rustix.workspace = true

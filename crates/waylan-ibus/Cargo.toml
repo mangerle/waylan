@@ -13,4 +13,3 @@ log.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 rustix.workspace = true
-tempfile.workspace = true

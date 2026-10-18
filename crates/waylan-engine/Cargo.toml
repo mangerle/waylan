@@ -10,7 +10,6 @@ waylan-core = { path = "../waylan-core" }
 waylan-algo = { path = "../waylan-algo" }
 waylan-voice = { path = "../waylan-voice" }
 log.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
