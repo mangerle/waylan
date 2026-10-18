@@ -10,8 +10,8 @@ use zbus::zvariant::OwnedObjectPath;
 /// 提示文本结构类型别名
 type ToolTipData = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 
-pub use waylan_core::assets::{detect_default_assets_path, resolve_icon_path_or_name};
 use waylan_core::state::SharedInputFlags;
+pub use waylan_sys::assets::{detect_default_assets_path, resolve_icon_path_or_name};
 
 /// 系统托盘状态项实现 (StatusNotifierItem)
 #[derive(Clone)]

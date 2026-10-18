@@ -1,6 +1,5 @@
 //! 微澜 (WayLan) 核心数据类型、输入法状态与配置系统
 
-pub mod assets;
 pub mod candidate;
 pub mod config;
 pub mod constants;

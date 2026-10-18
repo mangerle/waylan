@@ -9,9 +9,11 @@
 //!   3. 可移植性：为未来适配多平台操作系统原语提供明确的抽象隔离边界。
 //! - **代价与局限**：当前实现聚焦于现代 Linux 内核提供的系统原语。
 
+pub mod assets;
 pub mod fs_watcher;
 pub mod loop_wakeup;
 
+pub use assets::{detect_default_assets_path, resolve_icon_path_or_name};
 pub use fs_watcher::{
     check_watched_paths_changed, compute_initial_signature, init_session_inotify_watcher,
     init_session_inotify_watcher_with_filter, DirEventFilter, FileSignature, InotifyWatcher,

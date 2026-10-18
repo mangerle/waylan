@@ -16,8 +16,8 @@ use super::executor::{
     run_command_with_timeout, safe_gsettings_get, safe_gsettings_set,
     DEFAULT_DESKTOP_COMMAND_TIMEOUT,
 };
-use waylan_core::assets::detect_default_assets_path;
 use waylan_core::config::env_var_non_empty;
+use waylan_sys::assets::detect_default_assets_path;
 
 /// 安装或更新 GNOME Shell 隐藏原生指示器扩展文件至用户扩展目录
 pub(crate) fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
