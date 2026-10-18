@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
-use waylan_core::Candidate;
+use waylan_core::config::FuzzyPinyinRules;
+use waylan_core::{AppConfig, Candidate};
 
 /// 模糊音细粒度配置
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct FuzzyConfig {
     /// 平翘舌: z <=> zh
@@ -110,8 +111,54 @@ impl Default for AlgoConfig {
     }
 }
 
-impl From<&waylan_core::AppConfig> for AlgoConfig {
-    fn from(cfg: &waylan_core::AppConfig) -> Self {
+impl From<FuzzyPinyinRules> for FuzzyConfig {
+    fn from(r: FuzzyPinyinRules) -> Self {
+        Self {
+            z_zh: r.z_zh,
+            c_ch: r.c_ch,
+            s_sh: r.s_sh,
+            an_ang: r.an_ang,
+            en_eng: r.en_eng,
+            in_ing: r.in_ing,
+            l_n: r.l_n,
+            f_h: r.f_h,
+            r_l: r.r_l,
+            g_k: r.g_k,
+        }
+    }
+}
+
+impl From<&FuzzyPinyinRules> for FuzzyConfig {
+    fn from(r: &FuzzyPinyinRules) -> Self {
+        Self::from(*r)
+    }
+}
+
+impl From<FuzzyConfig> for FuzzyPinyinRules {
+    fn from(c: FuzzyConfig) -> Self {
+        Self {
+            c_ch: c.c_ch,
+            z_zh: c.z_zh,
+            s_sh: c.s_sh,
+            an_ang: c.an_ang,
+            en_eng: c.en_eng,
+            in_ing: c.in_ing,
+            l_n: c.l_n,
+            f_h: c.f_h,
+            r_l: c.r_l,
+            g_k: c.g_k,
+        }
+    }
+}
+
+impl From<&FuzzyConfig> for FuzzyPinyinRules {
+    fn from(c: &FuzzyConfig) -> Self {
+        Self::from(*c)
+    }
+}
+
+impl From<&AppConfig> for AlgoConfig {
+    fn from(cfg: &AppConfig) -> Self {
         Self {
             page_size: cfg.ui.page_size,
             enable_v_mode: cfg.pinyin.v_mode,
@@ -122,18 +169,7 @@ impl From<&waylan_core::AppConfig> for AlgoConfig {
             show_pinyin_comment: cfg.ui.show_pinyin_comment,
             auto_dedup: cfg.pinyin.auto_dedup,
             fuzzy: if cfg.pinyin.fuzzy_pinyin {
-                FuzzyConfig {
-                    z_zh: cfg.pinyin.fuzzy_rules.z_zh,
-                    c_ch: cfg.pinyin.fuzzy_rules.c_ch,
-                    s_sh: cfg.pinyin.fuzzy_rules.s_sh,
-                    an_ang: cfg.pinyin.fuzzy_rules.an_ang,
-                    en_eng: cfg.pinyin.fuzzy_rules.en_eng,
-                    in_ing: cfg.pinyin.fuzzy_rules.in_ing,
-                    l_n: cfg.pinyin.fuzzy_rules.l_n,
-                    f_h: cfg.pinyin.fuzzy_rules.f_h,
-                    r_l: cfg.pinyin.fuzzy_rules.r_l,
-                    g_k: cfg.pinyin.fuzzy_rules.g_k,
-                }
+                FuzzyConfig::from(cfg.pinyin.fuzzy_rules)
             } else {
                 FuzzyConfig::default()
             },
@@ -273,5 +309,39 @@ mod tests {
         assert!(config.enable_v_mode);
         assert!(config.auto_dedup);
         assert!(!config.traditional_chinese);
+    }
+
+    #[test]
+    fn test_fuzzy_config_conversion() {
+        let rules = FuzzyPinyinRules {
+            c_ch: true,
+            z_zh: false,
+            s_sh: true,
+            an_ang: false,
+            en_eng: true,
+            in_ing: false,
+            l_n: true,
+            f_h: false,
+            r_l: true,
+            g_k: false,
+        };
+
+        let fuzzy_cfg = FuzzyConfig::from(rules);
+        assert!(fuzzy_cfg.c_ch);
+        assert!(!fuzzy_cfg.z_zh);
+        assert!(fuzzy_cfg.s_sh);
+        assert!(!fuzzy_cfg.an_ang);
+        assert!(fuzzy_cfg.en_eng);
+        assert!(!fuzzy_cfg.in_ing);
+        assert!(fuzzy_cfg.l_n);
+        assert!(!fuzzy_cfg.f_h);
+        assert!(fuzzy_cfg.r_l);
+        assert!(!fuzzy_cfg.g_k);
+
+        let converted_back = FuzzyPinyinRules::from(fuzzy_cfg);
+        assert_eq!(converted_back, rules);
+
+        let from_ref = FuzzyConfig::from(&rules);
+        assert_eq!(from_ref, fuzzy_cfg);
     }
 }

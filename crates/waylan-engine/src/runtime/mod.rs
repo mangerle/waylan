@@ -96,11 +96,7 @@ impl ImeRuntime {
     /// 热重载应用程序配置与词库资源（使输入法交互运行时自闭环更新）
     pub fn reload_config(&mut self, cfg: &waylan_core::AppConfig) {
         self.core.engine.config = waylan_algo::AlgoConfig::from(cfg);
-        let shift_mode = match cfg.shortcuts.switch_key {
-            waylan_core::SwitchKey::Shift => waylan_algo::preprocessor::ToggleKeyMode::Shift,
-            waylan_core::SwitchKey::Ctrl => waylan_algo::preprocessor::ToggleKeyMode::Ctrl,
-        };
-        self.core.shift_sm.set_toggle_key(shift_mode);
+        self.core.shift_sm.set_toggle_key(cfg.shortcuts.switch_key);
         self.core.punctuation_processor.slash_to_dunhao = cfg.pinyin.slash_to_dunhao;
         self.core.punctuation_processor.protect_digits_punctuation =
             cfg.pinyin.protect_digits_punctuation;

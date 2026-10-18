@@ -108,7 +108,7 @@ pub enum CandidateThemePreset {
 }
 
 /// 模糊音细分规则配置（对应模糊音设置页面 10 项开关）
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FuzzyPinyinRules {
     /// c <=> ch

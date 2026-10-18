@@ -5,17 +5,11 @@
 //! - **核心优势**：严格跟踪目标修饰键按下期间是否伴随其他键，若伴随其他按键则判定为组合键输入，禁止切换模式。
 //! - **代价与局限**：需外部键盘事件驱动严格传入按下与松开（Press/Release）成对事件。
 
+use crate::config::SwitchKey;
 use crate::InputMode;
 
-/// 中英文切换触发键模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ToggleKeyMode {
-    /// 左右 Shift 键切换（默认）
-    #[default]
-    Shift,
-    /// 左右 Ctrl 键切换
-    Ctrl,
-}
+/// 中英文切换触发键模式（对齐全局统一配置项 [`SwitchKey`]）
+pub type ToggleKeyMode = SwitchKey;
 
 /// Shift/Ctrl 键中英文切换防误触状态机
 #[derive(Debug, Default)]
