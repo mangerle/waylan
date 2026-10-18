@@ -1,7 +1,7 @@
 use super::*;
 use crate::session_v1::{KEY_1, KEY_4, KEY_9, KEY_APOSTROPHE, KEY_SLASH};
 use crate::session_v2::keys::process_key_event;
-use waylan_algo::types::AlgoConfig;
+use waylan_engine::AlgoConfig;
 
 #[test]
 fn test_v2_session_initialization() {
@@ -380,7 +380,7 @@ fn test_v2_grid_expansion_state() {
 
 #[test]
 fn test_v2_grid_expanded_key_navigation_and_selection() {
-    let mut table = waylan_algo::table::LexiconTable::with_sample_data();
+    let mut table = waylan_engine::algo::table::LexiconTable::with_sample_data();
     for i in 0..20 {
         table.insert("ni", format!("字{}", i), 10_000 - i * 10);
     }

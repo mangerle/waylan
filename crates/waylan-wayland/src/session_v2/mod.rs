@@ -1,15 +1,20 @@
+mod frontend;
 mod keys;
 mod lifecycle;
 mod surrounding;
 
+pub use frontend::WaylanV2Frontend;
+
 use std::path::PathBuf;
-use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
+use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
 use log::{debug, warn};
-use waylan_algo::{AlgoEngine, ImeCoreSession};
 use waylan_core::CandidateBoxState;
-use waylan_voice::VoiceInteractionManager;
+use waylan_engine::{
+    build_common_candidate_box_state, AlgoEngine, CandidateBoxBuildOptions, ImeRuntime,
+    InputMethodFrontend,
+};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_pointer::WlPointer, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -23,7 +28,6 @@ use crate::session_common::*;
 use crate::surface::{CandidateSurfaceManager, CursorRect};
 use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
-use waylan_core::state::SharedInputFlags;
 pub use waylan_core::InputMode;
 use waylan_core::LoopWakeup;
 
@@ -34,8 +38,8 @@ pub type ReloadCallback = Box<dyn FnMut(&mut WaylanV2Session) + Send>;
 
 /// 微澜面向现代 Wayland 合成器 (KDE Plasma 6 / GNOME 46+ / Hyprland) 的 V2 会话状态
 pub struct WaylanV2Session {
-    /// 核心输入法决策会话与算法状态机
-    pub core: ImeCoreSession,
+    /// 统一输入法交互运行时 (IME Runtime)
+    pub runtime: ImeRuntime,
     /// 候选框透明悬浮 Surface 管理器
     pub surface_manager: CandidateSurfaceManager,
     /// 当前是否处于激活会话
@@ -58,16 +62,6 @@ pub struct WaylanV2Session {
     pub qhandle: Option<QueueHandle<Self>>,
     /// 当前跟踪的光标坐标
     pub current_cursor: CursorRect,
-    /// 共享输入状态原子容器
-    pub shared_flags: Option<SharedInputFlags>,
-    /// 与外部系统托盘共享的中英文状态标志
-    pub shared_is_chinese: Option<Arc<AtomicBool>>,
-    /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
-    pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
-    /// 键盘切换中英文时唤醒系统托盘刷新图标的通知发送端
-    pub mode_notify_tx: Option<SyncSender<()>>,
-    /// 与外部系统托盘共享的配置与词库重载请求标志
-    pub reload_requested: Option<Arc<AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
     pub reload_callback: Option<ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
@@ -118,8 +112,19 @@ pub struct WaylanV2Session {
     pub loop_wakeup: Option<LoopWakeup>,
     /// 外部按键事件拦截回调（用于语音听写快捷键等扩展）
     pub key_filter: Option<KeyFilterCallback>,
-    /// 统一语音按键交互与录音流式管理器
-    pub voice_manager: Option<VoiceInteractionManager>,
+}
+
+impl std::ops::Deref for WaylanV2Session {
+    type Target = ImeRuntime;
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+impl std::ops::DerefMut for WaylanV2Session {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.runtime
+    }
 }
 
 impl WaylanV2Session {
@@ -131,7 +136,7 @@ impl WaylanV2Session {
     /// - **代价与局限**：强依赖合成器完整实现 V2 输入法扩展协议，不支持无该协议的早期合成器环境。
     pub fn new(engine: AlgoEngine) -> Self {
         Self {
-            core: ImeCoreSession::new(engine),
+            runtime: ImeRuntime::with_engine(engine),
             surface_manager: CandidateSurfaceManager::new(),
             is_active: false,
             input_method: None,
@@ -143,11 +148,6 @@ impl WaylanV2Session {
             active_buffer: None,
             qhandle: None,
             current_cursor: CursorRect::default(),
-            shared_flags: None,
-            shared_is_chinese: None,
-            shared_is_caps_locked: None,
-            mode_notify_tx: None,
-            reload_requested: None,
             reload_callback: None,
             watched_paths: Vec::new(),
             last_watched_mtime: None,
@@ -173,35 +173,37 @@ impl WaylanV2Session {
             inotify_watcher: None,
             loop_wakeup: None,
             key_filter: None,
-            voice_manager: None,
         }
+    }
+
+    /// 拆分持有统一运行时与协议前端管道借用（用于通过 ImeRuntime 驱动按键与刷新）
+    pub fn split_runtime_and_frontend(&mut self) -> (&mut ImeRuntime, WaylanV2Frontend<'_>) {
+        (
+            &mut self.runtime,
+            WaylanV2Frontend {
+                input_method: self.input_method.as_ref(),
+                surface_manager: &mut self.surface_manager,
+                popup_wl_surface: self.popup_wl_surface.as_ref(),
+                active_buffer: &mut self.active_buffer,
+                shm: self.shm.as_ref(),
+                qhandle: self.qhandle.as_ref(),
+                virtual_keyboard: self.virtual_keyboard.as_ref(),
+                has_virtual_keymap: self.has_virtual_keymap,
+                done_serial: self.done_serial,
+            },
+        )
     }
 
     /// 查询当前是否处于语音录音或语音浮条激活状态
     #[inline]
     pub fn is_voice_active(&self) -> bool {
-        self.voice_manager
-            .as_ref()
-            .map(|v| v.is_active())
-            .unwrap_or(false)
+        self.runtime.is_voice_active()
     }
 
     /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
     pub fn poll_voice_cycle(&mut self) -> Option<String> {
-        if let Some(ref mut vm) = self.voice_manager {
-            if vm.is_active() {
-                let commit_opt = vm.poll_events();
-                if let Some(ref text) = commit_opt {
-                    self.commit_text(text);
-                    self.core.punctuation_processor.record_commit(text);
-                    self.hide_candidate_surface();
-                    return commit_opt;
-                } else {
-                    self.refresh_candidate_surface();
-                }
-            }
-        }
-        None
+        let (runtime, mut frontend) = self.split_runtime_and_frontend();
+        runtime.poll_voice_cycle(&mut frontend, true)
     }
 
     /// 设置关联的 V2 输入法实例
@@ -211,24 +213,39 @@ impl WaylanV2Session {
 
     /// 根据当前算法引擎与输入模式构建候选框渲染状态
     pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
-        keys::build_candidate_box_state(self)
+        build_common_candidate_box_state(
+            &self.core.engine,
+            CandidateBoxBuildOptions {
+                mode: self.core.mode,
+                is_active: self.is_active,
+                is_grid_expanded: self.is_grid_expanded,
+                grid_selected_index: self.grid_selected_index,
+                inline_preedit: true,
+                voice_manager: self.voice_manager.as_ref(),
+            },
+        )
     }
 
     /// 触发候选框悬浮表面重绘并提交至 Wayland 表面
     ///
-    /// # 设计原理
-    /// - **实现初衷**：在候选词状态变迁、用户词库重载或配置变更后主动刷新并提交合成器渲染候选框。
-    /// - **核心优势**：自动协调多缓冲槽位轮转与脏区域计算，仅在存在有效候选词时请求合成器展示。
-    /// - **代价与局限**：涉及矢量绘制与共享内存提交，频繁调用会产生微秒级渲染开销。
-    pub fn refresh_candidate_surface(&mut self) {
-        let box_state = self.build_candidate_box_state();
+    /// 使用给定的候选框状态渲染并提交至 Wayland 表面
+    pub fn render_candidate_surface(&mut self, state: &CandidateBoxState) {
         let params = CandidateSurfaceCommitParams {
             shm: self.shm.as_ref(),
             popup_wl_surface: self.popup_wl_surface.as_ref(),
             qhandle: self.qhandle.as_ref(),
             active_buffer: &mut self.active_buffer,
         };
-        commit_candidate_surface(&mut self.surface_manager, &box_state, params);
+        commit_candidate_surface(&mut self.surface_manager, state, params);
+    }
+
+    /// # 设计原理
+    /// - **实现初衷**：在候选词状态变迁、用户词库重载或配置变更后主动刷新并提交合成器渲染候选框。
+    /// - **核心优势**：自动协调多缓冲槽位轮转与脏区域计算，仅在存在有效候选词时请求合成器展示。
+    /// - **代价与局限**：涉及矢量绘制与共享内存提交，频繁调用会产生微秒级渲染开销。
+    pub fn refresh_candidate_surface(&mut self) {
+        let box_state = self.build_candidate_box_state();
+        self.render_candidate_surface(&box_state);
     }
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲
@@ -364,6 +381,45 @@ impl WaylanV2Session {
     /// 处理单个硬件按键按下/释放事件（返回本次直接上屏的文本，便于无合成器环境下单元测试验证）
     pub fn handle_key_event(&mut self, key: u32, is_press: bool) -> Option<String> {
         self.process_key_event(key, is_press).1
+    }
+}
+
+impl InputMethodFrontend for WaylanV2Session {
+    fn commit_text(&mut self, text: &str) {
+        if let Some(im) = &self.input_method {
+            im.commit_string(text.to_string());
+            im.set_preedit_string(String::new(), 0, 0);
+            im.commit(self.done_serial);
+        }
+        self.hide_candidate_surface();
+    }
+
+    fn update_preedit(&mut self, text: &str, cursor_byte_idx: usize) {
+        if let Some(im) = &self.input_method {
+            let cursor = cursor_byte_idx as i32;
+            im.set_preedit_string(text.to_string(), cursor, cursor);
+            im.commit(self.done_serial);
+        }
+    }
+
+    fn update_candidates(&mut self, state: &CandidateBoxState) {
+        self.render_candidate_surface(state);
+    }
+
+    fn hide_candidates(&mut self) {
+        self.hide_candidate_surface();
+    }
+
+    fn move_cursor(&mut self, offset: i32) {
+        let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
+        for _ in 0..offset.unsigned_abs() {
+            self.forward_key_to_seat(0, dir_key, true);
+            self.forward_key_to_seat(0, dir_key, false);
+        }
+    }
+
+    fn sync_input_mode(&mut self, _mode: InputMode) {
+        // 模式切换后的原子标志与托盘唤醒已由 ImeRuntime 统一托管
     }
 }
 

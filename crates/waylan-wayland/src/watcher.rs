@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fs::inotify::ReadFlags;
-use waylan_algo::custom_phrase::CustomPhraseManager;
-use waylan_algo::AlgoEngine;
 use waylan_core::fs_watcher::{DirEventFilter, InotifyWatcher};
+use waylan_engine::algo;
+use waylan_engine::algo::custom_phrase::CustomPhraseManager;
+use waylan_engine::AlgoEngine;
 
 pub use waylan_core::fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,
@@ -34,7 +35,7 @@ pub fn user_dict_filter_with_tracker(tracker: Option<Arc<AtomicU64>>) -> DirEven
                     false
                 }
             } else {
-                waylan_algo::user_adaptive::is_recent_internal_compact(2000)
+                algo::user_adaptive::is_recent_internal_compact(2000)
             };
 
             if is_recent {
@@ -80,7 +81,7 @@ pub fn apply_default_engine_reload(engine: &mut AlgoEngine) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use waylan_algo::types::AlgoConfig;
+    use waylan_engine::AlgoConfig;
 
     #[test]
     fn test_apply_default_engine_reload() {
@@ -179,7 +180,7 @@ mod tests {
             "外部删除清空 user_dict.bin 应正常触发热重载"
         );
 
-        waylan_algo::user_adaptive::mark_internal_compact();
+        algo::user_adaptive::mark_internal_compact();
         let internal_tmp = temp_dir.path().join("user_dict.internal.tmp");
         File::create(&internal_tmp)
             .expect("创建内部归并临时文件")
@@ -191,7 +192,7 @@ mod tests {
             "内部 compact_wal 原子重命名 user_dict.bin 绝不能误触发热重载"
         );
 
-        waylan_algo::user_adaptive::mark_internal_compact();
+        algo::user_adaptive::mark_internal_compact();
         let internal_tmp2 = temp_dir.path().join("user_dict.internal2.tmp");
         File::create(&internal_tmp2)
             .expect("创建第二次内部归并临时文件")

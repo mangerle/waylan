@@ -2,14 +2,8 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::debug;
-use waylan_algo::{KeyProcessContext, KeyProcessResult};
-use waylan_core::input::*;
-use waylan_core::InputMode;
-use waylan_voice::VoiceKeyAction;
 use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, WlKeyboard};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
@@ -24,6 +18,7 @@ fn handle_v1_keymap(state: &mut WaylanV1Session, fd: std::os::fd::OwnedFd, size:
     if file.read_exact(&mut buf).is_ok() {
         let text = String::from_utf8_lossy(&buf);
         state
+            .runtime
             .core
             .keymap_layout
             .update_from_xkb_text(text.trim_end_matches('\0'));
@@ -41,18 +36,14 @@ fn handle_v1_modifiers(
     mods_locked: u32,
     group: u32,
 ) {
-    let prev_caps = state.core.is_caps_locked();
-    state.core.set_modifiers(mods_depressed, mods_locked);
-    let curr_caps = state.core.is_caps_locked();
+    let prev_caps = state.runtime.core.is_caps_locked();
+    state
+        .runtime
+        .core
+        .set_modifiers(mods_depressed, mods_locked);
+    let curr_caps = state.runtime.core.is_caps_locked();
     if prev_caps != curr_caps {
-        if let Some(ref flags) = state.shared_flags {
-            flags.set_caps_locked(curr_caps);
-        } else if let Some(ref caps_flag) = state.shared_is_caps_locked {
-            caps_flag.store(curr_caps, Ordering::Release);
-        }
-        if let Some(ref notify_tx) = state.mode_notify_tx {
-            let _ = notify_tx.try_send(());
-        }
+        state.runtime.update_caps_lock_state(curr_caps);
     }
     context.modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
 }
@@ -66,56 +57,32 @@ fn handle_v1_key_event(
     key: u32,
     is_press: bool,
 ) {
-    // 1. 统一语音按键状态机优先分发（与 IBus 体验对齐）
-    if let Some(ref mut vm) = state.voice_manager {
-        match vm.handle_key_event(key, is_press, state.core.mods_depressed()) {
-            VoiceKeyAction::Consumed => {
-                if is_press {
-                    state.core.consumed_keys.record_press(key, true);
-                } else {
-                    state.core.consumed_keys.take_release(key);
-                }
-                state.refresh_candidate_surface();
-                return;
-            }
-            VoiceKeyAction::Commit(text) => {
-                context.commit_string(state.commit_serial, text.clone());
-                context.preedit_string(state.commit_serial, String::new(), String::new());
-                state.core.punctuation_processor.record_commit(&text);
-                state.hide_candidate_surface();
-                if is_press {
-                    state.core.consumed_keys.record_press(key, true);
-                } else {
-                    state.core.consumed_keys.take_release(key);
-                }
-                return;
-            }
-            VoiceKeyAction::PassThrough => {}
-        }
-    }
-
-    // 2. 外部快捷键拦截器优先捕获
+    // 1. 外部快捷键拦截器优先捕获
     if let Some(mut filter) = state.key_filter.take() {
-        let filter_outcome = filter(key, is_press, state.core.mods_depressed());
+        let filter_outcome = filter(key, is_press, state.runtime.core.mods_depressed());
         state.key_filter = Some(filter);
         match filter_outcome {
             crate::session_common::KeyFilterResult::Consumed => {
                 if is_press {
-                    state.core.consumed_keys.record_press(key, true);
+                    state.runtime.core.consumed_keys.record_press(key, true);
                 } else {
-                    state.core.consumed_keys.take_release(key);
+                    state.runtime.core.consumed_keys.take_release(key);
                 }
                 return;
             }
             crate::session_common::KeyFilterResult::Commit(text) => {
                 context.commit_string(state.commit_serial, text.clone());
                 context.preedit_string(state.commit_serial, String::new(), String::new());
-                state.core.punctuation_processor.record_commit(&text);
+                state
+                    .runtime
+                    .core
+                    .punctuation_processor
+                    .record_commit(&text);
                 state.hide_candidate_surface();
                 if is_press {
-                    state.core.consumed_keys.record_press(key, true);
+                    state.runtime.core.consumed_keys.record_press(key, true);
                 } else {
-                    state.core.consumed_keys.take_release(key);
+                    state.runtime.core.consumed_keys.take_release(key);
                 }
                 return;
             }
@@ -123,122 +90,20 @@ fn handle_v1_key_event(
         }
     }
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    // 3. 调用统一核心会话决策流水线
-    let result = state.core.process_key(
-        KeyProcessContext {
-            keycode: key,
-            is_press,
-            is_password_or_locked: false,
-            surrounding_prefix: None,
-        },
-        now,
+    // 2. 全权委托统一运行时 ImeRuntime 处理（包含语音分发、核心决策与前端 UI 刷新）
+    let (runtime, mut frontend) = state.split_runtime_and_frontend();
+    let (consumed, _commit) = runtime.process_key_event(
+        &mut frontend,
+        key,
+        is_press,
+        false, // V1 协议不具备 password 状态标记
+        None,  // V1 协议不具备 surrounding text 协议扩展
+        false, // inline_preedit 在 V1 下为 false
     );
 
-    // 4. 将决策结果映射为 V1 协议操作
-    match result {
-        KeyProcessResult::PassThrough => {
-            context.key(serial, time, key, if is_press { 1 } else { 0 });
-        }
-        KeyProcessResult::Handled { update_ui } => {
-            if update_ui {
-                let preedit = state.core.engine.formatted_preedit();
-                let cursor = state.core.engine.formatted_cursor_byte_offset() as i32;
-                state.refresh_candidate_surface();
-                context.preedit_cursor(cursor);
-                context.preedit_string(state.commit_serial, preedit, String::new());
-            }
-        }
-        KeyProcessResult::ExpandGrid => {
-            let preedit = state.core.engine.formatted_preedit();
-            let cursor = state.core.engine.formatted_cursor_byte_offset() as i32;
-            state.refresh_candidate_surface();
-            context.preedit_cursor(cursor);
-            context.preedit_string(state.commit_serial, preedit, String::new());
-        }
-        KeyProcessResult::Commit(text) => {
-            state.hide_candidate_surface();
-            context.commit_string(state.commit_serial, text);
-            context.preedit_cursor(0);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-        }
-        KeyProcessResult::CommitAndPassThrough(text) => {
-            state.hide_candidate_surface();
-            context.commit_string(state.commit_serial, text);
-            context.preedit_cursor(0);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-            context.key(serial, time, key, if is_press { 1 } else { 0 });
-        }
-        KeyProcessResult::CommitPunctuation {
-            text,
-            cursor_offset,
-        } => {
-            context.commit_string(state.commit_serial, text);
-            let dir_key = if cursor_offset < 0 {
-                KEY_LEFT
-            } else {
-                KEY_RIGHT
-            };
-            for _ in 0..cursor_offset.unsigned_abs() {
-                context.key(serial, time, dir_key, 1);
-                context.key(serial, time, dir_key, 0);
-            }
-        }
-        KeyProcessResult::CommitPartial {
-            committed,
-            remaining_preedit,
-        } => {
-            let cursor = state.core.engine.formatted_cursor_byte_offset() as i32;
-            context.commit_string(state.commit_serial, committed);
-            state.refresh_candidate_surface();
-            context.preedit_cursor(cursor);
-            context.preedit_string(state.commit_serial, remaining_preedit, String::new());
-        }
-        KeyProcessResult::Reset => {
-            state.hide_candidate_surface();
-            context.preedit_cursor(0);
-            context.preedit_string(state.commit_serial, String::new(), String::new());
-        }
-        KeyProcessResult::ShortcutToggled(_toggle) => {
-            if let Some(ref notify_tx) = state.mode_notify_tx {
-                let _ = notify_tx.try_send(());
-            }
-            state.refresh_candidate_surface();
-        }
-        KeyProcessResult::ModeChanged {
-            new_mode,
-            committed,
-            was_consumed,
-        } => {
-            let is_zh = matches!(new_mode, InputMode::Chinese | InputMode::VMode);
-            if let Some(ref flags) = state.shared_flags {
-                flags.set_chinese(is_zh);
-            } else if let Some(ref zh_flag) = state.shared_is_chinese {
-                zh_flag.store(is_zh, Ordering::Release);
-            }
-            if let Some(ref notify_tx) = state.mode_notify_tx {
-                let _ = notify_tx.try_send(());
-            }
-            let mode_str = match new_mode {
-                InputMode::Chinese => "中文",
-                InputMode::English => "英文",
-                InputMode::VMode => "V模式",
-            };
-            debug!("[微澜] 切换输入模式为：{}", mode_str);
-
-            if let Some(raw) = committed {
-                state.hide_candidate_surface();
-                context.commit_string(state.commit_serial, raw);
-                context.preedit_string(state.commit_serial, String::new(), String::new());
-            }
-            if !was_consumed {
-                context.key(serial, time, key, 0);
-            }
-        }
+    // 3. 若未被输入法消费，通过协议转发给上层应用
+    if !consumed {
+        context.key(serial, time, key, if is_press { 1 } else { 0 });
     }
 }
 

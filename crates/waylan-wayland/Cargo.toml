@@ -7,9 +7,8 @@ description = "微澜 (WayLan) Wayland 协议客户端通信模块"
 
 [dependencies]
 waylan-core = { path = "../waylan-core" }
-waylan-algo = { path = "../waylan-algo" }
+waylan-engine = { path = "../waylan-engine" }
 waylan-ui = { path = "../waylan-ui" }
-waylan-voice = { path = "../waylan-voice" }
 wayland-client.workspace = true
 wayland-protocols.workspace = true
 wayland-protocols-misc.workspace = true

@@ -5,15 +5,15 @@
 //! - **核心优势**：消除 V1 和 V2 对 Candidate、ExpandedCardState 与 VoiceBoxState 的重复转换代码。
 //! - **代价与局限**：提供参数对象 CandidateSurfaceCommitParams 收敛 Wayland 渲染提交入参。
 
-use waylan_algo::AlgoEngine;
-use waylan_core::{CandidateBoxState, InputMode};
-use waylan_voice::VoiceInteractionManager;
+use waylan_core::CandidateBoxState;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_shm::WlShm, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
 use wayland_client::{Dispatch, QueueHandle};
 
 use crate::surface::CandidateSurfaceManager;
+
+pub use waylan_engine::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 
 /// 提交候选框图层所需的 Wayland 目标上下文参数对象
 pub struct CandidateSurfaceCommitParams<'a, S> {
@@ -42,127 +42,6 @@ pub fn commit_candidate_surface<S>(
         params.qhandle,
         params.active_buffer,
     );
-}
-
-/// 构建候选框状态的配置参数对象
-#[derive(Clone, Copy)]
-pub struct CandidateBoxBuildOptions<'a> {
-    pub mode: InputMode,
-    pub is_active: bool,
-    pub is_grid_expanded: bool,
-    pub grid_selected_index: usize,
-    pub inline_preedit: bool,
-    pub voice_manager: Option<&'a VoiceInteractionManager>,
-}
-
-/// 统一构建候选框渲染状态的核心数据（收敛 V1 和 V2 对 Candidate 与 ExpandedCardState 的转换，使用参数对象收敛入参）
-pub fn build_common_candidate_box_state(
-    engine: &AlgoEngine,
-    opts: CandidateBoxBuildOptions<'_>,
-) -> CandidateBoxState {
-    use waylan_core::{Candidate, ExpandedCardState};
-
-    let CandidateBoxBuildOptions {
-        mode,
-        is_active,
-        is_grid_expanded,
-        grid_selected_index,
-        inline_preedit,
-        voice_manager,
-    } = opts;
-
-    // 若当前处于语音输入状态，优先呈现语音识别流式预览与动态波形（与 IBus 视觉契约 100% 对齐）
-    if let Some(vm) = voice_manager {
-        if vm.is_active() {
-            let partial_text = vm.partial_text.clone().unwrap_or_default();
-            let waveform = vm.waveform.clone().unwrap_or_default();
-            let display_text = vm.display_text.clone();
-
-            let voice_state = waylan_core::VoiceBoxState {
-                partial_text: partial_text.clone(),
-                waveform: waveform.clone(),
-                display_text: display_text.clone(),
-                is_listening: true,
-            };
-
-            let candidates = if let Some(ref voice_text) = display_text {
-                vec![Candidate::new(voice_text.clone(), waveform.clone(), 1000)]
-            } else {
-                Vec::new()
-            };
-
-            return CandidateBoxState {
-                visible: is_active,
-                preedit: partial_text,
-                candidates,
-                selected_index: 0,
-                expanded_card: ExpandedCardState::Collapsed,
-                mode_badge: String::new(),
-                is_grid_expanded: false,
-                grid_candidates: Vec::new(),
-                voice: Some(voice_state),
-            };
-        }
-    }
-
-    let core_candidates: Vec<Candidate> = engine.candidates().iter().map(Candidate::from).collect();
-
-    let grid_candidates: Vec<Candidate> = if is_grid_expanded {
-        engine
-            .all_candidates()
-            .iter()
-            .take(30)
-            .map(Candidate::from)
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let expanded_card = if engine.is_expanded() {
-        ExpandedCardState::Expanded {
-            selected_index: engine.expanded_selected_index(),
-        }
-    } else {
-        ExpandedCardState::Collapsed
-    };
-
-    let is_dynamic_v_mode = engine.raw_input().starts_with('v');
-    let (preedit, mode_badge) = if inline_preedit {
-        if is_dynamic_v_mode {
-            (engine.raw_input().to_string(), "V模式".to_string())
-        } else {
-            match mode {
-                InputMode::Chinese => (String::new(), String::new()),
-                InputMode::English => (String::new(), "英".to_string()),
-                InputMode::VMode => (engine.formatted_preedit(), "V".to_string()),
-            }
-        }
-    } else {
-        let badge = match mode {
-            InputMode::Chinese => "中".to_string(),
-            InputMode::English => "英".to_string(),
-            InputMode::VMode => "V".to_string(),
-        };
-        (engine.formatted_preedit(), badge)
-    };
-
-    let selected_index = if is_grid_expanded {
-        grid_selected_index
-    } else {
-        engine.selected_index()
-    };
-
-    CandidateBoxState {
-        visible: is_active && !engine.raw_input().is_empty(),
-        preedit,
-        candidates: core_candidates,
-        selected_index,
-        expanded_card,
-        mode_badge,
-        is_grid_expanded,
-        grid_candidates,
-        voice: None,
-    }
 }
 
 /// 隐藏候选框并解绑关联的 Wayland 表面缓冲区

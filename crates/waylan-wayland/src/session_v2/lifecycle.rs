@@ -3,8 +3,7 @@ use waylan_core::InputMode;
 
 use crate::session_common::{
     apply_default_engine_reload, check_reload_requested_or_files_changed,
-    init_session_inotify_watcher, is_reload_requested, sync_mode_from_shared_flag,
-    sync_mode_from_shared_flags,
+    init_session_inotify_watcher, is_reload_requested,
 };
 
 use super::WaylanV2Session;
@@ -81,8 +80,9 @@ impl WaylanV2Session {
 
     /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）
     pub(crate) fn sync_external_state(&mut self) {
+        let reload_flag = self.runtime.reload_requested.clone();
         let should_reload = check_reload_requested_or_files_changed(
-            self.reload_requested.as_deref(),
+            reload_flag.as_deref(),
             &mut self.inotify_watcher,
             &self.watched_paths,
             &mut self.last_watched_mtime,
@@ -108,7 +108,8 @@ impl WaylanV2Session {
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
     pub(crate) fn sync_atomic_state(&mut self) {
-        if is_reload_requested(self.reload_requested.as_deref()) {
+        let reload_flag = self.runtime.reload_requested.clone();
+        if is_reload_requested(reload_flag.as_deref()) {
             self.sync_external_state();
             return;
         }
@@ -118,11 +119,7 @@ impl WaylanV2Session {
 
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即取消输入并隐藏候选框
     pub(crate) fn sync_mode_from_shared_flag(&mut self) {
-        let changed = if let Some(ref flags) = self.shared_flags {
-            sync_mode_from_shared_flags(Some(flags), &mut self.core.mode)
-        } else {
-            sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
-        };
+        let changed = self.runtime.sync_shared_mode();
         if let Some(InputMode::English) = changed {
             if !self.core.engine.raw_input().is_empty() {
                 self.cancel_input();

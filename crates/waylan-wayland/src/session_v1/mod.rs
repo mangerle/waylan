@@ -1,10 +1,11 @@
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use log::{debug, info};
-use waylan_algo::{AlgoEngine, ImeCoreSession};
 use waylan_core::{CandidateBoxState, InputMode};
-use waylan_voice::VoiceInteractionManager;
+use waylan_engine::{AlgoEngine, ImeRuntime, InputMethodFrontend};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_keyboard::WlKeyboard, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -23,7 +24,6 @@ use crate::surface::CandidateSurfaceManager;
 use crate::session_common::*;
 use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
-use waylan_core::state::SharedInputFlags;
 use waylan_core::LoopWakeup;
 
 /// V1 会话配置与词库热重载回调函数类型
@@ -32,20 +32,10 @@ pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;
 /// 微澜输入法会话状态机
 #[derive(Default)]
 pub struct WaylanV1Session {
-    /// 核心输入法决策会话与算法状态机
-    pub core: ImeCoreSession,
+    /// 统一输入法交互运行时与算法决策状态机
+    pub runtime: ImeRuntime,
     /// 候选框悬浮图层管理器
     pub surface_manager: CandidateSurfaceManager,
-    /// 共享输入状态原子容器
-    pub shared_flags: Option<SharedInputFlags>,
-    /// 与外部系统托盘共享的中英文状态标志
-    pub shared_is_chinese: Option<Arc<AtomicBool>>,
-    /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
-    pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
-    /// 键盘切换中英文时唤醒系统托盘刷新图标的通知发送端
-    pub mode_notify_tx: Option<SyncSender<()>>,
-    /// 与外部系统托盘共享的配置与词库重载请求标志
-    pub reload_requested: Option<Arc<AtomicBool>>,
     /// 外部注入的配置与词库热重载回调函数
     pub reload_callback: Option<V1ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
@@ -80,11 +70,38 @@ pub struct WaylanV1Session {
     pub loop_wakeup: Option<LoopWakeup>,
     /// 外部按键事件拦截回调（用于语音听写快捷键等扩展）
     pub key_filter: Option<KeyFilterCallback>,
-    /// 统一语音按键交互与录音流式管理器
-    pub voice_manager: Option<VoiceInteractionManager>,
+}
+
+impl Deref for WaylanV1Session {
+    type Target = ImeRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+impl DerefMut for WaylanV1Session {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.runtime
+    }
 }
 
 impl WaylanV1Session {
+    /// 拆分统一运行时引用与轻量前端管道借用
+    pub fn split_runtime_and_frontend(&mut self) -> (&mut ImeRuntime, WaylanV1Frontend<'_>) {
+        let frontend = WaylanV1Frontend {
+            active_context: self.active_context.as_ref(),
+            commit_serial: self.commit_serial,
+            surface_manager: &mut self.surface_manager,
+            active_buffer: &mut self.active_buffer,
+            layer_surface: self.layer_surface.as_ref(),
+            popup_wl_surface: self.popup_wl_surface.as_ref(),
+            shm: self.shm.as_ref(),
+            qhandle: self.qhandle.as_ref(),
+        };
+        (&mut self.runtime, frontend)
+    }
+
     /// 创建默认配置的 Wayland V1 输入法会话实例
     ///
     /// # 设计原理
@@ -103,15 +120,16 @@ impl WaylanV1Session {
     /// - **代价与局限**：调用方需负责算法引擎的预热与全生命周期参数调优。
     pub fn with_engine(engine: AlgoEngine) -> Self {
         Self {
-            core: ImeCoreSession::new(engine),
+            runtime: ImeRuntime::with_engine(engine),
             ..Self::default()
         }
     }
 
     /// 同步外部系统托盘的中英文状态与热重载请求（优先基于 inotify 事件感知，回退时使用时间戳轮询）
     pub(crate) fn sync_external_state(&mut self) {
+        let reload_flag = self.runtime.reload_requested.clone();
         let should_reload = check_reload_requested_or_files_changed(
-            self.reload_requested.as_deref(),
+            reload_flag.as_deref(),
             &mut self.inotify_watcher,
             &self.watched_paths,
             &mut self.last_watched_mtime,
@@ -142,7 +160,8 @@ impl WaylanV1Session {
 
     /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
     pub(crate) fn sync_atomic_state(&mut self) {
-        if is_reload_requested(self.reload_requested.as_deref()) {
+        let reload_flag = self.runtime.reload_requested.clone();
+        if is_reload_requested(reload_flag.as_deref()) {
             self.sync_external_state();
             return;
         }
@@ -152,14 +171,10 @@ impl WaylanV1Session {
 
     /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即清理残留预编辑与候选框
     fn sync_mode_from_shared_flag(&mut self) {
-        let changed = if let Some(ref flags) = self.shared_flags {
-            sync_mode_from_shared_flags(Some(flags), &mut self.core.mode)
-        } else {
-            sync_mode_from_shared_flag(self.shared_is_chinese.as_deref(), &mut self.core.mode)
-        };
+        let changed = self.runtime.sync_shared_mode();
         if let Some(InputMode::English) = changed {
-            if !self.core.engine.raw_input().is_empty() {
-                self.core.engine.reset();
+            if !self.runtime.core.engine.raw_input().is_empty() {
+                self.runtime.core.engine.reset();
                 self.hide_candidate_surface();
                 if let Some(ref ctx) = self.active_context {
                     ctx.preedit_cursor(0);
@@ -172,64 +187,31 @@ impl WaylanV1Session {
     /// 查询当前是否处于语音录音或语音浮条激活状态
     #[inline]
     pub fn is_voice_active(&self) -> bool {
-        self.voice_manager
-            .as_ref()
-            .map(|v| v.is_active())
-            .unwrap_or(false)
+        self.runtime.is_voice_active()
     }
 
     /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
     pub fn poll_voice_cycle(&mut self) -> Option<String> {
-        if let Some(ref mut vm) = self.voice_manager {
-            if vm.is_active() {
-                let commit_opt = vm.poll_events();
-                if let Some(ref text) = commit_opt {
-                    if let Some(ref ctx) = self.active_context {
-                        ctx.commit_string(self.commit_serial, text.clone());
-                        ctx.preedit_cursor(0);
-                        ctx.preedit_string(self.commit_serial, String::new(), String::new());
-                    }
-                    self.core.punctuation_processor.record_commit(text);
-                    self.hide_candidate_surface();
-                    return commit_opt;
-                } else {
-                    self.refresh_candidate_surface();
-                }
-            }
-        }
-        None
+        let (runtime, mut frontend) = self.split_runtime_and_frontend();
+        runtime.poll_voice_cycle(&mut frontend, false)
     }
 
     /// 构造当前候选框的渲染状态
     pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
-        build_common_candidate_box_state(
-            &self.core.engine,
-            CandidateBoxBuildOptions {
-                mode: self.core.mode,
-                is_active: true,
-                is_grid_expanded: false,
-                grid_selected_index: 0,
-                inline_preedit: false,
-                voice_manager: self.voice_manager.as_ref(),
-            },
-        )
+        self.runtime.build_candidate_box_state(true, false)
     }
 
     /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
     ///
-    /// # 设计原理
-    /// - **实现初衷**：在 V1 协议下将算法引擎候选状态渲染并提交至 InputPanel 或 LayerShell 悬浮表面。
-    /// - **核心优势**：自动处理边缘防溢出坐标计算与 LayerShell 边距定位更新，确保候选框吸附于光标附近。
-    /// - **代价与局限**：在无 LayerShell 支持的环境下依赖 InputPanel 原生相对偏移定位。
-    pub fn refresh_candidate_surface(&mut self) {
-        let box_state = self.build_candidate_box_state();
+    /// 使用给定的候选框状态渲染并提交至 Wayland 表面
+    pub fn render_candidate_surface(&mut self, state: &CandidateBoxState) {
         let params = CandidateSurfaceCommitParams {
             shm: self.shm.as_ref(),
             popup_wl_surface: self.popup_wl_surface.as_ref(),
             qhandle: self.qhandle.as_ref(),
             active_buffer: &mut self.active_buffer,
         };
-        commit_candidate_surface(&mut self.surface_manager, &box_state, params);
+        commit_candidate_surface(&mut self.surface_manager, state, params);
 
         if let Some(ref layer_surf) = self.layer_surface {
             let scale = self.surface_manager.scale.max(1) as u32;
@@ -247,6 +229,15 @@ impl WaylanV1Session {
                 surf.commit();
             }
         }
+    }
+
+    /// # 设计原理
+    /// - **实现初衷**：在 V1 协议下将算法引擎候选状态渲染并提交至 InputPanel 或 LayerShell 悬浮表面。
+    /// - **核心优势**：自动处理边缘防溢出坐标计算与 LayerShell 边距定位更新，确保候选框吸附于光标附近。
+    /// - **代价与局限**：在无 LayerShell 支持的环境下依赖 InputPanel 原生相对偏移定位。
+    pub fn refresh_candidate_surface(&mut self) {
+        let box_state = self.build_candidate_box_state();
+        self.render_candidate_surface(&box_state);
     }
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲
@@ -348,8 +339,59 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
     }
 }
 
+impl InputMethodFrontend for WaylanV1Session {
+    fn commit_text(&mut self, text: &str) {
+        if let Some(ref context) = self.active_context {
+            context.commit_string(self.commit_serial, text.to_string());
+            context.preedit_cursor(0);
+            context.preedit_string(self.commit_serial, String::new(), String::new());
+        }
+        self.hide_candidate_surface();
+    }
+
+    fn update_preedit(&mut self, text: &str, cursor_byte_idx: usize) {
+        if let Some(ref context) = self.active_context {
+            context.preedit_cursor(cursor_byte_idx as i32);
+            context.preedit_string(self.commit_serial, text.to_string(), String::new());
+        }
+    }
+
+    fn update_candidates(&mut self, state: &CandidateBoxState) {
+        self.render_candidate_surface(state);
+    }
+
+    fn hide_candidates(&mut self) {
+        self.hide_candidate_surface();
+    }
+
+    fn move_cursor(&mut self, offset: i32) {
+        if let Some(ref context) = self.active_context {
+            let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
+            for _ in 0..offset.unsigned_abs() {
+                context.key(0, 0, dir_key, 1);
+                context.key(0, 0, dir_key, 0);
+            }
+        }
+    }
+
+    fn sync_input_mode(&mut self, mode: InputMode) {
+        let is_zh = matches!(mode, InputMode::Chinese | InputMode::VMode);
+        if let Some(ref flags) = self.shared_flags {
+            flags.set_chinese(is_zh);
+        } else if let Some(ref zh_flag) = self.shared_is_chinese {
+            zh_flag.store(is_zh, Ordering::Release);
+        }
+        if let Some(ref notify_tx) = self.mode_notify_tx {
+            let _ = notify_tx.try_send(());
+        }
+    }
+}
+
 mod dispatch;
+mod frontend;
 mod keyboard;
+
+pub use frontend::WaylanV1Frontend;
 
 #[cfg(test)]
 mod session_v1_tests;

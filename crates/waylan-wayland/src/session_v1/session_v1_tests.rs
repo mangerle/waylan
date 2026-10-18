@@ -1,7 +1,6 @@
 use super::*;
 use std::sync::Arc;
-use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
+use waylan_engine::{AlgoConfig, AlgoEngine};
 
 #[test]
 fn test_v1_session_initialization() {
