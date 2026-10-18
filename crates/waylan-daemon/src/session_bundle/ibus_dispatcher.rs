@@ -97,9 +97,6 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
 fn apply_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
     core.candidate_index_style = cfg.ui.candidate_index_style;
     core.candidate_orientation = cfg.ui.candidate_orientation;
-    core.runtime.core.traditional_shortcut = cfg.shortcuts.traditional_shortcut;
-    core.runtime.core.full_width_char_shortcut = cfg.shortcuts.full_width_char_shortcut;
-    core.runtime.core.full_width_punct_shortcut = cfg.shortcuts.full_width_punct_shortcut;
     core.runtime.reload_config(cfg);
 }
 

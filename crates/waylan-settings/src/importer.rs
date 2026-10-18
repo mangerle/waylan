@@ -18,9 +18,7 @@ use waylan_algo::dict_importer::DictImporter;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AuxiliaryDict;
 use waylan_core::config::AppConfig;
-
-/// 外部导入文件体积最大允许上限（64 MB），防止异常大文件导致内存暴涨
-pub const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
+pub use waylan_core::MAX_IMPORT_FILE_BYTES;
 
 /// 外部词库与字典数据导入错误枚举
 #[derive(Debug, Error)]

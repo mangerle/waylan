@@ -3,9 +3,8 @@ use crate::error::AlgoError;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use waylan_core::MAX_IMPORT_FILE_BYTES;
 
-/// 搜狗细胞词库最大允许文件体积上限 (100 MB)
-const MAX_SCEL_SIZE: usize = 100 * 1024 * 1024;
 /// 搜狗细胞词库标准文件头前 4 字节魔数
 const SCEL_HEADER_MAGIC: [u8; 4] = [0x40, 0x15, 0x00, 0x00];
 /// 搜狗细胞词库拼音表区 (0x1540) 4 字节魔数
@@ -37,9 +36,13 @@ impl DictImporter {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
-                if meta.len() > MAX_SCEL_SIZE as u64 {
+                if meta.len() > MAX_IMPORT_FILE_BYTES {
                     return Err(AlgoError::DictParseFailed {
-                        reason: format!("搜狗细胞词库文件体积超出 100MB 安全上限: {}", meta.len()),
+                        reason: format!(
+                            "搜狗细胞词库文件体积超出安全上限 ({} MB): {}",
+                            MAX_IMPORT_FILE_BYTES / (1024 * 1024),
+                            meta.len()
+                        ),
                     });
                 }
                 let data = fs::read(path).map_err(|e| AlgoError::DictionaryIo {
@@ -156,7 +159,7 @@ impl DictImporter {
         let words_offset = 0x2628;
 
         // 校验基本文件长度与最大体积上限
-        if data.len() < words_offset || data.len() > MAX_SCEL_SIZE {
+        if data.len() < words_offset || data.len() > MAX_IMPORT_FILE_BYTES as usize {
             return Err(AlgoError::DictParseFailed {
                 reason: "无效或损坏的搜狗细胞词库文件 (体积不在合法范围内)".to_string(),
             });

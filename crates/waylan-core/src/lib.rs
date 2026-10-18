@@ -4,6 +4,7 @@ pub mod assets;
 pub mod candidate;
 pub mod candidate_format;
 pub mod config;
+pub mod constants;
 pub mod fs_watcher;
 pub mod input;
 pub mod loop_wakeup;
@@ -23,6 +24,7 @@ pub use config::{
     VadModelType, VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig,
     VoiceVisualEffect,
 };
+pub use constants::{MAX_IMPORT_FILE_BYTES, MAX_USER_DICT_BYTES};
 pub use fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,
     compute_initial_signature, init_session_inotify_watcher, FileSignature, InotifyWatcher,
