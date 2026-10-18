@@ -68,6 +68,118 @@ pub struct OfflineVoiceRecognizer {
     fallback_mock: MockVoiceRecognizer,
 }
 
+/// 侦测到的本地 Zipformer 模型文件集合
+enum DetectedZipformerModel {
+    /// 单文件 CTC 极轻量流式模型
+    Ctc { model: PathBuf, tokens: PathBuf },
+    /// Transducer 多文件流式模型（encoder, decoder, joiner, tokens）
+    Transducer {
+        encoder: PathBuf,
+        decoder: PathBuf,
+        joiner: PathBuf,
+        tokens: PathBuf,
+    },
+}
+
+/// 优先检查自定义配置路径是否存在，若不存在则在默认候选文件名中匹配
+fn resolve_candidate_file(
+    dir: &std::path::Path,
+    configured: &str,
+    defaults: &[&str],
+) -> Option<PathBuf> {
+    let conf_path = dir.join(configured);
+    if conf_path.exists() {
+        return Some(conf_path);
+    }
+    defaults.iter().map(|f| dir.join(f)).find(|p| p.exists())
+}
+
+/// 在指定目录中尝试探测 CTC 或 Transducer 架构的完整模型文件
+fn detect_zipformer_files(
+    path: &std::path::Path,
+    config: &OfflineAsrConfig,
+) -> Option<DetectedZipformerModel> {
+    let ctc_model = ["model.int8.onnx", "model.onnx"]
+        .iter()
+        .map(|f| path.join(f))
+        .find(|p| p.exists());
+
+    let tokens = resolve_candidate_file(path, &config.tokens, &["tokens.txt"]);
+    let joiner = ["joiner.int8.onnx", "joiner.onnx"]
+        .iter()
+        .map(|f| path.join(f))
+        .find(|p| p.exists());
+
+    // 优先匹配单文件 CTC 模型
+    if let (Some(model), Some(tokens)) = (ctc_model, tokens.clone()) {
+        if joiner.is_none() {
+            return Some(DetectedZipformerModel::Ctc { model, tokens });
+        }
+    }
+
+    let encoder = resolve_candidate_file(
+        path,
+        &config.encoder,
+        &["encoder.int8.onnx", "encoder.onnx"],
+    );
+    let decoder = resolve_candidate_file(
+        path,
+        &config.decoder,
+        &["decoder.int8.onnx", "decoder.onnx"],
+    );
+
+    if let (Some(encoder), Some(decoder), Some(joiner), Some(tokens)) =
+        (encoder, decoder, joiner, tokens)
+    {
+        Some(DetectedZipformerModel::Transducer {
+            encoder,
+            decoder,
+            joiner,
+            tokens,
+        })
+    } else {
+        None
+    }
+}
+
+/// 根据探测到的模型文件配置并创建 sherpa-onnx 在线流式会话
+fn create_online_session(model: &DetectedZipformerModel) -> Option<SherpaOnlineSession> {
+    let mut rec_cfg = OnlineRecognizerConfig::default();
+    rec_cfg.feat_config.sample_rate = 16000;
+    rec_cfg.feat_config.feature_dim = 80;
+    rec_cfg.decoding_method = Some("greedy_search".to_string());
+    rec_cfg.model_config.num_threads = 2;
+    rec_cfg.model_config.provider = Some("cpu".to_string());
+
+    match model {
+        DetectedZipformerModel::Ctc { model, tokens } => {
+            rec_cfg.model_config.tokens = Some(tokens.to_string_lossy().to_string());
+            rec_cfg.model_config.zipformer2_ctc.model = Some(model.to_string_lossy().to_string());
+        }
+        DetectedZipformerModel::Transducer {
+            encoder,
+            decoder,
+            joiner,
+            tokens,
+        } => {
+            rec_cfg.model_config.tokens = Some(tokens.to_string_lossy().to_string());
+            rec_cfg.model_config.transducer.encoder = Some(encoder.to_string_lossy().to_string());
+            rec_cfg.model_config.transducer.decoder = Some(decoder.to_string_lossy().to_string());
+            rec_cfg.model_config.transducer.joiner = Some(joiner.to_string_lossy().to_string());
+            rec_cfg.model_config.model_type = Some("zipformer2".to_string());
+        }
+    }
+
+    let recognizer = OnlineRecognizer::create(&rec_cfg)?;
+    info!("[本地 ASR] 成功创建 sherpa-onnx 原生流式识别引擎");
+    let stream = recognizer.create_stream();
+    Some(SherpaOnlineSession {
+        recognizer,
+        stream,
+        last_text: String::new(),
+    })
+}
+
 impl OfflineVoiceRecognizer {
     /// 创建本地离线识别器并校验模型权重完整性
     pub fn new(config: OfflineAsrConfig) -> Self {
@@ -76,106 +188,20 @@ impl OfflineVoiceRecognizer {
         let mut active_session = None;
 
         if let Some(ref path) = resolved_dir {
-            // 检查单文件 CTC 模型（如 2025 年的 Zipformer2-Small-CTC model.int8.onnx）
-            let ctc_model_file = ["model.int8.onnx", "model.onnx"]
-                .iter()
-                .map(|f| path.join(f))
-                .find(|p| p.exists());
-
-            let enc_file = if path.join(&config.encoder).exists() {
-                Some(path.join(&config.encoder))
-            } else if path.join("encoder.int8.onnx").exists() {
-                Some(path.join("encoder.int8.onnx"))
-            } else if path.join("encoder.onnx").exists() {
-                Some(path.join("encoder.onnx"))
-            } else {
-                None
-            };
-
-            let dec_file = if path.join(&config.decoder).exists() {
-                Some(path.join(&config.decoder))
-            } else if path.join("decoder.onnx").exists() {
-                Some(path.join("decoder.onnx"))
-            } else if path.join("decoder.int8.onnx").exists() {
-                Some(path.join("decoder.int8.onnx"))
-            } else {
-                None
-            };
-
-            let tok_file = if path.join(&config.tokens).exists() {
-                Some(path.join(&config.tokens))
-            } else if path.join("tokens.txt").exists() {
-                Some(path.join("tokens.txt"))
-            } else {
-                None
-            };
-
-            let joiner_file = ["joiner.int8.onnx", "joiner.onnx"]
-                .iter()
-                .map(|f| path.join(f))
-                .find(|p| p.exists());
-
-            // 自动侦测实际 Zipformer 流式模型架构：
-            // 1. 若存在单个 ctc 模型文件（如 model.int8.onnx），判定为 Zipformer2-CTC 极轻量流式引擎
-            // 2. 若存在 joiner 权重，判定为 Zipformer-Transducer 多文件流式引擎
-            let is_ctc = ctc_model_file.is_some() || joiner_file.is_none();
-
-            let files_ready = if is_ctc {
-                ctc_model_file.is_some() && tok_file.is_some()
-            } else {
-                enc_file.is_some()
-                    && dec_file.is_some()
-                    && tok_file.is_some()
-                    && joiner_file.is_some()
-            };
-
-            if files_ready {
+            if let Some(detected) = detect_zipformer_files(path, &config) {
+                let is_ctc = matches!(detected, DetectedZipformerModel::Ctc { .. });
                 info!(
                     "[本地 ASR] 检测到完整本地离线 Zipformer 模型 (是否CTC: {}, 目录: {:?})",
                     is_ctc, path
                 );
                 models_ready = true;
-
-                let mut rec_cfg = OnlineRecognizerConfig::default();
-                rec_cfg.feat_config.sample_rate = 16000;
-                rec_cfg.feat_config.feature_dim = 80;
-                rec_cfg.decoding_method = Some("greedy_search".to_string());
-                rec_cfg.model_config.num_threads = 2;
-                rec_cfg.model_config.provider = Some("cpu".to_string());
-                rec_cfg.model_config.tokens = tok_file.map(|p| p.to_string_lossy().to_string());
-
-                if is_ctc {
-                    rec_cfg.model_config.zipformer2_ctc.model =
-                        ctc_model_file.map(|p| p.to_string_lossy().to_string());
-                } else {
-                    rec_cfg.model_config.transducer.encoder =
-                        enc_file.map(|p| p.to_string_lossy().to_string());
-                    rec_cfg.model_config.transducer.decoder =
-                        dec_file.map(|p| p.to_string_lossy().to_string());
-                    rec_cfg.model_config.transducer.joiner =
-                        joiner_file.map(|p| p.to_string_lossy().to_string());
-                    rec_cfg.model_config.model_type = Some("zipformer2".to_string());
-                }
-
-                if let Some(recognizer) = OnlineRecognizer::create(&rec_cfg) {
-                    info!("[本地 ASR] 成功创建 sherpa-onnx 原生流式识别引擎");
-                    let stream = recognizer.create_stream();
-                    active_session = Some(SherpaOnlineSession {
-                        recognizer,
-                        stream,
-                        last_text: String::new(),
-                    });
+                if let Some(session) = create_online_session(&detected) {
+                    active_session = Some(session);
                 } else {
                     warn!("[本地 ASR] 创建 sherpa-onnx 识别器失败，正在使用仿真器优雅降级");
                 }
             } else {
-                warn!(
-                    "[本地 ASR] 模型目录缺少必要权重文件 (encoder: {}, decoder: {}, tokens: {}, joiner: {})",
-                    enc_file.is_some(),
-                    dec_file.is_some(),
-                    tok_file.is_some(),
-                    joiner_file.is_some()
-                );
+                warn!("[本地 ASR] 模型目录 {:?} 缺少必要权重文件", path);
             }
         } else {
             info!("[本地 ASR] 未检测到已下载的本地 ASR 模型，使用仿真识别器保底");
