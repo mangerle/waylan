@@ -8,12 +8,23 @@ description = "微澜 (WayLan) - 纯 Rust 现代中文拼音输入核心算法�
 
 [features]
 default = []
+tools = []
 corpus-builder = ["dep:jieba-rs", "dep:rayon", "dep:regex", "dep:serde_json"]
 
 [[bin]]
 name = "build_bigram"
 path = "src/bin/build_bigram/main.rs"
 required-features = ["corpus-builder"]
+
+[[example]]
+name = "build_aux_dict"
+path = "examples/build_aux_dict.rs"
+required-features = ["tools"]
+
+[[example]]
+name = "build_base_dict"
+path = "examples/build_base_dict.rs"
+required-features = ["tools"]
 
 [dependencies]
 waylan-core = { path = "../waylan-core" }

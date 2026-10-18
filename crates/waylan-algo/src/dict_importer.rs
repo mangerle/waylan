@@ -10,13 +10,7 @@ const SCEL_HEADER_MAGIC: [u8; 4] = [0x40, 0x15, 0x00, 0x00];
 /// 搜狗细胞词库拼音表区 (0x1540) 4 字节魔数
 const SCEL_PY_MAGIC: [u8; 4] = [0x9D, 0x01, 0x00, 0x00];
 
-/// 词库条目结构 (文本, 拼音序列, 基础频次)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedDictEntry {
-    pub text: String,
-    pub pinyin: String,
-    pub weight: u32,
-}
+pub use crate::types::ImportedDictEntry;
 
 /// 第三方词库导入与转换器 (支持 Rime YAML / 搜狗细胞词库 .scel / 纯文本 .txt)
 pub struct DictImporter;

@@ -1,8 +1,10 @@
 pub mod bigram;
+#[cfg(feature = "tools")]
 pub mod builder;
 pub mod composition;
 pub mod custom_phrase;
 pub mod dat;
+#[cfg(feature = "tools")]
 pub mod dict_importer;
 pub mod dispatcher;
 pub mod engine;

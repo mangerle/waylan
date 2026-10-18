@@ -21,11 +21,10 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use crate::custom_phrase::AuxiliaryDict;
-use crate::dict_importer::ImportedDictEntry;
 use crate::error::AlgoError;
 use crate::prism::PrismEngine;
 use crate::table::LexiconTable;
-use crate::types::{AlgoCandidate, AlgoConfig};
+use crate::types::{AlgoCandidate, AlgoConfig, ImportedDictEntry};
 
 /// 微澜统一核心算法引擎门面 (AlgoEngine)
 ///

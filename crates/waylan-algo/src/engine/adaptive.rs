@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::dict_importer::ImportedDictEntry;
 use crate::error::AlgoError;
+use crate::types::ImportedDictEntry;
 use crate::user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};
 
 /// 用户自适应词频学习与预写日志持久化子模型

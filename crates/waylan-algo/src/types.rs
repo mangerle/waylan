@@ -298,6 +298,17 @@ impl From<AlgoCandidate> for Candidate {
     }
 }
 
+/// 外部词库导入条目数据契约 (文本, 拼音序列, 基础频次权重)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportedDictEntry {
+    /// 词条文本内容
+    pub text: String,
+    /// 拼音序列（如 "ni'hao"）
+    pub pinyin: String,
+    /// 基础频次权重
+    pub weight: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
