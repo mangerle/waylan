@@ -56,6 +56,7 @@ impl IbusMenuActionHandler for DaemonIbusMenuHandler {
 /// 宿主 IBus 配置热重载与指示器形态变迁驱动器
 struct DaemonIbusConfigReloader {
     exclusive_input_source: AtomicBool,
+    pending_sync_exclusive: AtomicBool,
 }
 
 impl IbusConfigReloader for DaemonIbusConfigReloader {
@@ -76,10 +77,18 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
         apply_bundle_to_ibus_core(bundle, core);
         let old_exclusive = self.exclusive_input_source.swap(hide_ext, Ordering::AcqRel);
         if hide_ext != old_exclusive {
+            // 标记待在锁守卫释放后的 post_reload 中安全执行桌面集成外部命令
+            self.pending_sync_exclusive.store(true, Ordering::Release);
+        }
+        false
+    }
+
+    fn post_reload(&self) {
+        if self.pending_sync_exclusive.swap(false, Ordering::AcqRel) {
+            let hide_ext = self.exclusive_input_source.load(Ordering::Acquire);
             waylan_ibus::desktop_integration::ensure_gnome_input_source_registered(hide_ext);
             waylan_ibus::desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
         }
-        false
     }
 }
 
@@ -123,6 +132,7 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
     });
     let config_reloader = Arc::new(DaemonIbusConfigReloader {
         exclusive_input_source: AtomicBool::new(opts.exclusive_source),
+        pending_sync_exclusive: AtomicBool::new(false),
     });
     let ibus_coordinator = IbusShutdownCoordinator::new(
         opts.coordinator.flag(),

@@ -219,6 +219,8 @@ fn handle_config_reload_event(
             let mut guard = shared_core.lock().unwrap_or_else(|e| e.into_inner());
             reloader.reload(&mut guard)
         };
+        // 核心互斥锁 guard 已经彻底析构释放，在临界区外安全执行外部命令或 I/O，绝不阻塞打字按键
+        reloader.post_reload();
         if should_restart {
             info!("[微澜 IBus] 热重载检测到指示器形态变更，正在触发平滑自重启...");
             params.coordinator.trigger_graceful_restart();

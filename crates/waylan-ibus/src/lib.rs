@@ -43,9 +43,12 @@ pub trait IbusMenuActionHandler: Send + Sync {
 
 /// IBus 词库与运行配置热重载驱动接口
 pub trait IbusConfigReloader: Send + Sync {
-    /// 当检测到配置文件修改或收到重载信号时调用。
+    /// 当检测到配置文件修改或收到重载信号时在互斥锁保护下调用以更新内存数据。
     /// 返回值：若由于配置变更（如托盘与原生指示器切换）需要触发平滑自重启则返回 true。
     fn reload(&self, core: &mut keys::IbusSessionCore) -> bool;
+
+    /// 在释放核心互斥锁守卫后调用的后置操作（可安全执行耗时外部子进程调用或 I/O，绝不阻塞输入法按键）
+    fn post_reload(&self) {}
 }
 
 /// IBus 会话停机与事件循环唤醒协调器
