@@ -200,137 +200,155 @@ pub fn draw_calendar_icon(
 
 /// 混合字形位图（支持 8-bit 单通道灰度 Mask 与 32-bit 彩色 Emoji，采用定点整数 Porter-Duff Source-Over 优化）
 pub fn blend_swash_image(pixmap: &mut Pixmap, image: &SwashImage, pos: (i32, i32), color: Color) {
-    let (x, y) = pos;
     let width = image.placement.width as i32;
     let height = image.placement.height as i32;
     if width <= 0 || height <= 0 {
         return;
     }
-    let pixmap_w = pixmap.width() as i32;
-    let pixmap_h = pixmap.height() as i32;
-    let pixels = pixmap.pixels_mut();
+
+    let mut target = BlitTarget {
+        pixmap_w: pixmap.width() as i32,
+        pixmap_h: pixmap.height() as i32,
+        pixels: pixmap.pixels_mut(),
+    };
 
     match image.content {
         SwashContent::Mask | SwashContent::SubpixelMask => {
-            let ca = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
-            if ca == 0 {
-                return;
-            }
-            let cr = (color.r * 255.0).round().clamp(0.0, 255.0) as u32;
-            let cg = (color.g * 255.0).round().clamp(0.0, 255.0) as u32;
-            let cb = (color.b * 255.0).round().clamp(0.0, 255.0) as u32;
-
-            let bitmap = &image.data;
-            for row in 0..height {
-                let py = y + row;
-                if py < 0 || py >= pixmap_h {
-                    continue;
-                }
-                let row_offset = (row * width) as usize;
-                let py_offset = (py * pixmap_w) as usize;
-
-                for col in 0..width {
-                    let px = x + col;
-                    if px < 0 || px >= pixmap_w {
-                        continue;
-                    }
-
-                    let cov = bitmap[row_offset + col as usize] as u32;
-                    if cov <= 2 {
-                        continue;
-                    }
-
-                    let src_a = (ca * cov + 127) / 255;
-                    if src_a == 0 {
-                        continue;
-                    }
-                    let inv_sa = 255 - src_a;
-
-                    let pixel_idx = py_offset + px as usize;
-                    let target = &mut pixels[pixel_idx];
-
-                    let dst_a = target.alpha() as u32;
-                    let dst_r = target.red() as u32;
-                    let dst_g = target.green() as u32;
-                    let dst_b = target.blue() as u32;
-
-                    let src_r_premul = (cr * src_a + 127) / 255;
-                    let src_g_premul = (cg * src_a + 127) / 255;
-                    let src_b_premul = (cb * src_a + 127) / 255;
-
-                    let out_a = (src_a + (dst_a * inv_sa + 127) / 255).min(255) as u8;
-                    let out_r =
-                        (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
-                    let out_g =
-                        (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
-                    let out_b =
-                        (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
-
-                    if let Some(blended) =
-                        PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a)
-                    {
-                        *target = blended;
-                    }
-                }
-            }
+            blend_mask_glyph(&mut target, image, pos, color);
         }
         SwashContent::Color => {
-            let data = &image.data;
-            for row in 0..height {
-                let py = y + row;
-                if py < 0 || py >= pixmap_h {
-                    continue;
-                }
-                let row_offset = (row * width * 4) as usize;
-                let py_offset = (py * pixmap_w) as usize;
-
-                for col in 0..width {
-                    let px = x + col;
-                    if px < 0 || px >= pixmap_w {
-                        continue;
-                    }
-
-                    let idx = row_offset + (col as usize * 4);
-                    if idx + 3 >= data.len() {
-                        continue;
-                    }
-                    let sr = data[idx] as u32;
-                    let sg = data[idx + 1] as u32;
-                    let sb = data[idx + 2] as u32;
-                    let sa = data[idx + 3] as u32;
-                    if sa <= 2 {
-                        continue;
-                    }
-
-                    let inv_sa = 255 - sa;
-                    let pixel_idx = py_offset + px as usize;
-                    let target = &mut pixels[pixel_idx];
-
-                    let dst_a = target.alpha() as u32;
-                    let dst_r = target.red() as u32;
-                    let dst_g = target.green() as u32;
-                    let dst_b = target.blue() as u32;
-
-                    let src_r_premul = (sr * sa + 127) / 255;
-                    let src_g_premul = (sg * sa + 127) / 255;
-                    let src_b_premul = (sb * sa + 127) / 255;
-
-                    let out_a = (sa + (dst_a * inv_sa + 127) / 255).min(255) as u8;
-                    let out_r =
-                        (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
-                    let out_g =
-                        (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
-                    let out_b =
-                        (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
-
-                    if let Some(blended) =
-                        PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a)
-                    {
-                        *target = blended;
-                    }
-                }
-            }
+            blend_color_emoji(&mut target, image, pos);
         }
+    }
+}
+
+/// 绘图目标缓冲区上下文
+struct BlitTarget<'a> {
+    pixmap_w: i32,
+    pixmap_h: i32,
+    pixels: &'a mut [PremultipliedColorU8],
+}
+
+/// 混合单通道灰度字形遮罩
+fn blend_mask_glyph(
+    target: &mut BlitTarget<'_>,
+    image: &SwashImage,
+    pos: (i32, i32),
+    color: Color,
+) {
+    let ca = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
+    if ca == 0 {
+        return;
+    }
+    let cr = (color.r * 255.0).round().clamp(0.0, 255.0) as u32;
+    let cg = (color.g * 255.0).round().clamp(0.0, 255.0) as u32;
+    let cb = (color.b * 255.0).round().clamp(0.0, 255.0) as u32;
+
+    let (x, y) = pos;
+    let width = image.placement.width as i32;
+    let height = image.placement.height as i32;
+    let bitmap = &image.data;
+
+    for row in 0..height {
+        let py = y + row;
+        if py < 0 || py >= target.pixmap_h {
+            continue;
+        }
+        let row_offset = (row * width) as usize;
+        let py_offset = (py * target.pixmap_w) as usize;
+
+        for col in 0..width {
+            let px = x + col;
+            if px < 0 || px >= target.pixmap_w {
+                continue;
+            }
+
+            let cov = bitmap[row_offset + col as usize] as u32;
+            if cov <= 2 {
+                continue;
+            }
+
+            let src_a = (ca * cov + 127) / 255;
+            if src_a == 0 {
+                continue;
+            }
+
+            let src_r_premul = (cr * src_a + 127) / 255;
+            let src_g_premul = (cg * src_a + 127) / 255;
+            let src_b_premul = (cb * src_a + 127) / 255;
+
+            let pixel = &mut target.pixels[py_offset + px as usize];
+            blend_pixel_over(pixel, src_r_premul, src_g_premul, src_b_premul, src_a);
+        }
+    }
+}
+
+/// 混合 32-bit 彩色 Emoji 位图
+fn blend_color_emoji(target: &mut BlitTarget<'_>, image: &SwashImage, pos: (i32, i32)) {
+    let (x, y) = pos;
+    let width = image.placement.width as i32;
+    let height = image.placement.height as i32;
+    let data = &image.data;
+
+    for row in 0..height {
+        let py = y + row;
+        if py < 0 || py >= target.pixmap_h {
+            continue;
+        }
+        let row_offset = (row * width * 4) as usize;
+        let py_offset = (py * target.pixmap_w) as usize;
+
+        for col in 0..width {
+            let px = x + col;
+            if px < 0 || px >= target.pixmap_w {
+                continue;
+            }
+
+            let idx = row_offset + (col as usize * 4);
+            if idx + 3 >= data.len() {
+                continue;
+            }
+            let sa = data[idx + 3] as u32;
+            if sa <= 2 {
+                continue;
+            }
+
+            let sr = data[idx] as u32;
+            let sg = data[idx + 1] as u32;
+            let sb = data[idx + 2] as u32;
+
+            let src_r_premul = (sr * sa + 127) / 255;
+            let src_g_premul = (sg * sa + 127) / 255;
+            let src_b_premul = (sb * sa + 127) / 255;
+
+            let pixel = &mut target.pixels[py_offset + px as usize];
+            blend_pixel_over(pixel, src_r_premul, src_g_premul, src_b_premul, sa);
+        }
+    }
+}
+
+/// 定点整数 Porter-Duff Source-Over 像素级原子混合
+#[inline(always)]
+fn blend_pixel_over(
+    target: &mut PremultipliedColorU8,
+    src_r_premul: u32,
+    src_g_premul: u32,
+    src_b_premul: u32,
+    src_a: u32,
+) {
+    let inv_sa = 255 - src_a;
+    let dst_a = target.alpha() as u32;
+    let dst_r = target.red() as u32;
+    let dst_g = target.green() as u32;
+    let dst_b = target.blue() as u32;
+
+    let out_a = (src_a + (dst_a * inv_sa + 127) / 255).min(255) as u8;
+    let out_r = (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
+    let out_g = (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
+    let out_b = (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
+
+    if let Some(blended) = PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a) {
+        *target = blended;
     }
 }
 
