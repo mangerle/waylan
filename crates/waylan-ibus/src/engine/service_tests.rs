@@ -20,7 +20,7 @@ fn test_password_capabilities_and_reset_lifecycle() {
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: false,
         is_password: Arc::clone(&is_password),
-        last_screen_check_ms: Arc::new(AtomicU64::new(0)),
+        lock_healer: Arc::new(ScreenLockHealer::default()),
     };
 
     // 1. 模拟进入密码框，设置密码能力位
@@ -50,7 +50,7 @@ fn test_screen_locked_recovery_on_plain_context() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let core = Arc::new(Mutex::new(IbusSessionCore::new(engine)));
     let is_password = Arc::new(AtomicBool::new(false));
-    let _service = IbusEngineService {
+    let service = IbusEngineService {
         core: Arc::clone(&core),
         reload_requested: None,
         loop_wakeup: None,
@@ -58,7 +58,7 @@ fn test_screen_locked_recovery_on_plain_context() {
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: false,
         is_password: Arc::clone(&is_password),
-        last_screen_check_ms: Arc::new(AtomicU64::new(0)),
+        lock_healer: Arc::new(ScreenLockHealer::default()),
     };
 
     // 1. 模拟系统此前记录为锁屏直通状态
@@ -68,13 +68,15 @@ fn test_screen_locked_recovery_on_plain_context() {
         guard.is_password_context = false;
     }
 
-    // 2. 模拟普通窗口在按键或焦点自愈探测下解除锁屏保护（模拟屏幕保护程序处于未激活态）
+    // 2. 验证获焦自愈检测器正确解除普通窗口的锁屏残留保护
     {
         let mut guard = core.lock().unwrap();
-        let is_saver_active = false;
-        if !guard.is_password_context && guard.is_screen_locked && !is_saver_active {
-            guard.is_screen_locked = false;
-        }
+        let healed = service.lock_healer.heal_on_focus(
+            guard.is_password_context,
+            &mut guard.is_screen_locked,
+            None,
+        );
+        assert!(healed);
     }
 
     // 3. 验证锁屏直通保护已正确解除

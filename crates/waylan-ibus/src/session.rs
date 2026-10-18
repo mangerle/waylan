@@ -7,7 +7,7 @@
 //! - **代价与局限**：强依赖宿主机上正常运行的 ibus-daemon 服务。
 
 use std::env;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex};
 
 use log::{debug, info};
@@ -25,6 +25,7 @@ use super::engine::{
 use super::error::IbusError;
 use super::keys::IbusSessionCore;
 use super::monitor::{run_ibus_monitor_loop, IbusMonitorParams};
+use super::screensaver::ScreenLockHealer;
 use super::types::build_waylan_ibus_component;
 use super::IbusSessionOptions;
 
@@ -48,7 +49,7 @@ fn assemble_ibus_services(
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: opts.suppress_properties,
         is_password: Arc::new(AtomicBool::new(false)),
-        last_screen_check_ms: Arc::new(AtomicU64::new(0)),
+        lock_healer: Arc::new(ScreenLockHealer::default()),
     };
 
     let monitor_params = IbusMonitorParams {

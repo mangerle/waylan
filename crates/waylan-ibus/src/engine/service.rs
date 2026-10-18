@@ -5,8 +5,7 @@
 //! - **核心优势**：纯内存瞬时加锁变更状态并提取不可变快照，所有信号发送在释放互斥锁后异步执行。
 //! - **代价与局限**：必须严格遵循 IBus D-Bus 信号契约。
 
-use log::info;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_core::LoopWakeup;
@@ -15,7 +14,7 @@ use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
 
 use super::super::keys::{IbusKeyOutcome, IbusSessionCore};
-use super::super::screensaver::query_current_screen_saver_active;
+use super::super::screensaver::ScreenLockHealer;
 use super::super::types::{build_ibus_prop_list, extract_text_from_ibus_variant};
 use super::snapshot::UiSnapshot;
 use crate::IbusMenuActionHandler;
@@ -36,7 +35,7 @@ pub struct IbusEngineService {
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) suppress_properties: bool,
     pub(crate) is_password: Arc<AtomicBool>,
-    pub(crate) last_screen_check_ms: Arc<AtomicU64>,
+    pub(crate) lock_healer: Arc<ScreenLockHealer>,
 }
 
 #[interface(name = "org.freedesktop.IBus.Engine")]
@@ -56,27 +55,12 @@ impl IbusEngineService {
                 guard.is_password_context = true;
             }
 
-            // 按键级锁屏直通残留即时自愈：
-            // 当当前窗口为普通输入上下文，但内部状态仍处于锁屏直通模式时，
-            // 实时探测桌面真实锁屏状态。若系统实际已解锁，立即解除直通保护并唤醒后台监控，
-            // 彻底杜绝解锁信号滞后或丢失导致首个按键被当作锁屏密码直通放行。
-            if !guard.is_password_context && guard.is_screen_locked {
-                let now_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                let last_ms = self.last_screen_check_ms.load(Ordering::Acquire);
-                if now_ms.saturating_sub(last_ms) >= 500 {
-                    self.last_screen_check_ms.store(now_ms, Ordering::Release);
-                    if !query_current_screen_saver_active() {
-                        info!("[微澜 IBus] 按键事件探测到系统已解锁，即时校准解除锁屏直通。");
-                        guard.is_screen_locked = false;
-                        if let Some(ref wakeup) = self.loop_wakeup {
-                            wakeup.wake();
-                        }
-                    }
-                }
-            }
+            // 按键级锁屏直通残留即时自愈
+            self.lock_healer.maybe_heal_on_key(
+                guard.is_password_context,
+                &mut guard.is_screen_locked,
+                self.loop_wakeup.as_ref(),
+            );
 
             let out = guard.process_key_event(keyval, keycode, state);
             let snap = if out.update_ui {
@@ -207,14 +191,12 @@ impl IbusEngineService {
             // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
             // 既杜绝旧普通窗口残留密码标记，又防止因先触发 SetContentType 后触发 FocusIn 导致密码标记被误冲刷
             guard.is_password_context = self.is_password.load(Ordering::Acquire);
-            // 自愈保护：若当前获焦的并非密码框，而内部仍记录为锁屏状态，说明桌面已解锁但锁屏信号丢失，自动解除锁屏直通
-            if !guard.is_password_context && guard.is_screen_locked {
-                info!("[微澜 IBus] 普通窗口获焦，自动校准并解除残留的锁屏直通保护。");
-                guard.is_screen_locked = false;
-                if let Some(ref wakeup) = self.loop_wakeup {
-                    wakeup.wake();
-                }
-            }
+            // 自愈保护：若当前获焦的并非密码框，而内部仍记录为锁屏状态，自动解除锁屏直通
+            self.lock_healer.heal_on_focus(
+                guard.is_password_context,
+                &mut guard.is_screen_locked,
+                self.loop_wakeup.as_ref(),
+            );
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
             let trad = guard.runtime.core.engine.config.traditional_chinese;

@@ -6,7 +6,7 @@
 //! - **代价与局限**：依赖宿主 D-Bus 连接的 ObjectServer 动态挂载能力。
 
 use log::{debug, warn};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use zbus::blocking::Connection;
 use zbus::fdo;
@@ -14,6 +14,7 @@ use zbus::interface;
 use zbus::zvariant::OwnedObjectPath;
 
 use super::super::keys::IbusSessionCore;
+use super::super::screensaver::ScreenLockHealer;
 use super::service::IbusEngineService;
 
 /// `org.freedesktop.IBus.Factory` 接口实现
@@ -43,7 +44,7 @@ impl IbusFactoryService {
             if let Some(ref conn) = *slot {
                 let mut srv = self.engine_template.clone();
                 srv.is_password = Arc::new(AtomicBool::new(false));
-                srv.last_screen_check_ms = Arc::new(AtomicU64::new(0));
+                srv.lock_healer = Arc::new(ScreenLockHealer::default());
                 let gen = IbusGenericService {
                     core: Arc::clone(&self.core),
                 };
