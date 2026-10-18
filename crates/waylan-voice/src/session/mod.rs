@@ -18,9 +18,17 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use log::{info, warn};
+use waylan_core::VoiceConfig;
 
 use self::pipeline::{active_recording_loop, compute_asr_fingerprint};
 use self::types::{ActiveRecordingContext, WorkerCommand, IDLE_MODEL_UNLOAD_TIMEOUT};
+
+type AsrFingerprint = (
+    waylan_core::VoiceEngineType,
+    Option<String>,
+    Option<waylan_core::CloudAsrConfig>,
+    Option<String>,
+);
 use crate::capture::AudioCapture;
 use crate::error::VoiceError;
 use crate::recognizer::{create_recognizer, PunctuationRestorer, VoiceRecognizer};
@@ -150,38 +158,144 @@ impl VoiceSessionController {
             let _ = self.cmd_tx.send(WorkerCommand::UnloadModels);
         }
     }
+}
 
+/// 语音会话工作线程常驻模型与指纹缓存容器
+#[derive(Default)]
+struct WorkerModelCache {
+    recognizer: Option<Box<dyn VoiceRecognizer>>,
+    vad: Option<Box<dyn VadProcessor>>,
+    punct: Option<PunctuationRestorer>,
+    last_asr_fingerprint: Option<AsrFingerprint>,
+}
+
+impl WorkerModelCache {
+    /// 清空所有模型权重缓存以释放常驻内存
+    fn unload(&mut self) {
+        self.recognizer = None;
+        self.vad = None;
+        self.punct = None;
+        self.last_asr_fingerprint = None;
+    }
+
+    /// 查询是否有任何模型权重驻留在内存中
+    #[inline]
+    fn has_cached_models(&self) -> bool {
+        self.recognizer.is_some() || self.vad.is_some()
+    }
+
+    /// 校验或按需初始化识别器、VAD与标点模型实例
+    fn prepare_models(
+        &mut self,
+        voice_config: &VoiceConfig,
+    ) -> Option<(
+        &mut (dyn VoiceRecognizer + 'static),
+        &mut (dyn VadProcessor + 'static),
+        Option<&PunctuationRestorer>,
+    )> {
+        let current_fingerprint = compute_asr_fingerprint(voice_config);
+        if self.last_asr_fingerprint.as_ref() != Some(&current_fingerprint) {
+            self.recognizer = None;
+            self.last_asr_fingerprint = Some(current_fingerprint);
+        }
+
+        if self.recognizer.is_none() {
+            self.recognizer = Some(create_recognizer(voice_config));
+        }
+        if self.vad.is_none() {
+            self.vad = Some(create_vad(&voice_config.vad));
+        }
+        if self.punct.is_none() && voice_config.auto_punctuation {
+            self.punct = Some(PunctuationRestorer::with_custom_path(
+                voice_config.punct_model_path.as_deref(),
+            ));
+        }
+
+        let recognizer = self.recognizer.as_mut()?;
+        let vad = self.vad.as_mut()?;
+        recognizer.reset();
+        vad.reset();
+
+        Some((recognizer.as_mut(), vad.as_mut(), self.punct.as_ref()))
+    }
+}
+
+/// 计算下一次接收命令的等待超时并执行模型空闲超时自动卸载
+fn check_idle_timeout_and_calculate_deadline(
+    cache: &mut WorkerModelCache,
+    last_activity: Instant,
+) -> Duration {
+    if cache.has_cached_models() {
+        let elapsed = last_activity.elapsed();
+        if elapsed >= IDLE_MODEL_UNLOAD_TIMEOUT {
+            cache.unload();
+            info!("[语音会话] 语音模块已持续空闲超过 5 分钟，自动卸载模型权重以释放常驻内存");
+            Duration::from_secs(3600)
+        } else {
+            IDLE_MODEL_UNLOAD_TIMEOUT.saturating_sub(elapsed)
+        }
+    } else {
+        Duration::from_secs(3600)
+    }
+}
+
+/// 处理 Start 指令并拉起活动录音事件循环
+fn handle_start_command(
+    cache: &mut WorkerModelCache,
+    visualizer: &mut WaveformVisualizer,
+    cmd_rx: &Receiver<WorkerCommand>,
+    options: VoiceSessionOptions,
+    event_tx: SyncSender<VoiceEvent>,
+    is_active: &Arc<AtomicBool>,
+) {
+    let Some((recognizer, vad, punct_restorer)) = cache.prepare_models(&options.voice_config)
+    else {
+        warn!("[语音会话] 语音识别器或 VAD 模型未正确初始化，跳过本次录音");
+        is_active.store(false, Ordering::Release);
+        return;
+    };
+    visualizer.reset();
+
+    let (pcm_tx, pcm_rx) = sync_channel::<Vec<f32>>(32);
+    let capture = match AudioCapture::start_with_device(
+        pcm_tx,
+        options.voice_config.device_name.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("[语音会话] 启动音频采集硬件失败: {}", e);
+            let _ = event_tx.send(VoiceEvent::Error(e.to_string()));
+            is_active.store(false, Ordering::Release);
+            return;
+        }
+    };
+
+    info!("[语音会话] 录音捕获流与识别管道启动就绪，正在聆听用户语音...");
+    active_recording_loop(ActiveRecordingContext {
+        capture,
+        pcm_rx,
+        cmd_rx,
+        event_tx: &event_tx,
+        visualizer,
+        vad,
+        recognizer,
+        punct_restorer,
+        voice_config: &options.voice_config,
+        is_active,
+    });
+}
+
+impl VoiceSessionController {
     /// 常驻工作线程主入口：纳管模型单例生命周期与会话状态机
     fn worker_main(cmd_rx: Receiver<WorkerCommand>, is_active: Arc<AtomicBool>) {
         let mut visualizer = WaveformVisualizer::new();
-        let mut cached_vad: Option<Box<dyn VadProcessor>> = None;
-        let mut cached_recognizer: Option<Box<dyn VoiceRecognizer>> = None;
-        let mut cached_punct: Option<PunctuationRestorer> = None;
-        let mut last_asr_fingerprint = None;
+        let mut cache = WorkerModelCache::default();
+        let mut last_activity_time = Instant::now();
 
         info!("[语音会话] 后台常驻语音工作线程启动完成，进入就绪待命状态");
 
-        let mut last_activity_time = Instant::now();
-
         loop {
-            let timeout = if cached_recognizer.is_some() || cached_vad.is_some() {
-                let elapsed = last_activity_time.elapsed();
-                if elapsed >= IDLE_MODEL_UNLOAD_TIMEOUT {
-                    cached_recognizer = None;
-                    cached_vad = None;
-                    cached_punct = None;
-                    last_asr_fingerprint = None;
-                    info!(
-                        "[语音会话] 语音模块已持续空闲超过 5 分钟，自动卸载模型权重以释放常驻内存"
-                    );
-                    Duration::from_secs(3600)
-                } else {
-                    IDLE_MODEL_UNLOAD_TIMEOUT.saturating_sub(elapsed)
-                }
-            } else {
-                Duration::from_secs(3600)
-            };
-
+            let timeout = check_idle_timeout_and_calculate_deadline(&mut cache, last_activity_time);
             let cmd = match cmd_rx.recv_timeout(timeout) {
                 Ok(c) => c,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -191,74 +305,20 @@ impl VoiceSessionController {
             last_activity_time = Instant::now();
             match cmd {
                 WorkerCommand::Start { options, event_tx } => {
-                    // 1. 若配置中引擎类型、目标服务、云端凭据或离线模型目录发生变更，主动失效识别器缓存以实现热切换
-                    let current_fingerprint = compute_asr_fingerprint(&options.voice_config);
-                    if last_asr_fingerprint.as_ref() != Some(&current_fingerprint) {
-                        cached_recognizer = None;
-                        last_asr_fingerprint = Some(current_fingerprint);
-                    }
-
-                    // 初始化或复用常驻语音识别、标点预测与 VAD 模型（仅在首次使用或配置切换时加载权重，后续 0 毫秒复用）
-                    if cached_recognizer.is_none() {
-                        cached_recognizer = Some(create_recognizer(&options.voice_config));
-                    }
-                    if cached_vad.is_none() {
-                        cached_vad = Some(create_vad(&options.voice_config.vad));
-                    }
-                    if cached_punct.is_none() && options.voice_config.auto_punctuation {
-                        cached_punct = Some(PunctuationRestorer::with_custom_path(
-                            options.voice_config.punct_model_path.as_deref(),
-                        ));
-                    }
-
-                    let (Some(recognizer), Some(vad)) =
-                        (cached_recognizer.as_mut(), cached_vad.as_mut())
-                    else {
-                        warn!("[语音会话] 语音识别器或 VAD 模型未正确初始化，跳过本次录音");
-                        is_active.store(false, Ordering::Release);
-                        continue;
-                    };
-                    recognizer.reset();
-                    vad.reset();
-                    visualizer.reset();
-
-                    // 2. 启动硬件麦克风捕获流（支持指定设备与热插拔优雅回退）
-                    let (pcm_tx, pcm_rx) = sync_channel::<Vec<f32>>(32);
-                    let capture = match AudioCapture::start_with_device(
-                        pcm_tx,
-                        options.voice_config.device_name.as_deref(),
-                    ) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            warn!("[语音会话] 启动音频采集硬件失败: {}", e);
-                            let _ = event_tx.send(VoiceEvent::Error(e.to_string()));
-                            is_active.store(false, Ordering::Release);
-                            continue;
-                        }
-                    };
-
-                    info!("[语音会话] 录音捕获流与识别管道启动就绪，正在聆听用户语音...");
-                    active_recording_loop(ActiveRecordingContext {
-                        capture,
-                        pcm_rx,
-                        cmd_rx: &cmd_rx,
-                        event_tx: &event_tx,
-                        visualizer: &mut visualizer,
-                        vad: vad.as_mut(),
-                        recognizer: recognizer.as_mut(),
-                        punct_restorer: cached_punct.as_ref(),
-                        voice_config: &options.voice_config,
-                        is_active: &is_active,
-                    });
+                    handle_start_command(
+                        &mut cache,
+                        &mut visualizer,
+                        &cmd_rx,
+                        *options,
+                        event_tx,
+                        &is_active,
+                    );
                 }
                 WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
                     is_active.store(false, Ordering::Release);
                 }
                 WorkerCommand::UnloadModels => {
-                    cached_recognizer = None;
-                    cached_vad = None;
-                    cached_punct = None;
-                    last_asr_fingerprint = None;
+                    cache.unload();
                     info!("[语音会话] 已卸载内存中缓存的语音识别、VAD与标点模型权重，完全释放常驻内存");
                 }
                 WorkerCommand::Shutdown => {
