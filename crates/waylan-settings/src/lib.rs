@@ -22,7 +22,9 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 
-use crate::callbacks::{populate_lexicon_statistics, register_settings_callbacks};
+use crate::callbacks::{
+    populate_lexicon_statistics, register_settings_callbacks, SettingsCallbacksContext,
+};
 use crate::sync::sync_config_to_window;
 use crate::voice::register_voice_callbacks;
 
@@ -63,16 +65,14 @@ pub fn run_settings_gui() -> Result<(), SettingsError> {
     let loaded_config = Arc::new(Mutex::new(config));
 
     // 2. 统计信息装载
-    let (aux_dict, phrases_model, phrase_path) = populate_lexicon_statistics(&window);
+    let stats = populate_lexicon_statistics(&window);
 
     // 3. 注册常规配置、短语与词库事件回调
-    register_settings_callbacks(
-        &window,
-        loaded_config.clone(),
-        aux_dict,
-        phrases_model,
-        phrase_path,
-    );
+    let callbacks_context = SettingsCallbacksContext {
+        loaded_config: loaded_config.clone(),
+        stats,
+    };
+    register_settings_callbacks(&window, callbacks_context);
 
     // 4. 注册语音流水线与云端管理回调事件
     register_voice_callbacks(&window, loaded_config);

@@ -31,10 +31,26 @@ use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::{PhraseItem, SettingsWindow};
 use tasks::{spawn_english_import_task, spawn_pinyin_import_task, spawn_symbols_import_task};
 
+/// 词库与短语初始化统计模型集合
+pub struct LexiconStatsBundle {
+    /// 辅助与混输词库（英文与表情符号）
+    pub aux_dict: AuxiliaryDict,
+    /// 界面自定义短语数据模型
+    pub phrases_model: Rc<VecModel<PhraseItem>>,
+    /// 用户自定义短语文件绝对路径
+    pub phrase_path: PathBuf,
+}
+
+/// 偏好设置回调注册上下文
+pub struct SettingsCallbacksContext {
+    /// 全局持久化应用配置原子锁
+    pub loaded_config: Arc<Mutex<AppConfig>>,
+    /// 词库与短语模型集合
+    pub stats: LexiconStatsBundle,
+}
+
 /// 统计与装载词库信息到窗口
-pub fn populate_lexicon_statistics(
-    window: &SettingsWindow,
-) -> (AuxiliaryDict, Rc<VecModel<PhraseItem>>, PathBuf) {
+pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundle {
     let phrase_path = CustomPhraseManager::default_path();
     let phrase_manager = CustomPhraseManager::load_or_init(&phrase_path);
     let phrases_data: Vec<PhraseItem> = phrase_manager
@@ -92,17 +108,24 @@ pub fn populate_lexicon_statistics(
     }
     window.set_base_dict_info(SharedString::from(base_dict_info));
 
-    (aux_dict, phrases_model, phrase_path)
+    LexiconStatsBundle {
+        aux_dict,
+        phrases_model,
+        phrase_path,
+    }
 }
 
 /// 注册通用配置、自定义短语与外部词库导入回调事件
-pub fn register_settings_callbacks(
-    window: &SettingsWindow,
-    loaded_config: Arc<Mutex<AppConfig>>,
-    aux_dict: AuxiliaryDict,
-    phrases_model: Rc<VecModel<PhraseItem>>,
-    phrase_path: PathBuf,
-) {
+pub fn register_settings_callbacks(window: &SettingsWindow, context: SettingsCallbacksContext) {
+    let SettingsCallbacksContext {
+        loaded_config,
+        stats:
+            LexiconStatsBundle {
+                aux_dict,
+                phrases_model,
+                phrase_path,
+            },
+    } = context;
     // 1. 保存设置回调
     let window_weak = window.as_weak();
     let current_cfg_cell = loaded_config;

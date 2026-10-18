@@ -8,11 +8,11 @@
 use crate::error::DaemonError;
 
 use log::info;
-use waylan_algo::custom_phrase::CustomPhraseManager;
-use waylan_algo::{AlgoConfig, AlgoEngine};
+use waylan_algo::AlgoEngine;
 use waylan_core::config::AppConfig;
+use waylan_engine::create_engine_with_table;
 
-use super::dict_loader::{load_auxiliary_managers, load_lexicon_table};
+use super::dict_loader::load_lexicon_table;
 use crate::system::ShutdownCoordinator;
 
 /// 构建算法引擎并加载全量汉字库、自定义短语与用户个性化词库
@@ -25,37 +25,14 @@ pub fn build_algo_engine(
         info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
         return Ok(None);
     }
-    let algo_config = AlgoConfig::from(cfg);
-    let mut engine = AlgoEngine::new(table, algo_config);
-
-    let phrase_path = CustomPhraseManager::default_path();
-    engine.resources.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
-    let user_dict = AppConfig::user_dict_path();
-    engine.set_user_dict_path(&user_dict);
-    if user_dict.exists() {
-        info!(
-            "[字库引擎] 成功载入用户自适应个性化历史词库: {:?} (词条数: {})",
-            user_dict,
-            engine.adaptive.model.total_entries()
-        );
-    }
-
-    let (english_suggester, symbol_suggester) = load_auxiliary_managers();
-    engine.resources.english_suggester = english_suggester;
-    engine.resources.symbol_suggester = symbol_suggester;
-
-    info!(
-        "[简繁词库] 全局简繁转换两级词库就绪 (单字映射: {} 个, 消歧短语: {} 组)",
-        engine.resources.opencc_dict.chars.len(),
-        engine.resources.opencc_dict.phrases_len()
-    );
-
+    let engine = create_engine_with_table(table, cfg);
     Ok(Some(engine))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use waylan_algo::AlgoConfig;
     use waylan_core::config::FuzzyPinyinRules;
 
     #[test]

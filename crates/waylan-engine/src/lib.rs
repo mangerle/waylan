@@ -6,10 +6,16 @@
 //! - **核心优势**：依赖倒置原则（DIP）；算法层仅保留纯粹数学与拼音计算，协议端退化为纯净的前端显示管道。
 //! - **代价与局限**：新增单独的 crate 作为中枢交互调度层。
 
+pub mod factory;
 pub mod frontend;
 pub mod runtime;
 pub mod session;
 
+pub use factory::{
+    create_engine_with_table, create_standard_engine, ensure_user_dictionaries_linked,
+    load_auxiliary_dict, load_auxiliary_managers, load_lexicon_table, load_opencc_dict,
+    reload_engine_resources,
+};
 pub use frontend::InputMethodFrontend;
 pub use runtime::{build_common_candidate_box_state, CandidateBoxBuildOptions, ImeRuntime};
 pub use session::{
