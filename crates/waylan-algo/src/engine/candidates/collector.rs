@@ -1,97 +1,22 @@
-use super::AlgoEngine;
-use crate::dispatcher::ModeDispatcher;
-use crate::pipeline::CandidatePipeline;
+//! 多源候选词并行与分层聚合器
+//!
+//! # 设计原理
+//! - **实现初衷**：将专名保护、词库精确倒排、模糊音等价匹配、Viterbi 长句解码、前缀扩展与首字母简拼等
+//!   多层级候选召回逻辑收敛至独立模块，从主候选流水线中解耦。
+//! - **核心优势**：职责单一且高内聚；单文件严格控制在 350 行以内，消除巨型单体文件膨胀隐患。
+//! - **代价与局限**：方法间需共享 [`SegmentPath`] 音节切分上下文。
+
+use super::super::AlgoEngine;
 use crate::prism::{PrismEngine, PrismFuzzy, SegmentPath};
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
 impl AlgoEngine {
-    /// 重新计算当前输入序列的全量候选词列表并分页刷新
-    pub(crate) fn recompute_candidates(&mut self) {
-        if self.composition.is_empty() {
-            self.clear_candidates_and_preedit();
-            return;
-        }
-
-        self.viewport.reset_selection();
-
-        // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
-        if self.try_dispatch_special_mode() {
-            return;
-        }
-
-        // 2. 拼音模式：利用 Prism 构建 DAG 音节路径与预编辑字符串
-        let (paths, preedit_str) = self.build_pinyin_paths_and_preedit();
-        self.composition.set_cached_preedit(preedit_str);
-
-        // 3. 聚合各层级候选词 (专名、DAG路径、长句合成、简拼与用户习惯)
-        let raw_candidates = self.collect_all_raw_candidates(&paths);
-
-        // 4. 流水线后处理、零页扩展注入与分页刷新
-        self.finalize_and_publish_candidates(&paths, raw_candidates);
-    }
-
-    /// 清空所有候选词缓存与预编辑内容
-    fn clear_candidates_and_preedit(&mut self) {
-        self.viewport.reset_selection();
-        self.viewport.all_candidates_cache.clear();
-        self.viewport.current_candidates.clear();
-        self.composition.clear_cached_preedit();
-    }
-
-    /// 尝试前缀特殊模式分流 (V计算器、U拆字、I特殊符号)，若命中则更新候选并返回 true
-    fn try_dispatch_special_mode(&mut self) -> bool {
-        let Some(dispatched) =
-            ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config)
-        else {
-            return false;
-        };
-
-        let input_len = self.composition.len();
-        let raw_str = self.composition.as_str().to_string();
-        self.composition.set_cached_preedit(raw_str);
-        let mut cands = CandidatePipeline::process_all_with_opencc(
-            dispatched,
-            &self.config,
-            Some(&self.resources.opencc_dict),
-        );
-        for c in &mut cands {
-            if c.consumed_len.is_none() {
-                c.consumed_len = Some(input_len);
-            }
-        }
-        self.viewport.all_candidates_cache = cands;
-        self.update_page_candidates();
-        true
-    }
-
-    /// 基于 Prism 构建音节切分 DAG 路径与预编辑字符串
-    fn build_pinyin_paths_and_preedit(&self) -> (Vec<SegmentPath>, String) {
-        let raw = self.composition.as_str();
-        let paths = PrismEngine::build_paths_with_entities(
-            raw,
-            &self.config.fuzzy,
-            Some(&self.resources.entity_manager),
-        );
-        let preedit_str = paths
-            .first()
-            .map(|p| {
-                if p.is_broken_typo_fallback(&self.config.fuzzy) {
-                    paths
-                        .iter()
-                        .find(|tp| tp.is_typo && tp.remaining.is_empty())
-                        .and_then(|tp| tp.format_raw_with_spans(raw))
-                        .unwrap_or_else(|| p.to_key_string())
-                } else {
-                    p.to_key_string()
-                }
-            })
-            .unwrap_or_else(|| raw.to_string());
-        (paths, preedit_str)
-    }
-
     /// 聚合各维度候选词（专名实体、DAG 路径匹配、长句前缀合成、简拼降级与习惯加权）
-    fn collect_all_raw_candidates(&mut self, paths: &[SegmentPath]) -> Vec<AlgoCandidate> {
+    pub(super) fn collect_all_raw_candidates(
+        &mut self,
+        paths: &[SegmentPath],
+    ) -> Vec<AlgoCandidate> {
         let raw_input = self.composition.as_str();
         let mut raw_candidates = std::mem::take(&mut self.scratch_candidates);
         raw_candidates.clear();
@@ -120,44 +45,6 @@ impl AlgoEngine {
         self.apply_user_and_context_boost(&mut raw_candidates, eval_ts);
 
         raw_candidates
-    }
-
-    /// 候选词流水线最终处理（去重、简繁、零页扩展、标记 consumed_len）并分页生效
-    fn finalize_and_publish_candidates(
-        &mut self,
-        paths: &[SegmentPath],
-        raw_candidates: Vec<AlgoCandidate>,
-    ) {
-        let raw_input = self.composition.as_str();
-        let mut best_units: Vec<String> = Vec::new();
-        if let Some(best) = paths.first() {
-            best_units.extend(best.syllables.iter().cloned());
-            if !best.remaining.is_empty() {
-                best_units.push(best.remaining.clone());
-            }
-        }
-
-        let mut candidates = CandidatePipeline::process_all_with_opencc(
-            raw_candidates,
-            &self.config,
-            Some(&self.resources.opencc_dict),
-        );
-
-        self.inject_page_zero_extensions(raw_input, paths, &mut candidates);
-
-        for cand in &mut candidates {
-            if cand.consumed_len.is_none() {
-                cand.consumed_len = Some(Self::calculate_consumed_len(
-                    raw_input,
-                    &cand.pinyin,
-                    &best_units,
-                ));
-            }
-        }
-
-        let old_cache = std::mem::replace(&mut self.viewport.all_candidates_cache, candidates);
-        self.scratch_candidates = old_cache;
-        self.update_page_candidates();
     }
 
     /// 遍历 DAG 音节切分路径，收集词库精确、用户自造词及模糊音匹配候选

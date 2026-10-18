@@ -20,34 +20,73 @@ use waylan_wayland::{run_session_v1_loop, run_session_v2_loop_fallible, WaylandC
 use crate::system::ShutdownCoordinator;
 use crate::tray::TrayService;
 
-/// 执行 Wayland V1 会话的运行配置与词库热重载
-pub fn reload_wayland_v1_session(session: &mut WaylanV1Session) {
+/// 抽象具备热重载能力的 Wayland 会话接口
+pub trait ReloadableWaylandSession {
+    /// 获取候选框渲染器的可变引用
+    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer;
+    /// 获取输入法运行时的可变引用
+    fn runtime_mut(&mut self) -> &mut waylan_engine::ImeRuntime;
+    /// 触发刷新候选框悬浮表面
+    fn refresh_surface(&mut self);
+}
+
+impl ReloadableWaylandSession for WaylanV1Session {
+    #[inline]
+    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
+        &mut self.surface_manager.renderer
+    }
+
+    #[inline]
+    fn runtime_mut(&mut self) -> &mut waylan_engine::ImeRuntime {
+        &mut self.runtime
+    }
+
+    #[inline]
+    fn refresh_surface(&mut self) {
+        self.refresh_candidate_surface();
+    }
+}
+
+impl ReloadableWaylandSession for WaylanV2Session {
+    #[inline]
+    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
+        &mut self.surface_manager.renderer
+    }
+
+    #[inline]
+    fn runtime_mut(&mut self) -> &mut waylan_engine::ImeRuntime {
+        &mut self.runtime
+    }
+
+    #[inline]
+    fn refresh_surface(&mut self) {
+        self.refresh_candidate_surface();
+    }
+}
+
+/// 执行通用的 Wayland 会话运行配置与词库热重载
+pub fn reload_wayland_session<S: ReloadableWaylandSession>(session: &mut S) {
     let cfg = AppConfig::load_or_create();
     let theme = match cfg.ui.theme {
         ThemeMode::Light => UiTheme::light(),
         ThemeMode::Dark => UiTheme::dark(),
     };
-    session.surface_manager.renderer.theme = theme;
-    session.surface_manager.renderer.font_size = cfg.ui.font_size;
-    session.runtime.reload_config(&cfg);
-    if !session.runtime.core.engine.raw_input().is_empty() {
-        session.refresh_candidate_surface();
+    session.renderer_mut().theme = theme;
+    session.renderer_mut().font_size = cfg.ui.font_size;
+    session.runtime_mut().reload_config(&cfg);
+    if !session.runtime_mut().core.engine.raw_input().is_empty() {
+        session.refresh_surface();
     }
+}
+
+/// 执行 Wayland V1 会话的运行配置与词库热重载
+pub fn reload_wayland_v1_session(session: &mut WaylanV1Session) {
+    reload_wayland_session(session);
 }
 
 /// 执行 Wayland V2 会话的运行配置与词库热重载
 pub fn reload_wayland_v2_session(session: &mut WaylanV2Session) {
-    let cfg = AppConfig::load_or_create();
-    let theme = match cfg.ui.theme {
-        ThemeMode::Light => UiTheme::light(),
-        ThemeMode::Dark => UiTheme::dark(),
-    };
-    session.surface_manager.renderer.theme = theme;
-    session.surface_manager.renderer.font_size = cfg.ui.font_size;
-    session.runtime.reload_config(&cfg);
-    if !session.runtime.core.engine.raw_input().is_empty() {
-        session.refresh_candidate_surface();
-    }
+    reload_wayland_session(session);
 }
 
 /// Wayland 内部会话参数包

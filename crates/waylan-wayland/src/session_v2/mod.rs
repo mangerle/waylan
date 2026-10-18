@@ -388,40 +388,33 @@ impl WaylanV2Session {
 
 impl InputMethodFrontend for WaylanV2Session {
     fn commit_text(&mut self, text: &str) {
-        if let Some(im) = &self.input_method {
-            im.commit_string(text.to_string());
-            im.set_preedit_string(String::new(), 0, 0);
-            im.commit(self.done_serial);
-        }
-        self.hide_candidate_surface();
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.commit_text(text);
     }
 
     fn update_preedit(&mut self, text: &str, cursor_byte_idx: usize) {
-        if let Some(im) = &self.input_method {
-            let cursor = cursor_byte_idx as i32;
-            im.set_preedit_string(text.to_string(), cursor, cursor);
-            im.commit(self.done_serial);
-        }
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.update_preedit(text, cursor_byte_idx);
     }
 
     fn update_candidates(&mut self, state: &CandidateBoxState) {
-        self.render_candidate_surface(state);
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.update_candidates(state);
     }
 
     fn hide_candidates(&mut self) {
-        self.hide_candidate_surface();
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.hide_candidates();
     }
 
     fn move_cursor(&mut self, offset: i32) {
-        let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
-        for _ in 0..offset.unsigned_abs() {
-            self.forward_key_to_seat(0, dir_key, true);
-            self.forward_key_to_seat(0, dir_key, false);
-        }
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.move_cursor(offset);
     }
 
-    fn sync_input_mode(&mut self, _mode: InputMode) {
-        // 模式切换后的原子标志与托盘唤醒已由 ImeRuntime 统一托管
+    fn sync_input_mode(&mut self, mode: InputMode) {
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.sync_input_mode(mode);
     }
 }
 

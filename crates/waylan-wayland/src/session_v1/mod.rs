@@ -334,47 +334,33 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
 
 impl InputMethodFrontend for WaylanV1Session {
     fn commit_text(&mut self, text: &str) {
-        if let Some(ref context) = self.active_context {
-            context.commit_string(self.commit_serial, text.to_string());
-            context.preedit_cursor(0);
-            context.preedit_string(self.commit_serial, String::new(), String::new());
-        }
-        self.hide_candidate_surface();
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.commit_text(text);
     }
 
     fn update_preedit(&mut self, text: &str, cursor_byte_idx: usize) {
-        if let Some(ref context) = self.active_context {
-            context.preedit_cursor(cursor_byte_idx as i32);
-            context.preedit_string(self.commit_serial, text.to_string(), String::new());
-        }
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.update_preedit(text, cursor_byte_idx);
     }
 
     fn update_candidates(&mut self, state: &CandidateBoxState) {
-        self.render_candidate_surface(state);
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.update_candidates(state);
     }
 
     fn hide_candidates(&mut self) {
-        self.hide_candidate_surface();
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.hide_candidates();
     }
 
     fn move_cursor(&mut self, offset: i32) {
-        if let Some(ref context) = self.active_context {
-            let dir_key = if offset < 0 { KEY_LEFT } else { KEY_RIGHT };
-            for _ in 0..offset.unsigned_abs() {
-                context.key(0, 0, dir_key, 1);
-                context.key(0, 0, dir_key, 0);
-            }
-        }
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.move_cursor(offset);
     }
 
     fn sync_input_mode(&mut self, mode: InputMode) {
-        let is_zh = matches!(mode, InputMode::Chinese | InputMode::VMode);
-        if let Some(ref flags) = self.runtime.shared_flags {
-            flags.set_chinese(is_zh);
-        }
-        if let Some(ref notify_tx) = self.runtime.mode_notify_tx {
-            let _ = notify_tx.try_send(());
-        }
+        let (_, mut frontend) = self.split_runtime_and_frontend();
+        frontend.sync_input_mode(mode);
     }
 }
 
