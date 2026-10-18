@@ -7,12 +7,16 @@ pub mod conversion;
 pub mod keymap;
 pub mod modifiers;
 pub mod page_keys;
+pub mod punctuation;
+pub mod shift_toggle;
 
 pub use constants::*;
 pub use conversion::*;
 pub use keymap::KeymapLayout;
 pub use modifiers::*;
 pub use page_keys::*;
+pub use punctuation::PunctuationProcessor;
+pub use shift_toggle::{ShiftToggleStateMachine, ToggleKeyMode};
 
 #[cfg(test)]
 mod tests {
