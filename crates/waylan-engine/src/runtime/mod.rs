@@ -150,8 +150,14 @@ impl ImeRuntime {
         }
     }
 
-    /// 同步来自系统托盘的共享中英文状态标志
+    /// 同步来自系统托盘的共享中英文与大写锁定状态标志
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
+        if let Some(ref flags) = self.shared_flags {
+            let external_caps = flags.is_caps_locked();
+            if self.core.is_caps_locked() != external_caps {
+                self.update_caps_lock_state(external_caps);
+            }
+        }
         let changed = sync_mode_from_shared_flags(self.shared_flags.as_ref(), &mut self.core.mode);
         if let Some(new_mode) = changed {
             if let Some(ref tx) = self.mode_notify_tx {

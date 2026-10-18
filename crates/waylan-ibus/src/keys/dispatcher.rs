@@ -74,7 +74,11 @@ impl IbusSessionCore {
             event_mods |= MOD_SUPER;
         }
 
-        if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked() {
+        // 外部状态指示的 CapsLock 锁定标志补齐：
+        // 仅当当前按键并非 CapsLock 键自身时，才允许由外部 state 掩码补齐激活。
+        // 若当前按键是 KEY_CAPSLOCK，按键抬起 (Release) 事件的 state 往往依然残留上一状态的 IBUS_LOCK_MASK，
+        // 若不排除 KEY_CAPSLOCK，将导致松开按键时被误判定为重新锁定，造成无法退出大写的死锁。
+        if evdev_key != KEY_CAPSLOCK && (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked() {
             self.update_caps_lock_state(true);
         }
 

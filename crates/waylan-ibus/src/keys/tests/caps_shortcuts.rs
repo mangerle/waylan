@@ -79,9 +79,14 @@ fn test_ibus_caps_lock_with_shift_interaction() {
         Some(InputMode::Chinese),
         "仅按一次 CapsLock 必须立即切回中文"
     );
-    let caps_off_rel = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_RELEASE_MASK);
+    // 模拟真实桌面环境：松开 CapsLock 时 state 仍可能附带旧的 IBUS_LOCK_MASK 掩码
+    let caps_off_rel =
+        core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_RELEASE_MASK | IBUS_LOCK_MASK);
     assert_eq!(caps_off_rel.mode_changed, None);
-    assert!(!core.is_caps_locked());
+    assert!(
+        !core.is_caps_locked(),
+        "释放 CapsLock 键时即使 state 带有旧锁定掩码，也绝不能被误判重新加锁"
+    );
 
     // 4. 后续输入正常进入拼音输入
     let letter = core.process_key_event(b'h' as u32, 0, 0);

@@ -160,9 +160,16 @@ impl DBusMenu {
 
         match id {
             1 => {
-                let next = !self.shared_flags.is_chinese();
-                self.shared_flags.set_chinese(next);
-                self.notify_flag_changed("输入模式", if next { "中文" } else { "英文" });
+                let snap = self.shared_flags.snapshot();
+                if snap.is_caps_locked {
+                    self.shared_flags.set_caps_locked(false);
+                    self.shared_flags.set_chinese(true);
+                    self.notify_flag_changed("输入模式", "中文 (解除大写锁定)");
+                } else {
+                    let next = !snap.is_chinese;
+                    self.shared_flags.set_chinese(next);
+                    self.notify_flag_changed("输入模式", if next { "中文" } else { "英文" });
+                }
             }
             2 => self.on_menu_reload(),
             3 => self.launch_settings(),
@@ -258,6 +265,14 @@ mod tests {
         let (_rev, (_root_id, _props, items_caps)) = menu.get_layout(0, -1, Vec::new());
         let item1_caps_str = format!("{:?}", items_caps[0]);
         assert!(item1_caps_str.contains("当前输入: 英文大写"));
+
+        // 点击第1项菜单（当前输入: 英文大写），验证自动解除大写锁定并切回中文
+        menu.event(1, "clicked".to_string(), Value::from(0), 0);
+        assert!(
+            !flags.is_caps_locked(),
+            "点击大写菜单项后应立即解除大写锁定"
+        );
+        assert!(flags.is_chinese(), "解除大写锁定后应恢复中文输入模式");
 
         let expected_label = "查看运行日志";
 
