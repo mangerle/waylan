@@ -72,15 +72,20 @@ pub fn build_common_candidate_box_state(
         }
     }
 
-    let core_candidates: Vec<Candidate> = engine.candidates().iter().map(Candidate::from).collect();
+    let candidates_slice = engine.candidates();
+    let mut core_candidates = Vec::with_capacity(candidates_slice.len());
+    for ac in candidates_slice {
+        core_candidates.push(ac.to_core_candidate());
+    }
 
-    let grid_candidates: Vec<Candidate> = if grid_state.is_expanded() {
-        engine
-            .all_candidates()
-            .iter()
-            .take(30)
-            .map(Candidate::from)
-            .collect()
+    let grid_candidates = if grid_state.is_expanded() {
+        let all = engine.all_candidates();
+        let take_count = all.len().min(30);
+        let mut grid = Vec::with_capacity(take_count);
+        for ac in all.iter().take(take_count) {
+            grid.push(ac.to_core_candidate());
+        }
+        grid
     } else {
         Vec::new()
     };

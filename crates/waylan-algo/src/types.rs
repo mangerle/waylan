@@ -270,14 +270,34 @@ impl AlgoCandidate {
         self
     }
 
-    /// 转换为 Core 层定义的公共候选词结构体
+    /// 转换为 Core 层定义的公共候选词结构体（避免空子候选容器分配与多重方法中转）
     pub fn to_core_candidate(&self) -> Candidate {
-        let mut c = Candidate::new(&self.text, &self.pinyin, self.score)
-            .with_sub_candidates(self.sub_candidates.clone());
-        if let Some(ref comment) = self.comment {
-            c = c.with_comment(comment);
+        let sub_candidates = if self.sub_candidates.is_empty() {
+            Vec::new()
+        } else {
+            self.sub_candidates.clone()
+        };
+        Candidate {
+            text: self.text.clone(),
+            pinyin: self.pinyin.clone(),
+            score: self.score,
+            is_expandable: !sub_candidates.is_empty(),
+            sub_candidates,
+            comment: self.comment.clone(),
         }
-        c
+    }
+
+    /// 消费所有权转换为 Core 层定义的公共候选词结构体（零额外堆克隆）
+    pub fn into_core_candidate(self) -> Candidate {
+        let is_expandable = !self.sub_candidates.is_empty();
+        Candidate {
+            text: self.text,
+            pinyin: self.pinyin,
+            score: self.score,
+            is_expandable,
+            sub_candidates: self.sub_candidates,
+            comment: self.comment,
+        }
     }
 }
 
@@ -289,12 +309,7 @@ impl From<&AlgoCandidate> for Candidate {
 
 impl From<AlgoCandidate> for Candidate {
     fn from(algo: AlgoCandidate) -> Self {
-        let mut c = Candidate::new(algo.text, algo.pinyin, algo.score)
-            .with_sub_candidates(algo.sub_candidates);
-        if let Some(comment) = algo.comment {
-            c = c.with_comment(comment);
-        }
-        c
+        algo.into_core_candidate()
     }
 }
 
