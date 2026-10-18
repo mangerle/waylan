@@ -29,10 +29,10 @@ pub struct LayoutParams<'a> {
 /// 计算整行候选条的测量结果与尺寸
 pub fn measure_candidates_bar<'a, F>(
     params: LayoutParams<'a>,
-    measure_fn: F,
+    mut measure_fn: F,
 ) -> (Vec<ItemMeasure<'a>>, f32)
 where
-    F: Fn(&str, f32) -> f32,
+    F: FnMut(&str, f32) -> f32,
 {
     let mut measured = Vec::with_capacity(params.candidates.len());
     let mut current_pos_x = params.padding_h + 2.0 * params.s;

@@ -4,7 +4,7 @@ use waylan_core::{Candidate, ExpandedCardState};
 
 #[test]
 fn test_renderer_basic() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     let state = CandidateBoxState {
         visible: true,
         preedit: "ni'hao".to_string(),
@@ -30,7 +30,7 @@ fn test_renderer_basic() {
 
 #[test]
 fn test_render_expanded_popup_card() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     let state = CandidateBoxState {
         visible: true,
         preedit: "ri'qi".to_string(),
@@ -53,7 +53,7 @@ fn test_render_expanded_popup_card() {
 
 #[test]
 fn test_glyph_cache_hit_and_reuse() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     if !renderer.has_font() {
         return;
     }
@@ -111,7 +111,7 @@ fn test_hidpi_scale_rendering() {
 
 #[test]
 fn test_fallback_font_chain() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     assert!(renderer.has_font(), "默认应至少加载系统可用字体");
 
     // 验证 cosmic-text 能对常规中文字符、英文字符与特殊符号正常测量
@@ -127,7 +127,7 @@ fn test_fallback_font_chain() {
 
 #[test]
 fn test_glyph_cache_lru_eviction() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     if !renderer.has_font() {
         return;
     }
@@ -150,7 +150,7 @@ fn test_glyph_cache_lru_eviction() {
 
 #[test]
 fn test_render_grid_expanded_and_hit_test() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     let mut grid_cands = Vec::with_capacity(30);
     for i in 0..30 {
         grid_cands.push(Candidate::new(format!("候选{}", i + 1), "hou'xuan", 100));
@@ -219,7 +219,7 @@ fn test_cosmic_text_smoke() {
 
 #[test]
 fn test_measure_text_cache_hit_and_clear() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     let w1 = renderer.measure_text("测试", 15.0);
     let w2 = renderer.measure_text("测试", 15.0);
     assert_eq!(w1, w2, "缓存命中的测量宽度必须完全一致");
@@ -231,7 +231,7 @@ fn test_measure_text_cache_hit_and_clear() {
 
 #[test]
 fn test_render_voice_capsule_bar() {
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
     let state = CandidateBoxState {
         visible: true,
         preedit: "你好".to_string(),

@@ -24,7 +24,7 @@ pub struct CapsuleBarParams<'a> {
 
 /// 渲染单行胶囊候选条背景、徽标、拼音、候选词项与下拉按钮
 pub fn render_capsule_bar(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     pixmap: &mut Pixmap,
     state: &CandidateBoxState,
     params: CapsuleBarParams,
@@ -120,7 +120,7 @@ struct CapsulePrefixParams {
 
 /// 绘制前置模式标识徽标（如“中”、“英”、“V”）与预编辑拼音文本
 fn render_capsule_prefix(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     pixmap: &mut Pixmap,
     state: &CandidateBoxState,
     params: CapsulePrefixParams,
@@ -187,7 +187,7 @@ struct CandidateItemParams<'a> {
 
 /// 绘制单个候选词条目（支持高亮背景胶囊与展开日历图标）
 fn render_candidate_item(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     pixmap: &mut Pixmap,
     params: CandidateItemParams,
 ) {
@@ -279,7 +279,7 @@ fn render_candidate_item(
 
 /// 渲染处于语音听写状态下的动态声波胶囊栏
 pub fn render_voice_capsule_bar(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     state: &CandidateBoxState,
     hit_regions: &mut Vec<HitRegion>,
 ) -> Option<Pixmap> {

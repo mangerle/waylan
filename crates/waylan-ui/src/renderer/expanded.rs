@@ -26,7 +26,7 @@ pub struct ExpandedCardRenderParams<'a> {
 
 /// 绘制二级展开浮层卡片背景与子候选条目，并注册子项鼠标点击区域
 pub fn render_expanded_popup_card(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     pixmap: &mut Pixmap,
     regions: &mut Vec<HitRegion>,
     params: ExpandedCardRenderParams<'_>,

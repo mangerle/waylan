@@ -30,7 +30,7 @@ fn main() {
         println!("[提示] 未在系统中找到 base.dict.bin，使用示例内置词库进行端到端性能压测。");
         AlgoEngine::with_sample_data(AlgoConfig::default())
     };
-    let renderer = CandidateBoxRenderer::new(UiTheme::light());
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
 
     // 预热 (Warm-up 500 次)
     for _ in 0..500 {

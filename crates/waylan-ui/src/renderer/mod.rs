@@ -13,19 +13,27 @@ use font::FontManager;
 use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, ItemMeasure, LayoutParams};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
-use std::sync::Mutex;
 use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
 
-/// 文本排版测量缓存大小（固定 128 项直接映射，零堆分配淘汰）
+/// 文本排版测量与字形缓存大小（固定 128 项直接映射，零堆分配淘汰）
 const MEASURE_CACHE_SIZE: usize = 128;
 
-/// 单项文本排版测量缓存条目
+/// 单个排版字形的物理光栅化定位参数
+#[derive(Clone, Copy)]
+struct CachedGlyph {
+    cache_key: cosmic_text::CacheKey,
+    x: i32,
+    y: i32,
+}
+
+/// 单项文本排版度量与字形序列缓存条目
 #[derive(Clone, Default)]
-struct MeasureCacheEntry {
+struct ShapedTextEntry {
     hash: u64,
     size_bits: u32,
     width: f32,
+    glyphs: Vec<CachedGlyph>,
     text: String,
 }
 
@@ -42,12 +50,65 @@ fn calculate_measure_hash(text: &str, size_bits: u32) -> u64 {
     }
 }
 
+/// 确保文本完成 HarfBuzz 排版塑形并存入直接映射缓存，消除同一文本测量与绘制时的双重排版
+fn ensure_shaped<'a>(
+    measure_cache: &'a mut [ShapedTextEntry; MEASURE_CACHE_SIZE],
+    buffer: &mut Buffer,
+    font_system: &mut FontSystem,
+    text: &str,
+    size: f32,
+) -> &'a ShapedTextEntry {
+    let size_bits = size.to_bits();
+    let hash = calculate_measure_hash(text, size_bits);
+    let idx = (hash as usize) & (MEASURE_CACHE_SIZE - 1);
+
+    if measure_cache[idx].hash == hash
+        && measure_cache[idx].size_bits == size_bits
+        && measure_cache[idx].text == text
+    {
+        return &measure_cache[idx];
+    }
+
+    buffer.set_metrics(Metrics::new(size, size * 1.2));
+    let shaping = if text.is_ascii() {
+        Shaping::Basic
+    } else {
+        Shaping::Advanced
+    };
+    buffer.set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
+    buffer.shape_until_scroll(font_system, false);
+
+    let mut width = 0.0f32;
+    let mut glyphs = Vec::with_capacity(text.len().max(4));
+    for run in buffer.layout_runs() {
+        width = width.max(run.line_w);
+        for glyph in run.glyphs {
+            let physical = glyph.physical((0.0, -run.line_y), 1.0);
+            glyphs.push(CachedGlyph {
+                cache_key: physical.cache_key,
+                x: physical.x,
+                y: physical.y,
+            });
+        }
+    }
+
+    let entry = &mut measure_cache[idx];
+    entry.hash = hash;
+    entry.size_bits = size_bits;
+    entry.width = width;
+    entry.glyphs = glyphs;
+    entry.text.clear();
+    entry.text.push_str(text);
+
+    &measure_cache[idx]
+}
+
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
     font_system: FontSystem,
     swash_cache: SwashCache,
     buffer: Buffer,
-    measure_cache: [MeasureCacheEntry; MEASURE_CACHE_SIZE],
+    measure_cache: [ShapedTextEntry; MEASURE_CACHE_SIZE],
 }
 
 /// 文本绘制选项参数对象
@@ -87,9 +148,9 @@ pub struct CandidateBoxRenderer {
     /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
     pub scale: f32,
     /// cosmic-text 文本排版与渲染引擎状态机
-    text_engine: Mutex<TextEngineState>,
+    text_engine: TextEngineState,
     /// 最近一次渲染生成的鼠标可点击命中测试区域列表
-    hit_regions: Mutex<Vec<HitRegion>>,
+    hit_regions: Vec<HitRegion>,
 }
 
 impl CandidateBoxRenderer {
@@ -102,20 +163,19 @@ impl CandidateBoxRenderer {
             theme,
             font_size: 15.0,
             scale: 1.0,
-            text_engine: Mutex::new(TextEngineState {
+            text_engine: TextEngineState {
                 font_system,
                 swash_cache,
                 buffer,
-                measure_cache: std::array::from_fn(|_| MeasureCacheEntry::default()),
-            }),
-            hit_regions: Mutex::new(Vec::with_capacity(36)),
+                measure_cache: std::array::from_fn(|_| ShapedTextEntry::default()),
+            },
+            hit_regions: Vec::with_capacity(36),
         }
     }
 
     /// 根据相对候选框表面左上角的物理像素坐标 (x, y) 执行命中测试，返回命中的操作目标
     pub fn hit_test(&self, x: f32, y: f32) -> Option<CandidateHitTarget> {
-        let lock = self.hit_regions.lock().ok()?;
-        for region in lock.iter() {
+        for region in &self.hit_regions {
             if region.contains(x, y) {
                 return Some(region.target);
             }
@@ -134,102 +194,62 @@ impl CandidateBoxRenderer {
 
     /// 查询当前是否已加载有效主字体或回退字体
     pub fn has_font(&self) -> bool {
-        self.text_engine
-            .lock()
-            .map(|e| e.font_system.db().faces().count() > 0)
-            .unwrap_or(false)
+        self.text_engine.font_system.db().faces().count() > 0
     }
 
     /// 手动从指定文件路径加载字体
     pub fn load_font_from_path(&mut self, path: &Path) -> bool {
-        if let Ok(mut engine) = self.text_engine.lock() {
-            let res = engine.font_system.db_mut().load_font_file(path).is_ok();
-            if res {
-                self.clear_glyph_cache();
-            }
-            res
-        } else {
-            false
+        let res = self
+            .text_engine
+            .font_system
+            .db_mut()
+            .load_font_file(path)
+            .is_ok();
+        if res {
+            self.clear_glyph_cache();
         }
+        res
     }
 
     /// 从内存字节流中加载字体
     pub fn load_font_from_bytes(&mut self, bytes: &[u8]) -> bool {
-        if let Ok(mut engine) = self.text_engine.lock() {
-            engine.font_system.db_mut().load_font_data(bytes.to_vec());
-            self.clear_glyph_cache();
-            true
-        } else {
-            false
-        }
+        self.text_engine
+            .font_system
+            .db_mut()
+            .load_font_data(bytes.to_vec());
+        self.clear_glyph_cache();
+        true
     }
 
     /// 获取当前字体数据库中已加载的字体变体条目总数（用于诊断与测试）
     pub fn glyph_cache_len(&self) -> usize {
-        self.text_engine
-            .lock()
-            .map(|e| e.font_system.db().faces().count())
-            .unwrap_or(0)
+        self.text_engine.font_system.db().faces().count()
     }
 
     /// 清空字形光栅化与排版测量缓存
-    pub fn clear_glyph_cache(&self) {
-        if let Ok(mut engine) = self.text_engine.lock() {
-            engine.swash_cache = SwashCache::new();
-            for entry in &mut engine.measure_cache {
-                entry.hash = 0;
-            }
+    pub fn clear_glyph_cache(&mut self) {
+        self.text_engine.swash_cache = SwashCache::new();
+        for entry in &mut self.text_engine.measure_cache {
+            entry.hash = 0;
+            entry.glyphs.clear();
+            entry.text.clear();
         }
     }
 
     /// 测量一段文字的排版宽度（基于 cosmic-text 高级塑形与布局，复用 Buffer 与直接映射缓存消除多余塑形）
-    pub fn measure_text(&self, text: &str, size: f32) -> f32 {
-        let Ok(mut engine) = self.text_engine.lock() else {
-            let s = self.scale.max(0.5);
-            return text.chars().count() as f32 * (size * 0.8 + 3.0 * s);
-        };
-
-        let size_bits = size.to_bits();
-        let hash = calculate_measure_hash(text, size_bits);
-        let idx = (hash as usize) & (MEASURE_CACHE_SIZE - 1);
-
-        if engine.measure_cache[idx].hash == hash
-            && engine.measure_cache[idx].size_bits == size_bits
-            && engine.measure_cache[idx].text == text
-        {
-            return engine.measure_cache[idx].width;
-        }
-
-        let engine = &mut *engine;
-        engine.buffer.set_metrics(Metrics::new(size, size * 1.2));
-        let shaping = if text.is_ascii() {
-            Shaping::Basic
-        } else {
-            Shaping::Advanced
-        };
-        engine
-            .buffer
-            .set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
-        engine
-            .buffer
-            .shape_until_scroll(&mut engine.font_system, false);
-        let mut width = 0.0f32;
-        for run in engine.buffer.layout_runs() {
-            width = width.max(run.line_w);
-        }
-
-        let entry = &mut engine.measure_cache[idx];
-        entry.hash = hash;
-        entry.size_bits = size_bits;
-        entry.width = width;
-        entry.text.clear();
-        entry.text.push_str(text);
-
-        width
+    pub fn measure_text(&mut self, text: &str, size: f32) -> f32 {
+        ensure_shaped(
+            &mut self.text_engine.measure_cache,
+            &mut self.text_engine.buffer,
+            &mut self.text_engine.font_system,
+            text,
+            size,
+        )
+        .width
     }
 
     /// 绘制文本（基线对齐，支持复杂连字、特殊符号与多色 Emoji，使用参数对象收敛入参）
-    pub(crate) fn draw_text(&self, pixmap: &mut Pixmap, opts: DrawTextOptions<'_>) {
+    pub(crate) fn draw_text(&mut self, pixmap: &mut Pixmap, opts: DrawTextOptions<'_>) {
         let DrawTextOptions {
             text,
             x,
@@ -237,35 +257,28 @@ impl CandidateBoxRenderer {
             size,
             color,
         } = opts;
-        let Ok(mut engine) = self.text_engine.lock() else {
-            return;
-        };
-        let engine = &mut *engine;
-        engine.buffer.set_metrics(Metrics::new(size, size * 1.2));
-        let shaping = if text.is_ascii() {
-            Shaping::Basic
-        } else {
-            Shaping::Advanced
-        };
-        engine
-            .buffer
-            .set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
-        engine
-            .buffer
-            .shape_until_scroll(&mut engine.font_system, false);
+        let entry = ensure_shaped(
+            &mut self.text_engine.measure_cache,
+            &mut self.text_engine.buffer,
+            &mut self.text_engine.font_system,
+            text,
+            size,
+        );
 
-        for run in engine.buffer.layout_runs() {
-            for glyph in run.glyphs {
-                let physical = glyph.physical((x, y - run.line_y), 1.0);
-                if let Some(img) = engine
-                    .swash_cache
-                    .get_image(&mut engine.font_system, physical.cache_key)
-                {
-                    if img.placement.width > 0 && img.placement.height > 0 {
-                        let gx = physical.x + img.placement.left;
-                        let gy = physical.y - img.placement.top;
-                        blend_swash_image(pixmap, img, (gx, gy), color);
-                    }
+        let x_round = x.round() as i32;
+        let y_round = y.round() as i32;
+        for glyph in &entry.glyphs {
+            let px = x_round + glyph.x;
+            let py = y_round + glyph.y;
+            if let Some(img) = self
+                .text_engine
+                .swash_cache
+                .get_image(&mut self.text_engine.font_system, glyph.cache_key)
+            {
+                if img.placement.width > 0 && img.placement.height > 0 {
+                    let gx = px + img.placement.left;
+                    let gy = py - img.placement.top;
+                    blend_swash_image(pixmap, img, (gx, gy), color);
                 }
             }
         }
@@ -273,7 +286,7 @@ impl CandidateBoxRenderer {
 
     /// 计算胶囊候选栏与展开浮层的几何尺寸与画布规格
     fn calculate_geometry<'a>(
-        &self,
+        &mut self,
         state: &'a CandidateBoxState,
     ) -> Option<CandidateBoxGeometry<'a>> {
         let s = self.scale.max(0.5);
@@ -385,7 +398,7 @@ impl CandidateBoxRenderer {
     }
 
     /// 渲染单行胶囊候选栏及二级展开浮层卡片
-    pub fn render(&self, state: &CandidateBoxState) -> Option<Pixmap> {
+    pub fn render(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
         if state.candidates.is_empty() && !state.is_voice_active() {
             return None;
         }
@@ -394,9 +407,7 @@ impl CandidateBoxRenderer {
         if state.is_voice_active() {
             let mut regions = Vec::with_capacity(4);
             let pix = capsule::render_voice_capsule_bar(self, state, &mut regions);
-            if let Ok(mut lock) = self.hit_regions.lock() {
-                *lock = regions;
-            }
+            self.hit_regions = regions;
             return pix;
         }
 
@@ -404,9 +415,7 @@ impl CandidateBoxRenderer {
         if state.is_grid_expanded {
             let mut regions = Vec::with_capacity(36);
             let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
-            if let Ok(mut lock) = self.hit_regions.lock() {
-                *lock = regions;
-            }
+            self.hit_regions = regions;
             return pix;
         }
 
@@ -448,10 +457,7 @@ impl CandidateBoxRenderer {
             );
         }
 
-        if let Ok(mut lock) = self.hit_regions.lock() {
-            *lock = regions;
-        }
-
+        self.hit_regions = regions;
         Some(pixmap)
     }
 }

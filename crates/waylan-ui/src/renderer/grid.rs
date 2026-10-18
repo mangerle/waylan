@@ -32,7 +32,7 @@ struct GridDimensions {
 
 /// 计算网格各列宽度与总宽高
 fn compute_grid_dimensions(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     candidates: &[Candidate],
     selected_index: usize,
     s: f32,
@@ -85,7 +85,7 @@ fn compute_grid_dimensions(
 
 /// 渲染 5 行展开大候选词网格面板
 pub fn render_grid_expanded_panel(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     state: &CandidateBoxState,
     regions: &mut Vec<HitRegion>,
 ) -> Option<Pixmap> {
@@ -137,7 +137,7 @@ pub fn render_grid_expanded_panel(
 
 /// 渲染网格内所有候选词项
 fn render_grid_items(
-    renderer: &CandidateBoxRenderer,
+    renderer: &mut CandidateBoxRenderer,
     pixmap: &mut Pixmap,
     state: &CandidateBoxState,
     candidates: &[Candidate],
