@@ -135,7 +135,7 @@ impl WaylanV1Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                apply_default_engine_reload(&mut self.runtime.core.engine);
+                apply_default_runtime_reload(&mut self.runtime);
             }
             info!("[微澜 Wayland V1] 已完成用户词库与运行配置热重载。");
         }

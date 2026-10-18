@@ -2,7 +2,7 @@ use log::info;
 use waylan_core::InputMode;
 
 use crate::session_common::{
-    apply_default_engine_reload, check_reload_requested_or_files_changed,
+    apply_default_runtime_reload, check_reload_requested_or_files_changed,
     init_session_inotify_watcher, is_reload_requested,
 };
 
@@ -93,7 +93,7 @@ impl WaylanV2Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                apply_default_engine_reload(&mut self.runtime.core.engine);
+                apply_default_runtime_reload(&mut self.runtime);
             }
             info!("[微澜 Wayland V2] 已完成用户词库与运行配置热重载。");
         }

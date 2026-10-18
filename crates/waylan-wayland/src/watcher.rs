@@ -77,6 +77,12 @@ pub fn apply_default_engine_reload(engine: &mut AlgoEngine) {
     }
 }
 
+/// 执行默认的输入法运行时完整配置与词库热重载（统一收敛至 ImeRuntime::reload_config）
+pub fn apply_default_runtime_reload(runtime: &mut waylan_engine::ImeRuntime) {
+    let cfg = waylan_core::AppConfig::load_or_create();
+    runtime.reload_config(&cfg);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +93,15 @@ mod tests {
         let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
         apply_default_engine_reload(&mut engine);
         assert_eq!(engine.raw_input(), "");
+    }
+
+    #[test]
+    fn test_apply_default_runtime_reload() {
+        let mut runtime = waylan_engine::ImeRuntime::with_engine(AlgoEngine::with_sample_data(
+            AlgoConfig::default(),
+        ));
+        apply_default_runtime_reload(&mut runtime);
+        assert_eq!(runtime.core.engine.raw_input(), "");
     }
 
     #[test]
