@@ -31,19 +31,17 @@ impl IbusSessionCore {
         is_press: bool,
         effective_mods: u32,
     ) -> Option<IbusKeyOutcome> {
-        let action = self
-            .voice_manager
-            .handle_key_event(evdev_key, is_press, effective_mods);
+        let action = self.voice_manager.dispatch_voice_key(
+            evdev_key,
+            is_press,
+            effective_mods,
+            &mut self.core.consumed_keys,
+        );
         match action {
             VoiceKeyAction::PassThrough => None,
             VoiceKeyAction::Consumed => {
-                if is_press {
-                    self.core.consumed_keys.record_press(evdev_key, true);
-                    if !self.core.engine.raw_input().is_empty() {
-                        self.core.engine.reset();
-                    }
-                } else {
-                    self.core.consumed_keys.take_release(evdev_key);
+                if is_press && !self.core.engine.raw_input().is_empty() {
+                    self.core.engine.reset();
                 }
                 Some(IbusKeyOutcome {
                     consumed: true,
@@ -52,13 +50,8 @@ impl IbusSessionCore {
                 })
             }
             VoiceKeyAction::Commit(text) => {
-                if is_press {
-                    self.core.consumed_keys.record_press(evdev_key, true);
-                    if !self.core.engine.raw_input().is_empty() {
-                        self.core.engine.reset();
-                    }
-                } else {
-                    self.core.consumed_keys.take_release(evdev_key);
+                if is_press && !self.core.engine.raw_input().is_empty() {
+                    self.core.engine.reset();
                 }
                 Some(IbusKeyOutcome {
                     consumed: true,

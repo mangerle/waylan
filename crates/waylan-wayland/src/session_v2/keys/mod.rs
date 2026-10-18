@@ -39,13 +39,13 @@ pub(crate) fn process_key_event(
 ) -> (bool, Option<String>) {
     // 1. 统一语音按键状态机优先分发（与 IBus 体验对齐）
     if let Some(ref mut vm) = session.voice_manager {
-        match vm.handle_key_event(key, is_press, session.core.mods_depressed()) {
+        match vm.dispatch_voice_key(
+            key,
+            is_press,
+            session.core.mods_depressed(),
+            &mut session.core.consumed_keys,
+        ) {
             VoiceKeyAction::Consumed => {
-                if is_press {
-                    session.core.consumed_keys.record_press(key, true);
-                } else {
-                    session.core.consumed_keys.take_release(key);
-                }
                 session.refresh_candidate_surface();
                 return (true, None);
             }
@@ -53,11 +53,6 @@ pub(crate) fn process_key_event(
                 session.commit_text(&text);
                 session.core.punctuation_processor.record_commit(&text);
                 session.refresh_candidate_surface();
-                if is_press {
-                    session.core.consumed_keys.record_press(key, true);
-                } else {
-                    session.core.consumed_keys.take_release(key);
-                }
                 return (true, Some(text));
             }
             VoiceKeyAction::PassThrough => {}
