@@ -10,18 +10,45 @@ use std::path::PathBuf;
 use std::process;
 
 use log::{info, warn};
-use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 use waylan_algo::AlgoEngine;
-use waylan_core::config::{AppConfig, SwitchKey};
-use waylan_ui::CandidateBoxRenderer;
+use waylan_core::config::{AppConfig, ThemeMode};
+use waylan_ui::{CandidateBoxRenderer, UiTheme};
 use waylan_wayland::session_v1::WaylanV1Session;
 use waylan_wayland::session_v2::WaylanV2Session;
 use waylan_wayland::{run_session_v1_loop, run_session_v2_loop_fallible, WaylandCapabilities};
 
-use super::config_bundle::{apply_reload_v1, apply_reload_v2};
-use super::voice_filter::build_wayland_voice_manager;
 use crate::system::ShutdownCoordinator;
 use crate::tray::TrayService;
+
+/// 执行 Wayland V1 会话的运行配置与词库热重载
+pub fn reload_wayland_v1_session(session: &mut WaylanV1Session) {
+    let cfg = AppConfig::load_or_create();
+    let theme = match cfg.ui.theme {
+        ThemeMode::Light => UiTheme::light(),
+        ThemeMode::Dark => UiTheme::dark(),
+    };
+    session.surface_manager.renderer.theme = theme;
+    session.surface_manager.renderer.font_size = cfg.ui.font_size;
+    session.runtime.reload_config(&cfg);
+    if !session.runtime.core.engine.raw_input().is_empty() {
+        session.refresh_candidate_surface();
+    }
+}
+
+/// 执行 Wayland V2 会话的运行配置与词库热重载
+pub fn reload_wayland_v2_session(session: &mut WaylanV2Session) {
+    let cfg = AppConfig::load_or_create();
+    let theme = match cfg.ui.theme {
+        ThemeMode::Light => UiTheme::light(),
+        ThemeMode::Dark => UiTheme::dark(),
+    };
+    session.surface_manager.renderer.theme = theme;
+    session.surface_manager.renderer.font_size = cfg.ui.font_size;
+    session.runtime.reload_config(&cfg);
+    if !session.runtime.core.engine.raw_input().is_empty() {
+        session.refresh_candidate_surface();
+    }
+}
 
 /// Wayland 内部会话参数包
 struct WaylandSessionParams<'a> {
@@ -40,26 +67,13 @@ fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
     session.surface_manager.renderer = params.renderer;
     session.watched_paths = params.watched_paths;
     session.last_watched_mtime = params.initial_mtime;
-    session.core.shift_sm =
-        ShiftToggleStateMachine::with_toggle_key(match params.cfg.shortcuts.switch_key {
-            SwitchKey::Shift => ToggleKeyMode::Shift,
-            SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
-        });
-    session.core.punctuation_processor = PunctuationProcessor::with_options(
-        params.cfg.pinyin.slash_to_dunhao,
-        params.cfg.pinyin.protect_digits_punctuation,
-        params.cfg.pinyin.auto_complete_pairs,
-    );
-    session.core.page_keys = params.cfg.shortcuts.page_keys.into();
-    session.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
-    session.shared_is_chinese = params.tray.as_ref().map(|t| t.mode_flag());
-    session.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
-    session.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
-    session.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
+    session.runtime.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
+    session.runtime.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
+    session.runtime.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
     session.exit_requested = Some(params.coordinator.flag());
     session.loop_wakeup = params.coordinator.loop_wakeup();
-    session.reload_callback = Some(Box::new(apply_reload_v1));
-    session.voice_manager = build_wayland_voice_manager(&params.cfg.voice);
+    session.reload_callback = Some(Box::new(reload_wayland_v1_session));
+    session.runtime.reload_config(params.cfg);
     run_session_v1_loop(session).map_err(Into::into)
 }
 
@@ -70,28 +84,13 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
     session_v2.surface_manager.renderer = params.renderer;
     session_v2.watched_paths = params.watched_paths;
     session_v2.last_watched_mtime = params.initial_mtime;
-    session_v2.core.shift_sm =
-        ShiftToggleStateMachine::with_toggle_key(match params.cfg.shortcuts.switch_key {
-            SwitchKey::Shift => ToggleKeyMode::Shift,
-            SwitchKey::Ctrl => ToggleKeyMode::Ctrl,
-        });
-    let mut session_v2_punct = PunctuationProcessor::with_options(
-        params.cfg.pinyin.slash_to_dunhao,
-        params.cfg.pinyin.protect_digits_punctuation,
-        params.cfg.pinyin.auto_complete_pairs,
-    );
-    session_v2_punct.full_width_punct = params.cfg.pinyin.full_width_punct;
-    session_v2.core.punctuation_processor = session_v2_punct;
-    session_v2.core.page_keys = params.cfg.shortcuts.page_keys.into();
-    session_v2.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
-    session_v2.shared_is_chinese = params.tray.as_ref().map(|t| t.mode_flag());
-    session_v2.shared_is_caps_locked = params.tray.as_ref().map(|t| t.caps_lock_flag());
-    session_v2.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
-    session_v2.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
+    session_v2.runtime.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
+    session_v2.runtime.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
+    session_v2.runtime.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
     session_v2.exit_requested = Some(params.coordinator.flag());
     session_v2.loop_wakeup = params.coordinator.loop_wakeup();
-    session_v2.reload_callback = Some(Box::new(apply_reload_v2));
-    session_v2.voice_manager = build_wayland_voice_manager(&params.cfg.voice);
+    session_v2.reload_callback = Some(Box::new(reload_wayland_v2_session));
+    session_v2.runtime.reload_config(params.cfg);
     let v2_result = run_session_v2_loop_fallible(session_v2);
     match v2_result {
         Ok(()) => Ok(()),
@@ -104,17 +103,16 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
                 "[微澜守护进程 警告] Wayland V2 会话建立或运行失败 ({})，正在优雅降级至广泛兼容的 V1 会话...",
                 e
             );
-            let mut session = WaylanV1Session {
+            let session = WaylanV1Session {
                 runtime: returned_session.runtime,
                 surface_manager: returned_session.surface_manager,
                 watched_paths: returned_session.watched_paths,
                 last_watched_mtime: returned_session.last_watched_mtime,
                 exit_requested: Some(params.coordinator.flag()),
                 loop_wakeup: params.coordinator.loop_wakeup(),
-                reload_callback: Some(Box::new(apply_reload_v1)),
+                reload_callback: Some(Box::new(reload_wayland_v1_session)),
                 ..WaylanV1Session::default()
             };
-            session.voice_manager = build_wayland_voice_manager(&params.cfg.voice);
             run_session_v1_loop(session).map_err(Into::into)
         }
     }

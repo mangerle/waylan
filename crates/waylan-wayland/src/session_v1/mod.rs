@@ -1,6 +1,5 @@
-use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use log::{debug, info};
@@ -72,21 +71,19 @@ pub struct WaylanV1Session {
     pub key_filter: Option<KeyFilterCallback>,
 }
 
-impl Deref for WaylanV1Session {
-    type Target = ImeRuntime;
-
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
-    }
-}
-
-impl DerefMut for WaylanV1Session {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.runtime
-    }
-}
-
 impl WaylanV1Session {
+    /// 获取核心输入法会话引用
+    #[inline]
+    pub fn core(&self) -> &waylan_engine::session::ImeCoreSession {
+        &self.runtime.core
+    }
+
+    /// 获取核心输入法会话可变引用
+    #[inline]
+    pub fn core_mut(&mut self) -> &mut waylan_engine::session::ImeCoreSession {
+        &mut self.runtime.core
+    }
+
     /// 拆分统一运行时引用与轻量前端管道借用
     pub fn split_runtime_and_frontend(&mut self) -> (&mut ImeRuntime, WaylanV1Frontend<'_>) {
         let frontend = WaylanV1Frontend {
@@ -140,7 +137,7 @@ impl WaylanV1Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                apply_default_engine_reload(&mut self.core.engine);
+                apply_default_engine_reload(&mut self.runtime.core.engine);
             }
             info!("[微澜 Wayland V1] 已完成用户词库与运行配置热重载。");
         }
@@ -253,7 +250,7 @@ impl WaylanV1Session {
 
     /// 重置会话的修饰键位图、按键消费记录及算法引擎状态
     fn reset_input_state(&mut self) {
-        self.core.reset_input_state();
+        self.runtime.core.reset_input_state();
     }
 
     /// 处理 V1 协议下的会话激活与键盘抓取建立
@@ -290,9 +287,9 @@ impl WaylanV1Session {
                     old_kb.release();
                 }
             }
-            self.core.reset_input_state();
+            self.runtime.core.reset_input_state();
             self.hide_candidate_surface();
-            let _ = self.core.engine.maybe_compact_user_dict();
+            let _ = self.runtime.core.engine.maybe_compact_user_dict();
         }
     }
 }
@@ -329,9 +326,9 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
                 state.commit_serial = serial;
             }
             ContextEvent::Reset => {
-                state.core.shift_sm.reset();
-                state.core.punctuation_processor.reset();
-                state.core.engine.reset();
+                state.runtime.core.shift_sm.reset();
+                state.runtime.core.punctuation_processor.reset();
+                state.runtime.core.engine.reset();
                 state.hide_candidate_surface();
             }
             _ => {}
@@ -376,12 +373,10 @@ impl InputMethodFrontend for WaylanV1Session {
 
     fn sync_input_mode(&mut self, mode: InputMode) {
         let is_zh = matches!(mode, InputMode::Chinese | InputMode::VMode);
-        if let Some(ref flags) = self.shared_flags {
+        if let Some(ref flags) = self.runtime.shared_flags {
             flags.set_chinese(is_zh);
-        } else if let Some(ref zh_flag) = self.shared_is_chinese {
-            zh_flag.store(is_zh, Ordering::Release);
         }
-        if let Some(ref notify_tx) = self.mode_notify_tx {
+        if let Some(ref notify_tx) = self.runtime.mode_notify_tx {
             let _ = notify_tx.try_send(());
         }
     }

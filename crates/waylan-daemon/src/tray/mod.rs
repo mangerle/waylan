@@ -84,16 +84,6 @@ impl TrayService {
         &self.shared_flags
     }
 
-    /// 获取中英文模式共享原子标志句柄
-    pub fn mode_flag(&self) -> Arc<AtomicBool> {
-        self.shared_flags.is_chinese_flag()
-    }
-
-    /// 获取 CapsLock 大写锁定状态共享原子标志句柄
-    pub fn caps_lock_flag(&self) -> Arc<AtomicBool> {
-        self.shared_flags.is_caps_locked_flag()
-    }
-
     /// 获取配置与词库重载请求共享原子标志句柄
     pub fn reload_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.reload_requested)

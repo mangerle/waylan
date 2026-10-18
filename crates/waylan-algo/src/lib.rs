@@ -22,7 +22,9 @@ pub mod vocab;
 
 pub use bigram::CompactMmapBigram;
 pub use composition::Composition;
-pub use custom_phrase::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
+pub use custom_phrase::{
+    load_auxiliary_managers, AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager,
+};
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;

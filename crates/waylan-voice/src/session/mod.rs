@@ -110,7 +110,6 @@ impl VoiceSessionController {
         event_tx: SyncSender<VoiceEvent>,
     ) -> Result<(), VoiceError> {
         if self.worker_handle.is_none() {
-            warn!("[微澜语音] 语音后台工作线程未就绪（已被安全降级禁用），忽略启动录音请求");
             return Err(VoiceError::WorkerThreadSpawnFailed(
                 "语音后台工作线程未就绪（已被安全降级禁用）".to_string(),
             ));
@@ -272,7 +271,7 @@ fn handle_start_command(
 
     info!("[语音会话] 录音捕获流与识别管道启动就绪，正在聆听用户语音...");
     active_recording_loop(ActiveRecordingContext {
-        capture,
+        capture: Some(capture),
         pcm_rx,
         cmd_rx,
         event_tx: &event_tx,

@@ -21,7 +21,6 @@ use waylan_ibus::{
     IbusShutdownCoordinator,
 };
 
-use super::config_bundle::SessionConfigBundle;
 use crate::system::{ShutdownCoordinator, SubprocessManager};
 use crate::tray::TrayService;
 
@@ -60,10 +59,9 @@ struct DaemonIbusConfigReloader {
 
 impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn reload(&self, core: &mut IbusSessionCore) -> bool {
-        let bundle = SessionConfigBundle::load_current();
-        let hide_ext = bundle.exclusive_input_source;
-        let current_has_tray = core.shared_flags.is_some();
         let new_cfg = AppConfig::load_or_create();
+        let hide_ext = new_cfg.desktop.exclusive_input_source;
+        let current_has_tray = core.runtime.shared_flags.is_some();
         let is_gnome = env::var("XDG_CURRENT_DESKTOP")
             .map(|d| d.to_uppercase().contains("GNOME"))
             .unwrap_or(false);
@@ -73,7 +71,7 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
             return true;
         }
 
-        apply_bundle_to_ibus_core(bundle, core);
+        apply_config_to_ibus_core(&new_cfg, core);
         let old_exclusive = self.exclusive_input_source.swap(hide_ext, Ordering::AcqRel);
         if hide_ext != old_exclusive {
             // 标记待在锁守卫释放后的 post_reload 中安全执行桌面集成外部命令
@@ -92,16 +90,13 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
 }
 
 /// 将统一配置包映射并应用到 IBus 核心会话中
-fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSessionCore) {
-    core.candidate_index_style = bundle.candidate_index_style;
-    core.candidate_orientation = bundle.candidate_orientation;
-    core.core.traditional_shortcut = bundle.traditional_shortcut;
-    core.core.full_width_char_shortcut = bundle.full_width_char_shortcut;
-    core.core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
-    if let Some(ref mut vm) = core.voice_manager {
-        vm.update_config(bundle.voice.clone());
-    }
-    bundle.apply_to_core(&mut core.core);
+fn apply_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
+    core.candidate_index_style = cfg.ui.candidate_index_style;
+    core.candidate_orientation = cfg.ui.candidate_orientation;
+    core.runtime.core.traditional_shortcut = cfg.shortcuts.traditional_shortcut;
+    core.runtime.core.full_width_char_shortcut = cfg.shortcuts.full_width_char_shortcut;
+    core.runtime.core.full_width_punct_shortcut = cfg.shortcuts.full_width_punct_shortcut;
+    core.runtime.reload_config(cfg);
 }
 
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
@@ -117,11 +112,11 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
 
     let mut session_core = IbusSessionCore::new(opts.engine);
     if let Some(tray) = opts.tray {
-        session_core.shared_flags = Some(tray.shared_flags().clone());
+        session_core.runtime.shared_flags = Some(tray.shared_flags().clone());
     }
-    session_core.mode_notify_tx = opts.tray.as_ref().map(|t| t.icon_notifier());
-    let initial_bundle = SessionConfigBundle::load_current();
-    apply_bundle_to_ibus_core(initial_bundle, &mut session_core);
+    session_core.runtime.mode_notify_tx = opts.tray.as_ref().map(|t| t.icon_notifier());
+    let initial_cfg = AppConfig::load_or_create();
+    apply_config_to_ibus_core(&initial_cfg, &mut session_core);
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {
         subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),

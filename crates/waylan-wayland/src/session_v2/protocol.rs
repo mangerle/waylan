@@ -3,7 +3,6 @@ use log::{debug, info, trace};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsFd;
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_ui::CandidateHitTarget;
 use wayland_client::protocol::wl_keyboard::KeyState;
@@ -151,6 +150,7 @@ fn handle_grab_keymap(
         if read_ok {
             let text = String::from_utf8_lossy(&buf);
             state
+                .runtime
                 .core
                 .keymap_layout
                 .update_from_xkb_text(text.trim_end_matches('\0'));
@@ -171,8 +171,11 @@ fn handle_grab_modifiers(
     mods_locked: u32,
     group: u32,
 ) {
-    let prev_caps = state.core.is_caps_locked();
-    state.core.set_modifiers(mods_depressed, mods_locked);
+    let prev_caps = state.runtime.core.is_caps_locked();
+    state
+        .runtime
+        .core
+        .set_modifiers(mods_depressed, mods_locked);
     state.mods_latched = mods_latched;
     state.mods_group = group;
     if state.has_virtual_keymap {
@@ -180,14 +183,12 @@ fn handle_grab_modifiers(
             vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
         }
     }
-    let curr_caps = state.core.is_caps_locked();
+    let curr_caps = state.runtime.core.is_caps_locked();
     if prev_caps != curr_caps {
-        if let Some(ref flags) = state.shared_flags {
+        if let Some(ref flags) = state.runtime.shared_flags {
             flags.set_caps_locked(curr_caps);
-        } else if let Some(ref caps_flag) = state.shared_is_caps_locked {
-            caps_flag.store(curr_caps, Ordering::Release);
         }
-        if let Some(ref notify_tx) = state.mode_notify_tx {
+        if let Some(ref notify_tx) = state.runtime.mode_notify_tx {
             let _ = notify_tx.try_send(());
         }
         debug!(
@@ -259,19 +260,27 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let select_res = if state.is_grid_expanded {
-        state.core.engine.select_candidate_from_all(idx, now)
+    let select_res = if state.runtime.core.is_grid_expanded {
+        state
+            .runtime
+            .core
+            .engine
+            .select_candidate_from_all(idx, now)
     } else {
-        state.core.engine.select_candidate(idx, now)
+        state.runtime.core.engine.select_candidate(idx, now)
     };
     if let Some((commit_text, remaining_len)) = select_res {
-        state.is_grid_expanded = false;
-        state.grid_selected_index = 0;
-        state.core.punctuation_processor.record_commit(&commit_text);
+        state.runtime.core.is_grid_expanded = false;
+        state.runtime.core.grid_selected_index = 0;
+        state
+            .runtime
+            .core
+            .punctuation_processor
+            .record_commit(&commit_text);
         if remaining_len == 0 {
             state.commit_text(&commit_text);
         } else {
-            let formatted = state.core.engine.formatted_preedit();
+            let formatted = state.runtime.core.engine.formatted_preedit();
             state.commit_partial(&commit_text, &formatted);
         }
     }
@@ -290,21 +299,21 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
 
     match target {
         CandidateHitTarget::ToggleExpand => {
-            state.is_grid_expanded = !state.is_grid_expanded;
-            if state.is_grid_expanded {
-                state.grid_selected_index = state.core.engine.selected_index();
+            state.runtime.core.is_grid_expanded = !state.runtime.core.is_grid_expanded;
+            if state.runtime.core.is_grid_expanded {
+                state.runtime.core.grid_selected_index = state.runtime.core.engine.selected_index();
             } else {
-                state.grid_selected_index = 0;
+                state.runtime.core.grid_selected_index = 0;
             }
             state.refresh_candidate_surface();
         }
         CandidateHitTarget::Select(idx) => handle_pointer_select_candidate(state, idx),
         CandidateHitTarget::NextPage => {
-            state.core.engine.next_page();
+            state.runtime.core.engine.next_page();
             state.refresh_candidate_surface();
         }
         CandidateHitTarget::PrevPage => {
-            state.core.engine.prev_page();
+            state.runtime.core.engine.prev_page();
             state.refresh_candidate_surface();
         }
     }

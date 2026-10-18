@@ -59,7 +59,7 @@ impl IbusEngineService {
             } else {
                 None
             };
-            (out, snap, guard.is_caps_locked)
+            (out, snap, guard.is_caps_locked())
         };
 
         let consumed = outcome.consumed;
@@ -84,7 +84,7 @@ impl IbusEngineService {
         self.is_password.store(is_pwd, Ordering::Release);
         let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_password_context = is_pwd;
-        if is_pwd && !guard.core.engine.raw_input().is_empty() {
+        if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
             guard.reset_context();
         }
     }
@@ -139,22 +139,36 @@ impl IbusEngineService {
                 update_ui: true,
                 ..Default::default()
             };
-            if guard.core.engine.is_expanded() {
-                let sel = guard.core.engine.selected_index();
-                if let Some((committed, _)) =
-                    guard.core.engine.select_expanded_item(sel, index as usize)
+            if guard.runtime.core.engine.is_expanded() {
+                let sel = guard.runtime.core.engine.selected_index();
+                if let Some((committed, _)) = guard
+                    .runtime
+                    .core
+                    .engine
+                    .select_expanded_item(sel, index as usize)
                 {
-                    guard.core.punctuation_processor.record_commit(&committed);
+                    guard
+                        .runtime
+                        .core
+                        .punctuation_processor
+                        .record_commit(&committed);
                     out.commit_text = Some(committed);
                 }
-            } else if let Some((committed, _)) =
-                guard.core.engine.select_candidate(index as usize, now)
+            } else if let Some((committed, _)) = guard
+                .runtime
+                .core
+                .engine
+                .select_candidate(index as usize, now)
             {
-                guard.core.punctuation_processor.record_commit(&committed);
+                guard
+                    .runtime
+                    .core
+                    .punctuation_processor
+                    .record_commit(&committed);
                 out.commit_text = Some(committed);
             }
             let snap = UiSnapshot::capture(&guard);
-            (out, Some(snap), guard.is_caps_locked)
+            (out, Some(snap), guard.is_caps_locked())
         };
         self.dispatch_outcome(&ctxt, outcome, snap, is_caps_locked)
             .await;
@@ -175,12 +189,12 @@ impl IbusEngineService {
             }
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
-            let trad = guard.core.engine.config.traditional_chinese;
-            let punct = guard.core.punctuation_processor.full_width_punct;
+            let trad = guard.runtime.core.engine.config.traditional_chinese;
+            let punct = guard.runtime.core.punctuation_processor.full_width_punct;
             let char_full = guard.is_full_width_char();
             (
-                guard.core.mode,
-                guard.is_caps_locked,
+                guard.runtime.core.mode,
+                guard.is_caps_locked(),
                 trad,
                 punct,
                 char_full,
@@ -236,8 +250,8 @@ impl IbusEngineService {
     async fn page_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if !guard.core.engine.is_expanded() {
-                let _ = guard.core.engine.prev_page();
+            if !guard.runtime.core.engine.is_expanded() {
+                let _ = guard.runtime.core.engine.prev_page();
             }
             UiSnapshot::capture(&guard)
         };
@@ -248,8 +262,8 @@ impl IbusEngineService {
     async fn page_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if !guard.core.engine.is_expanded() {
-                let _ = guard.core.engine.next_page();
+            if !guard.runtime.core.engine.is_expanded() {
+                let _ = guard.runtime.core.engine.next_page();
             }
             UiSnapshot::capture(&guard)
         };
@@ -260,11 +274,11 @@ impl IbusEngineService {
     async fn cursor_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.core.engine.is_expanded() {
-                let sel = guard.core.engine.selected_index();
-                guard.core.engine.prev_expanded_item(sel);
+            if guard.runtime.core.engine.is_expanded() {
+                let sel = guard.runtime.core.engine.selected_index();
+                guard.runtime.core.engine.prev_expanded_item(sel);
             } else {
-                guard.core.engine.prev_candidate();
+                guard.runtime.core.engine.prev_candidate();
             }
             UiSnapshot::capture(&guard)
         };
@@ -275,11 +289,11 @@ impl IbusEngineService {
     async fn cursor_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.core.engine.is_expanded() {
-                let sel = guard.core.engine.selected_index();
-                guard.core.engine.next_expanded_item(sel);
+            if guard.runtime.core.engine.is_expanded() {
+                let sel = guard.runtime.core.engine.selected_index();
+                guard.runtime.core.engine.next_expanded_item(sel);
             } else {
-                guard.core.engine.next_candidate();
+                guard.runtime.core.engine.next_candidate();
             }
             UiSnapshot::capture(&guard)
         };
@@ -312,7 +326,7 @@ impl IbusEngineService {
         self.is_password.store(is_pwd, Ordering::Release);
         let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_password_context = is_pwd;
-        if is_pwd && !guard.core.engine.raw_input().is_empty() {
+        if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
             guard.reset_context();
         }
     }

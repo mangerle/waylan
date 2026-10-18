@@ -9,6 +9,7 @@ use waylan_core::VoiceConfig;
 use waylan_voice::VoiceInteractionManager;
 
 /// 为 Wayland 原生会话构建统一语音交互状态机
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_wayland_voice_manager(voice_config: &VoiceConfig) -> Option<VoiceInteractionManager> {
     if !voice_config.enabled {
         return None;

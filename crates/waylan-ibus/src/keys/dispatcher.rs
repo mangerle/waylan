@@ -74,7 +74,7 @@ impl IbusSessionCore {
             event_mods |= MOD_SUPER;
         }
 
-        if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked {
+        if (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked() {
             self.update_caps_lock_state(true);
         }
 
@@ -87,7 +87,7 @@ impl IbusSessionCore {
             return None;
         }
 
-        let next_locked = !self.is_caps_locked;
+        let next_locked = !self.is_caps_locked();
         self.update_caps_lock_state(next_locked);
         if self.runtime.core.mode != InputMode::English {
             let effective_mode = if next_locked {

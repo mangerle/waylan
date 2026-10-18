@@ -92,7 +92,7 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
 /// 会话退出时平滑落盘保存用户自学习词库
 fn cleanup_ibus_session(shared_core: &Arc<Mutex<IbusSessionCore>>) {
     if let Ok(mut guard) = shared_core.lock() {
-        if let Err(e) = guard.core.engine.persist_user_dict() {
+        if let Err(e) = guard.runtime.core.engine.persist_user_dict() {
             log::error!("[微澜 IBus 错误] 用户自学习词库落盘失败: {}", e);
         } else {
             info!("[微澜 IBus] 已安全完成用户自适应历史词库落盘。");

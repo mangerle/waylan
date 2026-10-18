@@ -1,5 +1,6 @@
 use super::*;
 use std::sync::mpsc::sync_channel;
+use waylan_core::input::*;
 
 #[test]
 fn test_voice_interaction_manager_initial_state() {

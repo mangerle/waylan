@@ -25,7 +25,7 @@ fn test_ibus_session_pinyin_and_shift_toggle() {
         assert!(out.consumed);
         assert!(out.update_ui);
     }
-    assert_eq!(core.core.engine.raw_input(), "xian");
+    assert_eq!(core.runtime.core.engine.raw_input(), "xian");
 
     // 按下并释放 Shift 切换至英文模式并自动上屏残留编码
     let _ = core.process_key_event(0xffe1, KEY_LEFTSHIFT, 0);
@@ -52,13 +52,13 @@ fn test_ibus_date_time_tab_expansion_and_selection() {
     assert_eq!(cands[0].text, "日期");
     assert!(cands[1].text.contains("年"));
     assert!(cands[1].is_expandable);
-    assert_eq!(core.core.engine.selected_index(), 0);
+    assert_eq!(core.runtime.core.engine.selected_index(), 0);
 
     // 2. 按 Tab 键触发二级展开
     let tab_out = core.process_key_event(0xff09, KEY_TAB, 0);
     assert!(tab_out.consumed);
     assert!(tab_out.update_ui);
-    assert!(core.core.engine.is_expanded());
+    assert!(core.runtime.core.engine.is_expanded());
 
     // 3. 展开后 current_candidates 应返回全部 7 种细分日期格式
     let expanded_cands = core.current_candidates();
@@ -69,8 +69,8 @@ fn test_ibus_date_time_tab_expansion_and_selection() {
     let num_out = core.process_key_event(b'2' as u32, KEY_2, 0);
     assert!(num_out.consumed);
     assert_eq!(num_out.commit_text, Some(expanded_cands[1].text.clone()));
-    assert!(!core.core.engine.is_expanded());
-    assert!(core.core.engine.raw_input().is_empty());
+    assert!(!core.runtime.core.engine.is_expanded());
+    assert!(core.runtime.core.engine.raw_input().is_empty());
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn test_ibus_password_context_reset_and_recovery() {
         !outcome.consumed,
         "密码输入框中按键应直通放行，不被输入法消费"
     );
-    assert!(core.core.engine.raw_input().is_empty());
+    assert!(core.runtime.core.engine.raw_input().is_empty());
 
     // 2. 模拟切换窗口或失焦触发重置
     core.reset_context();
@@ -100,7 +100,7 @@ fn test_ibus_password_context_reset_and_recovery() {
         outcome2.consumed,
         "退出密码框后输入法应完全恢复可用并消费按键"
     );
-    assert_eq!(core.core.engine.raw_input(), "n");
+    assert_eq!(core.runtime.core.engine.raw_input(), "n");
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn test_ibus_screen_lock_passthrough_and_recovery() {
         "系统锁屏状态下所有硬件按键必须完全直通放行，绝不消费"
     );
     assert!(
-        core.core.engine.raw_input().is_empty(),
+        core.runtime.core.engine.raw_input().is_empty(),
         "锁屏状态下严禁将按键录入算法引擎"
     );
 
@@ -127,5 +127,5 @@ fn test_ibus_screen_lock_passthrough_and_recovery() {
         outcome2.consumed,
         "解锁屏幕后应立即恢复拼音拦截与候选词处理"
     );
-    assert_eq!(core.core.engine.raw_input(), "a");
+    assert_eq!(core.runtime.core.engine.raw_input(), "a");
 }

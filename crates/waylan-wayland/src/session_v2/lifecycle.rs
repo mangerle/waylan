@@ -47,7 +47,7 @@ impl WaylanV2Session {
                 self.reset_focus_state();
             } else {
                 self.sync_atomic_state();
-                if self.is_password_context && !self.core.engine.raw_input().is_empty() {
+                if self.is_password_context && !self.runtime.core.engine.raw_input().is_empty() {
                     self.cancel_input();
                 }
             }
@@ -57,13 +57,13 @@ impl WaylanV2Session {
             self.pending_is_password = false;
             self.is_password_context = false;
             if was_active || focus_reset {
-                if self.core.mods_depressed() != 0 && self.has_virtual_keymap {
+                if self.runtime.core.mods_depressed() != 0 && self.has_virtual_keymap {
                     if let Some(ref vk) = self.virtual_keyboard {
-                        vk.modifiers(0, 0, self.core.mods_locked(), self.mods_group);
+                        vk.modifiers(0, 0, self.runtime.core.mods_locked(), self.mods_group);
                     }
                 }
                 self.reset_focus_state();
-                let _ = self.core.engine.maybe_compact_user_dict();
+                let _ = self.runtime.core.engine.maybe_compact_user_dict();
             }
         }
         now_active
@@ -71,7 +71,7 @@ impl WaylanV2Session {
 
     /// 重置焦点关联的键盘修饰键、防误触状态机与输入引擎状态
     pub(crate) fn reset_focus_state(&mut self) {
-        self.core.reset_input_state();
+        self.runtime.core.reset_input_state();
         self.repeat_state = None;
         self.mods_latched = 0;
         self.mods_group = 0;
@@ -93,7 +93,7 @@ impl WaylanV2Session {
                 cb(self);
                 self.reload_callback = Some(cb);
             } else {
-                apply_default_engine_reload(&mut self.core.engine);
+                apply_default_engine_reload(&mut self.runtime.core.engine);
             }
             info!("[微澜 Wayland V2] 已完成用户词库与运行配置热重载。");
         }
@@ -121,7 +121,7 @@ impl WaylanV2Session {
     pub(crate) fn sync_mode_from_shared_flag(&mut self) {
         let changed = self.runtime.sync_shared_mode();
         if let Some(InputMode::English) = changed {
-            if !self.core.engine.raw_input().is_empty() {
+            if !self.runtime.core.engine.raw_input().is_empty() {
                 self.cancel_input();
             }
         }

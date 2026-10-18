@@ -77,7 +77,7 @@ pub(super) struct StopCommitContext<'a> {
 
 /// 活跃录音与实时推理运行上下文参数结构体
 pub(super) struct ActiveRecordingContext<'a> {
-    pub capture: AudioCapture,
+    pub capture: Option<AudioCapture>,
     pub pcm_rx: Receiver<Vec<f32>>,
     pub cmd_rx: &'a Receiver<WorkerCommand>,
     pub event_tx: &'a SyncSender<VoiceEvent>,

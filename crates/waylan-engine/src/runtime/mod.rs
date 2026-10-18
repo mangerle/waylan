@@ -7,7 +7,7 @@
 //!   即可由 `ImeRuntime` 单一真实源驱动所有打字交互、状态流转、预编辑更新与语音会话。
 //! - **代价与局限**：协议层需以借用形式提供前端抽象实例。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,10 +46,6 @@ pub struct ImeRuntime {
     pub voice_manager: Option<VoiceInteractionManager>,
     /// 与系统托盘和外部进程共享的原子状态标志集合
     pub shared_flags: Option<SharedInputFlags>,
-    /// 与外部系统托盘共享的中英文状态标志
-    pub shared_is_chinese: Option<Arc<AtomicBool>>,
-    /// 与外部系统托盘共享的 CapsLock 大写锁定状态标志
-    pub shared_is_caps_locked: Option<Arc<AtomicBool>>,
     /// 切换中英文或大写时唤醒系统托盘刷新图标的通知发送端
     pub mode_notify_tx: Option<SyncSender<()>>,
     /// 与外部系统托盘共享的配置与词库重载请求标志
@@ -69,8 +65,6 @@ impl ImeRuntime {
             core,
             voice_manager: Some(VoiceInteractionManager::new(VoiceConfig::default())),
             shared_flags: None,
-            shared_is_chinese: None,
-            shared_is_caps_locked: None,
             mode_notify_tx: None,
             reload_requested: None,
         }
@@ -109,6 +103,60 @@ impl ImeRuntime {
         frontend.update_preedit("", 0);
     }
 
+    /// 热重载应用程序配置与词库资源（使输入法交互运行时自闭环更新）
+    pub fn reload_config(&mut self, cfg: &waylan_core::AppConfig) {
+        self.core.engine.config = waylan_algo::AlgoConfig::from(cfg);
+        let shift_mode = match cfg.shortcuts.switch_key {
+            waylan_core::SwitchKey::Shift => waylan_algo::preprocessor::ToggleKeyMode::Shift,
+            waylan_core::SwitchKey::Ctrl => waylan_algo::preprocessor::ToggleKeyMode::Ctrl,
+        };
+        self.core.shift_sm.set_toggle_key(shift_mode);
+        self.core.punctuation_processor.slash_to_dunhao = cfg.pinyin.slash_to_dunhao;
+        self.core.punctuation_processor.protect_digits_punctuation =
+            cfg.pinyin.protect_digits_punctuation;
+        self.core.punctuation_processor.auto_complete_pairs = cfg.pinyin.auto_complete_pairs;
+        self.core.punctuation_processor.full_width_punct = cfg.pinyin.full_width_punct;
+        self.core.page_keys = waylan_core::input::PageKeyConfig::from(cfg.shortcuts.page_keys);
+        self.core.traditional_shortcut = cfg.shortcuts.traditional_shortcut;
+        self.core.full_width_char_shortcut = cfg.shortcuts.full_width_char_shortcut;
+        self.core.full_width_punct_shortcut = cfg.shortcuts.full_width_punct_shortcut;
+
+        // 自定义短语
+        let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
+        self.core.engine.resources.custom_phrases =
+            waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
+
+        // 用户自适应词库
+        let user_dict_path = waylan_core::AppConfig::user_dict_path();
+        if user_dict_path.exists() {
+            if let Ok(m) = std::fs::metadata(&user_dict_path) {
+                if m.len() == 0 {
+                    log::info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
+                    self.core.engine.adaptive.model =
+                        waylan_algo::user_adaptive::UserAdaptiveModel::new();
+                    self.core.engine.set_user_dict_path(&user_dict_path);
+                } else if !self.core.engine.is_same_wal_file(&user_dict_path) {
+                    self.core.engine.set_user_dict_path(&user_dict_path);
+                }
+            }
+        } else {
+            log::info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
+            self.core.engine.adaptive.model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+            self.core.engine.set_user_dict_path(&user_dict_path);
+        }
+
+        // 辅助与混输词库
+        let (english_suggester, symbol_suggester) =
+            waylan_algo::custom_phrase::load_auxiliary_managers();
+        self.core.engine.resources.english_suggester = english_suggester;
+        self.core.engine.resources.symbol_suggester = symbol_suggester;
+
+        // 语音配置同步
+        if let Some(ref mut vm) = self.voice_manager {
+            vm.update_config(cfg.voice.clone());
+        }
+    }
+
     /// 同步 CapsLock 大写锁定状态至共享标志并唤醒托盘刷新
     pub fn update_caps_lock_state(&mut self, is_locked: bool) {
         if self.core.is_caps_locked() != is_locked {
@@ -120,9 +168,6 @@ impl ImeRuntime {
             if let Some(ref flags) = self.shared_flags {
                 flags.set_caps_locked(is_locked);
             }
-            if let Some(ref flag) = self.shared_is_caps_locked {
-                flag.store(is_locked, Ordering::Release);
-            }
             if let Some(ref tx) = self.mode_notify_tx {
                 let _ = tx.try_send(());
             }
@@ -131,14 +176,7 @@ impl ImeRuntime {
 
     /// 同步来自系统托盘的共享中英文状态标志
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
-        let changed = if let Some(ref flags) = self.shared_flags {
-            sync_mode_from_shared_flags(Some(flags), &mut self.core.mode)
-        } else {
-            waylan_core::input::sync_mode_from_shared_flag(
-                self.shared_is_chinese.as_deref(),
-                &mut self.core.mode,
-            )
-        };
+        let changed = sync_mode_from_shared_flags(self.shared_flags.as_ref(), &mut self.core.mode);
         if let Some(new_mode) = changed {
             if let Some(ref tx) = self.mode_notify_tx {
                 let _ = tx.try_send(());
@@ -272,9 +310,6 @@ impl ImeRuntime {
             } => {
                 if let Some(ref flags) = self.shared_flags {
                     flags.set_chinese(new_mode == InputMode::Chinese);
-                }
-                if let Some(ref is_ch) = self.shared_is_chinese {
-                    is_ch.store(new_mode == InputMode::Chinese, Ordering::Release);
                 }
                 if let Some(ref tx) = self.mode_notify_tx {
                     let _ = tx.try_send(());

@@ -5,10 +5,8 @@
 //! - **核心优势**：纯内存数据结构，加锁保护仅限于单次按键决策的微秒级临界区内。
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
-use std::ops::{Deref, DerefMut};
-
 use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
-use waylan_engine::{AlgoEngine, ImeRuntime};
+use waylan_engine::{AlgoEngine, ImeCoreSession, ImeRuntime};
 
 /// 单次 IBus 按键或交互事件的决策输出
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -29,7 +27,6 @@ pub struct IbusKeyOutcome {
 pub struct IbusSessionCore {
     /// 统一输入法交互运行时 (IME Runtime)
     pub runtime: ImeRuntime,
-    pub is_caps_locked: bool,
     pub phys_mods: u8,
     pub is_password_context: bool,
     pub is_screen_locked: bool,
@@ -40,26 +37,11 @@ pub struct IbusSessionCore {
     pub active_engine_path: Option<String>,
 }
 
-impl Deref for IbusSessionCore {
-    type Target = ImeRuntime;
-
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
-    }
-}
-
-impl DerefMut for IbusSessionCore {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.runtime
-    }
-}
-
 impl IbusSessionCore {
     /// 使用预加载的算法引擎构造 IBus 会话状态核心
     pub fn new(engine: AlgoEngine) -> Self {
         Self {
             runtime: ImeRuntime::with_engine(engine),
-            is_caps_locked: false,
             phys_mods: 0,
             is_password_context: false,
             is_screen_locked: false,
@@ -70,6 +52,21 @@ impl IbusSessionCore {
         }
     }
 
+    /// 获取只读核心会话状态引用
+    pub fn core(&self) -> &ImeCoreSession {
+        &self.runtime.core
+    }
+
+    /// 获取可变核心会话状态引用
+    pub fn core_mut(&mut self) -> &mut ImeCoreSession {
+        &mut self.runtime.core
+    }
+
+    /// 查询当前是否处于 CapsLock 大写锁定状态
+    pub fn is_caps_locked(&self) -> bool {
+        self.runtime.core.is_caps_locked()
+    }
+
     /// 同步来自系统托盘的共享中英文状态标志
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
         self.runtime.sync_shared_mode()
@@ -77,23 +74,23 @@ impl IbusSessionCore {
 
     /// 同步来自托盘与全局状态的简繁与标点/字符全半角配置
     pub fn sync_shared_settings(&mut self) {
-        if let Some(ref flags) = self.shared_flags {
+        if let Some(ref flags) = self.runtime.shared_flags {
             let snap = flags.snapshot();
-            if self.core.engine.config.traditional_chinese != snap.traditional_chinese {
-                self.core.engine.config.traditional_chinese = snap.traditional_chinese;
+            if self.runtime.core.engine.config.traditional_chinese != snap.traditional_chinese {
+                self.runtime.core.engine.config.traditional_chinese = snap.traditional_chinese;
             }
-            if self.core.punctuation_processor.full_width_punct != snap.full_width_punct {
-                self.core.punctuation_processor.full_width_punct = snap.full_width_punct;
+            if self.runtime.core.punctuation_processor.full_width_punct != snap.full_width_punct {
+                self.runtime.core.punctuation_processor.full_width_punct = snap.full_width_punct;
             }
-            if self.core.full_width_char != snap.full_width_char {
-                self.core.full_width_char = snap.full_width_char;
+            if self.runtime.core.full_width_char != snap.full_width_char {
+                self.runtime.core.full_width_char = snap.full_width_char;
             }
         }
     }
 
     /// 判定当前是否开启了全角字符/字母模式
     pub fn is_full_width_char(&self) -> bool {
-        self.core.full_width_char
+        self.runtime.core.full_width_char
     }
 
     /// 重置当前预编辑与修饰键跟踪状态（用于失焦 `FocusOut` 或 `Reset`）
@@ -105,7 +102,6 @@ impl IbusSessionCore {
             vm.clear_state();
         }
         self.runtime.core.reset_input_state();
-        self.is_caps_locked = false;
         self.phys_mods = 0;
         self.is_password_context = false;
         self.surrounding_text = None;
@@ -113,12 +109,13 @@ impl IbusSessionCore {
 
     /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
     pub fn current_candidates(&self) -> Vec<Candidate> {
-        if self.core.engine.is_expanded() {
+        if self.runtime.core.engine.is_expanded() {
             if let Some(cand) = self
+                .runtime
                 .core
                 .engine
                 .candidates()
-                .get(self.core.engine.selected_index())
+                .get(self.runtime.core.engine.selected_index())
             {
                 if cand.is_expandable && !cand.sub_candidates.is_empty() {
                     let mut out = Vec::with_capacity(cand.sub_candidates.len());
@@ -129,15 +126,12 @@ impl IbusSessionCore {
                 }
             }
         }
-        let cands = self.core.engine.candidates();
+        let cands = self.runtime.core.engine.candidates();
         cands.iter().map(Candidate::from).collect()
     }
 
     /// 同步 CapsLock 大写锁定状态至共享标志并唤醒托盘刷新
     pub(crate) fn update_caps_lock_state(&mut self, is_locked: bool) {
-        if self.is_caps_locked != is_locked {
-            self.is_caps_locked = is_locked;
-            self.runtime.update_caps_lock_state(is_locked);
-        }
+        self.runtime.update_caps_lock_state(is_locked);
     }
 }

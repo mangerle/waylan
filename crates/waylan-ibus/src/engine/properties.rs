@@ -24,18 +24,18 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = match guard.core.mode {
+            let next = match guard.runtime.core.mode {
                 InputMode::Chinese | InputMode::VMode => InputMode::English,
                 InputMode::English => InputMode::Chinese,
             };
-            guard.core.mode = next;
-            if let Some(ref flags) = guard.shared_flags {
+            guard.runtime.core.mode = next;
+            if let Some(ref flags) = guard.runtime.shared_flags {
                 flags.set_chinese(matches!(next, InputMode::Chinese));
             }
-            if let Some(ref tx) = guard.mode_notify_tx {
+            if let Some(ref tx) = guard.runtime.mode_notify_tx {
                 let _ = tx.try_send(());
             }
-            (next, guard.is_caps_locked)
+            (next, guard.is_caps_locked())
         };
         if !self.suppress_properties {
             if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
@@ -50,12 +50,12 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = !guard.core.engine.config.traditional_chinese;
-            guard.core.engine.config.traditional_chinese = next;
-            if let Some(ref flags) = guard.shared_flags {
+            let next = !guard.runtime.core.engine.config.traditional_chinese;
+            guard.runtime.core.engine.config.traditional_chinese = next;
+            if let Some(ref flags) = guard.runtime.shared_flags {
                 flags.set_traditional(next);
             }
-            if let Some(ref tx) = guard.mode_notify_tx {
+            if let Some(ref tx) = guard.runtime.mode_notify_tx {
                 let _ = tx.try_send(());
             }
             info!(
@@ -75,12 +75,12 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = !guard.core.punctuation_processor.full_width_punct;
-            guard.core.punctuation_processor.full_width_punct = next;
-            if let Some(ref flags) = guard.shared_flags {
+            let next = !guard.runtime.core.punctuation_processor.full_width_punct;
+            guard.runtime.core.punctuation_processor.full_width_punct = next;
+            if let Some(ref flags) = guard.runtime.shared_flags {
                 flags.set_full_width_punct(next);
             }
-            if let Some(ref tx) = guard.mode_notify_tx {
+            if let Some(ref tx) = guard.runtime.mode_notify_tx {
                 let _ = tx.try_send(());
             }
             info!(
@@ -105,16 +105,17 @@ impl IbusEngineService {
                 return;
             };
             let current = guard
+                .runtime
                 .shared_flags
                 .as_ref()
                 .map(|f| f.is_full_width_char())
-                .unwrap_or(guard.core.full_width_char);
+                .unwrap_or(guard.runtime.core.full_width_char);
             let next = !current;
-            guard.core.full_width_char = next;
-            if let Some(ref flags) = guard.shared_flags {
+            guard.runtime.core.full_width_char = next;
+            if let Some(ref flags) = guard.runtime.shared_flags {
                 flags.set_full_width_char(next);
             }
-            if let Some(ref tx) = guard.mode_notify_tx {
+            if let Some(ref tx) = guard.runtime.mode_notify_tx {
                 let _ = tx.try_send(());
             }
             info!(

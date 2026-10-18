@@ -44,11 +44,7 @@ pub(crate) fn process_key_event(
         }
     }
 
-    // 2. 同步前置网格状态到统一运行时
-    session.runtime.core.is_grid_expanded = session.is_grid_expanded;
-    session.runtime.core.grid_selected_index = session.grid_selected_index;
-
-    // 3. 全权委托统一运行时 ImeRuntime 处理（包含语音分发、核心决策与前端 UI 刷新）
+    // 2. 全权委托统一运行时 ImeRuntime 处理（包含语音分发、核心决策与前端 UI 刷新）
     let is_password = session.is_password_context;
     let surrounding = session.surrounding_text.clone();
     let (runtime, mut frontend) = session.split_runtime_and_frontend();
@@ -62,11 +58,7 @@ pub(crate) fn process_key_event(
         true, // inline_preedit
     );
 
-    // 4. 同步运行时决策后的网格展开与索引状态
-    session.is_grid_expanded = session.runtime.core.is_grid_expanded;
-    session.grid_selected_index = session.runtime.core.grid_selected_index;
-
-    // 5. 按键长按连击跟踪处理
+    // 3. 按键长按连击跟踪处理
     if !is_press {
         if session
             .repeat_state

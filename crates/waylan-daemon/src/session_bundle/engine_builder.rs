@@ -9,10 +9,9 @@ use crate::error::DaemonError;
 
 use log::info;
 use waylan_algo::custom_phrase::CustomPhraseManager;
-use waylan_algo::AlgoEngine;
+use waylan_algo::{AlgoConfig, AlgoEngine};
 use waylan_core::config::AppConfig;
 
-use super::config_bundle::build_algo_config;
 use super::dict_loader::{load_auxiliary_managers, load_lexicon_table};
 use crate::system::ShutdownCoordinator;
 
@@ -26,7 +25,7 @@ pub fn build_algo_engine(
         info!("[微澜守护进程] 启动加载期间收到终止信号，立即停止启动并安全退场。");
         return Ok(None);
     }
-    let algo_config = build_algo_config(cfg);
+    let algo_config = AlgoConfig::from(cfg);
     let mut engine = AlgoEngine::new(table, algo_config);
 
     let phrase_path = CustomPhraseManager::default_path();
@@ -76,7 +75,7 @@ mod tests {
             g_k: false,
         };
 
-        let algo_cfg = build_algo_config(&cfg);
+        let algo_cfg = AlgoConfig::from(&cfg);
         assert!(algo_cfg.fuzzy.z_zh);
         assert!(!algo_cfg.fuzzy.c_ch);
         assert!(algo_cfg.fuzzy.s_sh);
@@ -91,7 +90,7 @@ mod tests {
         cfg.pinyin.fuzzy_pinyin = false;
         cfg.pinyin.fuzzy_rules.z_zh = true;
 
-        let algo_cfg = build_algo_config(&cfg);
+        let algo_cfg = AlgoConfig::from(&cfg);
         assert!(
             !algo_cfg.fuzzy.z_zh,
             "当 fuzzy_pinyin 为 false 时所有规则均应处于关闭状态"

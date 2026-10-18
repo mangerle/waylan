@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
@@ -12,175 +13,58 @@ use super::types::{
     PRE_SPEECH_BUFFER_CAPACITY,
 };
 use crate::afe::AudioFrontEndPipeline;
+use crate::capture::AudioCapture;
 use crate::recognizer::{PunctuationRestorer, VoiceRecognizer};
 use crate::vad::calculate_rms;
 
-/// 活跃录音与实时推理循环
-pub(super) fn active_recording_loop(ctx: ActiveRecordingContext<'_>) {
-    let ActiveRecordingContext {
-        capture: _capture,
-        pcm_rx,
-        cmd_rx,
-        event_tx,
-        visualizer,
-        vad,
-        recognizer,
-        punct_restorer,
-        voice_config,
-        is_active,
-    } = ctx;
-    let mut afe = AudioFrontEndPipeline::new(&voice_config.afe);
-    let mut last_visual_time = Instant::now();
-    let mut last_partial_text = String::new();
-    let session_start_time = Instant::now();
-    let mut pre_speech_buffer: VecDeque<f32> = VecDeque::with_capacity(PRE_SPEECH_BUFFER_CAPACITY);
-    let mut capture_opt = Some(_capture);
+/// 活跃录音主循环内部运行时状态缓存
+struct ActiveRecordingState {
+    /// 前端音频增强流水线（降噪/滤波/AGC）
+    afe: AudioFrontEndPipeline,
+    /// 上次刷新波形可视化条的时间戳
+    last_visual_time: Instant,
+    /// 上次流式识别的部分文本缓存
+    last_partial_text: String,
+    /// 当前录音会话启动时间戳
+    session_start_time: Instant,
+    /// 起音前静音样本环形预缓冲区
+    pre_speech_buffer: VecDeque<f32>,
+}
 
-    loop {
-        // 1. 优先检查外部主动停止、提交或取消命令，确保指令不因 is_active 竞态而被跳过
-        if let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                WorkerCommand::StopAndCommit => {
-                    let ctx = StopCommitContext {
-                        capture: capture_opt.take(),
-                        pcm_rx: &pcm_rx,
-                        recognizer,
-                        afe: &mut afe,
-                        pre_speech_buffer: &mut pre_speech_buffer,
-                        last_partial_text: &mut last_partial_text,
-                        punct_restorer,
-                        voice_config,
-                        event_tx,
-                        is_active,
-                    };
-                    handle_stop_and_commit(ctx);
-                    break;
-                }
-                WorkerCommand::Cancel => {
-                    info!("[语音会话] 收到外部取消指令，放弃本次录音");
-                    drop(capture_opt.take());
-                    pre_speech_buffer.clear();
-                    recognizer.reset();
-                    let _ = event_tx.send(VoiceEvent::Cancelled);
-                    is_active.store(false, Ordering::Release);
-                    break;
-                }
-                WorkerCommand::Shutdown => {
-                    drop(capture_opt.take());
-                    pre_speech_buffer.clear();
-                    recognizer.reset();
-                    is_active.store(false, Ordering::Release);
-                    break;
-                }
-                WorkerCommand::UnloadModels => {
-                    info!("[语音会话] 录音过程中收到卸载指令，中止当前录音并退出");
-                    drop(capture_opt.take());
-                    pre_speech_buffer.clear();
-                    recognizer.reset();
-                    is_active.store(false, Ordering::Release);
-                    break;
-                }
-                WorkerCommand::Start { .. } => {
-                    // 录音期间忽略重复 Start
-                }
-            }
+impl ActiveRecordingState {
+    /// 创建并初始化录音流水线状态
+    fn new(voice_config: &VoiceConfig) -> Self {
+        Self {
+            afe: AudioFrontEndPipeline::new(&voice_config.afe),
+            last_visual_time: Instant::now(),
+            last_partial_text: String::new(),
+            session_start_time: Instant::now(),
+            pre_speech_buffer: VecDeque::with_capacity(PRE_SPEECH_BUFFER_CAPACITY),
         }
+    }
+}
 
-        if !is_active.load(Ordering::Acquire) {
-            info!("[语音会话] 检测到外部会话已取消或关闭，平滑退出录音循环");
-            break;
+/// 活跃录音与实时推理循环
+pub(super) fn active_recording_loop(mut ctx: ActiveRecordingContext<'_>) {
+    let mut state = ActiveRecordingState::new(ctx.voice_config);
+
+    while ctx.is_active.load(Ordering::Acquire) {
+        // 1. 优先检查外部主动停止、提交或取消命令
+        if let Ok(cmd) = ctx.cmd_rx.try_recv() {
+            if handle_recording_command(cmd, &mut state, &mut ctx) {
+                break;
+            }
         }
 
         // 2. 接收重采样后的 16kHz PCM 音频切片（超时 50ms 防止阻塞）
-        match pcm_rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(mut samples) => {
-                // 执行前端音频增强流水线（80Hz高通滤波 + 人声智能降噪 + 动态数字AGC）
-                afe.process(&mut samples);
-
-                let now = Instant::now();
-                let rms = calculate_rms(&samples);
-
-                // 刷新动态波形条（约 80ms 间隔，仅在开启浮动条时上报）
-                if voice_config.interaction.show_floating_bar
-                    && now.duration_since(last_visual_time) >= Duration::from_millis(80)
-                {
-                    let wave = visualizer.update(rms);
-                    if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-                        event_tx.try_send(VoiceEvent::WaveformUpdated {
-                            waveform: wave,
-                            volume: rms,
-                        })
-                    {
-                        info!("[语音会话] 外部事件通道已关闭，退出录音循环");
-                        break;
-                    }
-                    last_visual_time = now;
-                }
-
-                // 喂给 VAD 进行端点与人声活跃度判定
-                let should_finish = vad.feed_chunk(&samples, now);
-
-                // 静音算力抑制与起音回溯门禁机制：
-                // 若用户尚未开口说话，则跳过耗费算力的 ASR 推理，仅将音频暂存于 300ms 环形预缓冲区；
-                // 一旦检测到人声起音，将预缓冲区内的前置辅音连同当前音频一并送入 ASR 激活解码。
-                if vad.is_speech_started() {
-                    let should_continue = process_recognition_feed(
-                        RecognitionFeedContext {
-                            recognizer,
-                            pre_speech_buffer: &mut pre_speech_buffer,
-                            last_partial_text: &mut last_partial_text,
-                            event_tx,
-                            real_time_preview: voice_config.interaction.real_time_preview,
-                        },
-                        &samples,
-                    );
-                    if !should_continue {
-                        break;
-                    }
-                } else {
-                    // 静音抑制期：麦克风切片仅存入前置环形队列，完全跳过 ASR 推理以极度节省 CPU 算力
-                    push_pre_speech_silence(&mut pre_speech_buffer, &samples);
-                }
-
-                // 录音开启前 500ms 内不触发 VAD 自动截断，防止环境初始微弱底噪导致瞬间误切
-                if should_finish
-                    && now.duration_since(session_start_time) >= Duration::from_millis(500)
-                {
-                    info!(
-                        "[语音会话] VAD 检测到人声停顿并超时，分句自动断句上屏提交（保持持续听写）"
-                    );
-                    let seg_text = extract_final_text(
-                        recognizer,
-                        punct_restorer,
-                        voice_config.auto_punctuation,
-                        &voice_config.itn,
-                    );
-                    if !seg_text.is_empty() {
-                        info!("[语音会话] 自动断句分句上屏结果: \"{}\"", seg_text);
-                        if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-                            event_tx.try_send(VoiceEvent::SegmentCommit(seg_text))
-                        {
-                            info!("[语音会话] 外部事件通道已关闭，退出录音循环");
-                            break;
-                        }
-                    }
-                    recognizer.reset();
-                    vad.reset();
-                    afe.reset();
-                    pre_speech_buffer.clear();
-                    last_partial_text.clear();
-                    // 注意：不 break，录音循环继续运行，等待下一句说话！
+        match ctx.pcm_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(samples) => {
+                if !process_pcm_chunk(samples, &mut state, &mut ctx) {
+                    break;
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // 空闲时检查底层硬件流是否因设备拔出或严重错误而死亡
-                if capture_opt
-                    .as_ref()
-                    .map(|c| c.is_stream_dead())
-                    .unwrap_or(false)
-                {
-                    warn!("[语音会话] 检测到底层麦克风音频流已异常中断（设备可能已拔出），立即终止会话");
-                    let _ = event_tx.send(VoiceEvent::Error("麦克风音频设备已断开".to_string()));
+                if check_stream_dead(&ctx.capture, ctx.event_tx) {
                     break;
                 }
             }
@@ -191,8 +75,169 @@ pub(super) fn active_recording_loop(ctx: ActiveRecordingContext<'_>) {
         }
     }
 
-    is_active.store(false, Ordering::Release);
+    ctx.is_active.store(false, Ordering::Release);
     info!("[语音会话] 录音会话结束，音频捕获硬件已释放");
+}
+
+/// 处理来自控制通道的外部指令，返回是否应当终止录音主循环
+fn handle_recording_command(
+    cmd: WorkerCommand,
+    state: &mut ActiveRecordingState,
+    ctx: &mut ActiveRecordingContext<'_>,
+) -> bool {
+    match cmd {
+        WorkerCommand::StopAndCommit => {
+            let commit_ctx = StopCommitContext {
+                capture: ctx.capture.take(),
+                pcm_rx: &ctx.pcm_rx,
+                recognizer: ctx.recognizer,
+                afe: &mut state.afe,
+                pre_speech_buffer: &mut state.pre_speech_buffer,
+                last_partial_text: &mut state.last_partial_text,
+                punct_restorer: ctx.punct_restorer,
+                voice_config: ctx.voice_config,
+                event_tx: ctx.event_tx,
+                is_active: ctx.is_active,
+            };
+            handle_stop_and_commit(commit_ctx);
+            true
+        }
+        WorkerCommand::Cancel => {
+            info!("[语音会话] 收到外部取消指令，放弃本次录音");
+            drop(ctx.capture.take());
+            state.pre_speech_buffer.clear();
+            ctx.recognizer.reset();
+            let _ = ctx.event_tx.send(VoiceEvent::Cancelled);
+            ctx.is_active.store(false, Ordering::Release);
+            true
+        }
+        WorkerCommand::Shutdown => {
+            drop(ctx.capture.take());
+            state.pre_speech_buffer.clear();
+            ctx.recognizer.reset();
+            ctx.is_active.store(false, Ordering::Release);
+            true
+        }
+        WorkerCommand::UnloadModels => {
+            info!("[语音会话] 录音过程中收到卸载指令，中止当前录音并退出");
+            drop(ctx.capture.take());
+            state.pre_speech_buffer.clear();
+            ctx.recognizer.reset();
+            ctx.is_active.store(false, Ordering::Release);
+            true
+        }
+        WorkerCommand::Start { .. } => {
+            // 录音进行期间忽略重复 Start
+            false
+        }
+    }
+}
+
+/// 处理接收到的单块 16kHz PCM 音频切片，返回是否继续录音
+fn process_pcm_chunk(
+    mut samples: Vec<f32>,
+    state: &mut ActiveRecordingState,
+    ctx: &mut ActiveRecordingContext<'_>,
+) -> bool {
+    // 执行前端音频增强流水线（80Hz高通滤波 + 人声智能降噪 + 动态数字AGC）
+    state.afe.process(&mut samples);
+
+    let now = Instant::now();
+    let rms = calculate_rms(&samples);
+
+    // 刷新动态波形条（约 80ms 间隔，仅在开启浮动条时上报）
+    if ctx.voice_config.interaction.show_floating_bar
+        && now.duration_since(state.last_visual_time) >= Duration::from_millis(80)
+    {
+        let wave = ctx.visualizer.update(rms);
+        if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
+            ctx.event_tx.try_send(VoiceEvent::WaveformUpdated {
+                waveform: wave,
+                volume: rms,
+            })
+        {
+            info!("[语音会话] 外部事件通道已关闭，退出录音循环");
+            return false;
+        }
+        state.last_visual_time = now;
+    }
+
+    // 喂给 VAD 进行端点与人声活跃度判定
+    let should_finish = ctx.vad.feed_chunk(&samples, now);
+
+    // 静音算力抑制与起音回溯门禁机制
+    if ctx.vad.is_speech_started() {
+        let feed_ctx = RecognitionFeedContext {
+            recognizer: ctx.recognizer,
+            pre_speech_buffer: &mut state.pre_speech_buffer,
+            last_partial_text: &mut state.last_partial_text,
+            event_tx: ctx.event_tx,
+            real_time_preview: ctx.voice_config.interaction.real_time_preview,
+        };
+        if !process_recognition_feed(feed_ctx, &samples) {
+            return false;
+        }
+    } else {
+        // 静音抑制期：麦克风切片仅存入前置环形队列，完全跳过 ASR 推理以极度节省 CPU 算力
+        push_pre_speech_silence(&mut state.pre_speech_buffer, &samples);
+    }
+
+    // 录音开启前 500ms 内不触发 VAD 自动截断，防止环境初始微弱底噪导致瞬间误切
+    if should_finish
+        && now.duration_since(state.session_start_time) >= Duration::from_millis(500)
+        && !handle_vad_segment(state, ctx)
+    {
+        return false;
+    }
+
+    true
+}
+
+/// 处理 VAD 检测到的人声停顿自动断句提交，返回是否继续录音
+fn handle_vad_segment(
+    state: &mut ActiveRecordingState,
+    ctx: &mut ActiveRecordingContext<'_>,
+) -> bool {
+    info!("[语音会话] VAD 检测到人声停顿并超时，分句自动断句上屏提交（保持持续听写）");
+    let seg_text = extract_final_text(
+        ctx.recognizer,
+        ctx.punct_restorer,
+        ctx.voice_config.auto_punctuation,
+        &ctx.voice_config.itn,
+    );
+    if !seg_text.is_empty() {
+        info!("[语音会话] 自动断句分句上屏结果: \"{}\"", seg_text);
+        if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
+            ctx.event_tx.try_send(VoiceEvent::SegmentCommit(seg_text))
+        {
+            info!("[语音会话] 外部事件通道已关闭，退出录音循环");
+            return false;
+        }
+    }
+    ctx.recognizer.reset();
+    ctx.vad.reset();
+    state.afe.reset();
+    state.pre_speech_buffer.clear();
+    state.last_partial_text.clear();
+    true
+}
+
+/// 检查底层麦克风音频流是否发生异常中断，若中断则通知外部事件通道并返回 true
+fn check_stream_dead(
+    capture_opt: &Option<AudioCapture>,
+    event_tx: &SyncSender<VoiceEvent>,
+) -> bool {
+    if capture_opt
+        .as_ref()
+        .map(|c| c.is_stream_dead())
+        .unwrap_or(false)
+    {
+        warn!("[语音会话] 检测到底层麦克风音频流已异常中断（设备可能已拔出），立即终止会话");
+        let _ = event_tx.send(VoiceEvent::Error("麦克风音频设备已断开".to_string()));
+        true
+    } else {
+        false
+    }
 }
 
 /// 处理主动停止录音与优雅排空提交

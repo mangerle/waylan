@@ -240,7 +240,7 @@ fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSess
     let mode_changed = shared_core
         .lock()
         .ok()
-        .and_then(|mut g| g.sync_shared_mode().map(|m| (m, g.is_caps_locked)));
+        .and_then(|mut g| g.sync_shared_mode().map(|m| (m, g.is_caps_locked())));
     if let Some((new_mode, is_caps)) = mode_changed {
         if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
             let _ = conn.emit_signal(

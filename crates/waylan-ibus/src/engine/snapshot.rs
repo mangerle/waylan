@@ -22,15 +22,16 @@ pub(crate) struct UiSnapshot {
 impl UiSnapshot {
     /// 提取处于语音录入或语音展示期间的 UI 快照
     fn capture_voice_snapshot(core: &IbusSessionCore) -> Self {
-        let (display_text, waveform, partial_text) = if let Some(ref vm) = core.voice_manager {
-            (
-                vm.display_text.clone(),
-                vm.waveform.clone().unwrap_or_default(),
-                vm.partial_text.clone().unwrap_or_default(),
-            )
-        } else {
-            (None, String::new(), String::new())
-        };
+        let (display_text, waveform, partial_text) =
+            if let Some(ref vm) = core.runtime.voice_manager {
+                (
+                    vm.display_text.clone(),
+                    vm.waveform.clone().unwrap_or_default(),
+                    vm.partial_text.clone().unwrap_or_default(),
+                )
+            } else {
+                (None, String::new(), String::new())
+            };
         let candidates = if let Some(ref voice_text) = display_text {
             vec![Candidate::new(voice_text.clone(), waveform, 1000)]
         } else {
@@ -48,20 +49,20 @@ impl UiSnapshot {
 
     /// 提取常规键盘输入组词状态下的 UI 快照
     fn capture_input_snapshot(core: &IbusSessionCore) -> Self {
-        let is_v_mode = core.core.engine.raw_input().starts_with('v');
-        let preedit = if core.core.engine.raw_input().is_empty() {
+        let is_v_mode = core.runtime.core.engine.raw_input().starts_with('v');
+        let preedit = if core.runtime.core.engine.raw_input().is_empty() {
             String::new()
         } else if is_v_mode {
-            core.core.engine.raw_input().to_string()
+            core.runtime.core.engine.raw_input().to_string()
         } else {
-            core.core.engine.formatted_preedit()
+            core.runtime.core.engine.formatted_preedit()
         };
-        let is_expanded = core.core.engine.is_expanded();
+        let is_expanded = core.runtime.core.engine.is_expanded();
         let candidates = core.current_candidates();
         let (page_size, selected_index, orientation) = if is_expanded {
             (
                 candidates.len().max(1),
-                core.core.engine.expanded_selected_index(),
+                core.runtime.core.engine.expanded_selected_index(),
                 super::super::types::IBUS_ORIENTATION_VERTICAL,
             )
         } else {
@@ -72,8 +73,8 @@ impl UiSnapshot {
                 CandidateOrientation::Vertical => super::super::types::IBUS_ORIENTATION_VERTICAL,
             };
             (
-                core.core.engine.config.page_size,
-                core.core.engine.selected_index(),
+                core.runtime.core.engine.config.page_size,
+                core.runtime.core.engine.selected_index(),
                 orientation,
             )
         };
@@ -114,8 +115,9 @@ mod tests {
         assert!(!normal_snap.candidates.is_empty());
 
         // 模拟语音激活状态：正在聆听中...
-        core.voice_manager.as_mut().unwrap().display_text = Some("正在聆听中...".to_string());
-        core.voice_manager.as_mut().unwrap().waveform = Some(" ▂▃▄▅".to_string());
+        core.runtime.voice_manager.as_mut().unwrap().display_text =
+            Some("正在聆听中...".to_string());
+        core.runtime.voice_manager.as_mut().unwrap().waveform = Some(" ▂▃▄▅".to_string());
         let voice_snap = UiSnapshot::capture(&core);
 
         // 核心断言：输入框预编辑必须完全为空，严禁将波形塞入输入框光标处

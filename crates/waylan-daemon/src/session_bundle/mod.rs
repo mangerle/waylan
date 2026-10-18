@@ -2,7 +2,6 @@
 //!
 //! 负责整合输入法会话运行所需的词库加载、配置装配、环境能力探测与 Wayland 原生语音快捷键拦截器。
 
-mod config_bundle;
 mod dict_loader;
 mod engine_builder;
 mod ibus_dispatcher;
@@ -10,28 +9,30 @@ mod system_env;
 mod voice_filter;
 mod wayland_dispatcher;
 
-#[cfg(test)]
-pub use config_bundle::SessionConfigBundle;
 pub use engine_builder::build_algo_engine;
 pub use ibus_dispatcher::{dispatch_ibus_session, IbusDispatchOptions};
 pub use system_env::{check_wayland_capabilities, trigger_graceful_restart_and_exit};
 pub use wayland_dispatcher::{dispatch_wayland_session, WaylandDispatchOptions};
 
 #[cfg(test)]
+pub use wayland_dispatcher::{reload_wayland_v1_session, reload_wayland_v2_session};
+
+#[cfg(test)]
 mod tests {
     use super::dict_loader::{load_auxiliary_dict, load_lexicon_table, load_opencc_dict};
     use super::voice_filter::build_wayland_voice_manager;
     use super::*;
-    use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
     use waylan_algo::{AlgoConfig, AlgoEngine};
+    use waylan_core::config::AppConfig;
     use waylan_core::VoiceConfig;
-    use waylan_wayland::session_v1::PageKeyConfig;
+    use waylan_engine::ImeRuntime;
 
     #[test]
-    fn test_session_config_bundle_load() {
-        let bundle = SessionConfigBundle::load_current();
-        assert!(bundle.algo_config.page_size >= 5 && bundle.algo_config.page_size <= 9);
-        assert!(bundle.font_size >= 12.0 && bundle.font_size <= 24.0);
+    fn test_app_config_to_algo_config_conversion() {
+        let cfg = AppConfig::load_or_create();
+        let algo_cfg = AlgoConfig::from(&cfg);
+        assert!(algo_cfg.page_size >= 5 && algo_cfg.page_size <= 9);
+        assert!(cfg.ui.font_size >= 12.0 && cfg.ui.font_size <= 24.0);
     }
 
     #[test]
@@ -52,24 +53,31 @@ mod tests {
 
     #[test]
     fn test_reload_preserves_punctuation_context() {
-        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-        let mut shift_sm = ShiftToggleStateMachine::with_toggle_key(ToggleKeyMode::Shift);
-        let mut punct = PunctuationProcessor::with_options(true, true, false);
-        let mut page_keys = PageKeyConfig::default();
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut runtime = ImeRuntime::with_engine(engine);
 
         // 模拟已输入左双引号与上下文网址前缀
-        punct.record_commit("“https://example.com");
-        assert!(punct.double_quote_open);
-        assert_eq!(punct.recent_context, "“https://example.com");
+        runtime
+            .core
+            .punctuation_processor
+            .record_commit("“https://example.com");
+        assert!(runtime.core.punctuation_processor.double_quote_open);
+        assert_eq!(
+            runtime.core.punctuation_processor.recent_context,
+            "“https://example.com"
+        );
 
-        let mut bundle = SessionConfigBundle::load_current();
-        bundle.punct_processor = PunctuationProcessor::with_options(false, true, false);
-        bundle.apply_to_engine_and_input(&mut engine, &mut shift_sm, &mut punct, &mut page_keys);
+        let mut cfg = AppConfig::load_or_create();
+        cfg.pinyin.slash_to_dunhao = false;
+        runtime.reload_config(&cfg);
 
         // 验证热重载更新了配置开关，同时完整保留了引号开闭状态与最近输入上下文
-        assert!(!punct.slash_to_dunhao);
-        assert!(punct.double_quote_open);
-        assert_eq!(punct.recent_context, "“https://example.com");
+        assert!(!runtime.core.punctuation_processor.slash_to_dunhao);
+        assert!(runtime.core.punctuation_processor.double_quote_open);
+        assert_eq!(
+            runtime.core.punctuation_processor.recent_context,
+            "“https://example.com"
+        );
     }
 
     #[test]
@@ -100,7 +108,6 @@ mod tests {
 
     #[test]
     fn test_apply_wayland_session_reload_updates_voice_config() {
-        use super::config_bundle::apply_reload_v2;
         use waylan_core::config::AppConfig;
         use waylan_wayland::session_v2::WaylanV2Session;
         let engine = AlgoEngine::with_sample_data(Default::default());
@@ -110,15 +117,37 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        session.voice_manager = Some(waylan_voice::VoiceInteractionManager::new(initial_voice));
+        session.runtime.voice_manager =
+            Some(waylan_voice::VoiceInteractionManager::new(initial_voice));
 
-        apply_reload_v2(&mut session);
+        reload_wayland_v2_session(&mut session);
 
         // 验证热重载后，Wayland 会话内部的 voice_manager 配置已同步为磁盘当前配置
         let disk_cfg = AppConfig::load_or_create();
         assert_eq!(
-            session.voice_manager.as_ref().unwrap().config.enabled,
+            session
+                .runtime
+                .voice_manager
+                .as_ref()
+                .unwrap()
+                .config
+                .enabled,
             disk_cfg.voice.enabled
+        );
+    }
+
+    #[test]
+    fn test_apply_wayland_v1_session_reload() {
+        use waylan_wayland::session_v1::WaylanV1Session;
+        let engine = AlgoEngine::with_sample_data(Default::default());
+        let mut session = WaylanV1Session::with_engine(engine);
+
+        reload_wayland_v1_session(&mut session);
+
+        let disk_cfg = AppConfig::load_or_create();
+        assert_eq!(
+            session.runtime.core.engine.config.page_size,
+            disk_cfg.ui.page_size
         );
     }
 }

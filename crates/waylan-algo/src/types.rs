@@ -110,6 +110,38 @@ impl Default for AlgoConfig {
     }
 }
 
+impl From<&waylan_core::AppConfig> for AlgoConfig {
+    fn from(cfg: &waylan_core::AppConfig) -> Self {
+        Self {
+            page_size: cfg.ui.page_size,
+            enable_v_mode: cfg.pinyin.v_mode,
+            enable_u_mode: cfg.pinyin.enable_u_mode,
+            enable_i_mode: cfg.pinyin.enable_i_mode,
+            traditional_chinese: cfg.pinyin.traditional_chinese,
+            filter_uncommon_charset: cfg.pinyin.filter_uncommon_charset,
+            show_pinyin_comment: cfg.ui.show_pinyin_comment,
+            auto_dedup: cfg.pinyin.auto_dedup,
+            fuzzy: if cfg.pinyin.fuzzy_pinyin {
+                FuzzyConfig {
+                    z_zh: cfg.pinyin.fuzzy_rules.z_zh,
+                    c_ch: cfg.pinyin.fuzzy_rules.c_ch,
+                    s_sh: cfg.pinyin.fuzzy_rules.s_sh,
+                    an_ang: cfg.pinyin.fuzzy_rules.an_ang,
+                    en_eng: cfg.pinyin.fuzzy_rules.en_eng,
+                    in_ing: cfg.pinyin.fuzzy_rules.in_ing,
+                    l_n: cfg.pinyin.fuzzy_rules.l_n,
+                    f_h: cfg.pinyin.fuzzy_rules.f_h,
+                    r_l: cfg.pinyin.fuzzy_rules.r_l,
+                    g_k: cfg.pinyin.fuzzy_rules.g_k,
+                }
+            } else {
+                FuzzyConfig::default()
+            },
+            auto_pangu_spacing: cfg.pinyin.auto_pangu_spacing,
+        }
+    }
+}
+
 /// 候选词优先级层级（数值越大优先级越高）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum CandidateTier {

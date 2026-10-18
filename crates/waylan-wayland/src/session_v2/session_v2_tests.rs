@@ -9,7 +9,7 @@ fn test_v2_session_initialization() {
     let session = WaylanV2Session::new(engine);
 
     assert!(!session.is_active);
-    assert_eq!(session.core.mode, InputMode::Chinese);
+    assert_eq!(session.runtime.core.mode, InputMode::Chinese);
     assert_eq!(session.done_serial, 0);
     assert!(session.keyboard_grab.is_none());
     assert!(session.input_method.is_none());
@@ -25,8 +25,8 @@ fn test_v2_session_preedit_and_cancel() {
     let mut session = WaylanV2Session::new(engine);
     session.is_active = true;
 
-    session.core.engine.push_char('n');
-    session.core.engine.push_char('i');
+    session.runtime.core.engine.push_char('n');
+    session.runtime.core.engine.push_char('i');
 
     let box_state = session.build_candidate_box_state();
     assert!(box_state.visible);
@@ -36,7 +36,7 @@ fn test_v2_session_preedit_and_cancel() {
     session.cancel_input();
     let box_state_after = session.build_candidate_box_state();
     assert!(!box_state_after.visible);
-    assert!(session.core.engine.raw_input().is_empty());
+    assert!(session.runtime.core.engine.raw_input().is_empty());
 }
 
 #[test]
@@ -60,16 +60,28 @@ fn test_shift_punctuation_and_modifier_tracking() {
         Some('/')
     );
 
-    session.core.update_modifier_by_key(KEY_LEFTSHIFT, true);
-    assert!(session.core.is_shift_active());
-    assert!(!session.core.has_ctrl_or_alt());
-    session.core.update_modifier_by_key(KEY_LEFTSHIFT, false);
-    assert!(!session.core.is_shift_active());
+    session
+        .runtime
+        .core
+        .update_modifier_by_key(KEY_LEFTSHIFT, true);
+    assert!(session.runtime.core.is_shift_active());
+    assert!(!session.runtime.core.has_ctrl_or_alt());
+    session
+        .runtime
+        .core
+        .update_modifier_by_key(KEY_LEFTSHIFT, false);
+    assert!(!session.runtime.core.is_shift_active());
 
-    session.core.update_modifier_by_key(KEY_LEFTCTRL, true);
-    assert!(session.core.has_ctrl_or_alt());
-    session.core.update_modifier_by_key(KEY_LEFTCTRL, false);
-    assert!(!session.core.has_ctrl_or_alt());
+    session
+        .runtime
+        .core
+        .update_modifier_by_key(KEY_LEFTCTRL, true);
+    assert!(session.runtime.core.has_ctrl_or_alt());
+    session
+        .runtime
+        .core
+        .update_modifier_by_key(KEY_LEFTCTRL, false);
+    assert!(!session.runtime.core.has_ctrl_or_alt());
 }
 
 #[test]
@@ -79,14 +91,14 @@ fn test_candidate_selection_navigation() {
     session.is_active = true;
 
     for ch in "xian".chars() {
-        session.core.engine.push_char(ch);
+        session.runtime.core.engine.push_char(ch);
     }
-    assert!(session.core.engine.candidates().len() >= 2);
+    assert!(session.runtime.core.engine.candidates().len() >= 2);
 
     assert_eq!(session.build_candidate_box_state().selected_index, 0);
-    session.core.engine.next_candidate();
+    session.runtime.core.engine.next_candidate();
     assert_eq!(session.build_candidate_box_state().selected_index, 1);
-    session.core.engine.prev_candidate();
+    session.runtime.core.engine.prev_candidate();
     assert_eq!(session.build_candidate_box_state().selected_index, 0);
 }
 
@@ -134,7 +146,7 @@ fn test_v2_english_mode_and_empty_buffer_passthrough() {
     assert_eq!(commit_comma, Some("，".to_string()));
 
     // 2. 切换至英文模式：普通字母、回车、Tab、退格等全部原生透传给席位
-    session.core.mode = InputMode::English;
+    session.runtime.core.mode = InputMode::English;
     let (consumed_a, _) = session.process_key_event(30, true);
     assert!(!consumed_a, "英文模式普通字母应原生透传");
     let (consumed_en_enter, _) = session.process_key_event(KEY_ENTER, true);
@@ -154,12 +166,12 @@ fn test_watched_paths_mtime_triggers_reload() {
 
     session.watched_paths = vec![temp_file.clone()];
     session.reload_callback = Some(Box::new(|s| {
-        s.core.engine.config.page_size = 9;
+        s.runtime.core.engine.config.page_size = 9;
     }));
 
     // 首次同步仅记录基准时间戳，不触发重载
     session.sync_external_state();
-    assert_eq!(session.core.engine.config.page_size, 7);
+    assert_eq!(session.runtime.core.engine.config.page_size, 7);
 
     // 模拟外部进程将历史签名退后，使得当前文件签名更新于基准签名
     session.last_watched_mtime = Some(waylan_core::FileSignature::SingleFile(
@@ -167,7 +179,7 @@ fn test_watched_paths_mtime_triggers_reload() {
     ));
     session.sync_external_state();
     assert_eq!(
-        session.core.engine.config.page_size, 9,
+        session.runtime.core.engine.config.page_size, 9,
         "检测到被监控文件状态签名变迁后应自动触发 reload_callback"
     );
 }
@@ -182,15 +194,15 @@ fn test_shift_toggle_commits_raw_preedit() {
     session.handle_key_event(49, false);
     session.handle_key_event(23, true); // 'i'
     session.handle_key_event(23, false);
-    assert_eq!(session.core.engine.raw_input(), "ni");
+    assert_eq!(session.runtime.core.engine.raw_input(), "ni");
 
     // 单击 Shift 键切换中英文
     session.handle_key_event(KEY_LEFTSHIFT, true);
     let commit = session.handle_key_event(KEY_LEFTSHIFT, false);
 
-    assert_eq!(session.core.mode, InputMode::English);
+    assert_eq!(session.runtime.core.mode, InputMode::English);
     assert_eq!(commit, Some("ni".to_string()));
-    assert!(session.core.engine.raw_input().is_empty());
+    assert!(session.runtime.core.engine.raw_input().is_empty());
     assert!(!session.build_candidate_box_state().visible);
 }
 
@@ -208,7 +220,7 @@ fn test_v2_unconsumed_key_and_shortcuts() {
 
     // 2. 模拟按下 Ctrl+C 组合快捷键
     session.process_key_event(KEY_LEFTCTRL, true);
-    assert!(session.core.has_ctrl_or_alt());
+    assert!(session.runtime.core.has_ctrl_or_alt());
 
     // 按下 C 键 (keycode 46)，由于带有 Ctrl 修饰键，输入法不拦截消费
     let (consumed_c, text_c) = session.process_key_event(46, true);
@@ -219,13 +231,13 @@ fn test_v2_unconsumed_key_and_shortcuts() {
     let (consumed_c_up, _) = session.process_key_event(46, false);
     assert!(!consumed_c_up);
     session.process_key_event(KEY_LEFTCTRL, false);
-    assert!(!session.core.has_ctrl_or_alt());
+    assert!(!session.runtime.core.has_ctrl_or_alt());
 
     // 3. 正常输入拼音字符时，应被输入法消费
     let (consumed_n, text_n) = session.process_key_event(49, true); // 'n'
     assert!(consumed_n);
     assert_eq!(text_n, None);
-    assert_eq!(session.core.engine.raw_input(), "n");
+    assert_eq!(session.runtime.core.engine.raw_input(), "n");
 }
 
 #[test]
@@ -308,15 +320,15 @@ fn test_v2_double_buffered_done_atomic_commit() {
     );
 
     // 模拟输入拼音与残留引号状态后，在同一批次内收到 Deactivate + Activate 焦点切换
-    session.core.engine.push_char('n');
-    session.core.punctuation_processor.double_quote_open = true;
+    session.runtime.core.engine.push_char('n');
+    session.runtime.core.punctuation_processor.double_quote_open = true;
     session.stage_deactivate();
     session.stage_activate();
     assert!(session.apply_done_state());
     assert!(session.is_active);
     assert_eq!(session.done_serial, 2);
-    assert!(session.core.engine.raw_input().is_empty());
-    assert!(!session.core.punctuation_processor.double_quote_open);
+    assert!(session.runtime.core.engine.raw_input().is_empty());
+    assert!(!session.runtime.core.punctuation_processor.double_quote_open);
     assert!(session.surrounding_text.is_none());
 }
 
@@ -334,7 +346,7 @@ fn test_key_press_release_symmetry() {
     let (space_press_consumed, committed) = session.process_key_event(KEY_SPACE, true);
     assert!(space_press_consumed);
     assert_eq!(committed, Some("你".to_string()));
-    assert!(session.core.engine.raw_input().is_empty());
+    assert!(session.runtime.core.engine.raw_input().is_empty());
 
     let (space_release_consumed, _) = session.process_key_event(KEY_SPACE, false);
     assert!(
@@ -350,7 +362,7 @@ fn test_key_press_release_symmetry() {
         !shift_release_consumed,
         "Shift 按下透传给客户端后，松开事件也必须透传以防客户端 Shift 卡死"
     );
-    assert_eq!(session.core.mode, InputMode::English);
+    assert_eq!(session.runtime.core.mode, InputMode::English);
 }
 
 #[test]
@@ -359,15 +371,15 @@ fn test_v2_grid_expansion_state() {
     let mut session = WaylanV2Session::new(engine);
     session.is_active = true;
 
-    session.core.engine.push_char('n');
-    session.core.engine.push_char('i');
+    session.runtime.core.engine.push_char('n');
+    session.runtime.core.engine.push_char('i');
 
     let initial_box = session.build_candidate_box_state();
     assert!(!initial_box.is_grid_expanded);
     assert!(initial_box.grid_candidates.is_empty());
 
     // 展开 5 行大网格大候选词面板
-    session.is_grid_expanded = true;
+    session.runtime.core.is_grid_expanded = true;
     let expanded_box = session.build_candidate_box_state();
     assert!(expanded_box.is_grid_expanded);
     assert!(!expanded_box.grid_candidates.is_empty());
@@ -375,7 +387,7 @@ fn test_v2_grid_expansion_state() {
 
     // 取消输入时自动收回展开态
     session.cancel_input();
-    assert!(!session.is_grid_expanded);
+    assert!(!session.is_grid_expanded());
 }
 
 #[test]
@@ -385,54 +397,56 @@ fn test_v2_grid_expanded_key_navigation_and_selection() {
         table.insert("ni", format!("字{}", i), 10_000 - i * 10);
     }
     let mut session = WaylanV2Session::new(AlgoEngine::new(table, AlgoConfig::default()));
-    session.core.engine.push_char('n');
-    session.core.engine.push_char('i');
+    session.runtime.core.engine.push_char('n');
+    session.runtime.core.engine.push_char('i');
 
     // 展开 5 行网格面板
-    session.is_grid_expanded = true;
-    session.grid_selected_index = 0;
+    session.runtime.core.is_grid_expanded = true;
+    session.runtime.core.grid_selected_index = 0;
 
     // 1. 按 Down 键：向下移动一行（从第 1 行跳至第 2 行第 1 个词，索引 6）
     let (consumed, committed) = process_key_event(&mut session, KEY_DOWN, true);
     assert!(consumed);
     assert!(committed.is_none());
-    assert_eq!(session.grid_selected_index, 6);
+    assert_eq!(session.grid_selected_index(), 6);
 
     // 2. 按 Right 键：向右移动一个词（索引 7）
     let (consumed, _) = process_key_event(&mut session, KEY_RIGHT, true);
     assert!(consumed);
-    assert_eq!(session.grid_selected_index, 7);
+    assert_eq!(session.grid_selected_index(), 7);
 
     // 3. 当前处于第 2 行，按数字 2 键：选取第 2 行第 2 个词（索引 1 * 6 + (2 - 1) = 7）
-    let all_cands = session.core.engine.all_candidates();
+    let all_cands = session.runtime.core.engine.all_candidates();
     let expected_text = all_cands[7].text.clone();
     let (consumed, committed) = process_key_event(&mut session, KEY_2, true);
     assert!(consumed);
     assert_eq!(committed, Some(expected_text));
-    assert!(!session.is_grid_expanded, "选词后应自动折叠大网格");
-    assert_eq!(session.grid_selected_index, 0);
+    assert!(!session.is_grid_expanded(), "选词后应自动折叠大网格");
+    assert_eq!(session.grid_selected_index(), 0);
 
     // 4. 测试空格选词
-    session.core.engine.push_char('n');
-    session.core.engine.push_char('i');
-    session.is_grid_expanded = true;
-    session.grid_selected_index = 12; // 第 3 行第 1 个词
-    let expected_text_3 = session.core.engine.all_candidates()[12].text.clone();
+    session.runtime.core.engine.push_char('n');
+    session.runtime.core.engine.push_char('i');
+    session.runtime.core.is_grid_expanded = true;
+    session.runtime.core.grid_selected_index = 12; // 第 3 行第 1 个词
+    let expected_text_3 = session.runtime.core.engine.all_candidates()[12]
+        .text
+        .clone();
     let (consumed, committed) = process_key_event(&mut session, KEY_SPACE, true);
     assert!(consumed);
     assert_eq!(committed, Some(expected_text_3));
-    assert!(!session.is_grid_expanded);
+    assert!(!session.is_grid_expanded());
 
     // 5. 测试 ESC 折叠
-    session.core.engine.push_char('n');
-    session.core.engine.push_char('i');
-    session.is_grid_expanded = true;
+    session.runtime.core.engine.push_char('n');
+    session.runtime.core.engine.push_char('i');
+    session.runtime.core.is_grid_expanded = true;
     let (consumed, committed) = process_key_event(&mut session, KEY_ESC, true);
     assert!(consumed);
     assert!(committed.is_none());
-    assert!(!session.is_grid_expanded, "ESC 应折叠大网格");
+    assert!(!session.is_grid_expanded(), "ESC 应折叠大网格");
     assert!(
-        !session.core.engine.raw_input().is_empty(),
+        !session.runtime.core.engine.raw_input().is_empty(),
         "单次 ESC 仅折叠大网格，不清除输入"
     );
 }
@@ -442,22 +456,22 @@ fn test_caps_lock_toggle_and_passthrough() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
     session.is_active = true;
-    assert_eq!(session.core.mode, InputMode::Chinese);
-    assert!(!session.core.is_caps_locked());
+    assert_eq!(session.runtime.core.mode, InputMode::Chinese);
+    assert!(!session.runtime.core.is_caps_locked());
 
     // 1. 中文状态下输入拼音字母
     let (c1, _) = session.process_key_event(49, true); // 'n'
     assert!(c1);
     let (c2, _) = session.process_key_event(23, true); // 'i'
     assert!(c2);
-    assert_eq!(session.core.engine.raw_input(), "ni");
+    assert_eq!(session.runtime.core.engine.raw_input(), "ni");
 
     // 2. 拼音输入中途按下 CapsLock：应立即提交拼音原始字母上屏，CapsLock 本身不被消费（透传给合成器）
     let (caps_consumed, committed) = session.process_key_event(KEY_CAPSLOCK, true);
     assert!(!caps_consumed, "CapsLock 键本身必须透传给合成器更新锁定位");
     assert_eq!(committed, Some("ni".to_string()), "未完成拼音应直接上屏");
     assert!(
-        session.core.engine.raw_input().is_empty(),
+        session.runtime.core.engine.raw_input().is_empty(),
         "引擎拼音输入应被清空"
     );
 
@@ -465,19 +479,19 @@ fn test_caps_lock_toggle_and_passthrough() {
     assert!(!caps_up_consumed);
 
     // 3. 模拟合成器下发修饰键锁定状态（mods_locked 包含 MOD_CAPS）
-    session.core.modifiers.locked = MOD_CAPS;
-    assert!(session.core.is_caps_locked());
+    session.runtime.core.modifiers.locked = MOD_CAPS;
+    assert!(session.runtime.core.is_caps_locked());
 
     // 大写锁定期间，敲击字母键（如 A 键，扫描码 30），输入法不拦截消费，直通焦点应用
     let (a_consumed, _) = session.process_key_event(30, true);
     assert!(!a_consumed, "CapsLock 激活期间字母键应原生透传以输出大写");
-    assert!(session.core.engine.raw_input().is_empty());
+    assert!(session.runtime.core.engine.raw_input().is_empty());
 
     // 4. 解除大写锁定（合成器更新 mods_locked = 0）
-    session.core.modifiers.locked = 0;
-    assert!(!session.core.is_caps_locked());
+    session.runtime.core.modifiers.locked = 0;
+    assert!(!session.runtime.core.is_caps_locked());
     assert_eq!(
-        session.core.mode,
+        session.runtime.core.mode,
         InputMode::Chinese,
         "解除大写锁定后应恢复中文模式"
     );
@@ -485,16 +499,16 @@ fn test_caps_lock_toggle_and_passthrough() {
     // 恢复中文模式后，再次敲击字母键应正常进入拼音引擎
     let (n_consumed, _) = session.process_key_event(49, true);
     assert!(n_consumed);
-    assert_eq!(session.core.engine.raw_input(), "n");
+    assert_eq!(session.runtime.core.engine.raw_input(), "n");
 
     // 5. 若原来是英文模式：解除大写锁定后应保持英文模式
-    session.core.mode = InputMode::English;
-    session.core.modifiers.locked = MOD_CAPS;
-    assert!(session.core.is_caps_locked());
-    session.core.modifiers.locked = 0;
-    assert!(!session.core.is_caps_locked());
+    session.runtime.core.mode = InputMode::English;
+    session.runtime.core.modifiers.locked = MOD_CAPS;
+    assert!(session.runtime.core.is_caps_locked());
+    session.runtime.core.modifiers.locked = 0;
+    assert!(!session.runtime.core.is_caps_locked());
     assert_eq!(
-        session.core.mode,
+        session.runtime.core.mode,
         InputMode::English,
         "原本是英文模式时解除大写锁定仍应为英文模式"
     );
