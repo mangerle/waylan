@@ -129,6 +129,7 @@ mod tests {
                 dynamic_adjust_freq: true,
                 enable_acronym: true,
                 slash_to_dunhao: true,
+                backslash_to_dunhao: true,
                 protect_digits_punctuation: true,
                 auto_complete_pairs: true,
                 v_mode: true,

@@ -2,9 +2,9 @@
 
 use super::constants::{
     KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_APOSTROPHE,
-    KEY_COMMA, KEY_DOT, KEY_EQUAL, KEY_GRAVE, KEY_KP0, KEY_KP1, KEY_KP2, KEY_KP3, KEY_KP4, KEY_KP5,
-    KEY_KP6, KEY_KP7, KEY_KP8, KEY_KP9, KEY_KPASTERISK, KEY_KPDOT, KEY_KPMINUS, KEY_KPPLUS,
-    KEY_KPSLASH, KEY_LEFTBRACE, KEY_MINUS, KEY_RIGHTBRACE, KEY_SEMICOLON, KEY_SLASH,
+    KEY_BACKSLASH, KEY_COMMA, KEY_DOT, KEY_EQUAL, KEY_GRAVE, KEY_KP0, KEY_KP1, KEY_KP2, KEY_KP3,
+    KEY_KP4, KEY_KP5, KEY_KP6, KEY_KP7, KEY_KP8, KEY_KP9, KEY_KPASTERISK, KEY_KPDOT, KEY_KPMINUS,
+    KEY_KPPLUS, KEY_KPSLASH, KEY_LEFTBRACE, KEY_MINUS, KEY_RIGHTBRACE, KEY_SEMICOLON, KEY_SLASH,
 };
 use super::keymap::KeymapLayout;
 
@@ -62,11 +62,12 @@ pub fn keycode_to_punctuation(keycode: u32) -> Option<char> {
         KEY_APOSTROPHE => Some('\''),
         KEY_LEFTBRACE => Some('['),
         KEY_RIGHTBRACE => Some(']'),
+        KEY_BACKSLASH => Some('\\'),
         _ => None,
     }
 }
 
-/// 结合 Shift 修饰键状态将扫描码转换为中文标点源字符（支持 !?$^_()""<>{}:~ 等 Shift 标点）
+/// 结合 Shift 修饰键状态将扫描码转换为中文标点源字符（支持 !?$^_()""<>{}:~| 等 Shift 标点）
 pub fn keycode_to_punctuation_with_shift(keycode: u32, shift_pressed: bool) -> Option<char> {
     if shift_pressed {
         match keycode {
@@ -84,6 +85,7 @@ pub fn keycode_to_punctuation_with_shift(keycode: u32, shift_pressed: bool) -> O
             KEY_RIGHTBRACE => Some('}'),
             KEY_SEMICOLON => Some(':'),
             KEY_GRAVE => Some('~'),
+            KEY_BACKSLASH => Some('|'),
             _ => None,
         }
     } else {

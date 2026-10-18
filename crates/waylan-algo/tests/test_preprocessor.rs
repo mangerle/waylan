@@ -96,6 +96,10 @@ fn test_punctuation_conversion() {
     let res = pp.process_punctuation('/').expect("应替换顿号");
     assert_eq!(res, vec![TextAction::Commit("、".to_string())]);
 
+    // 反斜杠替换顿号（两者均可起作用）
+    let res_bs = pp.process_punctuation('\\').expect("应替换顿号");
+    assert_eq!(res_bs, vec![TextAction::Commit("、".to_string())]);
+
     // 数字后冒号保护
     pp.record_commit("12");
     let res_colon = pp.process_punctuation(':').expect("应半角冒号");
@@ -212,10 +216,14 @@ fn test_ctrl_toggle_and_punctuation_options() {
         Some(InputMode::English)
     );
 
-    let mut pp = PunctuationProcessor::with_options(false, false, false);
+    let mut pp = PunctuationProcessor::with_options(false, false, false, false);
     assert_eq!(
         pp.process_punctuation('/'),
         Some(vec![TextAction::Commit("/".to_string())])
+    );
+    assert_eq!(
+        pp.process_punctuation('\\'),
+        Some(vec![TextAction::Commit("\\".to_string())])
     );
     pp.record_commit("12");
     assert_eq!(

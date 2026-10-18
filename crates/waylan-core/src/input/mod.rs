@@ -52,6 +52,11 @@ mod tests {
             keycode_to_punctuation_with_shift(KEY_COMMA, true),
             Some('<')
         );
+        assert_eq!(keycode_to_punctuation(KEY_BACKSLASH), Some('\\'));
+        assert_eq!(
+            keycode_to_punctuation_with_shift(KEY_BACKSLASH, true),
+            Some('|')
+        );
     }
 
     #[test]

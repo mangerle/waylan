@@ -83,6 +83,7 @@ pub(super) fn sync_general_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_auto_pangu_spacing(cfg.pinyin.auto_pangu_spacing);
     window.set_v_mode(cfg.pinyin.v_mode);
     window.set_slash_to_dunhao(cfg.pinyin.slash_to_dunhao);
+    window.set_backslash_to_dunhao(cfg.pinyin.backslash_to_dunhao);
     window.set_protect_digits_punctuation(cfg.pinyin.protect_digits_punctuation);
     window.set_auto_complete_pairs(cfg.pinyin.auto_complete_pairs);
 
@@ -199,6 +200,7 @@ pub(super) fn update_general_from_window(window: &SettingsWindow, cfg: &mut AppC
     cfg.pinyin.enable_acronym = window.get_enable_acronym();
     cfg.shortcuts.shift_select_second = window.get_shift_select_second();
     cfg.pinyin.slash_to_dunhao = window.get_slash_to_dunhao();
+    cfg.pinyin.backslash_to_dunhao = window.get_backslash_to_dunhao();
     cfg.pinyin.protect_digits_punctuation = window.get_protect_digits_punctuation();
     cfg.pinyin.auto_complete_pairs = window.get_auto_complete_pairs();
     cfg.pinyin.v_mode = window.get_v_mode();

@@ -19,6 +19,7 @@ export component GeneralTab inherits VerticalLayout {
 
     // 标点特性
     in-out property <bool> slash_to_dunhao: true;
+    in-out property <bool> backslash_to_dunhao: true;
     in-out property <bool> protect_digits_punctuation: true;
     in-out property <bool> auto_complete_pairs: true;
 
@@ -170,6 +171,10 @@ export component GeneralTab inherits VerticalLayout {
         title: "标点特性与保护";
         subtitle: "提供智能标点转换与格式防错保护";
 
+        AppCheckBox {
+            text: "反斜杠转顿号（敲击 \\| 键直接输入顿号 、）";
+            checked <=> root.backslash_to_dunhao;
+        }
         AppCheckBox {
             text: "斜杠转顿号（敲击 /? 键直接输入顿号 、）";
             checked <=> root.slash_to_dunhao;

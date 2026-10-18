@@ -100,6 +100,7 @@ mod tests {
         let default_cfg = AppConfig::default();
         let serialized = toml::to_string_pretty(&default_cfg).expect("序列化应成功");
         assert!(serialized.contains("slash_to_dunhao = true"));
+        assert!(serialized.contains("backslash_to_dunhao = true"));
         assert!(serialized.contains("font_size = 15.0"));
 
         let deserialized: AppConfig = toml::from_str(&serialized).expect("反序列化应成功");
@@ -116,6 +117,7 @@ mod tests {
         assert!(!deserialized.pinyin.filter_uncommon_charset);
         assert!(deserialized.ui.show_pinyin_comment);
         assert!(deserialized.pinyin.auto_dedup);
+        assert!(deserialized.pinyin.backslash_to_dunhao);
 
         // 测试临时文件保存（使用 tempfile::tempdir() 确保多线程并发测试隔离与 RAII 自动清理）
         let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");

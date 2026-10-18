@@ -115,6 +115,7 @@ impl ImeRuntime {
 
         self.core.shift_sm.set_toggle_key(cfg.shortcuts.switch_key);
         self.core.punctuation_processor.slash_to_dunhao = cfg.pinyin.slash_to_dunhao;
+        self.core.punctuation_processor.backslash_to_dunhao = cfg.pinyin.backslash_to_dunhao;
         self.core.punctuation_processor.protect_digits_punctuation =
             cfg.pinyin.protect_digits_punctuation;
         self.core.punctuation_processor.auto_complete_pairs = cfg.pinyin.auto_complete_pairs;

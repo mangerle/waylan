@@ -18,6 +18,8 @@ pub struct PunctuationProcessor {
     pub single_quote_open: bool,
     /// 是否将斜杠 / 转换为中文顿号 、
     pub slash_to_dunhao: bool,
+    /// 是否将反斜杠 \ 转换为中文顿号 、
+    pub backslash_to_dunhao: bool,
     /// 是否开启数字后紧跟冒号/小数点/斜杠自动保持英文半角保护
     pub protect_digits_punctuation: bool,
     /// 是否开启成对括号与引号自动补全并回退光标
@@ -35,6 +37,7 @@ impl Default for PunctuationProcessor {
             double_quote_open: false,
             single_quote_open: false,
             slash_to_dunhao: true,
+            backslash_to_dunhao: true,
             protect_digits_punctuation: true,
             auto_complete_pairs: true,
             full_width_punct: true,
@@ -51,6 +54,7 @@ impl PunctuationProcessor {
     /// 使用指定的标点特性开关构造处理器
     pub fn with_options(
         slash_to_dunhao: bool,
+        backslash_to_dunhao: bool,
         protect_digits_punctuation: bool,
         auto_complete_pairs: bool,
     ) -> Self {
@@ -59,6 +63,7 @@ impl PunctuationProcessor {
             double_quote_open: false,
             single_quote_open: false,
             slash_to_dunhao,
+            backslash_to_dunhao,
             protect_digits_punctuation,
             auto_complete_pairs,
             full_width_punct: true,
@@ -69,6 +74,7 @@ impl PunctuationProcessor {
     /// 从新配置实例同步标点特性布尔开关，同时完整保留当前引号开闭状态与最近输入上下文
     pub fn apply_options_from(&mut self, other: &Self) {
         self.slash_to_dunhao = other.slash_to_dunhao;
+        self.backslash_to_dunhao = other.backslash_to_dunhao;
         self.protect_digits_punctuation = other.protect_digits_punctuation;
         self.auto_complete_pairs = other.auto_complete_pairs;
         self.full_width_punct = other.full_width_punct;
@@ -304,6 +310,14 @@ impl PunctuationProcessor {
                 let s = if self.slash_to_dunhao { "、" } else { "/" };
                 Some(vec![TextAction::Commit(s.to_string())])
             }
+            '\\' => {
+                let s = if self.backslash_to_dunhao {
+                    "、"
+                } else {
+                    "\\"
+                };
+                Some(vec![TextAction::Commit(s.to_string())])
+            }
             '?' => Some(vec![TextAction::Commit("？".to_string())]),
             '!' => Some(vec![TextAction::Commit("！".to_string())]),
             ':' => Some(vec![TextAction::Commit("：".to_string())]),
@@ -312,6 +326,7 @@ impl PunctuationProcessor {
             '$' => Some(vec![TextAction::Commit("￥".to_string())]),
             '^' => Some(vec![TextAction::Commit("……".to_string())]),
             '_' => Some(vec![TextAction::Commit("——".to_string())]),
+            '|' => Some(vec![TextAction::Commit("|".to_string())]),
             _ => None,
         }
     }

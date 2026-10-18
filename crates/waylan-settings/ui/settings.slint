@@ -49,6 +49,7 @@ export component SettingsWindow inherits Window {
     in-out property <bool> auto_pangu_spacing: false;
     in-out property <bool> v_mode: true;
     in-out property <bool> slash_to_dunhao: true;
+    in-out property <bool> backslash_to_dunhao: true;
     in-out property <bool> protect_digits_punctuation: true;
     in-out property <bool> auto_complete_pairs: true;
     in-out property <int> enable_tray_index: 0;
@@ -359,6 +360,7 @@ export component SettingsWindow inherits Window {
                         auto_pangu_spacing <=> root.auto_pangu_spacing;
                         v_mode <=> root.v_mode;
                         slash_to_dunhao <=> root.slash_to_dunhao;
+                        backslash_to_dunhao <=> root.backslash_to_dunhao;
                         protect_digits_punctuation <=> root.protect_digits_punctuation;
                         auto_complete_pairs <=> root.auto_complete_pairs;
                         enable_tray_index <=> root.enable_tray_index;

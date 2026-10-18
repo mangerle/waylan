@@ -27,6 +27,7 @@ pub const KEY_SEMICOLON: u32 = 39;
 pub const KEY_APOSTROPHE: u32 = 40;
 pub const KEY_LEFTBRACE: u32 = 26;
 pub const KEY_RIGHTBRACE: u32 = 27;
+pub const KEY_BACKSLASH: u32 = 43;
 
 /// 字母 T 的 evdev 扫描码 (20)
 pub const KEY_T: u32 = 20;

@@ -173,6 +173,8 @@ pub struct PinyinConfig {
     pub enable_acronym: bool,
     /// 是否开启斜杠转顿号（将 /? 替换为 、）
     pub slash_to_dunhao: bool,
+    /// 是否开启反斜杠转顿号（将 \| 键未按 Shift 时的 \ 替换为 、）
+    pub backslash_to_dunhao: bool,
     /// 是否开启数字间英文标点保护（如 12:00、3.14）
     pub protect_digits_punctuation: bool,
     /// 是否开启成对符号自动补全
@@ -208,6 +210,7 @@ impl Default for PinyinConfig {
             dynamic_adjust_freq: true,
             enable_acronym: true,
             slash_to_dunhao: true,
+            backslash_to_dunhao: true,
             protect_digits_punctuation: true,
             auto_complete_pairs: true,
             v_mode: true,
