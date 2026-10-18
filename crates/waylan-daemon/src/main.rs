@@ -114,7 +114,8 @@ fn acquire_daemon_instance_lock(
                 e
             );
             if !opts.ibus_backend && !opts.self_check && check_another_instance_running() {
-                info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心...");
+                info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心并激活输入法...");
+                activate_desktop_input_source();
                 let _ = launch_settings_gui();
                 return Ok(None);
             }
@@ -123,14 +124,33 @@ fn acquire_daemon_instance_lock(
     }
 }
 
-/// 处理单实例冲突唤起逻辑
+/// 处理单实例冲突唤起逻辑（激活输入法并唤起设置中心）
 fn handle_instance_conflict(opts: &DaemonOptions) {
     if !opts.ibus_backend && !opts.self_check {
-        info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心...");
+        info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心并激活输入法...");
+        activate_desktop_input_source();
         let _ = launch_settings_gui();
     } else {
         warn!("[微澜] 检测到已有另一个活跃的输入法守护进程正在运行，当前进程将安全退出。");
     }
+}
+
+/// 激活当前桌面会话的微澜输入源并置顶为首选
+fn activate_desktop_input_source() {
+    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_uppercase().contains("GNOME"))
+        .unwrap_or(false);
+
+    if is_gnome {
+        waylan_ibus::desktop_integration::ensure_gnome_input_source_registered(false);
+    }
+
+    let mut cmd = process::Command::new("ibus");
+    cmd.args(["engine", "waylan"]);
+    let _ = waylan_ibus::desktop_integration::run_command_with_timeout(
+        cmd,
+        waylan_ibus::desktop_integration::DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+    );
 }
 
 /// 决策并派发 Wayland 或 IBus 前端会话

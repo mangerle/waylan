@@ -32,6 +32,12 @@ case "$1" in
                 case "$uid" in
                     ''|*[!0-9]*) continue ;;
                 esac
+
+                # 记录用户在升级前是否处于微澜运行状态，供 postinst 精准按需热激活
+                if pgrep -u "$uid" -x waylan >/dev/null 2>&1; then
+                    touch "${user_dir}/.waylan-upgrade-active" 2>/dev/null || true
+                fi
+
                 if command -v systemctl >/dev/null 2>&1; then
                     systemctl --user -M "${uid}@" stop waylan.service >/dev/null 2>&1 || true
                 fi

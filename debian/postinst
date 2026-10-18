@@ -35,16 +35,26 @@ if [ "$1" = "configure" ]; then
                 systemctl --user -M "${uid}@" restart waylan.service >/dev/null 2>&1 || true
             fi
 
-            # 5.2 针对 GNOME / IBus 桌面会话：即时刷新用户级 IBus 缓存，避免按需调度时差
+            # 5.2 针对 GNOME / IBus 桌面会话：刷新缓存；若升级前微澜正处于活跃状态，则精准唤醒自愈
             user="$(id -nu "$uid" 2>/dev/null || true)"
             user_home="$(getent passwd "$uid" 2>/dev/null | cut -d: -f6 || true)"
+            flag_file="${user_dir}/.waylan-upgrade-active"
+            was_active=false
+            if [ -f "$flag_file" ]; then
+                was_active=true
+                rm -f "$flag_file" 2>/dev/null || true
+            fi
+
             if [ -n "$user" ] && [ -n "$user_home" ] && command -v ibus >/dev/null 2>&1; then
                 ibus_bus_file="$(ls -t "${user_home}/.config/ibus/bus/"* 2>/dev/null | head -n1 || true)"
                 if [ -n "$ibus_bus_file" ] && [ -f "$ibus_bus_file" ]; then
                     ibus_addr="$(grep -m1 '^IBUS_ADDRESS=' "$ibus_bus_file" 2>/dev/null | cut -d'=' -f2- || true)"
                     if [ -n "$ibus_addr" ]; then
-                        # 安全传递环境变量，杜绝注入漏洞，且不强行篡改用户当前活跃输入法引擎
                         runuser -u "$user" -- env IBUS_ADDRESS="$ibus_addr" ibus write-cache >/dev/null 2>&1 || true
+                        # 若升级前微澜正在运行，立即安全恢复微澜引擎，彻底消除升级后断联
+                        if [ "$was_active" = true ]; then
+                            runuser -u "$user" -- env IBUS_ADDRESS="$ibus_addr" ibus engine waylan >/dev/null 2>&1 || true
+                        fi
                     fi
                 fi
             fi
