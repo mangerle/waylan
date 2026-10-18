@@ -295,7 +295,20 @@ pub(crate) fn run_ibus_monitor_loop(
             ensure_global_engine_active(conn);
         }
 
-        let current_locked = screen_locked_flag.load(Ordering::Acquire);
+        let mut current_locked = screen_locked_flag.load(Ordering::Acquire);
+        // 处于锁屏保护期时的自愈探活：若内部记录为锁屏状态，主动向会话总线校验一次真实状态，
+        // 彻底杜绝桌面环境解锁信号滞后数秒或信号丢失导致状态机脱节
+        if current_locked || last_screen_locked {
+            let real_locked = Connection::session()
+                .ok()
+                .as_ref()
+                .map(query_initial_screen_saver_active)
+                .unwrap_or(false);
+            if !real_locked && (current_locked || last_screen_locked) {
+                screen_locked_flag.store(false, Ordering::Release);
+                current_locked = false;
+            }
+        }
         handle_screen_saver_transition(conn, shared_core, current_locked, &mut last_screen_locked);
 
         let (is_voice_active, target_engine_path) = query_voice_active_and_path(shared_core);

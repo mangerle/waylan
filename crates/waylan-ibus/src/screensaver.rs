@@ -44,6 +44,15 @@ pub(crate) fn query_initial_screen_saver_active(conn: &Connection) -> bool {
     false
 }
 
+/// 快速探测当前系统锁屏状态（自动获取用户会话连接）
+pub(crate) fn query_current_screen_saver_active() -> bool {
+    Connection::session()
+        .ok()
+        .as_ref()
+        .map(query_initial_screen_saver_active)
+        .unwrap_or(false)
+}
+
 /// 后台常驻锁屏信号监听器 RAII 句柄，Drop 时自动唤醒并回收工作线程
 pub(crate) struct ScreenSaverListenerHandle {
     join_handle: Option<JoinHandle<()>>,
