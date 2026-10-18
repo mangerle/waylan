@@ -53,7 +53,7 @@ fn bind_session_v1_globals(
         if let Ok(input_panel) = globals.bind::<ZwpInputPanelV1, _, _>(qh, 1..=1, ()) {
             let panel_surface = input_panel.get_input_panel_surface(&wl_surface, qh, ());
             panel_surface.set_overlay_panel();
-            session.panel_surface = Some(panel_surface);
+            session.protocol.panel_surface = Some(panel_surface);
             info!("[微澜 Wayland] 成功绑定 zwp_input_panel_v1 并将候选框配置为光标悬浮面板(overlay_panel)。");
         } else if let Ok(layer_shell) = globals.bind::<ZwlrLayerShellV1, _, _>(qh, 1..=4, ()) {
             let layer_surface = layer_shell.get_layer_surface(
@@ -68,7 +68,7 @@ fn bind_session_v1_globals(
             layer_surface.set_anchor(Anchor::Top | Anchor::Left);
             layer_surface.set_size(1, 1);
             wl_surface.commit();
-            session.layer_surface = Some(layer_surface);
+            session.protocol.layer_surface = Some(layer_surface);
             info!(
                 "[微澜 Wayland] 成功绑定 zwlr_layer_shell_v1 并将候选框配置为 Overlay 图层表面。"
             );
@@ -76,10 +76,10 @@ fn bind_session_v1_globals(
             warn!("[微澜 Wayland] 合成器未提供 zwp_input_panel_v1 或 zwlr_layer_shell_v1，裸 wl_surface 可能无法正常显示。");
         }
 
-        session.popup_wl_surface = Some(wl_surface);
+        session.surface.popup_wl_surface = Some(wl_surface);
     }
     if let Ok(shm) = globals.bind::<WlShm, _, _>(qh, 1..=1, ()) {
-        session.shm = Some(shm);
+        session.surface.shm = Some(shm);
     }
     session.qhandle = Some(qh.clone());
     session.init_inotify_watcher();
@@ -189,6 +189,7 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRu
 
     loop {
         if session
+            .watcher
             .exit_requested
             .as_ref()
             .map(|f| f.load(Ordering::Acquire))
@@ -203,21 +204,21 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRu
 
         let default_poll_timeout = if session.is_voice_active() {
             40
-        } else if session.inotify_watcher.is_some() {
+        } else if session.watcher.inotify_watcher.is_some() {
             -1
         } else {
             2000
         };
         let timeout_ms = session.next_poll_timeout_ms(default_poll_timeout);
-        let inotify_fd = session.inotify_watcher.as_ref().map(|w| w.as_fd());
-        let wakeup_fd = session.loop_wakeup.as_ref().map(|w| w.as_fd());
+        let inotify_fd = session.watcher.inotify_watcher.as_ref().map(|w| w.as_fd());
+        let wakeup_fd = session.watcher.loop_wakeup.as_ref().map(|w| w.as_fd());
 
         if let Some(guard) = event_queue.prepare_read() {
             let outcome = poll_and_read_events(guard, timeout_ms, inotify_fd, wakeup_fd)?;
             session.poll_voice_cycle();
             match outcome {
                 PollEventOutcome::TimedOut => {
-                    if session.inotify_watcher.is_none() {
+                    if session.watcher.inotify_watcher.is_none() {
                         session.sync_external_state();
                     }
                 }
@@ -226,7 +227,7 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRu
                     inotify_triggered,
                 } => {
                     if wakeup_triggered {
-                        if let Some(ref wakeup) = session.loop_wakeup {
+                        if let Some(ref wakeup) = session.watcher.loop_wakeup {
                             wakeup.drain();
                         }
                         session.sync_external_state();

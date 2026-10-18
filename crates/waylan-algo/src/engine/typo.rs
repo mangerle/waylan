@@ -70,7 +70,7 @@ impl SpatialTypoCorrector {
                 let cost = cost_u8 as u32;
                 buf[i] = alt_c as u8;
                 if let Ok(mutated) = std::str::from_utf8(&buf[..n]) {
-                    Self::try_push_valid_candidate(mutated, orig_c, alt_c, cost, table, candidates);
+                    Self::try_push_valid_candidate(mutated, cost, table, candidates);
                 }
                 buf[i] = orig_b;
             }
@@ -90,7 +90,7 @@ impl SpatialTypoCorrector {
         for i in 0..n.saturating_sub(1) {
             buf.swap(i, i + 1);
             if let Ok(swapped) = std::str::from_utf8(&buf[..n]) {
-                Self::try_push_valid_candidate(swapped, ' ', ' ', 16, table, candidates);
+                Self::try_push_valid_candidate(swapped, 16, table, candidates);
             }
             buf.swap(i, i + 1);
         }
@@ -163,7 +163,7 @@ impl SpatialTypoCorrector {
 
         for (mutated, cost) in mutated_inputs {
             if mutated != raw_input {
-                Self::try_push_valid_candidate(&mutated, ' ', ' ', cost, table, candidates);
+                Self::try_push_valid_candidate(&mutated, cost, table, candidates);
             }
         }
     }
@@ -171,8 +171,6 @@ impl SpatialTypoCorrector {
     /// 尝试校验变异字符串是否构成单音节或可合法切分，命中词条则推入候选列表
     fn try_push_valid_candidate(
         mutated: &str,
-        _orig_c: char,
-        _alt_c: char,
         cost: u32,
         table: &LexiconTable,
         candidates: &mut Vec<(AlgoCandidate, u32)>,

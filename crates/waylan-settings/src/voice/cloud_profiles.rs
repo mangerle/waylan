@@ -98,10 +98,12 @@ fn register_cloud_save_and_delete(
                 &win,
                 &current_cfg_cell,
                 &editing_id_save,
-                &name,
-                &endpoint,
-                &key,
-                &model,
+                CloudProfileFormData {
+                    name: &name,
+                    endpoint: &endpoint,
+                    key: &key,
+                    model: &model,
+                },
             );
         }
     });
@@ -115,25 +117,30 @@ fn register_cloud_save_and_delete(
     });
 }
 
+/// 云端语音服务表单提交数据
+struct CloudProfileFormData<'a> {
+    name: &'a str,
+    endpoint: &'a str,
+    key: &'a str,
+    model: &'a str,
+}
+
 /// 处理保存/更新云端语音服务配置
 fn handle_save_cloud_profile(
     win: &SettingsWindow,
     current_cfg_cell: &Arc<Mutex<AppConfig>>,
     editing_id_save: &Rc<RefCell<Option<String>>>,
-    name: &str,
-    endpoint: &str,
-    key: &str,
-    model: &str,
+    form: CloudProfileFormData<'_>,
 ) {
-    let name_str = name.trim().to_string();
-    let endpoint_str = endpoint.trim().to_string();
-    let model_str = model.trim().to_string();
+    let name_str = form.name.trim().to_string();
+    let endpoint_str = form.endpoint.trim().to_string();
+    let model_str = form.model.trim().to_string();
     if name_str.is_empty() || endpoint_str.is_empty() || model_str.is_empty() {
         win.set_global_status_is_error(true);
         win.set_global_status(SharedString::from("服务名称、接口地址和模型标识不能为空！"));
         return;
     }
-    let key_str = key.trim();
+    let key_str = form.key.trim();
     let api_key = if key_str.is_empty() {
         None
     } else {

@@ -180,75 +180,26 @@ impl SymbolSuggestionManager {
     }
 }
 
-struct AuxManagerCache {
-    source_path: Option<std::path::PathBuf>,
-    mtime: Option<std::time::SystemTime>,
-    managers: (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>),
-}
-
-static CACHED_AUX_MANAGERS: OnceLock<std::sync::Mutex<AuxManagerCache>> = OnceLock::new();
-
-/// 探测当前应当生效的辅助词库文件路径及其最新修改时间
-fn probe_active_aux_dict_meta() -> (Option<std::path::PathBuf>, Option<std::time::SystemTime>) {
-    for path in waylan_core::AppConfig::aux_dict_search_paths() {
-        if path.exists() {
-            let mtime = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok());
-            return (Some(path), mtime);
-        }
-    }
-    (None, None)
-}
-
-/// 从磁盘构建辅助与混输词库管理器缓存实例
-fn build_auxiliary_managers() -> AuxManagerCache {
+/// 按照多级搜索策略加载并构建辅助与混输词库管理器
+///
+/// 若磁盘存在用户定制或预编译辅助词库，则从文件反序列化构建；若不存在则零拷贝复用内置全局默认实例。
+pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
     let search_paths = waylan_core::AppConfig::aux_dict_search_paths();
 
     for path in search_paths {
         if path.exists() {
-            let mtime = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok());
             if let Ok(dict) = AuxiliaryDict::load_from_file(&path) {
                 let en = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
                 let sym = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
-                return AuxManagerCache {
-                    source_path: Some(path),
-                    mtime,
-                    managers: (en, sym),
-                };
+                return (en, sym);
             }
         }
     }
 
-    AuxManagerCache {
-        source_path: None,
-        mtime: None,
-        managers: (
-            EnglishSuggestionManager::default_global(),
-            SymbolSuggestionManager::default_global(),
-        ),
-    }
-}
-
-/// 按照多级搜索策略加载辅助与混输词库管理器（带文件时间戳感知的单例缓存，未变动时零拷贝复用，变动时自动热更新）
-pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
-    let cache_mutex =
-        CACHED_AUX_MANAGERS.get_or_init(|| std::sync::Mutex::new(build_auxiliary_managers()));
-
-    let (active_path, active_mtime) = probe_active_aux_dict_meta();
-    if let Ok(mut guard) = cache_mutex.lock() {
-        if guard.source_path == active_path && guard.mtime == active_mtime {
-            return guard.managers.clone();
-        }
-        let fresh = build_auxiliary_managers();
-        let out = fresh.managers.clone();
-        *guard = fresh;
-        return out;
-    }
-
-    build_auxiliary_managers().managers
+    (
+        EnglishSuggestionManager::default_global(),
+        SymbolSuggestionManager::default_global(),
+    )
 }
 
 #[cfg(test)]

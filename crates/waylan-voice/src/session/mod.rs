@@ -153,22 +153,27 @@ impl VoiceSessionController {
     }
 }
 
+/// 语音后台常驻工作循环持久状态
+struct VoiceWorkerLoopState<'a> {
+    cache: &'a mut WorkerModelCache,
+    visualizer: &'a mut WaveformVisualizer,
+    cmd_rx: &'a Receiver<WorkerCommand>,
+    is_active: &'a Arc<AtomicBool>,
+}
+
 /// 处理 Start 指令并拉起活动录音事件循环
 fn handle_start_command(
-    cache: &mut WorkerModelCache,
-    visualizer: &mut WaveformVisualizer,
-    cmd_rx: &Receiver<WorkerCommand>,
+    state: &mut VoiceWorkerLoopState<'_>,
     options: VoiceSessionOptions,
     event_tx: SyncSender<VoiceEvent>,
-    is_active: &Arc<AtomicBool>,
 ) {
-    let Some((recognizer, vad, punct_restorer)) = cache.prepare_models(&options.voice_config)
+    let Some((recognizer, vad, punct_restorer)) = state.cache.prepare_models(&options.voice_config)
     else {
         warn!("[语音会话] 语音识别器或 VAD 模型未正确初始化，跳过本次录音");
-        is_active.store(false, Ordering::Release);
+        state.is_active.store(false, Ordering::Release);
         return;
     };
-    visualizer.reset();
+    state.visualizer.reset();
 
     let (pcm_tx, pcm_rx) = sync_channel::<Vec<f32>>(32);
     let capture = match AudioCapture::start_with_device(
@@ -179,7 +184,7 @@ fn handle_start_command(
         Err(e) => {
             warn!("[语音会话] 启动音频采集硬件失败: {}", e);
             let _ = event_tx.send(VoiceEvent::Error(e.to_string()));
-            is_active.store(false, Ordering::Release);
+            state.is_active.store(false, Ordering::Release);
             return;
         }
     };
@@ -188,14 +193,14 @@ fn handle_start_command(
     active_recording_loop(ActiveRecordingContext {
         capture: Some(capture),
         pcm_rx,
-        cmd_rx,
+        cmd_rx: state.cmd_rx,
         event_tx: &event_tx,
-        visualizer,
+        visualizer: state.visualizer,
         vad,
         recognizer,
         punct_restorer,
         voice_config: &options.voice_config,
-        is_active,
+        is_active: state.is_active,
     });
 }
 
@@ -219,14 +224,13 @@ impl VoiceSessionController {
             last_activity_time = Instant::now();
             match cmd {
                 WorkerCommand::Start { options, event_tx } => {
-                    handle_start_command(
-                        &mut cache,
-                        &mut visualizer,
-                        &cmd_rx,
-                        *options,
-                        event_tx,
-                        &is_active,
-                    );
+                    let mut loop_state = VoiceWorkerLoopState {
+                        cache: &mut cache,
+                        visualizer: &mut visualizer,
+                        cmd_rx: &cmd_rx,
+                        is_active: &is_active,
+                    };
+                    handle_start_command(&mut loop_state, *options, event_tx);
                 }
                 WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
                     is_active.store(false, Ordering::Release);

@@ -7,10 +7,10 @@ fn test_v1_session_initialization() {
     let session = WaylanV1Session::with_engine(engine);
 
     assert_eq!(session.runtime.core.mode, InputMode::Chinese);
-    assert_eq!(session.commit_serial, 0);
-    assert_eq!(session.current_serial, 0);
-    assert!(session.active_context.is_none());
-    assert!(session.grabbed_keyboard.is_none());
+    assert_eq!(session.protocol.commit_serial, 0);
+    assert_eq!(session.protocol.current_serial, 0);
+    assert!(session.protocol.active_context.is_none());
+    assert!(session.protocol.grabbed_keyboard.is_none());
     assert_eq!(session.runtime.core.page_keys, PageKeyConfig::default());
 }
 

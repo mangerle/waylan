@@ -13,7 +13,9 @@ use log::{info, warn};
 use waylan_algo::AlgoEngine;
 use waylan_core::config::{AppConfig, ThemeMode};
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
-use waylan_wayland::session_v1::WaylanV1Session;
+use waylan_wayland::session_v1::{
+    WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext,
+};
 use waylan_wayland::session_v2::WaylanV2Session;
 use waylan_wayland::{run_session_v1_loop, run_session_v2_loop_fallible, WaylandCapabilities};
 
@@ -33,7 +35,7 @@ pub trait ReloadableWaylandSession {
 impl ReloadableWaylandSession for WaylanV1Session {
     #[inline]
     fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
-        &mut self.surface_manager.renderer
+        &mut self.surface.surface_manager.renderer
     }
 
     #[inline]
@@ -103,15 +105,15 @@ struct WaylandSessionParams<'a> {
 /// 运行 Wayland V1 会话
 fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
     let mut session = WaylanV1Session::with_engine(params.engine);
-    session.surface_manager.renderer = params.renderer;
-    session.watched_paths = params.watched_paths;
-    session.last_watched_mtime = params.initial_mtime;
+    session.surface.surface_manager.renderer = params.renderer;
+    session.watcher.watched_paths = params.watched_paths;
+    session.watcher.last_watched_mtime = params.initial_mtime;
     session.runtime.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
     session.runtime.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
     session.runtime.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-    session.exit_requested = Some(params.coordinator.flag());
-    session.loop_wakeup = params.coordinator.loop_wakeup();
-    session.reload_callback = Some(Box::new(reload_wayland_v1_session));
+    session.watcher.exit_requested = Some(params.coordinator.flag());
+    session.watcher.loop_wakeup = params.coordinator.loop_wakeup();
+    session.watcher.reload_callback = Some(Box::new(reload_wayland_v1_session));
     session.runtime.reload_config(params.cfg);
     run_session_v1_loop(session).map_err(Into::into)
 }
@@ -144,12 +146,18 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
             );
             let session = WaylanV1Session {
                 runtime: returned_session.runtime,
-                surface_manager: returned_session.surface.surface_manager,
-                watched_paths: returned_session.watcher.watched_paths,
-                last_watched_mtime: returned_session.watcher.last_watched_mtime,
-                exit_requested: Some(params.coordinator.flag()),
-                loop_wakeup: params.coordinator.loop_wakeup(),
-                reload_callback: Some(Box::new(reload_wayland_v1_session)),
+                surface: WaylandV1SurfaceContext {
+                    surface_manager: returned_session.surface.surface_manager,
+                    ..Default::default()
+                },
+                watcher: WaylandV1WatcherContext {
+                    watched_paths: returned_session.watcher.watched_paths,
+                    last_watched_mtime: returned_session.watcher.last_watched_mtime,
+                    exit_requested: Some(params.coordinator.flag()),
+                    loop_wakeup: params.coordinator.loop_wakeup(),
+                    reload_callback: Some(Box::new(reload_wayland_v1_session)),
+                    ..Default::default()
+                },
                 ..WaylanV1Session::default()
             };
             run_session_v1_loop(session).map_err(Into::into)

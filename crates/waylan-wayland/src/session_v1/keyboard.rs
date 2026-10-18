@@ -8,7 +8,7 @@ use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, Wl
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
-use crate::session_v1::WaylanV1Session;
+use crate::session_v1::{WaylanV1Frontend, WaylanV1Session};
 
 /// 处理 XKB 键盘字符布局映射同步
 fn handle_v1_keymap(state: &mut WaylanV1Session, fd: std::os::fd::OwnedFd, size: u32) {
@@ -73,9 +73,10 @@ fn handle_v1_key_event(
     context: &ZwpInputMethodContextV1,
     params: V1KeyEventParams,
 ) {
-    // 1. 全权委托统一运行时 ImeRuntime 处理（包含语音分发、核心决策与前端 UI 刷新）
-    let (runtime, mut frontend) = state.split_runtime_and_frontend();
-    let (consumed, _commit) = runtime.process_key_event(
+    // 1. 原生借用：前端借用 protocol + surface，runtime 单独借用，借用检查器天然支持不相交借用
+    let mut frontend =
+        WaylanV1Frontend::new(&state.protocol, &mut state.surface, state.qhandle.as_ref());
+    let (consumed, _commit) = state.runtime.process_key_event(
         &mut frontend,
         waylan_engine::ProcessKeyEventParams {
             key: params.key,
@@ -86,7 +87,7 @@ fn handle_v1_key_event(
         },
     );
 
-    // 3. 若未被输入法消费，通过协议转发给上层应用
+    // 2. 若未被输入法消费，通过协议转发给上层应用
     if !consumed {
         context.key(
             params.serial,
@@ -111,7 +112,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
             return;
         }
 
-        let Some(context) = state.active_context.clone() else {
+        let Some(context) = state.protocol.active_context.clone() else {
             return;
         };
 
@@ -124,7 +125,7 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
                 key,
                 state: key_state,
             } => {
-                state.current_serial = serial;
+                state.protocol.current_serial = serial;
                 let is_press = matches!(key_state, WEnum::Value(KeyState::Pressed));
                 handle_v1_key_event(
                     state,

@@ -8,7 +8,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
 };
 
 // 展开 7 组通用的基础 Wayland Dispatch trait (wl_seat, wl_compositor, wl_shm, wl_surface, wl_shm_pool, wl_buffer, wl_registry)
-impl_common_wayland_dispatch!(WaylanV1Session);
+impl_common_wayland_dispatch!(WaylanV1Session, surface.surface_manager);
 
 // 为 zwp_input_panel_v1 实现 Dispatch
 impl Dispatch<ZwpInputPanelV1, ()> for WaylanV1Session {
@@ -65,7 +65,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylanV1Session {
             }
             LayerSurfaceEvent::Closed => {
                 log::info!("[V1会话] 图层表面 (LayerSurface) 已被合成器关闭，重置表面句柄。");
-                state.layer_surface = None;
+                state.protocol.layer_surface = None;
             }
             _ => {}
         }
