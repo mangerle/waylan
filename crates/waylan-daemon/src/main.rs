@@ -1,4 +1,5 @@
 mod cli;
+mod desktop;
 mod error;
 mod logger;
 mod session_bundle;
@@ -142,15 +143,12 @@ fn activate_desktop_input_source() {
         .unwrap_or(false);
 
     if is_gnome {
-        waylan_ibus::desktop_integration::ensure_gnome_input_source_registered(false);
+        desktop::ensure_gnome_input_source_registered(false);
     }
 
     let mut cmd = process::Command::new("ibus");
     cmd.args(["engine", "waylan"]);
-    let _ = waylan_ibus::desktop_integration::run_command_with_timeout(
-        cmd,
-        waylan_ibus::desktop_integration::DEFAULT_DESKTOP_COMMAND_TIMEOUT,
-    );
+    let _ = desktop::run_command_with_timeout(cmd, desktop::DEFAULT_DESKTOP_COMMAND_TIMEOUT);
 }
 
 /// 决策并派发 Wayland 或 IBus 前端会话

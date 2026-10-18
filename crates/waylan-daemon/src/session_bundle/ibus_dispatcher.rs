@@ -87,8 +87,8 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn post_reload(&self) {
         if self.pending_sync_exclusive.swap(false, Ordering::AcqRel) {
             let hide_ext = self.exclusive_input_source.load(Ordering::Acquire);
-            waylan_ibus::desktop_integration::ensure_gnome_input_source_registered(hide_ext);
-            waylan_ibus::desktop_integration::sync_gnome_hide_indicator_extension(hide_ext);
+            crate::desktop::ensure_gnome_input_source_registered(hide_ext);
+            crate::desktop::sync_gnome_hide_indicator_extension(hide_ext);
         }
     }
 }

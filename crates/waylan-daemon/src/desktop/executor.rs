@@ -1,0 +1,169 @@
+//! 桌面环境外部子进程安全执行与生命周期守护模块
+//!
+//! # 设计原理
+//! - **实现初衷**：在与 GNOME Shell、IBus 以及 GSettings 交互时，若直接调用 `Command::output()`，
+//!   一旦 D-Bus 或桌面总线挂起，调用线程将被永久阻塞，导致守护进程事件监听循环直接卡死。
+//! - **核心优势**：通过非阻塞轮询 `try_wait` 配合管道并发读取，在超时发生时主动发送 `SIGKILL`
+//!   并调用 `wait` 回收进程控制块（PCB），彻底杜绝僵尸进程残留与事件循环冻结。
+//! - **代价与局限**：命令执行期间存在微休眠轮询（10ms），超时场景下子进程会被强制终止。
+
+use std::io::{self, Read};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+/// 默认桌面集成外部命令执行超时时限（2 秒）
+pub const DEFAULT_DESKTOP_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 管道读取工作线程句柄对
+struct PipeReaderHandles {
+    stdout_join: JoinHandle<Vec<u8>>,
+    stderr_join: JoinHandle<Vec<u8>>,
+}
+
+/// 启动并发管道读取线程以防管道缓冲区打满死锁
+fn spawn_pipe_readers(child: &mut Child) -> PipeReaderHandles {
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
+    let stdout_join = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = stdout_pipe {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let stderr_join = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = stderr_pipe {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    PipeReaderHandles {
+        stdout_join,
+        stderr_join,
+    }
+}
+
+/// 等待子进程退出或超时强制回收
+fn wait_child_with_timeout(
+    mut child: Child,
+    readers: PipeReaderHandles,
+    timeout: Duration,
+) -> io::Result<Output> {
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(10);
+
+    let status: ExitStatus = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = readers.stdout_join.join();
+                    let _ = readers.stderr_join.join();
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "外部子进程执行超时（超过 {:?}），已被强制终止并回收",
+                            timeout
+                        ),
+                    ));
+                }
+                thread::sleep(poll_interval);
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = readers.stdout_join.join();
+                let _ = readers.stderr_join.join();
+                return Err(e);
+            }
+        }
+    };
+
+    let stdout = readers.stdout_join.join().unwrap_or_default();
+    let stderr = readers.stderr_join.join().unwrap_or_default();
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// 带超时保护与自动僵尸进程回收的外部命令执行函数
+///
+/// # Errors
+/// 若子进程派生失败、I/O 管道异常或在超时时间内未完成执行，将返回对应的 [`io::Error`]。
+pub fn run_command_with_timeout(mut cmd: Command, timeout: Duration) -> io::Result<Output> {
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+    let readers = spawn_pipe_readers(&mut child);
+    wait_child_with_timeout(child, readers, timeout)
+}
+
+/// 安全读取 GSettings 键值（带超时保护）
+pub fn safe_gsettings_get(schema: &str, key: &str, timeout: Duration) -> Option<String> {
+    let mut cmd = Command::new("gsettings");
+    cmd.args(["get", schema, key]);
+    let out = run_command_with_timeout(cmd, timeout).ok()?;
+    if out.status.success() {
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
+/// 安全设置 GSettings 键值（带超时保护）
+pub fn safe_gsettings_set(schema: &str, key: &str, value: &str, timeout: Duration) -> bool {
+    let mut cmd = Command::new("gsettings");
+    cmd.args(["set", schema, key, value]);
+    run_command_with_timeout(cmd, timeout)
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_command_success() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("微澜安全子进程");
+        let res = run_command_with_timeout(cmd, Duration::from_secs(1));
+        assert!(res.is_ok());
+        let output = res.unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("微澜安全子进程"));
+    }
+
+    #[test]
+    fn test_run_command_timeout() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("2");
+        let start = Instant::now();
+        let res = run_command_with_timeout(cmd, Duration::from_millis(50));
+        let elapsed = start.elapsed();
+
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(elapsed < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_run_command_not_found() {
+        let cmd = Command::new("definitely_non_existent_binary_waylan_test");
+        let res = run_command_with_timeout(cmd, Duration::from_millis(100));
+        assert!(res.is_err());
+        assert_ne!(res.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+}
