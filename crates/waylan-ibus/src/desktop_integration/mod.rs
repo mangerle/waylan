@@ -11,9 +11,14 @@
 //! - **代价与局限**：首次写入组件 XML 后，若当前 `ibus-daemon` 尚未加载新缓存，需通知或重启 `ibus-daemon` 以刷新静态表。
 
 pub mod component_cache;
+pub mod executor;
 pub mod gnome_shell;
 
 pub use component_cache::{format_ibus_component_xml, format_ibus_engines_xml};
+pub use executor::{
+    run_command_with_timeout, safe_gsettings_get, safe_gsettings_set, safe_gsettings_set_async,
+    spawn_command_detached, DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+};
 pub use gnome_shell::{ensure_gnome_input_source_registered, sync_gnome_hide_indicator_extension};
 
 /// 确保微澜组件注册就绪并同步置顶至 GNOME 输入源列表

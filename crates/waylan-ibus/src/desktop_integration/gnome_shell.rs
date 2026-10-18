@@ -12,6 +12,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::executor::{
+    run_command_with_timeout, safe_gsettings_get, safe_gsettings_set,
+    DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+};
 use waylan_core::assets::detect_default_assets_path;
 use waylan_core::config::env_var_non_empty;
 
@@ -66,10 +70,9 @@ pub(crate) fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
 pub(crate) fn set_gnome_extension_enabled(extension_uuid: &str, enable: bool) {
     let action = if enable { "enable" } else { "disable" };
     update_gsettings_enabled_extensions(extension_uuid, enable);
-    match Command::new("gnome-extensions")
-        .args([action, extension_uuid])
-        .output()
-    {
+    let mut cmd = Command::new("gnome-extensions");
+    cmd.args([action, extension_uuid]);
+    match run_command_with_timeout(cmd, DEFAULT_DESKTOP_COMMAND_TIMEOUT) {
         Ok(out) if out.status.success() => {
             info!(
                 "[微澜 IBus] 已成功{} GNOME 隐藏原生指示器扩展 ({})",
@@ -85,7 +88,7 @@ pub(crate) fn set_gnome_extension_enabled(extension_uuid: &str, enable: bool) {
             );
         }
         Err(e) => {
-            debug!("[微澜 IBus] 调用 gnome-extensions 失败: {}", e);
+            debug!("[微澜 IBus] 调用 gnome-extensions 失败或超时: {}", e);
         }
     }
 }
@@ -106,16 +109,13 @@ pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
 
 /// 同步更新 GNOME GSettings enabled-extensions 列表
 fn update_gsettings_enabled_extensions(uuid: &str, enable: bool) {
-    let Ok(out) = Command::new("gsettings")
-        .args(["get", "org.gnome.shell", "enabled-extensions"])
-        .output()
-    else {
+    let Some(raw) = safe_gsettings_get(
+        "org.gnome.shell",
+        "enabled-extensions",
+        DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+    ) else {
         return;
     };
-    if !out.status.success() {
-        return;
-    }
-    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let mut list: Vec<String> = raw
         .trim_matches(|c| c == '[' || c == ']' || c == ' ')
         .split(',')
@@ -142,9 +142,12 @@ fn update_gsettings_enabled_extensions(uuid: &str, enable: bool) {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.shell", "enabled-extensions", &formatted])
-            .output();
+        safe_gsettings_set(
+            "org.gnome.shell",
+            "enabled-extensions",
+            &formatted,
+            DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+        );
         info!(
             "[微澜 IBus] 已同步更新 GNOME enabled-extensions: {}",
             formatted
@@ -162,11 +165,16 @@ pub fn ensure_gnome_input_source_registered(exclusive: bool) {
         update_gsettings_source_key("mru-sources");
     }
     // 同步将 GNOME 当前输入源索引切换至首项（微澜）
-    let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-        .output();
+    safe_gsettings_set(
+        "org.gnome.desktop.input-sources",
+        "current",
+        "0",
+        DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+    );
     // 确保 IBus 全局引擎激活为微澜
-    let _ = Command::new("ibus").args(["engine", "waylan"]).output();
+    let mut cmd = Command::new("ibus");
+    cmd.args(["engine", "waylan"]);
+    let _ = run_command_with_timeout(cmd, DEFAULT_DESKTOP_COMMAND_TIMEOUT);
 }
 
 /// 将微澜设为 GNOME 首选输入源并保留底层必须的 XKB 键盘布局
@@ -177,19 +185,22 @@ pub fn set_waylan_as_exclusive_input_source() {
     let exclusive_sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
 
     for key in ["sources", "mru-sources"] {
-        let _ = Command::new("gsettings")
-            .args([
-                "set",
-                "org.gnome.desktop.input-sources",
-                key,
-                exclusive_sources,
-            ])
-            .output();
+        safe_gsettings_set(
+            "org.gnome.desktop.input-sources",
+            key,
+            exclusive_sources,
+            DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+        );
     }
-    let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-        .output();
-    let _ = Command::new("ibus").args(["engine", "waylan"]).output();
+    safe_gsettings_set(
+        "org.gnome.desktop.input-sources",
+        "current",
+        "0",
+        DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+    );
+    let mut cmd = Command::new("ibus");
+    cmd.args(["engine", "waylan"]);
+    let _ = run_command_with_timeout(cmd, DEFAULT_DESKTOP_COMMAND_TIMEOUT);
     info!(
         "[微澜 IBus] 已将微澜设为 GNOME 首选输入源并保留 XKB 硬件按键基础映射: {}",
         exclusive_sources
@@ -198,28 +209,25 @@ pub fn set_waylan_as_exclusive_input_source() {
 
 /// 读取并更新指定的 GSettings 输入源键（将微澜置顶）
 fn update_gsettings_source_key(key: &str) {
-    let Ok(out) = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.input-sources", key])
-        .output()
-    else {
+    let Some(current) = safe_gsettings_get(
+        "org.gnome.desktop.input-sources",
+        key,
+        DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+    ) else {
         return;
     };
-    if !out.status.success() {
-        return;
-    }
 
-    let current = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if let Some(updated) = prioritize_waylan_in_gsettings_sources(&current) {
-        if let Ok(st) = Command::new("gsettings")
-            .args(["set", "org.gnome.desktop.input-sources", key, &updated])
-            .status()
-        {
-            if st.success() {
-                info!(
-                    "[微澜 IBus] 已将 ('ibus', 'waylan') 置顶同步至 GNOME 系统 {} 列表: {}",
-                    key, updated
-                );
-            }
+        if safe_gsettings_set(
+            "org.gnome.desktop.input-sources",
+            key,
+            &updated,
+            DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+        ) {
+            info!(
+                "[微澜 IBus] 已将 ('ibus', 'waylan') 置顶同步至 GNOME 系统 {} 列表: {}",
+                key, updated
+            );
         }
     }
 }

@@ -7,7 +7,6 @@
 //! - **代价与局限**：主线程常驻阻塞于 poll 调用。
 
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -28,6 +27,7 @@ use super::types::{
     build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_text, build_input_mode_property,
     IBUS_ENGINE_PREEDIT_CLEAR, IBUS_ORIENTATION_HORIZONTAL,
 };
+use crate::desktop_integration::{safe_gsettings_set_async, DEFAULT_DESKTOP_COMMAND_TIMEOUT};
 use crate::{IbusConfigReloader, IbusShutdownCoordinator};
 
 /// 后台监控循环参数结构体
@@ -62,9 +62,12 @@ fn handle_screen_saver_transition(
             guard.is_password_context = false;
         }
         ensure_global_engine_active(conn);
-        let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-            .output();
+        safe_gsettings_set_async(
+            "org.gnome.desktop.input-sources",
+            "current",
+            "0",
+            DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+        );
     }
     *last_screen_locked = current_screen_locked;
 }
@@ -364,9 +367,12 @@ pub(crate) fn ensure_global_engine_active(conn: &Connection) {
             debug!("[微澜 IBus] 自愈激活全局引擎 waylan 重试提示: {}", e);
         } else {
             info!("[微澜 IBus] 开机自愈完成：成功将全局引擎激活为 waylan (微澜)");
-            let _ = Command::new("gsettings")
-                .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-                .output();
+            safe_gsettings_set_async(
+                "org.gnome.desktop.input-sources",
+                "current",
+                "0",
+                DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+            );
         }
     }
 }

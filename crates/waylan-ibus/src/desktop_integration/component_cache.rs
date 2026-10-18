@@ -12,6 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::executor::{
+    run_command_with_timeout, spawn_command_detached, DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+};
 use waylan_core::assets::{detect_default_assets_path, resolve_icon_path_or_name};
 use waylan_core::config::env_var_non_empty;
 
@@ -62,11 +65,15 @@ pub(crate) fn ensure_user_icons_registered(home_path: &Path) {
             "[微澜 IBus] 已自动同步微澜矢量图标至用户图标目录: {:?}",
             target_dir
         );
-        let _ = Command::new("gtk-update-icon-cache")
-            .arg("-f")
+        let mut cmd = Command::new("gtk-update-icon-cache");
+        cmd.arg("-f")
             .arg("-t")
-            .arg(home_path.join(".local/share/icons/hicolor"))
-            .output();
+            .arg(home_path.join(".local/share/icons/hicolor"));
+        spawn_command_detached(
+            cmd,
+            DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+            "gtk-update-icon-cache",
+        );
     }
 }
 
@@ -145,11 +152,10 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
 /// 调用 `ibus write-cache` 将用户级组件编译进 `~/.cache/ibus/bus/registry`
 pub(crate) fn rebuild_user_ibus_cache(comp_dir: &Path) {
     let comp_path_env = format!("/usr/share/ibus/component:{}", comp_dir.display());
-    match Command::new("ibus")
-        .arg("write-cache")
-        .env("IBUS_COMPONENT_PATH", &comp_path_env)
-        .output()
-    {
+    let mut cmd = Command::new("ibus");
+    cmd.arg("write-cache")
+        .env("IBUS_COMPONENT_PATH", &comp_path_env);
+    match run_command_with_timeout(cmd, DEFAULT_DESKTOP_COMMAND_TIMEOUT) {
         Ok(out) if out.status.success() => {
             info!("[微澜 IBus] 已成功更新 ~/.cache/ibus/bus/registry 组件缓存");
         }
@@ -160,7 +166,7 @@ pub(crate) fn rebuild_user_ibus_cache(comp_dir: &Path) {
             );
         }
         Err(e) => {
-            debug!("[微澜 IBus] 调用 ibus write-cache 失败: {}", e);
+            debug!("[微澜 IBus] 调用 ibus write-cache 失败或超时: {}", e);
         }
     }
 }
@@ -231,7 +237,9 @@ pub(crate) fn cleanup_redundant_user_component(user_xml: &Path, env_conf: &Path)
     }
     if cleaned {
         info!("[微澜 IBus] 系统级组件已就绪，已清理用户目录冗余描述并刷新缓存。");
-        let _ = Command::new("ibus").arg("write-cache").output();
+        let mut cmd = Command::new("ibus");
+        cmd.arg("write-cache");
+        spawn_command_detached(cmd, DEFAULT_DESKTOP_COMMAND_TIMEOUT, "ibus-write-cache");
     }
 }
 
