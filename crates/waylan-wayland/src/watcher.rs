@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fs::inotify::ReadFlags;
-use waylan_engine::algo::custom_phrase::CustomPhraseManager;
 use waylan_engine::AlgoEngine;
 use waylan_sys::fs_watcher::{DirEventFilter, InotifyWatcher};
 
@@ -67,14 +66,10 @@ pub fn init_session_inotify_watcher(
     );
 }
 
-/// 执行默认的算法引擎词库与自定义短语热重载
+/// 执行默认的算法引擎词库与自定义短语热重载（统一委托 waylan_engine 权威实现）
 pub fn apply_default_engine_reload(engine: &mut AlgoEngine) {
-    let phrase_path = CustomPhraseManager::default_path();
-    engine.resources.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
-    let wal_opt = engine.user_dict_path().map(|p| p.to_path_buf());
-    if let Some(ref wal_path) = wal_opt {
-        engine.set_user_dict_path(wal_path);
-    }
+    let cfg = waylan_core::AppConfig::load_or_create();
+    waylan_engine::reload_engine_resources(engine, &cfg);
 }
 
 /// 执行默认的输入法运行时完整配置与词库热重载（统一收敛至 ImeRuntime::reload_config）
