@@ -129,9 +129,58 @@ pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     sync_voice_models_to_window(window, cfg);
 }
 
-/// 同步语音四大模型（ASR / VAD / 标点 / NS降噪）列表与当前选中项至界面
-fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
-    // 1. 统一 ASR 模型下拉列表（本地离线模型 + 线上云端 Profile）
+/// 根据路径或后缀在模型列表中查找匹配项下标
+fn find_model_index_by_path(models: &[waylan_voice::ModelItem], path: &str) -> Option<usize> {
+    models.iter().position(|m| {
+        m.path.as_deref() == Some(path)
+            || m.path
+                .as_deref()
+                .map(|p| p.ends_with(path) || path.ends_with(p))
+                .unwrap_or(false)
+    })
+}
+
+#[inline]
+fn default_offline_notice() -> String {
+    "当前处于【本地离线模式】: 采用阿里 Paraformer 流式 int8 ONNX 引擎，所有音频计算均在本地完成，零延迟、零网络依赖、保障隐私安全。".to_string()
+}
+
+/// 解析当前配置中生效的 ASR 模型列表下标、是否云端以及状态提示文本
+fn resolve_asr_selection(
+    cfg: &AppConfig,
+    local_asrs: &[waylan_voice::ModelItem],
+) -> (usize, bool, String) {
+    if let Some(ref sel) = cfg.voice.selected_asr {
+        if let Some(cloud_id) = sel.strip_prefix("cloud:") {
+            if let Some(pos) = cfg
+                .voice
+                .cloud_profiles
+                .iter()
+                .position(|p| p.id == cloud_id)
+            {
+                let profile = &cfg.voice.cloud_profiles[pos];
+                let notice = format!(
+                    "当前处于【云端转写模式 - {}】: 说话结束后将音频打包发送至目标云端 API，由远端 {} 模型转录。支持超大参数高精转写，请保持网络畅通。",
+                    profile.name, profile.model
+                );
+                return (local_asrs.len() + pos, true, notice);
+            }
+        } else if let Some(ref dir) = cfg.voice.offline.model_dir {
+            if let Some(pos) = find_model_index_by_path(local_asrs, dir) {
+                return (pos, false, default_offline_notice());
+            }
+        }
+    } else if let Some(ref dir) = cfg.voice.offline.model_dir {
+        if let Some(pos) = find_model_index_by_path(local_asrs, dir) {
+            return (pos, false, default_offline_notice());
+        }
+    }
+
+    (0, false, default_offline_notice())
+}
+
+/// 同步 ASR 模型下拉列表（本地离线模型 + 线上云端 Profile）
+fn sync_asr_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let local_asrs = waylan_voice::list_asr_models();
     let mut all_asr_names: Vec<slint::SharedString> = Vec::new();
     for m in &local_asrs {
@@ -147,138 +196,83 @@ fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         )));
     }
 
-    let mut selected_idx = 0;
-    let mut is_cloud = false;
-    let mut notice = "当前处于【本地离线模式】: 采用阿里 Paraformer 流式 int8 ONNX 引擎，所有音频计算均在本地完成，零延迟、零网络依赖、保障隐私安全。".to_string();
-
-    if let Some(ref sel) = cfg.voice.selected_asr {
-        if let Some(cloud_id) = sel.strip_prefix("cloud:") {
-            if let Some(pos) = cfg
-                .voice
-                .cloud_profiles
-                .iter()
-                .position(|p| p.id == cloud_id)
-            {
-                selected_idx = local_asrs.len() + pos;
-                is_cloud = true;
-                let profile = &cfg.voice.cloud_profiles[pos];
-                notice = format!(
-                    "当前处于【云端转写模式 - {}】: 说话结束后将音频打包发送至目标云端 API，由远端 {} 模型转录。支持超大参数高精转写，请保持网络畅通。",
-                    profile.name, profile.model
-                );
-            }
-        } else {
-            // 本地模型匹配
-            if let Some(ref dir) = cfg.voice.offline.model_dir {
-                for (i, m) in local_asrs.iter().enumerate() {
-                    if m.path.as_deref() == Some(dir)
-                        || m.path
-                            .as_deref()
-                            .map(|p| p.ends_with(dir) || dir.ends_with(p))
-                            .unwrap_or(false)
-                    {
-                        selected_idx = i;
-                        break;
-                    }
-                }
-            }
-        }
-    } else if let Some(ref dir) = cfg.voice.offline.model_dir {
-        for (i, m) in local_asrs.iter().enumerate() {
-            if m.path.as_deref() == Some(dir)
-                || m.path
-                    .as_deref()
-                    .map(|p| p.ends_with(dir) || dir.ends_with(p))
-                    .unwrap_or(false)
-            {
-                selected_idx = i;
-                break;
-            }
-        }
-    }
-
+    let (selected_idx, is_cloud, notice) = resolve_asr_selection(cfg, &local_asrs);
     window.set_asr_model_names(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(all_asr_names),
     )));
     window.set_asr_model_index(selected_idx as i32);
     window.set_asr_notice_text(slint::SharedString::from(notice));
     window.set_is_asr_cloud(is_cloud);
+}
 
-    // 2. VAD 端点检测模型
+/// 同步 VAD 端点检测模型下拉列表与选中索引
+fn sync_vad_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let vad_models = waylan_voice::list_vad_models();
     let vad_names: Vec<slint::SharedString> = vad_models
         .iter()
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
-    let mut vad_idx = 0;
-    if cfg.voice.vad.vad_type == waylan_core::VadModelType::Energy {
-        for (i, m) in vad_models.iter().enumerate() {
-            if m.path.as_deref() == Some("__energy__") {
-                vad_idx = i;
-                break;
-            }
-        }
+    let vad_idx = if cfg.voice.vad.vad_type == waylan_core::VadModelType::Energy {
+        vad_models
+            .iter()
+            .position(|m| m.path.as_deref() == Some("__energy__"))
+            .unwrap_or(0)
     } else if let Some(ref path) = cfg.voice.vad.model_path {
-        for (i, m) in vad_models.iter().enumerate() {
-            if m.path.as_deref() == Some(path)
-                || m.path
-                    .as_deref()
-                    .map(|p| p.ends_with(path) || path.ends_with(p))
-                    .unwrap_or(false)
-            {
-                vad_idx = i;
-                break;
-            }
-        }
-    }
+        find_model_index_by_path(&vad_models, path).unwrap_or(0)
+    } else {
+        0
+    };
     window.set_vad_model_names(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(vad_names),
     )));
     window.set_vad_model_index(vad_idx as i32);
+}
 
-    // 3. 标点符号预测模型
+/// 同步标点符号预测模型下拉列表与选中索引
+fn sync_punct_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let punct_models = waylan_voice::list_punct_models();
     let punct_names: Vec<slint::SharedString> = punct_models
         .iter()
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
-    let mut punct_idx = 0;
-    if let Some(ref path) = cfg.voice.punct_model_path {
-        for (i, m) in punct_models.iter().enumerate() {
-            if m.path.as_deref() == Some(path)
-                || m.path
-                    .as_deref()
-                    .map(|p| p.ends_with(path) || path.ends_with(p))
-                    .unwrap_or(false)
-            {
-                punct_idx = i;
-                break;
-            }
-        }
-    }
+    let punct_idx = cfg
+        .voice
+        .punct_model_path
+        .as_deref()
+        .and_then(|path| find_model_index_by_path(&punct_models, path))
+        .unwrap_or(0);
     window.set_punct_model_names(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(punct_names),
     )));
     window.set_punct_model_index(punct_idx as i32);
+}
 
-    // 4. 人声智能降噪 (NS) 模型
+/// 同步人声智能降噪 (NS) 模型下拉列表与选中索引
+fn sync_ns_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let ns_models = waylan_voice::list_ns_models();
     let ns_names: Vec<slint::SharedString> = ns_models
         .iter()
         .filter(|m| m.path.as_deref() != Some("__bypass__"))
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
-    let mut ns_idx = 0;
-    match cfg.voice.afe.ns_engine {
-        waylan_core::NsEngineType::Rnnoise => ns_idx = 0,
-        waylan_core::NsEngineType::DeepFilterNet => ns_idx = 1,
-        waylan_core::NsEngineType::Gtcrn => ns_idx = 2,
-        _ => {}
-    }
+    let ns_idx = match cfg.voice.afe.ns_engine {
+        waylan_core::NsEngineType::Rnnoise => 0,
+        waylan_core::NsEngineType::DeepFilterNet => 1,
+        waylan_core::NsEngineType::Gtcrn => 2,
+        _ => 0,
+    };
     window.set_ns_model_names(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(ns_names),
     )));
     window.set_ns_model_index(ns_idx);
+}
+
+/// 同步语音四大模型（ASR / VAD / 标点 / NS降噪）列表与当前选中项至界面
+fn sync_voice_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
+    sync_asr_models_to_window(window, cfg);
+    sync_vad_models_to_window(window, cfg);
+    sync_punct_models_to_window(window, cfg);
+    sync_ns_models_to_window(window, cfg);
 }
 
 /// 从 Slint 界面属性增量读取语音输入配置
