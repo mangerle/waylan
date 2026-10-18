@@ -67,40 +67,7 @@ impl OpenCcDict {
 
     /// 按多级路径加载默认简繁词典
     pub fn load_default() -> Self {
-        let mut bin_candidates = Vec::with_capacity(10);
-        if let Ok(custom) = std::env::var("WAYLAN_OPENCC_DICT_PATH") {
-            if !custom.trim().is_empty() {
-                bin_candidates.push(PathBuf::from(custom));
-            }
-        }
-        if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
-            if !data_home.trim().is_empty() {
-                bin_candidates.push(
-                    PathBuf::from(data_home)
-                        .join("waylan")
-                        .join("opencc.dict.bin"),
-                );
-            }
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            if !home.trim().is_empty() {
-                bin_candidates.push(
-                    PathBuf::from(home)
-                        .join(".local")
-                        .join("share")
-                        .join("waylan")
-                        .join("opencc.dict.bin"),
-                );
-            }
-        }
-        bin_candidates.push(PathBuf::from("data/opencc.dict.bin"));
-        bin_candidates.push(PathBuf::from("../../data/opencc.dict.bin"));
-        bin_candidates.push(PathBuf::from("/usr/share/waylan/data/opencc.dict.bin"));
-        bin_candidates.push(PathBuf::from("/usr/share/waylan/opencc.dict.bin"));
-        bin_candidates.push(PathBuf::from(
-            "/usr/local/share/waylan/data/opencc.dict.bin",
-        ));
-        bin_candidates.push(PathBuf::from("/usr/local/share/waylan/opencc.dict.bin"));
+        let bin_candidates = waylan_core::config::opencc_dict_search_paths();
 
         for path in &bin_candidates {
             if path.exists() {

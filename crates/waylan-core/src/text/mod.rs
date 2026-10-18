@@ -5,6 +5,9 @@
 //! - **核心优势**：纯栈内定长快速匹配与无堆分配内联优化，纳秒级判定。
 //! - **代价与局限**：CJK 字符范围收敛于当前主流 Unicode 标准中的表意文字及扩展区，不包含非汉字类的全角假名或谚文。
 
+pub mod pangu;
+pub use pangu::{apply_pangu_spacing, should_insert_pangu_space, PanguSpacing};
+
 /// 判断字符是否为 CJK 表意汉字（覆盖汉字零“〇”、扩展 A~I 区、基本汉字区、兼容汉字及第三辅助平面汉字）
 ///
 /// # 判定区间
