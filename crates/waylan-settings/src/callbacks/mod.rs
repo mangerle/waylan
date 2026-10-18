@@ -8,7 +8,10 @@
 pub mod desktop;
 pub mod tasks;
 
-pub use desktop::{pick_directory_dialog, pick_file_dialog, sync_gnome_indicator_mode};
+pub use desktop::{
+    pick_directory_dialog, pick_directory_dialog_async, pick_file_dialog, pick_file_dialog_async,
+    sync_gnome_indicator_mode,
+};
 pub(crate) use tasks::TaskRunningGuard;
 
 use std::fs;
@@ -141,31 +144,11 @@ pub fn register_settings_callbacks(
 
     // 3. 拼音词库导入回调
     let is_pinyin_importing = Arc::new(AtomicBool::new(false));
-    let pinyin_running = is_pinyin_importing.clone();
+    let pinyin_running = is_pinyin_importing;
     let window_weak = window.as_weak();
     window.on_pick_and_import_pinyin(move || {
         if let Some(win) = window_weak.upgrade() {
-            if pinyin_running
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                win.set_pinyin_import_status(SharedString::from(
-                    "已有拼音词库导入任务正在执行，请稍候...",
-                ));
-                return;
-            }
-            if let Some(path) = pick_file_dialog(
-                "请选择要导入的拼音词库文件",
-                "词库文件 (*.txt, *.dict.yaml, *.yaml, *.scel)",
-                "*.txt *.dict.yaml *.yaml *.yml *.scel",
-            ) {
-                let path_str = path.to_string_lossy().to_string();
-                win.set_pinyin_import_path(SharedString::from(&path_str));
-                win.set_pinyin_import_status(SharedString::from("正在解析并合入词库，请稍候..."));
-                spawn_pinyin_import_task(win.as_weak(), path_str, pinyin_running.clone());
-            } else {
-                pinyin_running.store(false, Ordering::Release);
-            }
+            handle_pick_and_import_pinyin(&win, &pinyin_running);
         }
     });
 
@@ -178,32 +161,7 @@ pub fn register_settings_callbacks(
     let aux_running_for_en = is_aux_importing.clone();
     window.on_pick_and_import_english(move || {
         if let Some(win) = window_weak.upgrade() {
-            if aux_running_for_en
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                win.set_english_import_status(SharedString::from(
-                    "已有辅助词库导入任务正在执行，请稍候...",
-                ));
-                return;
-            }
-            if let Some(path) = pick_file_dialog(
-                "请选择要导入的英文词库文件",
-                "英文词汇与词频文件 (*.txt, *.dict.yaml, *.yaml)",
-                "*.txt *.dict.yaml *.yaml *.yml",
-            ) {
-                let path_str = path.to_string_lossy().to_string();
-                win.set_english_import_path(SharedString::from(&path_str));
-                win.set_english_import_status(SharedString::from("正在解析英文词库，请稍候..."));
-                spawn_english_import_task(
-                    win.as_weak(),
-                    path_str,
-                    aux_for_en.clone(),
-                    aux_running_for_en.clone(),
-                );
-            } else {
-                aux_running_for_en.store(false, Ordering::Release);
-            }
+            handle_pick_and_import_english(&win, &aux_for_en, &aux_running_for_en);
         }
     });
 
@@ -213,32 +171,7 @@ pub fn register_settings_callbacks(
     let aux_running_for_sym = is_aux_importing;
     window.on_pick_and_import_symbols(move || {
         if let Some(win) = window_weak.upgrade() {
-            if aux_running_for_sym
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                win.set_symbols_import_status(SharedString::from(
-                    "已有辅助词库导入任务正在执行，请稍候...",
-                ));
-                return;
-            }
-            if let Some(path) = pick_file_dialog(
-                "请选择要导入的特殊符号库文件",
-                "符号定义文件 (*.txt, *.dict.yaml, *.yaml)",
-                "*.txt *.dict.yaml *.yaml *.yml",
-            ) {
-                let path_str = path.to_string_lossy().to_string();
-                win.set_symbols_import_path(SharedString::from(&path_str));
-                win.set_symbols_import_status(SharedString::from("正在解析特殊符号库，请稍候..."));
-                spawn_symbols_import_task(
-                    win.as_weak(),
-                    path_str,
-                    aux_for_sym.clone(),
-                    aux_running_for_sym.clone(),
-                );
-            } else {
-                aux_running_for_sym.store(false, Ordering::Release);
-            }
+            handle_pick_and_import_symbols(&win, &aux_for_sym, &aux_running_for_sym);
         }
     });
 
@@ -301,4 +234,137 @@ pub fn register_settings_callbacks(
             win.set_global_status(SharedString::from("用户历史自造词记忆已彻底清空。"));
         }
     });
+}
+
+/// 处理拼音词库文件选取与异步导入派发
+fn handle_pick_and_import_pinyin(win: &SettingsWindow, running_flag: &Arc<AtomicBool>) {
+    if running_flag
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        win.set_pinyin_import_status(SharedString::from(
+            "已有拼音词库导入任务正在执行，请稍候...",
+        ));
+        return;
+    }
+    win.set_pinyin_import_status(SharedString::from("正在等待选择文件..."));
+    let win_weak = win.as_weak();
+    let running_flag = running_flag.clone();
+
+    pick_file_dialog_async(
+        "请选择要导入的拼音词库文件",
+        "词库文件 (*.txt, *.dict.yaml, *.yaml, *.scel)",
+        "*.txt *.dict.yaml *.yaml *.yml *.scel",
+        move |selected| {
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(win) = win_weak.upgrade() else {
+                    running_flag.store(false, Ordering::Release);
+                    return;
+                };
+                if let Some(path) = selected {
+                    let path_str = path.to_string_lossy().to_string();
+                    win.set_pinyin_import_path(SharedString::from(&path_str));
+                    win.set_pinyin_import_status(SharedString::from(
+                        "正在解析并合入词库，请稍候...",
+                    ));
+                    spawn_pinyin_import_task(win.as_weak(), path_str, running_flag);
+                } else {
+                    win.set_pinyin_import_status(SharedString::from("已取消文件选择"));
+                    running_flag.store(false, Ordering::Release);
+                }
+            });
+        },
+    );
+}
+
+/// 处理英文辅助词库文件选取与异步导入派发
+fn handle_pick_and_import_english(
+    win: &SettingsWindow,
+    aux_dict: &Arc<Mutex<AuxiliaryDict>>,
+    running_flag: &Arc<AtomicBool>,
+) {
+    if running_flag
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        win.set_english_import_status(SharedString::from(
+            "已有辅助词库导入任务正在执行，请稍候...",
+        ));
+        return;
+    }
+    win.set_english_import_status(SharedString::from("正在等待选择文件..."));
+    let win_weak = win.as_weak();
+    let aux_dict = aux_dict.clone();
+    let running_flag = running_flag.clone();
+
+    pick_file_dialog_async(
+        "请选择要导入的英文词库文件",
+        "英文词汇与词频文件 (*.txt, *.dict.yaml, *.yaml)",
+        "*.txt *.dict.yaml *.yaml *.yml",
+        move |selected| {
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(win) = win_weak.upgrade() else {
+                    running_flag.store(false, Ordering::Release);
+                    return;
+                };
+                if let Some(path) = selected {
+                    let path_str = path.to_string_lossy().to_string();
+                    win.set_english_import_path(SharedString::from(&path_str));
+                    win.set_english_import_status(SharedString::from(
+                        "正在解析英文词库，请稍候...",
+                    ));
+                    spawn_english_import_task(win.as_weak(), path_str, aux_dict, running_flag);
+                } else {
+                    win.set_english_import_status(SharedString::from("已取消文件选择"));
+                    running_flag.store(false, Ordering::Release);
+                }
+            });
+        },
+    );
+}
+
+/// 处理特殊符号库文件选取与异步导入派发
+fn handle_pick_and_import_symbols(
+    win: &SettingsWindow,
+    aux_dict: &Arc<Mutex<AuxiliaryDict>>,
+    running_flag: &Arc<AtomicBool>,
+) {
+    if running_flag
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        win.set_symbols_import_status(SharedString::from(
+            "已有辅助词库导入任务正在执行，请稍候...",
+        ));
+        return;
+    }
+    win.set_symbols_import_status(SharedString::from("正在等待选择文件..."));
+    let win_weak = win.as_weak();
+    let aux_dict = aux_dict.clone();
+    let running_flag = running_flag.clone();
+
+    pick_file_dialog_async(
+        "请选择要导入的特殊符号库文件",
+        "符号定义文件 (*.txt, *.dict.yaml, *.yaml)",
+        "*.txt *.dict.yaml *.yaml *.yml",
+        move |selected| {
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(win) = win_weak.upgrade() else {
+                    running_flag.store(false, Ordering::Release);
+                    return;
+                };
+                if let Some(path) = selected {
+                    let path_str = path.to_string_lossy().to_string();
+                    win.set_symbols_import_path(SharedString::from(&path_str));
+                    win.set_symbols_import_status(SharedString::from(
+                        "正在解析特殊符号库，请稍候...",
+                    ));
+                    spawn_symbols_import_task(win.as_weak(), path_str, aux_dict, running_flag);
+                } else {
+                    win.set_symbols_import_status(SharedString::from("已取消文件选择"));
+                    running_flag.store(false, Ordering::Release);
+                }
+            });
+        },
+    );
 }

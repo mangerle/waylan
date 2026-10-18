@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-/// 同步更新 GNOME 输入源列表与指示器隐藏扩展
+/// 同步更新 GNOME 输入源列表与指示器隐藏扩展（后台异步派发执行，绝不阻塞 UI 线程）
 pub fn sync_gnome_indicator_mode(exclusive: bool) {
     if !std::env::var("XDG_CURRENT_DESKTOP")
         .map(|d| d.to_uppercase().contains("GNOME"))
@@ -16,25 +16,29 @@ pub fn sync_gnome_indicator_mode(exclusive: bool) {
         return;
     }
 
-    let sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
+    let _ = std::thread::Builder::new()
+        .name("sync-gnome-mode".to_string())
+        .spawn(move || {
+            let sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
 
-    for key in ["sources", "mru-sources"] {
-        let _ = std::process::Command::new("gsettings")
-            .args(["set", "org.gnome.desktop.input-sources", key, sources])
-            .output();
-    }
-    let _ = std::process::Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-        .output();
-    let _ = std::process::Command::new("ibus")
-        .args(["engine", "waylan"])
-        .output();
+            for key in ["sources", "mru-sources"] {
+                let _ = std::process::Command::new("gsettings")
+                    .args(["set", "org.gnome.desktop.input-sources", key, sources])
+                    .output();
+            }
+            let _ = std::process::Command::new("gsettings")
+                .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
+                .output();
+            let _ = std::process::Command::new("ibus")
+                .args(["engine", "waylan"])
+                .output();
 
-    let action = if exclusive { "enable" } else { "disable" };
-    let uuid = "waylan-hide-input-source@waylan.org";
-    let _ = std::process::Command::new("gnome-extensions")
-        .args([action, uuid])
-        .output();
+            let action = if exclusive { "enable" } else { "disable" };
+            let uuid = "waylan-hide-input-source@waylan.org";
+            let _ = std::process::Command::new("gnome-extensions")
+                .args([action, uuid])
+                .output();
+        });
 }
 
 /// 调用系统原生对话框 (zenity) 选择外部词库文件
@@ -90,5 +94,43 @@ pub fn pick_directory_dialog(title: &str) -> Option<PathBuf> {
         Some(path)
     } else {
         None
+    }
+}
+
+/// 异步调用系统原生对话框 (zenity) 选择外部文件，并通过回调接收路径结果（不阻塞当前 UI 线程）
+pub fn pick_file_dialog_async<F>(
+    title: &'static str,
+    filter_desc: &'static str,
+    filter_patterns: &'static str,
+    on_selected: F,
+) where
+    F: FnOnce(Option<PathBuf>) + Send + 'static,
+{
+    let spawn_res = std::thread::Builder::new()
+        .name("zenity-file-picker".to_string())
+        .spawn(move || {
+            let path = pick_file_dialog(title, filter_desc, filter_patterns);
+            on_selected(path);
+        });
+
+    if let Err(e) = spawn_res {
+        log::warn!("[偏好设置 警告] 派发 Zenity 文件选择线程失败: {}", e);
+    }
+}
+
+/// 异步调用系统原生对话框 (zenity) 选择外部目录（不阻塞当前 UI 线程）
+pub fn pick_directory_dialog_async<F>(title: &'static str, on_selected: F)
+where
+    F: FnOnce(Option<PathBuf>) + Send + 'static,
+{
+    let spawn_res = std::thread::Builder::new()
+        .name("zenity-dir-picker".to_string())
+        .spawn(move || {
+            let path = pick_directory_dialog(title);
+            on_selected(path);
+        });
+
+    if let Err(e) = spawn_res {
+        log::warn!("[偏好设置 警告] 派发 Zenity 目录选择线程失败: {}", e);
     }
 }

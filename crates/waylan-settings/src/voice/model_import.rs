@@ -5,6 +5,7 @@
 //! - **核心优势**：大文件 I/O 派发至独立后台线程，杜绝大模型复制导致 Slint UI 线程挂起假死。
 //! - **代价与局限**：模型文件复制需要目标磁盘具有足够的剩余空间。
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use slint::{ComponentHandle, SharedString};
@@ -12,7 +13,7 @@ use waylan_core::config::AppConfig;
 use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory};
 
 use super::save_config_and_notify_status;
-use crate::callbacks::{pick_directory_dialog, pick_file_dialog};
+use crate::callbacks::{pick_directory_dialog_async, pick_file_dialog_async};
 use crate::sync::update_config_from_window;
 use crate::SettingsWindow;
 
@@ -76,124 +77,207 @@ pub(crate) fn register_model_import_callbacks(
     });
 }
 
-/// 执行 ASR 复合模型包目录导入（派发后台线程执行大文件递归复制，防止阻塞主 UI 线程）
+/// 执行 ASR 复合模型包目录导入（对话框异步弹出并在后台线程执行大文件递归复制，防止阻塞主 UI 线程）
 fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Arc<Mutex<AppConfig>>) {
-    let Some(src_path) =
-        pick_directory_dialog("请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)")
-    else {
-        return;
-    };
     win.set_global_status_is_error(false);
-    win.set_global_status(SharedString::from("正在后台导入 ASR 复合模型包，请稍候..."));
+    win.set_global_status(SharedString::from("正在等待选择 ASR 模型目录..."));
 
     let win_weak = win.as_weak();
     let cfg_cell = current_cfg_cell.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name("asr-importer".to_string())
-        .spawn(move || {
-            let imported_opt = waylan_voice::import_asr_model_from_dir(&src_path);
+
+    pick_directory_dialog_async(
+        "请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)",
+        move |selected| {
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak.upgrade() {
-                    match imported_opt {
-                        Some(imported_path) => {
-                            let name = imported_path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
-                            update_config_from_window(&w, &mut cfg);
-                            cfg.voice.offline.model_dir =
-                                Some(imported_path.to_string_lossy().to_string());
-                            save_config_and_notify_status(
-                                &w,
-                                &cfg_cell,
-                                cfg,
-                                &format!("成功导入 ASR 模型: {}", name),
-                                "保存 ASR 模型配置失败",
-                            );
-                        }
-                        None => {
-                            w.set_global_status_is_error(true);
-                            w.set_global_status(SharedString::from(
-                                "导入 ASR 复合模型包失败，请检查文件权限与目录完整性",
-                            ));
-                        }
-                    }
+                let Some(win) = win_weak.upgrade() else {
+                    return;
+                };
+                let Some(src_path) = selected else {
+                    win.set_global_status(SharedString::from("已取消选择 ASR 模型目录"));
+                    return;
+                };
+                win.set_global_status_is_error(false);
+                win.set_global_status(SharedString::from("正在后台导入 ASR 复合模型包，请稍候..."));
+
+                let win_weak_inner = win.as_weak();
+                let cfg_cell_inner = cfg_cell.clone();
+                if let Err(e) = std::thread::Builder::new()
+                    .name("asr-importer".to_string())
+                    .spawn(move || {
+                        let imported_opt = waylan_voice::import_asr_model_from_dir(&src_path);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = win_weak_inner.upgrade() {
+                                match imported_opt {
+                                    Some(imported_path) => {
+                                        let name = imported_path
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .to_string();
+                                        let mut cfg = cfg_cell_inner
+                                            .lock()
+                                            .map(|g| g.clone())
+                                            .unwrap_or_default();
+                                        update_config_from_window(&w, &mut cfg);
+                                        cfg.voice.offline.model_dir =
+                                            Some(imported_path.to_string_lossy().to_string());
+                                        save_config_and_notify_status(
+                                            &w,
+                                            &cfg_cell_inner,
+                                            cfg,
+                                            &format!("成功导入 ASR 模型: {}", name),
+                                            "保存 ASR 模型配置失败",
+                                        );
+                                    }
+                                    None => {
+                                        w.set_global_status_is_error(true);
+                                        w.set_global_status(SharedString::from(
+                                            "导入 ASR 复合模型包失败，请检查文件权限与目录完整性",
+                                        ));
+                                    }
+                                }
+                            }
+                        });
+                    })
+                {
+                    log::warn!("[偏好设置 警告] 派发 ASR 导入后台线程失败: {}", e);
+                    win.set_global_status_is_error(true);
+                    win.set_global_status(SharedString::from(format!(
+                        "启动模型导入线程失败: {}",
+                        e
+                    )));
                 }
             });
-        })
-    {
-        log::warn!("[偏好设置 警告] 派发 ASR 导入后台线程失败: {}", e);
-        win.set_global_status_is_error(true);
-        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
-    }
+        },
+    );
 }
 
-/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改（后台线程异步复制）
+/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改（对话框异步弹出并在后台线程异步复制）
 fn handle_import_onnx_model<F>(
     win: &SettingsWindow,
     current_cfg_cell: &Arc<Mutex<AppConfig>>,
     category: ModelSubdirectory,
-    title: &str,
-    mut apply_fn: F,
+    title: &'static str,
+    apply_fn: F,
 ) where
     F: FnMut(&mut AppConfig, &str) + Send + 'static,
 {
-    let Some(src_path) = pick_file_dialog(title, "ONNX 神经网络模型 (*.onnx)", "*.onnx")
-    else {
-        return;
-    };
     win.set_global_status_is_error(false);
-    win.set_global_status(SharedString::from(format!(
-        "正在后台导入 {} 神经网络模型，请稍候...",
-        category.as_str().to_uppercase()
-    )));
+    win.set_global_status(SharedString::from("正在等待选择模型文件..."));
 
     let win_weak = win.as_weak();
     let cfg_cell = current_cfg_cell.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name(format!("{}-model-importer", category.as_str()))
-        .spawn(move || {
-            let imported_opt = import_onnx_model_from_file(category, &src_path);
+
+    pick_file_dialog_async(
+        title,
+        "ONNX 神经网络模型 (*.onnx)",
+        "*.onnx",
+        move |selected| {
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak.upgrade() {
-                    match imported_opt {
-                        Some(imported_path) => {
-                            let name = imported_path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
-                            update_config_from_window(&w, &mut cfg);
-                            apply_fn(&mut cfg, &imported_path.to_string_lossy());
-                            save_config_and_notify_status(
-                                &w,
-                                &cfg_cell,
-                                cfg,
-                                &format!(
-                                    "成功导入 {} 模型: {}",
-                                    category.as_str().to_uppercase(),
-                                    name
-                                ),
-                                &format!("保存 {} 模型配置失败", category.as_str().to_uppercase()),
-                            );
-                        }
-                        None => {
-                            w.set_global_status_is_error(true);
-                            w.set_global_status(SharedString::from(format!(
-                                "导入 {} 神经网络模型失败，请检查文件权限",
-                                category.as_str().to_uppercase()
-                            )));
-                        }
-                    }
+                let Some(win) = win_weak.upgrade() else {
+                    return;
+                };
+                let Some(src_path) = selected else {
+                    win.set_global_status(SharedString::from("已取消选择模型文件"));
+                    return;
+                };
+                win.set_global_status_is_error(false);
+                win.set_global_status(SharedString::from(format!(
+                    "正在后台导入 {} 神经网络模型，请稍候...",
+                    category.as_str().to_uppercase()
+                )));
+
+                let win_weak_inner = win.as_weak();
+                let cfg_cell_inner = cfg_cell.clone();
+                if let Err(e) = std::thread::Builder::new()
+                    .name(format!("{}-model-importer", category.as_str()))
+                    .spawn(move || {
+                        run_model_import_thread(
+                            category,
+                            src_path,
+                            win_weak_inner,
+                            cfg_cell_inner,
+                            apply_fn,
+                        );
+                    })
+                {
+                    log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
+                    win.set_global_status_is_error(true);
+                    win.set_global_status(SharedString::from(format!(
+                        "启动模型导入线程失败: {}",
+                        e
+                    )));
                 }
             });
-        })
-    {
-        log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
-        win.set_global_status_is_error(true);
-        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
+        },
+    );
+}
+
+/// 成功导入模型后原子更新配置与主界面状态
+fn apply_imported_model_to_config_and_ui(
+    w: &SettingsWindow,
+    cfg_cell: &Arc<Mutex<AppConfig>>,
+    category: ModelSubdirectory,
+    imported_path: PathBuf,
+    mut apply_fn: impl FnMut(&mut AppConfig, &str),
+) {
+    let name = imported_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
+    update_config_from_window(w, &mut cfg);
+    apply_fn(&mut cfg, &imported_path.to_string_lossy());
+    save_config_and_notify_status(
+        w,
+        cfg_cell,
+        cfg,
+        &format!(
+            "成功导入 {} 模型: {}",
+            category.as_str().to_uppercase(),
+            name
+        ),
+        &format!("保存 {} 模型配置失败", category.as_str().to_uppercase()),
+    );
+}
+
+/// 在 Slint 主线程中处理模型导入结果事件
+fn handle_imported_model_event(
+    w: &SettingsWindow,
+    cfg_cell: &Arc<Mutex<AppConfig>>,
+    category: ModelSubdirectory,
+    imported_opt: Option<PathBuf>,
+    apply_fn: impl FnMut(&mut AppConfig, &str),
+) {
+    match imported_opt {
+        Some(imported_path) => {
+            apply_imported_model_to_config_and_ui(w, cfg_cell, category, imported_path, apply_fn);
+        }
+        None => {
+            w.set_global_status_is_error(true);
+            w.set_global_status(SharedString::from(format!(
+                "导入 {} 神经网络模型失败，请检查文件权限",
+                category.as_str().to_uppercase()
+            )));
+        }
     }
+}
+
+/// 后台线程执行具体的模型文件复制并通知前台
+fn run_model_import_thread<F>(
+    category: ModelSubdirectory,
+    src_path: PathBuf,
+    win_weak: slint::Weak<SettingsWindow>,
+    cfg_cell: Arc<Mutex<AppConfig>>,
+    apply_fn: F,
+) where
+    F: FnMut(&mut AppConfig, &str) + Send + 'static,
+{
+    let imported_opt = import_onnx_model_from_file(category, &src_path);
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = win_weak.upgrade() {
+            handle_imported_model_event(&w, &cfg_cell, category, imported_opt, apply_fn);
+        }
+    });
 }
