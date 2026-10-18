@@ -1,25 +1,21 @@
-//! 偏好设置窗口业务回调注册与桌面集成
+//! 偏好设置窗口业务回调注册与装配
 //!
 //! # 设计原理
-//! - **实现初衷**：将短语增删、词库异步导入、配置持久化与桌面 GNOME 指示器同步等 UI 回调注册集中收敛。
-//! - **核心优势**：使 `lib.rs` 保持极简的高层装配，将复杂事件交互隔离至专用模块。
+//! - **实现初衷**：收敛短语增删、词库异步导入挂载、配置持久化与桌面 GNOME 指示器同步等 UI 回调注册。
+//! - **核心优势**：按职责裂变为子模块（desktop / tasks），本模块仅保留轻量高层回调装配，复杂度严格受控。
+//! - **代价与局限**：回调函数需捕获 Slint 窗口的 Weak 引用进行跨线程安全更新。
+
+pub mod desktop;
+pub mod tasks;
+
+pub use desktop::{pick_directory_dialog, pick_file_dialog, sync_gnome_indicator_mode};
+pub(crate) use tasks::TaskRunningGuard;
 
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-
-/// 异步任务防重入与生命周期安全守护对象 (RAII)
-///
-/// 确保异步任务在退出（无论正常完成还是异常恐慌）时，均能原子化清除正在执行标志，杜绝并发重入死锁。
-pub(crate) struct TaskRunningGuard(pub(crate) Arc<AtomicBool>);
-
-impl Drop for TaskRunningGuard {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use waylan_algo::custom_phrase::CustomPhraseManager;
@@ -28,11 +24,9 @@ use waylan_algo::AuxiliaryDict;
 use waylan_algo::CompactMmapLexicon;
 use waylan_core::config::AppConfig;
 
-use crate::importer::{
-    import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file,
-};
 use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::{PhraseItem, SettingsWindow};
+use tasks::{spawn_english_import_task, spawn_pinyin_import_task, spawn_symbols_import_task};
 
 /// 统计与装载词库信息到窗口
 pub fn populate_lexicon_statistics(
@@ -307,215 +301,4 @@ pub fn register_settings_callbacks(
             win.set_global_status(SharedString::from("用户历史自造词记忆已彻底清空。"));
         }
     });
-}
-
-/// 异步执行拼音词库导入并在主界面刷新状态
-fn spawn_pinyin_import_task(
-    win_weak: slint::Weak<SettingsWindow>,
-    path_str: String,
-    running_flag: Arc<AtomicBool>,
-) {
-    let guard_flag = running_flag.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name("pinyin-importer".to_string())
-        .spawn(move || {
-            let _guard = TaskRunningGuard(guard_flag);
-            let result = import_pinyin_dict_file(&path_str);
-            let count = UserAdaptiveModel::load_or_replay_wal(AppConfig::user_dict_path())
-                .map(|m| m.total_entries())
-                .unwrap_or(0);
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak.upgrade() {
-                    match result {
-                        Ok(msg) => {
-                            w.set_pinyin_import_status(SharedString::from(msg));
-                            w.set_user_model_info(SharedString::from(format!(
-                                "自适应个性化历史词模型: {} 条记忆",
-                                count
-                            )));
-                        }
-                        Err(err) => {
-                            w.set_pinyin_import_status(SharedString::from(format!(
-                                "导入失败: {}",
-                                err
-                            )));
-                        }
-                    }
-                }
-            });
-        })
-    {
-        running_flag.store(false, Ordering::Release);
-        log::warn!("[偏好设置 警告] 派发拼音导入线程失败: {}", e);
-    }
-}
-
-/// 异步执行英文词库导入并在主界面刷新状态
-fn spawn_english_import_task(
-    win_weak: slint::Weak<SettingsWindow>,
-    path_str: String,
-    aux_lock: Arc<Mutex<AuxiliaryDict>>,
-    running_flag: Arc<AtomicBool>,
-) {
-    let guard_flag = running_flag.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name("english-dict-importer".to_string())
-        .spawn(move || {
-            let _guard = TaskRunningGuard(guard_flag);
-            let result = {
-                let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
-                import_english_dict_file(&path_str, &mut aux)
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak.upgrade() {
-                    match result {
-                        Ok((msg, total)) => {
-                            w.set_english_import_status(SharedString::from(msg));
-                            w.set_english_dict_info(SharedString::from(format!(
-                                "已就绪常用英文单词: {} 词",
-                                total
-                            )));
-                        }
-                        Err(err) => {
-                            w.set_english_import_status(SharedString::from(format!(
-                                "导入失败: {}",
-                                err
-                            )));
-                        }
-                    }
-                }
-            });
-        })
-    {
-        running_flag.store(false, Ordering::Release);
-        log::warn!("[偏好设置 警告] 派发英文词库导入线程失败: {}", e);
-    }
-}
-
-/// 异步执行特殊符号库导入并在主界面刷新状态
-fn spawn_symbols_import_task(
-    win_weak: slint::Weak<SettingsWindow>,
-    path_str: String,
-    aux_lock: Arc<Mutex<AuxiliaryDict>>,
-    running_flag: Arc<AtomicBool>,
-) {
-    let guard_flag = running_flag.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name("symbols-dict-importer".to_string())
-        .spawn(move || {
-            let _guard = TaskRunningGuard(guard_flag);
-            let result = {
-                let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
-                import_symbols_dict_file(&path_str, &mut aux)
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak.upgrade() {
-                    match result {
-                        Ok((msg, total)) => {
-                            w.set_symbols_import_status(SharedString::from(msg));
-                            w.set_symbols_dict_info(SharedString::from(format!(
-                                "已收录语义符号与表情: {} 项",
-                                total
-                            )));
-                        }
-                        Err(err) => {
-                            w.set_symbols_import_status(SharedString::from(format!(
-                                "导入失败: {}",
-                                err
-                            )));
-                        }
-                    }
-                }
-            });
-        })
-    {
-        running_flag.store(false, Ordering::Release);
-        log::warn!("[偏好设置 警告] 派发符号词库导入线程失败: {}", e);
-    }
-}
-
-/// 同步更新 GNOME 输入源列表与指示器隐藏扩展
-pub fn sync_gnome_indicator_mode(exclusive: bool) {
-    if !std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_uppercase().contains("GNOME"))
-        .unwrap_or(false)
-    {
-        return;
-    }
-
-    let sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
-
-    for key in ["sources", "mru-sources"] {
-        let _ = std::process::Command::new("gsettings")
-            .args(["set", "org.gnome.desktop.input-sources", key, sources])
-            .output();
-    }
-    let _ = std::process::Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-        .output();
-    let _ = std::process::Command::new("ibus")
-        .args(["engine", "waylan"])
-        .output();
-
-    let action = if exclusive { "enable" } else { "disable" };
-    let uuid = "waylan-hide-input-source@waylan.org";
-    let _ = std::process::Command::new("gnome-extensions")
-        .args([action, uuid])
-        .output();
-}
-
-/// 调用系统原生对话框 (zenity) 选择外部词库文件
-pub fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("zenity")
-        .arg("--file-selection")
-        .arg(format!(
-            "--file-filter={} | {}",
-            filter_desc, filter_patterns
-        ))
-        .arg("--file-filter=所有文件 (*.*) | *")
-        .arg(format!("--title={}", title))
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let selected_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if selected_str.is_empty() {
-        return None;
-    }
-
-    let path = PathBuf::from(&selected_str);
-    if path.is_file() {
-        Some(path)
-    } else {
-        None
-    }
-}
-
-/// 调用系统原生对话框 (zenity) 选择外部目录（如 ASR 复合模型包目录）
-pub fn pick_directory_dialog(title: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("zenity")
-        .arg("--file-selection")
-        .arg("--directory")
-        .arg(format!("--title={}", title))
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let selected_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if selected_str.is_empty() {
-        return None;
-    }
-
-    let path = PathBuf::from(&selected_str);
-    if path.is_dir() {
-        Some(path)
-    } else {
-        None
-    }
 }
