@@ -147,18 +147,7 @@ fn register_or_activate_ibus_engine(
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "waylan".to_string());
 
-    if is_ibus_child_mode {
-        if let Err(e) = conn.request_name("org.freedesktop.IBus.Waylan") {
-            log::warn!(
-                "[微澜 IBus 警告] 子进程模式下申请总线名称 org.freedesktop.IBus.Waylan 失败: {}",
-                e
-            );
-        } else {
-            info!("[微澜 IBus] 已在子进程模式下成功申请总线名称 org.freedesktop.IBus.Waylan");
-        }
-    } else {
-        ensure_ibus_and_gnome_integration(&exe_path, exclusive);
-
+    if !is_ibus_child_mode {
         let exec_cmd = format!("{} --ibus", exe_path);
         let setup_cmd = format!("{} settings", exe_path);
         if let Ok(comp_val) = build_waylan_ibus_component(&exec_cmd, &setup_cmd) {
@@ -178,6 +167,8 @@ fn register_or_activate_ibus_engine(
             "[微澜 IBus 警告] 申请独占总线名称 org.freedesktop.IBus.Waylan 失败: {}",
             e
         );
+    } else if is_ibus_child_mode {
+        info!("[微澜 IBus] 已在子进程模式下成功申请总线名称 org.freedesktop.IBus.Waylan");
     }
 
     if let Err(e) = conn.call_method(
@@ -193,6 +184,10 @@ fn register_or_activate_ibus_engine(
         );
     } else {
         info!("[微澜 IBus] 已成功将当前 GNOME / IBus 全局输入法引擎激活为: waylan (微澜)");
+    }
+
+    if !is_ibus_child_mode {
+        ensure_ibus_and_gnome_integration(&exe_path, exclusive);
     }
 
     Ok(())

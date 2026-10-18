@@ -163,18 +163,14 @@ pub fn ensure_gnome_input_source_registered(exclusive: bool) {
     } else {
         update_gsettings_source_key("sources");
         update_gsettings_source_key("mru-sources");
+        // 同步将 GNOME 当前输入源索引切换至首项（微澜）
+        safe_gsettings_set(
+            "org.gnome.desktop.input-sources",
+            "current",
+            "0",
+            DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+        );
     }
-    // 同步将 GNOME 当前输入源索引切换至首项（微澜）
-    safe_gsettings_set(
-        "org.gnome.desktop.input-sources",
-        "current",
-        "0",
-        DEFAULT_DESKTOP_COMMAND_TIMEOUT,
-    );
-    // 确保 IBus 全局引擎激活为微澜
-    let mut cmd = Command::new("ibus");
-    cmd.args(["engine", "waylan"]);
-    let _ = run_command_with_timeout(cmd, DEFAULT_DESKTOP_COMMAND_TIMEOUT);
 }
 
 /// 将微澜设为 GNOME 首选输入源并保留底层必须的 XKB 键盘布局
@@ -198,9 +194,6 @@ pub fn set_waylan_as_exclusive_input_source() {
         "0",
         DEFAULT_DESKTOP_COMMAND_TIMEOUT,
     );
-    let mut cmd = Command::new("ibus");
-    cmd.args(["engine", "waylan"]);
-    let _ = run_command_with_timeout(cmd, DEFAULT_DESKTOP_COMMAND_TIMEOUT);
     info!(
         "[微澜 IBus] 已将微澜设为 GNOME 首选输入源并保留 XKB 硬件按键基础映射: {}",
         exclusive_sources
