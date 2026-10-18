@@ -110,6 +110,36 @@ impl ExpandedCardState {
     }
 }
 
+/// 5 行大候选网格面板展开状态
+///
+/// 遵循“非法状态不可表示 (Make Illegal States Unrepresentable)”的设计原则，
+/// 将是否展开与选中项索引绑定在枚举状态中，防止出现“未展开却存在选中索引”的无效状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GridState {
+    /// 未展开状态（折叠）
+    #[default]
+    Collapsed,
+    /// 已展开状态，携带当前选中的网格项索引（0-indexed）
+    Expanded { selected_index: usize },
+}
+
+impl GridState {
+    /// 是否处于大网格展开状态
+    #[inline]
+    pub fn is_expanded(&self) -> bool {
+        matches!(self, Self::Expanded { .. })
+    }
+
+    /// 获取展开状态下的当前选中索引
+    #[inline]
+    pub fn selected_index(&self) -> Option<usize> {
+        match self {
+            Self::Expanded { selected_index } => Some(*selected_index),
+            Self::Collapsed => None,
+        }
+    }
+}
+
 /// 语音听写与动态波形渲染状态
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct VoiceBoxState {
@@ -140,6 +170,9 @@ pub struct CandidateBoxState {
     pub mode_badge: String,
     /// 是否处于 5 行大候选网格面板展开状态
     pub is_grid_expanded: bool,
+    /// 5 行大候选网格面板展开状态机
+    #[serde(default)]
+    pub grid_state: GridState,
     /// 展开状态下的多行网格候选词列表（通常预加载前 30 个候选词）
     pub grid_candidates: Vec<Candidate>,
     /// 语音交互原生状态（若当前处于语音录音或展示模式则为 Some）
@@ -173,6 +206,24 @@ impl CandidateBoxState {
         } else {
             self.expanded_card = ExpandedCardState::Collapsed;
         }
+    }
+
+    /// 查询当前是否处于大候选网格展开态
+    #[inline]
+    pub fn is_grid_expanded(&self) -> bool {
+        self.grid_state.is_expanded() || self.is_grid_expanded
+    }
+
+    /// 获取大候选网格展开态下的选中索引，未展开则返回 0
+    #[inline]
+    pub fn grid_selected_index(&self) -> usize {
+        self.grid_state.selected_index().unwrap_or(0)
+    }
+
+    /// 切换或设置大网格展开状态机，并同步向后兼容标志位
+    pub fn set_grid_state(&mut self, state: GridState) {
+        self.is_grid_expanded = state.is_expanded();
+        self.grid_state = state;
     }
 }
 

@@ -11,7 +11,8 @@ pub mod state;
 pub mod text;
 
 pub use candidate::{
-    Candidate, CandidateBoxState, ExpandedCardState, InputMode, TextAction, VoiceBoxState,
+    Candidate, CandidateBoxState, ExpandedCardState, GridState, InputMode, TextAction,
+    VoiceBoxState,
 };
 pub use candidate_format::{format_candidate_display, CIRCLED_NUMBERS};
 pub use config::{

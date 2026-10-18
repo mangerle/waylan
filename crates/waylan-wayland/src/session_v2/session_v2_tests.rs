@@ -379,7 +379,7 @@ fn test_v2_grid_expansion_state() {
     assert!(initial_box.grid_candidates.is_empty());
 
     // 展开 5 行大网格大候选词面板
-    session.runtime.core.is_grid_expanded = true;
+    session.runtime.core.expand_grid();
     let expanded_box = session.build_candidate_box_state();
     assert!(expanded_box.is_grid_expanded);
     assert!(!expanded_box.grid_candidates.is_empty());
@@ -401,8 +401,8 @@ fn test_v2_grid_expanded_key_navigation_and_selection() {
     session.runtime.core.engine.push_char('i');
 
     // 展开 5 行网格面板
-    session.runtime.core.is_grid_expanded = true;
-    session.runtime.core.grid_selected_index = 0;
+    session.runtime.core.expand_grid();
+    session.runtime.core.set_grid_selected_index(0);
 
     // 1. 按 Down 键：向下移动一行（从第 1 行跳至第 2 行第 1 个词，索引 6）
     let (consumed, committed) = process_key_event(&mut session, KEY_DOWN, true);
@@ -427,8 +427,8 @@ fn test_v2_grid_expanded_key_navigation_and_selection() {
     // 4. 测试空格选词
     session.runtime.core.engine.push_char('n');
     session.runtime.core.engine.push_char('i');
-    session.runtime.core.is_grid_expanded = true;
-    session.runtime.core.grid_selected_index = 12; // 第 3 行第 1 个词
+    session.runtime.core.expand_grid();
+    session.runtime.core.set_grid_selected_index(12); // 第 3 行第 1 个词
     let expected_text_3 = session.runtime.core.engine.all_candidates()[12]
         .text
         .clone();
@@ -440,7 +440,7 @@ fn test_v2_grid_expanded_key_navigation_and_selection() {
     // 5. 测试 ESC 折叠
     session.runtime.core.engine.push_char('n');
     session.runtime.core.engine.push_char('i');
-    session.runtime.core.is_grid_expanded = true;
+    session.runtime.core.expand_grid();
     let (consumed, committed) = process_key_event(&mut session, KEY_ESC, true);
     assert!(consumed);
     assert!(committed.is_none());

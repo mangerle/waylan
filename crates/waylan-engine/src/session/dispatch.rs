@@ -143,7 +143,7 @@ impl ImeCoreSession {
 
         // 1. 若处于拼音组词状态，优先流转大网格展开态或拼音状态机
         if !self.engine.raw_input().is_empty() {
-            if self.is_grid_expanded {
+            if self.is_grid_expanded() {
                 if let Some(action) = self.handle_grid_expanded_key(keycode, now) {
                     return action;
                 }

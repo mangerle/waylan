@@ -260,7 +260,7 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let select_res = if state.runtime.core.is_grid_expanded {
+    let select_res = if state.runtime.core.is_grid_expanded() {
         state
             .runtime
             .core
@@ -270,8 +270,7 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
         state.runtime.core.engine.select_candidate(idx, now)
     };
     if let Some((commit_text, remaining_len)) = select_res {
-        state.runtime.core.is_grid_expanded = false;
-        state.runtime.core.grid_selected_index = 0;
+        state.runtime.core.collapse_grid();
         state
             .runtime
             .core
@@ -299,12 +298,7 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
 
     match target {
         CandidateHitTarget::ToggleExpand => {
-            state.runtime.core.is_grid_expanded = !state.runtime.core.is_grid_expanded;
-            if state.runtime.core.is_grid_expanded {
-                state.runtime.core.grid_selected_index = state.runtime.core.engine.selected_index();
-            } else {
-                state.runtime.core.grid_selected_index = 0;
-            }
+            state.runtime.core.toggle_grid_expansion();
             state.refresh_candidate_surface();
         }
         CandidateHitTarget::Select(idx) => handle_pointer_select_candidate(state, idx),

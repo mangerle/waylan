@@ -124,13 +124,13 @@ impl WaylanV2Session {
     /// 查询 5 行大网格候选卡片当前是否处于展开状态
     #[inline]
     pub fn is_grid_expanded(&self) -> bool {
-        self.runtime.core.is_grid_expanded
+        self.runtime.core.is_grid_expanded()
     }
 
     /// 获取 5 行大网格候选卡片当前选中的候选词全局索引
     #[inline]
     pub fn grid_selected_index(&self) -> usize {
-        self.runtime.core.grid_selected_index
+        self.runtime.core.grid_selected_index()
     }
 
     /// 基于已加载并配置好的核心算法引擎构造 Wayland V2 输入法会话
@@ -220,8 +220,7 @@ impl WaylanV2Session {
             CandidateBoxBuildOptions {
                 mode: self.runtime.core.mode,
                 is_active: self.is_active,
-                is_grid_expanded: self.runtime.core.is_grid_expanded,
-                grid_selected_index: self.runtime.core.grid_selected_index,
+                grid_state: self.runtime.core.grid_state,
                 inline_preedit: true,
                 voice_manager: self.runtime.voice_manager.as_ref(),
             },
@@ -266,8 +265,7 @@ impl WaylanV2Session {
 
     /// 提交指定文本上屏，并重置预编辑状态
     pub(crate) fn commit_text(&mut self, text: &str) {
-        self.runtime.core.is_grid_expanded = false;
-        self.runtime.core.grid_selected_index = 0;
+        self.runtime.core.collapse_grid();
         if let Some(im) = &self.input_method {
             im.commit_string(text.to_string());
             im.set_preedit_string(String::new(), 0, 0);
@@ -307,8 +305,7 @@ impl WaylanV2Session {
 
     /// 取消当前输入，重置引擎与预编辑区
     pub(crate) fn cancel_input(&mut self) {
-        self.runtime.core.is_grid_expanded = false;
-        self.runtime.core.grid_selected_index = 0;
+        self.runtime.core.collapse_grid();
         self.runtime.core.engine.reset();
         self.update_preedit("");
     }

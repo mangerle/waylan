@@ -6,7 +6,9 @@
 //! - **代价与局限**：对算法引擎与语音管理器采用借用传递。
 
 use waylan_algo::AlgoEngine;
-use waylan_core::{Candidate, CandidateBoxState, ExpandedCardState, InputMode, VoiceBoxState};
+use waylan_core::{
+    Candidate, CandidateBoxState, ExpandedCardState, GridState, InputMode, VoiceBoxState,
+};
 use waylan_voice::VoiceInteractionManager;
 
 /// 候选词卡片构建参数配置
@@ -14,8 +16,7 @@ use waylan_voice::VoiceInteractionManager;
 pub struct CandidateBoxBuildOptions<'a> {
     pub mode: InputMode,
     pub is_active: bool,
-    pub is_grid_expanded: bool,
-    pub grid_selected_index: usize,
+    pub grid_state: GridState,
     pub inline_preedit: bool,
     pub voice_manager: Option<&'a VoiceInteractionManager>,
 }
@@ -28,8 +29,7 @@ pub fn build_common_candidate_box_state(
     let CandidateBoxBuildOptions {
         mode,
         is_active,
-        is_grid_expanded,
-        grid_selected_index,
+        grid_state,
         inline_preedit,
         voice_manager,
     } = opts;
@@ -62,6 +62,7 @@ pub fn build_common_candidate_box_state(
                 expanded_card: ExpandedCardState::Collapsed,
                 mode_badge: String::new(),
                 is_grid_expanded: false,
+                grid_state: GridState::Collapsed,
                 grid_candidates: Vec::new(),
                 voice: Some(voice_state),
             };
@@ -70,7 +71,7 @@ pub fn build_common_candidate_box_state(
 
     let core_candidates: Vec<Candidate> = engine.candidates().iter().map(Candidate::from).collect();
 
-    let grid_candidates: Vec<Candidate> = if is_grid_expanded {
+    let grid_candidates: Vec<Candidate> = if grid_state.is_expanded() {
         engine
             .all_candidates()
             .iter()
@@ -109,8 +110,8 @@ pub fn build_common_candidate_box_state(
         (engine.formatted_preedit(), badge)
     };
 
-    let selected_index = if is_grid_expanded {
-        grid_selected_index
+    let selected_index = if let Some(idx) = grid_state.selected_index() {
+        idx
     } else {
         engine.selected_index()
     };
@@ -122,7 +123,8 @@ pub fn build_common_candidate_box_state(
         selected_index,
         expanded_card,
         mode_badge,
-        is_grid_expanded,
+        is_grid_expanded: grid_state.is_expanded(),
+        grid_state,
         grid_candidates,
         voice: None,
     }

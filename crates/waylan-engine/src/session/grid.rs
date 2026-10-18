@@ -8,6 +8,7 @@
 
 use super::{ImeCoreSession, ImeOutputAction};
 use waylan_core::input::*;
+use waylan_core::GridState;
 
 const GRID_COLS: usize = 6;
 const MAX_GRID_CANDIDATES: usize = 30;
@@ -15,19 +16,19 @@ const MAX_GRID_CANDIDATES: usize = 30;
 impl ImeCoreSession {
     /// 展开 5 行网格大候选词面板
     pub fn expand_grid(&mut self) {
-        self.is_grid_expanded = true;
-        self.grid_selected_index = self.engine.selected_index();
+        self.grid_state = GridState::Expanded {
+            selected_index: self.engine.selected_index(),
+        };
     }
 
-    /// 折叠 5 行网格大候选词面板并重置选中光标
+    /// 折叠 5 行网格大候选词面板并重置选中状态机
     pub fn collapse_grid(&mut self) {
-        self.is_grid_expanded = false;
-        self.grid_selected_index = 0;
+        self.grid_state = GridState::Collapsed;
     }
 
     /// 切换 5 行网格大候选词面板的展开/折叠状态
     pub fn toggle_grid_expansion(&mut self) {
-        if self.is_grid_expanded {
+        if self.grid_state.is_expanded() {
             self.collapse_grid();
         } else {
             self.expand_grid();
@@ -61,21 +62,25 @@ impl ImeCoreSession {
         key: u32,
         now: u64,
     ) -> Option<ImeOutputAction> {
+        let GridState::Expanded { mut selected_index } = self.grid_state else {
+            return None;
+        };
+
         let total = self.engine.all_candidates().len().min(MAX_GRID_CANDIDATES);
         if total == 0 {
             return None;
         }
 
         let row_count = total.div_ceil(GRID_COLS).clamp(1, 5);
-        let row = self.grid_selected_index / GRID_COLS;
-        let col = self.grid_selected_index % GRID_COLS;
+        let row = selected_index / GRID_COLS;
+        let col = selected_index % GRID_COLS;
 
         // 1. 方向键与 Esc 折叠导航
         match key {
             KEY_DOWN => {
                 let next_row = (row + 1) % row_count;
-                self.grid_selected_index =
-                    (next_row * GRID_COLS + col).min(total.saturating_sub(1));
+                selected_index = (next_row * GRID_COLS + col).min(total.saturating_sub(1));
+                self.grid_state = GridState::Expanded { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_UP => {
@@ -84,20 +89,22 @@ impl ImeCoreSession {
                 } else {
                     row - 1
                 };
-                self.grid_selected_index =
-                    (prev_row * GRID_COLS + col).min(total.saturating_sub(1));
+                selected_index = (prev_row * GRID_COLS + col).min(total.saturating_sub(1));
+                self.grid_state = GridState::Expanded { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_RIGHT => {
-                self.grid_selected_index = (self.grid_selected_index + 1) % total;
+                selected_index = (selected_index + 1) % total;
+                self.grid_state = GridState::Expanded { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_LEFT => {
-                self.grid_selected_index = if self.grid_selected_index == 0 {
+                selected_index = if selected_index == 0 {
                     total.saturating_sub(1)
                 } else {
-                    self.grid_selected_index - 1
+                    selected_index - 1
                 };
+                self.grid_state = GridState::Expanded { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_ESC => {
@@ -122,7 +129,7 @@ impl ImeCoreSession {
 
         // 3. 空格键确认选词
         if key == KEY_SPACE {
-            let idx = self.grid_selected_index.min(total.saturating_sub(1));
+            let idx = selected_index.min(total.saturating_sub(1));
             return Some(self.commit_grid_candidate_by_index(idx, now));
         }
 

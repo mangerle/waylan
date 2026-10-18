@@ -1,6 +1,6 @@
 use super::*;
 
-use waylan_core::{Candidate, ExpandedCardState};
+use waylan_core::{Candidate, ExpandedCardState, GridState};
 
 #[test]
 fn test_renderer_basic() {
@@ -17,6 +17,7 @@ fn test_renderer_basic() {
         expanded_card: ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
+        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -43,6 +44,7 @@ fn test_render_expanded_popup_card() {
         expanded_card: ExpandedCardState::Expanded { selected_index: 0 },
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
+        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -69,6 +71,7 @@ fn test_glyph_cache_hit_and_reuse() {
         expanded_card: ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
+        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -97,6 +100,7 @@ fn test_hidpi_scale_rendering() {
         expanded_card: ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
         is_grid_expanded: false,
+        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -164,6 +168,7 @@ fn test_render_grid_expanded_and_hit_test() {
         expanded_card: ExpandedCardState::Collapsed,
         mode_badge: String::new(),
         is_grid_expanded: true,
+        grid_state: GridState::Expanded { selected_index: 0 },
         grid_candidates: grid_cands,
         voice: None,
     };
@@ -240,6 +245,7 @@ fn test_render_voice_capsule_bar() {
         expanded_card: ExpandedCardState::Collapsed,
         mode_badge: String::new(),
         is_grid_expanded: false,
+        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: Some(waylan_core::VoiceBoxState {
             partial_text: "正在识别中...".to_string(),

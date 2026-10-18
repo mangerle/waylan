@@ -22,7 +22,9 @@ pub use key_handler::{
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
-use waylan_core::{FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TraditionalShortcut};
+use waylan_core::{
+    FullWidthCharShortcut, FullWidthPunctShortcut, GridState, InputMode, TraditionalShortcut,
+};
 
 /// 全局模式与功能快捷键切换动作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,10 +101,8 @@ pub struct ImeCoreSession {
     pub full_width_punct_shortcut: FullWidthPunctShortcut,
     /// 是否开启全角字符/字母输入
     pub full_width_char: bool,
-    /// 候选词是否处于大网格展开态
-    pub is_grid_expanded: bool,
-    /// 大网格展开态下的高亮选中项绝对索引 (0..30)
-    pub grid_selected_index: usize,
+    /// 候选词 5 行大网格展开状态机（杜绝未展开时选中项悬空的非法状态）
+    pub grid_state: GridState,
 }
 
 impl Default for ImeCoreSession {
@@ -129,8 +129,29 @@ impl ImeCoreSession {
             full_width_char_shortcut: FullWidthCharShortcut::default(),
             full_width_punct_shortcut: FullWidthPunctShortcut::default(),
             full_width_char: false,
-            is_grid_expanded: false,
-            grid_selected_index: 0,
+            grid_state: GridState::Collapsed,
+        }
+    }
+
+    /// 查询当前是否处于大候选网格展开态
+    #[inline]
+    pub fn is_grid_expanded(&self) -> bool {
+        self.grid_state.is_expanded()
+    }
+
+    /// 获取大候选网格展开态下的高亮选中项绝对索引，未展开则返回 0
+    #[inline]
+    pub fn grid_selected_index(&self) -> usize {
+        self.grid_state.selected_index().unwrap_or(0)
+    }
+
+    /// 设置大候选网格展开态下的选中索引
+    #[inline]
+    pub fn set_grid_selected_index(&mut self, idx: usize) {
+        if self.grid_state.is_expanded() {
+            self.grid_state = GridState::Expanded {
+                selected_index: idx,
+            };
         }
     }
 

@@ -376,8 +376,7 @@ impl ImeRuntime {
             CandidateBoxBuildOptions {
                 mode: self.core.mode,
                 is_active,
-                is_grid_expanded: self.core.is_grid_expanded,
-                grid_selected_index: self.core.grid_selected_index,
+                grid_state: self.core.grid_state,
                 inline_preedit,
                 voice_manager: self.voice_manager.as_ref(),
             },
