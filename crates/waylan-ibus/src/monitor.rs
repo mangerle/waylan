@@ -316,7 +316,20 @@ pub(crate) fn run_ibus_monitor_loop(
         handle_screen_saver_transition(conn, shared_core, current_locked, &mut last_screen_locked);
 
         let (is_voice_active, target_engine_path) = query_voice_active_and_path(shared_core);
-        let poll_timeout_ms = if is_voice_active { 60 } else { 2000 };
+        // 监控循环超时策略分级：
+        // 1. 流式语音激活中：60ms 轮询窗口用于高平滑度波形与动态文字刷新；
+        // 2. 开机阶段：100ms 快速完成多轮全局引擎活跃自愈；
+        // 3. 锁屏异常防护中：3000ms 节流兜底自愈探活；
+        // 4. 常规空闲待命状态：-1（纯事件驱动，永久阻塞直至 inotify/eventfd 唤醒，彻底消除忙轮询）。
+        let poll_timeout_ms = if is_voice_active {
+            60
+        } else if startup_healing_rounds > 0 {
+            100
+        } else if current_locked || last_screen_locked {
+            3000
+        } else {
+            -1
+        };
         poll_wakeup_and_inotify(
             inotify_watcher.as_ref(),
             params.coordinator.loop_wakeup(),
@@ -417,7 +430,12 @@ fn poll_wakeup_and_inotify(
     }
 
     if fds.is_empty() {
-        thread::sleep(Duration::from_millis(timeout_ms.max(50) as u64));
+        let sleep_ms = if timeout_ms < 0 {
+            100
+        } else {
+            timeout_ms.max(50) as u64
+        };
+        thread::sleep(Duration::from_millis(sleep_ms));
         return;
     }
 

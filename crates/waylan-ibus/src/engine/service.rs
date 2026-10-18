@@ -62,7 +62,13 @@ impl IbusEngineService {
                 self.loop_wakeup.as_ref(),
             );
 
+            let prev_voice = guard.is_voice_active();
             let out = guard.process_key_event(keyval, keycode, state);
+            if guard.is_voice_active() != prev_voice {
+                if let Some(ref wakeup) = self.loop_wakeup {
+                    wakeup.wake();
+                }
+            }
             let snap = if out.update_ui {
                 Some(UiSnapshot::capture(&guard))
             } else {
