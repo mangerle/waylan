@@ -6,14 +6,10 @@
 //! - **代价与局限**：采用轻量手写状态机而非庞大的第三方 CLI 解析库，保持守护进程极速冷启动与微量依赖包体积。
 
 use crate::error::DaemonError;
-use log::info;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
-use waylan_algo::builder::DictBuilder;
-use waylan_algo::opencc::OpenCcDict;
-use waylan_algo::AlgoEngine;
 
+pub mod dict_cmd;
 pub mod self_check;
+pub use dict_cmd::DictSubcommand;
 pub use self_check::run_self_check;
 
 /// 顶层命令行解析决策枚举
@@ -42,29 +38,6 @@ pub struct DaemonOptions {
     pub ibus_backend: bool,
     /// 启动前执行核心算法与词库完整性自检
     pub self_check: bool,
-}
-
-/// 词库管理子命令枚举
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DictSubcommand {
-    /// 打印词库命令帮助信息
-    Help,
-    /// 编译文本词库为零拷贝 DAT 紧凑二进制词库
-    Build { inputs: Vec<String>, output: String },
-    /// 编译 OpenCC 简繁转换两级词库
-    BuildOpenCc {
-        chars: String,
-        phrases: String,
-        output: String,
-    },
-    /// 编译英文与符号表情辅助词库
-    BuildAux {
-        english: String,
-        symbols: String,
-        output: String,
-    },
-    /// 从文本导入用户个性化调频词库
-    ImportUser { input: String, user_dict: String },
 }
 
 impl CliCommand {
@@ -191,87 +164,6 @@ fn parse_dict_subcommand(sub_tokens: &[String]) -> Result<DictSubcommand, Daemon
     }
 }
 
-impl DictSubcommand {
-    /// 执行对应的词库编译或管理操作
-    ///
-    /// # Errors
-    /// 当源文件不存在、格式解析异常或写入磁盘失败时返回 `DaemonError`。
-    pub fn execute(self) -> Result<(), DaemonError> {
-        match self {
-            Self::Help => {
-                print_dict_usage();
-                Ok(())
-            }
-            Self::Build { inputs, output } => {
-                info!(
-                    "[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}",
-                    output
-                );
-                let input_refs: Vec<&str> = inputs.iter().map(|s| s.as_str()).collect();
-                let stats =
-                    DictBuilder::build_compact_binary_dict(&input_refs, Path::new(&output))?;
-                info!(
-                    "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
-                    stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
-                );
-                Ok(())
-            }
-            Self::BuildOpenCc {
-                chars,
-                phrases,
-                output,
-            } => {
-                info!(
-                    "[简繁词库] 正在将 OpenCC 词表编译为二进制紧凑词库: {} + {} -> {}",
-                    chars, phrases, output
-                );
-                let dict = OpenCcDict::from_tsv_files(&chars, &phrases)?;
-                dict.save_to_file(&output)?;
-                info!(
-                    "[简繁词库] 编译完成，短语数: {}, 单字数: {}",
-                    dict.phrases_len(),
-                    dict.chars.len()
-                );
-                Ok(())
-            }
-            Self::BuildAux {
-                english,
-                symbols,
-                output,
-            } => {
-                info!(
-                    "[辅助词库] 编译英文与符号表情词库: {} + {} -> {}",
-                    english, symbols, output
-                );
-                let stats = DictBuilder::build_auxiliary_dict(&[&english], &[&symbols], &output)?;
-                info!(
-                    "[辅助词库] 编译完成，英文词汇数: {}, 符号表情数: {}",
-                    stats.english_words.len(),
-                    stats.symbols.len()
-                );
-                Ok(())
-            }
-            Self::ImportUser { input, user_dict } => {
-                info!(
-                    "[用户词库] 从文本导入自造词与调频记录: {} -> {}",
-                    input, user_dict
-                );
-                let mut engine = AlgoEngine::default();
-                engine.set_user_dict_path(&user_dict);
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|e| DaemonError::Cli(e.to_string()))?
-                    .as_secs();
-                let count =
-                    DictBuilder::import_user_text_dict(&input, &mut engine.adaptive.model, now)?;
-                engine.persist_user_dict()?;
-                info!("[用户词库] 成功导入 {} 条用户记录", count);
-                Ok(())
-            }
-        }
-    }
-}
-
 /// 打印主程序 CLI 使用帮助
 pub fn print_main_usage() {
     println!("微澜输入法 (WayLan) - 专为 Wayland 打造的现代轻量纯 Rust 中文输入法");
@@ -289,16 +181,6 @@ pub fn print_main_usage() {
     println!("子命令:");
     println!("  settings             启动图形化偏好设置界面");
     println!("  dict <子命令>        词库编译与用户词库导入管理工具");
-}
-
-/// 打印词库管理 CLI 使用帮助
-pub fn print_dict_usage() {
-    println!("微澜输入法 (WayLan) 词库构建管理工具");
-    println!("用法: waylan dict <子命令> [参数...]");
-    println!("  build <输入文本词库1> [输入2...] <输出二进制文件>");
-    println!("  build-opencc [STCharacters.txt] [STPhrases.txt] [输出文件]");
-    println!("  build-aux <英文词表> <符号表> <输出文件>");
-    println!("  import-user <用户文本词库> <用户二进制WAL路径>");
 }
 
 #[cfg(test)]
