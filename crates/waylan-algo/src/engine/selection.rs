@@ -276,4 +276,58 @@ impl AlgoEngine {
             0
         }
     }
+
+    /// 结合当前最优切分路径单元计算候选词所消费的原始按键字节长度
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在候选词生成阶段，利用已经求解出的音节路径 `best_units` 预先精确计算
+    ///   每个候选词所消费的按键长度，并在候选词中记录 `consumed_len`。
+    /// - **核心优势**：彻底消除用户选词上屏时重新调用 `PrismEngine::build_paths_with_entities`
+    ///   求解音节图路径的微秒级延迟，将按键上屏关键交互路径耗时降为纯内存字段读取。
+    pub(crate) fn calculate_consumed_len(raw: &str, pinyin: &str, best_units: &[String]) -> usize {
+        if raw.is_empty() {
+            return 0;
+        }
+
+        if raw.starts_with(pinyin) && !pinyin.is_empty() {
+            let mut len = pinyin.len();
+            if raw[len..].starts_with('\'') {
+                len = len.saturating_add(1);
+            }
+            return len;
+        }
+
+        // 全拼与简拼混合模式：优先按候选音节逐段对齐原始输入或最优切分路径单元
+        let cand_syls: Vec<&str> = pinyin.split('\'').filter(|s| !s.is_empty()).collect();
+        let mut pos = 0usize;
+        for (i, &cs) in cand_syls.iter().enumerate() {
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+            if pos >= raw.len() {
+                break;
+            }
+            if raw[pos..].starts_with(cs) {
+                pos += cs.len();
+            } else if i < best_units.len() && raw[pos..].starts_with(best_units[i].as_str()) {
+                pos += best_units[i].len();
+            } else {
+                let first_len = cs.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                if raw[pos..].starts_with(&cs[..first_len]) {
+                    pos += first_len;
+                } else {
+                    return Self::compute_consumed_len(raw, pinyin);
+                }
+            }
+            while pos < raw.len() && raw[pos..].starts_with('\'') {
+                pos += 1;
+            }
+        }
+
+        if pos > 0 {
+            pos.min(raw.len())
+        } else {
+            Self::compute_consumed_len(raw, pinyin)
+        }
+    }
 }
