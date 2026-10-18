@@ -1,21 +1,18 @@
-//! 外部词库与字典数据导入模块
+//! 外部词库与字典数据导入前端适配模块
 //!
 //! # 设计原理
-//! - **实现初衷**：为用户提供外部拼音词库、英文词库及特殊符号表的增量导入与合入机制。
+//! - **实现初衷**：为设置界面提供用户外部拼音词库、英文词库及特殊符号表的增量导入入口。
 //! - **核心优势**：
-//!   1. 统一安全防御机制，校验 64MB 文件体积上限，杜绝内存爆满风险；
-//!   2. 支持自动去重与增量合入，避免污染现有自适应词库与预设字典；
-//!   3. 支持 WAL 日志紧凑化写入，确保断电或异常退出时数据一致性。
+//!   1. 彻底将词库校验、解析与合入逻辑下沉委托至 `waylan-algo::dict_importer::DictImportService`；
+//!   2. 本模块仅保留 UI 交互所需的状态报告字符串拼装与界面级错误映射；
+//!   3. 零技术债与逻辑复制，确保 CLI 与 GUI 导入行为 100% 严格一致。
 //! - **代价与局限**：
-//!   一次性同步解析文本行，超大文件导入时存在短暂的 I/O 处理耗时。
+//!   界面调用时同步执行文件解析与持久化，超大文件导入时建议通过后台工作线程触发。
 
-use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use waylan_algo::dict_importer::DictImporter;
-use waylan_algo::user_adaptive::UserAdaptiveModel;
+use waylan_algo::dict_importer::DictImportService;
+use waylan_algo::error::AlgoError;
 use waylan_algo::AuxiliaryDict;
 use waylan_core::config::AppConfig;
 pub use waylan_core::MAX_IMPORT_FILE_BYTES;
@@ -72,54 +69,55 @@ pub enum ImportError {
     },
 }
 
+/// 将底层算法库领域错误映射为图形界面使用的导入错误
+fn map_algo_error(err: AlgoError, fallback_path: &str) -> ImportError {
+    match err {
+        AlgoError::FileNotFound { path } => ImportError::FileNotFound {
+            path: path.to_string_lossy().to_string(),
+        },
+        AlgoError::FileTooLarge {
+            path,
+            limit_bytes,
+            actual_bytes,
+        } => ImportError::FileTooLarge {
+            path: path.to_string_lossy().to_string(),
+            limit_bytes,
+            actual_bytes,
+        },
+        AlgoError::DictionaryIo { path, source } => ImportError::IoError {
+            path: path.to_string_lossy().to_string(),
+            source,
+        },
+        AlgoError::UserDictPersistFailed { path, source } => ImportError::SaveError {
+            path: path.to_string_lossy().to_string(),
+            message: source.to_string(),
+        },
+        AlgoError::DictParseFailed { reason } | AlgoError::DeserializeFailed { reason, .. } => {
+            ImportError::ParseError {
+                path: fallback_path.to_string(),
+                message: reason,
+            }
+        }
+        other => ImportError::ParseError {
+            path: fallback_path.to_string(),
+            message: other.to_string(),
+        },
+    }
+}
+
 /// 解析并合入外部拼音词库
 ///
 /// # Errors
 /// 当文件不存在、体积超限、解析格式错误或写入磁盘失败时返回 [`ImportError`]。
 pub fn import_pinyin_dict_file(path_str: &str) -> Result<String, ImportError> {
     let path = Path::new(path_str.trim());
-    if !path.is_file() {
-        return Err(ImportError::FileNotFound {
-            path: path_str.to_string(),
-        });
-    }
-    let meta = fs::metadata(path).map_err(|source| ImportError::IoError {
-        path: path_str.to_string(),
-        source,
-    })?;
-    if meta.len() > MAX_IMPORT_FILE_BYTES {
-        return Err(ImportError::FileTooLarge {
-            path: path_str.to_string(),
-            limit_bytes: MAX_IMPORT_FILE_BYTES,
-            actual_bytes: meta.len(),
-        });
-    }
-
-    let entries = DictImporter::import_file(path).map_err(|e| ImportError::ParseError {
-        path: path_str.to_string(),
-        message: e.to_string(),
-    })?;
-    let count = entries.len();
     let user_dict_path = AppConfig::user_dict_path();
-    let mut user_model = UserAdaptiveModel::load_or_replay_wal(&user_dict_path).unwrap_or_default();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(1_700_000_000);
-    for entry in &entries {
-        user_model.record_commit(&entry.text, &entry.pinyin, now);
-    }
-    user_model
-        .compact_wal(&user_dict_path)
-        .map_err(|e| ImportError::SaveError {
-            path: user_dict_path.to_string_lossy().to_string(),
-            message: e.to_string(),
-        })?;
+    let report = DictImportService::import_pinyin_dict(path, &user_dict_path)
+        .map_err(|e| map_algo_error(e, path_str))?;
 
     Ok(format!(
         "成功合入 {} 条词目，当前自适应词库总词量: {} 条",
-        count,
-        user_model.total_entries()
+        report.imported_count, report.total_entries
     ))
 }
 
@@ -132,72 +130,16 @@ pub fn import_english_dict_file(
     aux: &mut AuxiliaryDict,
 ) -> Result<(String, usize), ImportError> {
     let path = Path::new(path_str.trim());
-    if !path.is_file() {
-        return Err(ImportError::FileNotFound {
-            path: path_str.to_string(),
-        });
-    }
-    let meta = fs::metadata(path).map_err(|source| ImportError::IoError {
-        path: path_str.to_string(),
-        source,
-    })?;
-    if meta.len() > MAX_IMPORT_FILE_BYTES {
-        return Err(ImportError::FileTooLarge {
-            path: path_str.to_string(),
-            limit_bytes: MAX_IMPORT_FILE_BYTES,
-            actual_bytes: meta.len(),
-        });
-    }
-
-    let content = fs::read_to_string(path).map_err(|source| ImportError::IoError {
-        path: path_str.to_string(),
-        source,
-    })?;
-    let mut existing: HashSet<String> = aux
-        .english_words
-        .iter()
-        .map(|(w, _)| w.to_lowercase())
-        .collect();
-    let mut added = 0;
-    let mut in_yaml_header = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            in_yaml_header = true;
-            continue;
-        }
-        if trimmed == "..." {
-            in_yaml_header = false;
-            continue;
-        }
-        if in_yaml_header || trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let word = trimmed.split('\t').next().unwrap_or("").trim();
-        if !word.is_empty()
-            && word.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
-            && existing.insert(word.to_lowercase())
-        {
-            aux.english_words.push((word.to_string(), 50_000));
-            added += 1;
-        }
-    }
-
     let aux_path = AppConfig::user_aux_dict_path();
-    aux.save_to_file(&aux_path)
-        .map_err(|e| ImportError::SaveError {
-            path: aux_path.to_string_lossy().to_string(),
-            message: e.to_string(),
-        })?;
+    let report = DictImportService::import_english_dict(path, aux, Some(&aux_path))
+        .map_err(|e| map_algo_error(e, path_str))?;
 
     Ok((
         format!(
             "成功导入 {} 个英文单词，当前单词库总数: {}",
-            added,
-            aux.english_words.len()
+            report.added_count, report.total_count
         ),
-        aux.english_words.len(),
+        report.total_count,
     ))
 }
 
@@ -210,75 +152,23 @@ pub fn import_symbols_dict_file(
     aux: &mut AuxiliaryDict,
 ) -> Result<(String, usize), ImportError> {
     let path = Path::new(path_str.trim());
-    if !path.is_file() {
-        return Err(ImportError::FileNotFound {
-            path: path_str.to_string(),
-        });
-    }
-    let meta = fs::metadata(path).map_err(|source| ImportError::IoError {
-        path: path_str.to_string(),
-        source,
-    })?;
-    if meta.len() > MAX_IMPORT_FILE_BYTES {
-        return Err(ImportError::FileTooLarge {
-            path: path_str.to_string(),
-            limit_bytes: MAX_IMPORT_FILE_BYTES,
-            actual_bytes: meta.len(),
-        });
-    }
-
-    let content = fs::read_to_string(path).map_err(|source| ImportError::IoError {
-        path: path_str.to_string(),
-        source,
-    })?;
-    let mut existing: HashSet<(String, String)> = aux
-        .symbols
-        .iter()
-        .map(|(k, s, _)| (k.clone(), s.clone()))
-        .collect();
-    let mut added = 0;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let parts: Vec<&str> = trimmed.split('\t').collect();
-        if parts.len() >= 2 {
-            let key = parts[0].trim().to_string();
-            let sym = parts[1].trim().to_string();
-            let desc = if parts.len() >= 3 {
-                parts[2].trim().to_string()
-            } else {
-                "外部符号".to_string()
-            };
-            if existing.insert((key.clone(), sym.clone())) {
-                aux.symbols.push((key, sym, desc));
-                added += 1;
-            }
-        }
-    }
-
     let aux_path = AppConfig::user_aux_dict_path();
-    aux.save_to_file(&aux_path)
-        .map_err(|e| ImportError::SaveError {
-            path: aux_path.to_string_lossy().to_string(),
-            message: e.to_string(),
-        })?;
+    let report = DictImportService::import_symbols_dict(path, aux, Some(&aux_path))
+        .map_err(|e| map_algo_error(e, path_str))?;
 
     Ok((
         format!(
             "成功导入 {} 组符号联想项，当前符号总数: {}",
-            added,
-            aux.symbols.len()
+            report.added_count, report.total_count
         ),
-        aux.symbols.len(),
+        report.total_count,
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::NamedTempFile;
 
     #[test]

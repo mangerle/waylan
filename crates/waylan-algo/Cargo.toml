@@ -44,3 +44,6 @@ rayon = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

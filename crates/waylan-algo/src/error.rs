@@ -10,6 +10,20 @@ use thiserror::Error;
 /// - **代价与局限**：跨模块传递时需显式进行错误变体转换，较通用动态错误稍增类型声明成本。
 #[derive(Debug, Error)]
 pub enum AlgoError {
+    /// 词库文件不存在或路径无效
+    #[error("指定的词库文件不存在或路径无效: {path}")]
+    FileNotFound { path: PathBuf },
+
+    /// 词库文件体积超出安全上限
+    #[error(
+        "词库文件体积超过安全上限（{limit_bytes} 字节）: {path}（当前体积: {actual_bytes} 字节）"
+    )]
+    FileTooLarge {
+        path: PathBuf,
+        limit_bytes: u64,
+        actual_bytes: u64,
+    },
+
     /// 词库文件访问或 I/O 错误
     #[error("词库文件访问失败，路径: {path}，原因: {source}")]
     DictionaryIo {

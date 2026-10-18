@@ -6137,6 +6137,7 @@ dependencies = [
  "rustix 0.38.44",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "waylan-core",
 ]

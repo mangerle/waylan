@@ -9,10 +9,9 @@
 use crate::error::DaemonError;
 use log::info;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_algo::builder::DictBuilder;
+use waylan_algo::dict_importer::DictImportService;
 use waylan_algo::opencc::OpenCcDict;
-use waylan_algo::AlgoEngine;
 
 /// 词库管理子命令枚举
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,19 +98,14 @@ impl DictSubcommand {
             }
             Self::ImportUser { input, user_dict } => {
                 info!(
-                    "[用户词库] 从文本导入自造词与调频记录: {} -> {}",
+                    "[用户词库] 从外部词库文件导入自造词与调频记录: {} -> {}",
                     input, user_dict
                 );
-                let mut engine = AlgoEngine::default();
-                engine.set_user_dict_path(&user_dict);
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|e| DaemonError::Cli(e.to_string()))?
-                    .as_secs();
-                let count =
-                    DictBuilder::import_user_text_dict(&input, &mut engine.adaptive.model, now)?;
-                engine.persist_user_dict()?;
-                info!("[用户词库] 成功导入 {} 条用户记录", count);
+                let report = DictImportService::import_pinyin_dict(&input, &user_dict)?;
+                info!(
+                    "[用户词库] 成功导入 {} 条记录，当前词库总词量: {} 条",
+                    report.imported_count, report.total_entries
+                );
                 Ok(())
             }
         }

@@ -1,5 +1,18 @@
+//! 第三方词库文件解码与词条提取器
+//!
+//! # 设计原理
+//! - **实现初衷**：负责解析各类外部异构格式词库文件（Rime YAML、搜狗细胞词库 .scel 及纯文本 .txt），
+//!   提取标准化拼音词条项并输出统一的领域对象 `ImportedDictEntry`。
+//! - **核心优势**：
+//!   1. 纯内存格式解析，与上层持久化和自适应模型逻辑完全解耦；
+//!   2. 严格内存边界防御，防范畸变搜狗 SCEL 二进制扩展字段越界攻击；
+//!   3. 零多余堆分配，基于流式切片高效解码。
+//! - **代价与局限**：
+//!   仅负责单文件的语法与二进制解码，不直接负责自适应历史记录合入与去重。
+
 use crate::builder::normalize_pinyin_tones;
 use crate::error::AlgoError;
+use crate::types::ImportedDictEntry;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -10,13 +23,14 @@ const SCEL_HEADER_MAGIC: [u8; 4] = [0x40, 0x15, 0x00, 0x00];
 /// 搜狗细胞词库拼音表区 (0x1540) 4 字节魔数
 const SCEL_PY_MAGIC: [u8; 4] = [0x9D, 0x01, 0x00, 0x00];
 
-pub use crate::types::ImportedDictEntry;
-
 /// 第三方词库导入与转换器 (支持 Rime YAML / 搜狗细胞词库 .scel / 纯文本 .txt)
 pub struct DictImporter;
 
 impl DictImporter {
     /// 自动根据文件后缀解析导入词库文件
+    ///
+    /// # Errors
+    /// 当文件不存在、读取异常、超出大小上限或格式损坏时返回 [`AlgoError`]。
     pub fn import_file(path: &Path) -> Result<Vec<ImportedDictEntry>, AlgoError> {
         let extension = path
             .extension()
@@ -31,12 +45,10 @@ impl DictImporter {
                     source: e,
                 })?;
                 if meta.len() > MAX_IMPORT_FILE_BYTES {
-                    return Err(AlgoError::DictParseFailed {
-                        reason: format!(
-                            "搜狗细胞词库文件体积超出安全上限 ({} MB): {}",
-                            MAX_IMPORT_FILE_BYTES / (1024 * 1024),
-                            meta.len()
-                        ),
+                    return Err(AlgoError::FileTooLarge {
+                        path: path.to_path_buf(),
+                        limit_bytes: MAX_IMPORT_FILE_BYTES,
+                        actual_bytes: meta.len(),
                     });
                 }
                 let data = fs::read(path).map_err(|e| AlgoError::DictionaryIo {

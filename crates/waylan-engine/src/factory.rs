@@ -163,15 +163,36 @@ pub fn create_standard_engine(cfg: &AppConfig) -> AlgoEngine {
     create_engine_with_table(table, cfg)
 }
 
-/// 对已有算法引擎执行热重载（重新载入配置、短语与自学习记录）
+/// 对已有算法引擎执行热重载（重新载入配置、自定义短语、用户自学习库与辅助词典）
 pub fn reload_engine_resources(engine: &mut AlgoEngine, cfg: &AppConfig) {
     engine.config = AlgoConfig::from(cfg);
+
+    // 1. 重新载入自定义短语
     let phrase_path = CustomPhraseManager::default_path();
     engine.resources.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
-    let wal_opt = engine.user_dict_path().map(|p| p.to_path_buf());
-    if let Some(ref wal_path) = wal_opt {
-        engine.set_user_dict_path(wal_path);
+
+    // 2. 重新检测并同步用户自适应词库
+    let user_dict_path = AppConfig::user_dict_path();
+    if user_dict_path.exists() {
+        if let Ok(m) = fs::metadata(&user_dict_path) {
+            if m.len() == 0 {
+                info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
+                engine.adaptive.model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+                engine.set_user_dict_path(&user_dict_path);
+            } else if !engine.is_same_wal_file(&user_dict_path) {
+                engine.set_user_dict_path(&user_dict_path);
+            }
+        }
+    } else {
+        info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
+        engine.adaptive.model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+        engine.set_user_dict_path(&user_dict_path);
     }
+
+    // 3. 重新载入英文与符号表情辅助词库管理器
+    let (english_suggester, symbol_suggester) = load_auxiliary_managers();
+    engine.resources.english_suggester = english_suggester;
+    engine.resources.symbol_suggester = symbol_suggester;
 }
 
 #[cfg(test)]

@@ -111,7 +111,8 @@ impl ImeRuntime {
 
     /// 热重载应用程序配置与词库资源（使输入法交互运行时自闭环更新）
     pub fn reload_config(&mut self, cfg: &waylan_core::AppConfig) {
-        self.core.engine.config = waylan_algo::AlgoConfig::from(cfg);
+        crate::factory::reload_engine_resources(&mut self.core.engine, cfg);
+
         self.core.shift_sm.set_toggle_key(cfg.shortcuts.switch_key);
         self.core.punctuation_processor.slash_to_dunhao = cfg.pinyin.slash_to_dunhao;
         self.core.punctuation_processor.protect_digits_punctuation =
@@ -122,36 +123,6 @@ impl ImeRuntime {
         self.core.traditional_shortcut = cfg.shortcuts.traditional_shortcut;
         self.core.full_width_char_shortcut = cfg.shortcuts.full_width_char_shortcut;
         self.core.full_width_punct_shortcut = cfg.shortcuts.full_width_punct_shortcut;
-
-        // 自定义短语
-        let p_path = waylan_algo::custom_phrase::CustomPhraseManager::default_path();
-        self.core.engine.resources.custom_phrases =
-            waylan_algo::custom_phrase::CustomPhraseManager::load_or_init(&p_path);
-
-        // 用户自适应词库
-        let user_dict_path = waylan_core::AppConfig::user_dict_path();
-        if user_dict_path.exists() {
-            if let Ok(m) = std::fs::metadata(&user_dict_path) {
-                if m.len() == 0 {
-                    log::info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
-                    self.core.engine.adaptive.model =
-                        waylan_algo::user_adaptive::UserAdaptiveModel::new();
-                    self.core.engine.set_user_dict_path(&user_dict_path);
-                } else if !self.core.engine.is_same_wal_file(&user_dict_path) {
-                    self.core.engine.set_user_dict_path(&user_dict_path);
-                }
-            }
-        } else {
-            log::info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
-            self.core.engine.adaptive.model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
-            self.core.engine.set_user_dict_path(&user_dict_path);
-        }
-
-        // 辅助与混输词库
-        let (english_suggester, symbol_suggester) =
-            waylan_algo::custom_phrase::load_auxiliary_managers();
-        self.core.engine.resources.english_suggester = english_suggester;
-        self.core.engine.resources.symbol_suggester = symbol_suggester;
 
         // 语音配置同步
         if let Some(ref mut vm) = self.voice_manager {
