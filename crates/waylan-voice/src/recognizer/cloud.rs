@@ -98,26 +98,17 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
             return Ok(String::new());
         }
 
-        let api_key = match &self.config.api_key {
-            Some(key) if !key.trim().is_empty() => key.trim().to_string(),
-            _ => {
+        let (api_key, endpoint) = match resolve_api_credentials(&self.config) {
+            Ok(creds) => creds,
+            Err(e) => {
                 self.reset();
-                return Err(VoiceError::RecognizerFailed {
-                    engine_type: "云端 Whisper".to_string(),
-                    message: "未配置有效的 API Key 凭据，无法发起远端识别".to_string(),
-                });
+                return Err(e);
             }
         };
 
         let wav_data = encode_pcm_to_wav(&self.pcm_buffer, 16_000);
         let duration_secs = self.pcm_buffer.len() as f64 / 16000.0;
         self.reset();
-
-        let endpoint = if self.config.endpoint.trim().is_empty() {
-            "https://api.openai.com/v1/audio/transcriptions".to_string()
-        } else {
-            self.config.endpoint.clone()
-        };
 
         info!(
             "[云端 ASR] 正在向远端服务发起识别请求 (地址: {}, 音频: {:.2}s, 字节数: {})",
@@ -126,46 +117,10 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
             wav_data.len()
         );
 
-        // 构造标准的 multipart/form-data 报文体
-        let boundary = format!(
-            "----WayLanBoundary{:x}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        );
-        let mut body = Vec::new();
-
-        // 1. model 字段
-        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-        body.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
-        let model_name = if self.config.model.trim().is_empty() {
-            "whisper-1"
-        } else {
-            self.config.model.trim()
-        };
-        body.extend_from_slice(model_name.as_bytes());
-        body.extend_from_slice(b"\r\n");
-
-        // 2. language 字段
-        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-        body.extend_from_slice(b"Content-Disposition: form-data; name=\"language\"\r\n\r\n");
-        body.extend_from_slice(b"zh\r\n");
-
-        // 3. file 音频文件内容
-        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-        body.extend_from_slice(
-            b"Content-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n",
-        );
-        body.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
-        body.extend_from_slice(&wav_data);
-        body.extend_from_slice(b"\r\n");
-
-        // 结束边界标记
-        body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+        let (boundary, body) = build_multipart_payload(&self.config.model, &wav_data);
 
         // 复用长生命周期 HTTP 连接池发送识别请求
-        let resp_result = self
+        let resp = self
             .agent
             .post(&endpoint)
             .set("Authorization", &format!("Bearer {}", api_key))
@@ -173,50 +128,13 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
                 "Content-Type",
                 &format!("multipart/form-data; boundary={}", boundary),
             )
-            .send_bytes(&body);
-
-        match resp_result {
-            Ok(resp) => {
-                let status = resp.status();
-                if (200..300).contains(&status) {
-                    let resp_str =
-                        resp.into_string()
-                            .map_err(|e| VoiceError::RecognizerFailed {
-                                engine_type: "云端 Whisper".to_string(),
-                                message: format!("解析云端响应字符串失败: {}", e),
-                            })?;
-                    // 尝试从标准 Whisper 返回 JSON 中解析识别文本
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp_str) {
-                        if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
-                            info!("[云端 ASR] 识别成功，文本长度: {}", text.len());
-                            return Ok(text.to_string());
-                        }
-                    }
-                    Ok(resp_str)
-                } else {
-                    let status_text = resp.status_text().to_string();
-                    let resp_body = resp.into_string().unwrap_or_default();
-                    let detail = if !resp_body.trim().is_empty() {
-                        format!(
-                            "状态码: {} ({}), 详情: {}",
-                            status,
-                            status_text,
-                            resp_body.trim()
-                        )
-                    } else {
-                        format!("状态码: {} ({})", status, status_text)
-                    };
-                    Err(VoiceError::RecognizerFailed {
-                        engine_type: "云端 Whisper".to_string(),
-                        message: format!("远端服务器返回错误: {}", detail),
-                    })
-                }
-            }
-            Err(e) => Err(VoiceError::RecognizerFailed {
+            .send_bytes(&body)
+            .map_err(|e| VoiceError::RecognizerFailed {
                 engine_type: "云端 Whisper".to_string(),
                 message: format!("请求远端语音识别服务失败: {}", e),
-            }),
-        }
+            })?;
+
+        parse_cloud_response(resp)
     }
 
     fn reset(&mut self) {
@@ -233,4 +151,105 @@ pub fn test_cloud_profile_connection(config: &CloudAsrConfig) -> Result<String, 
     let dummy_samples = vec![0.0f32; 8000];
     recognizer.feed_pcm(&dummy_samples)?;
     recognizer.finish()
+}
+
+/// 解析与验证云端 ASR 的 API Key 与终端地址
+fn resolve_api_credentials(config: &CloudAsrConfig) -> Result<(String, String), VoiceError> {
+    let api_key = match &config.api_key {
+        Some(key) if !key.trim().is_empty() => key.trim().to_string(),
+        _ => {
+            return Err(VoiceError::RecognizerFailed {
+                engine_type: "云端 Whisper".to_string(),
+                message: "未配置有效的 API Key 凭据，无法发起远端识别".to_string(),
+            });
+        }
+    };
+
+    let endpoint = if config.endpoint.trim().is_empty() {
+        "https://api.openai.com/v1/audio/transcriptions".to_string()
+    } else {
+        config.endpoint.clone()
+    };
+
+    Ok((api_key, endpoint))
+}
+
+/// 构造标准的 multipart/form-data 报文体
+fn build_multipart_payload(model: &str, wav_data: &[u8]) -> (String, Vec<u8>) {
+    let boundary = format!(
+        "----WayLanBoundary{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let mut body = Vec::new();
+
+    // 1. model 字段
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+    let model_name = if model.trim().is_empty() {
+        "whisper-1"
+    } else {
+        model.trim()
+    };
+    body.extend_from_slice(model_name.as_bytes());
+    body.extend_from_slice(b"\r\n");
+
+    // 2. language 字段
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Disposition: form-data; name=\"language\"\r\n\r\n");
+    body.extend_from_slice(b"zh\r\n");
+
+    // 3. file 音频文件内容
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
+    body.extend_from_slice(wav_data);
+    body.extend_from_slice(b"\r\n");
+
+    // 结束边界标记
+    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+    (boundary, body)
+}
+
+/// 解析云端 HTTP 响应与错误提取
+fn parse_cloud_response(resp: ureq::Response) -> Result<String, VoiceError> {
+    let status = resp.status();
+    if (200..300).contains(&status) {
+        let resp_str = resp
+            .into_string()
+            .map_err(|e| VoiceError::RecognizerFailed {
+                engine_type: "云端 Whisper".to_string(),
+                message: format!("解析云端响应字符串失败: {}", e),
+            })?;
+        // 尝试从标准 Whisper 返回 JSON 中解析识别文本
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp_str) {
+            if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
+                info!("[云端 ASR] 识别成功，文本长度: {}", text.len());
+                return Ok(text.to_string());
+            }
+        }
+        Ok(resp_str)
+    } else {
+        let status_text = resp.status_text().to_string();
+        let resp_body = resp.into_string().unwrap_or_default();
+        let detail = if !resp_body.trim().is_empty() {
+            format!(
+                "状态码: {} ({}), 详情: {}",
+                status,
+                status_text,
+                resp_body.trim()
+            )
+        } else {
+            format!("状态码: {} ({})", status, status_text)
+        };
+        Err(VoiceError::RecognizerFailed {
+            engine_type: "云端 Whisper".to_string(),
+            message: format!("远端服务器返回错误: {}", detail),
+        })
+    }
 }
