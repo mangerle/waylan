@@ -9,6 +9,7 @@
 //!   增加了单层轻量结果解构，但彻底隔绝了平台底层对复杂打字业务逻辑的污染。
 
 mod dispatch;
+mod grid;
 #[cfg(test)]
 mod tests;
 
@@ -101,6 +102,10 @@ pub struct ImeCoreSession {
     pub full_width_punct_shortcut: FullWidthPunctShortcut,
     /// 是否开启全角字符/字母输入
     pub full_width_char: bool,
+    /// 候选词是否处于大网格展开态
+    pub is_grid_expanded: bool,
+    /// 大网格展开态下的高亮选中项绝对索引 (0..30)
+    pub grid_selected_index: usize,
 }
 
 impl Default for ImeCoreSession {
@@ -127,6 +132,8 @@ impl ImeCoreSession {
             full_width_char_shortcut: FullWidthCharShortcut::default(),
             full_width_punct_shortcut: FullWidthPunctShortcut::default(),
             full_width_char: false,
+            is_grid_expanded: false,
+            grid_selected_index: 0,
         }
     }
 
@@ -161,12 +168,13 @@ impl ImeCoreSession {
         self.modifiers.locked = locked;
     }
 
-    /// 重置输入状态（清空修饰键、消费追踪、Shift 状态机、标点处理器与算法引擎）
+    /// 重置输入状态（清空修饰键、消费追踪、Shift 状态机、标点处理器、网格展开态与算法引擎）
     pub fn reset_input_state(&mut self) {
         self.modifiers.reset();
         self.consumed_keys.clear();
         self.shift_sm.reset();
         self.punctuation_processor.reset();
+        self.collapse_grid();
         self.engine.reset();
     }
 

@@ -1,6 +1,5 @@
 //! V2 协议键盘输入分发与状态机管理模块
 
-mod grid;
 mod repeat;
 
 use std::sync::atomic::Ordering;
@@ -92,16 +91,11 @@ pub(crate) fn process_key_event(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    // 3. 若大网格展开态且处于按下阶段，优先由大网格导航拦截
-    if session.is_grid_expanded && is_press {
-        if let Some(res) = grid::process_grid_expanded_key(session, key, now) {
-            session.core.consumed_keys.record_press(key, res.0);
-            repeat::update_key_repeat(session, key, res.0);
-            return res;
-        }
-    }
+    // 同步前置网格状态（若外部通过 session 显式设置）
+    session.core.is_grid_expanded = session.is_grid_expanded;
+    session.core.grid_selected_index = session.grid_selected_index;
 
-    // 4. 调用统一核心会话决策流水线
+    // 3. 调用统一核心会话决策流水线（包含组词、中英切换、快捷键与大网格导航）
     let context_prefix = extract_surrounding_prefix(session.surrounding_text.as_ref(), 64);
     let result = session.core.process_key(
         KeyProcessContext {
@@ -113,20 +107,17 @@ pub(crate) fn process_key_event(
         now,
     );
 
-    // 5. 统一驱动 Wayland 界面呈现与文本上屏
+    // 4. 统一驱动 Wayland 界面呈现与文本上屏
     let outcome = match result {
         KeyProcessResult::PassThrough => (false, None),
         KeyProcessResult::Handled { update_ui } => {
             if update_ui {
-                session.grid_selected_index = 0;
                 let preedit = session.core.engine.formatted_preedit();
                 session.update_preedit(&preedit);
             }
             (true, None)
         }
         KeyProcessResult::ExpandGrid => {
-            session.is_grid_expanded = true;
-            session.grid_selected_index = session.core.engine.selected_index();
             session.refresh_candidate_surface();
             (true, None)
         }
@@ -201,7 +192,11 @@ pub(crate) fn process_key_event(
         }
     };
 
-    // 6. 按键重复跟踪处理
+    // 同步核心会话决策后的网格展开与索引状态
+    session.is_grid_expanded = session.core.is_grid_expanded;
+    session.grid_selected_index = session.core.grid_selected_index;
+
+    // 5. 按键重复跟踪处理
     if !is_press {
         if session
             .repeat_state

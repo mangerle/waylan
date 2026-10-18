@@ -140,8 +140,14 @@ impl ImeCoreSession {
             return ImeOutputAction::PassThrough;
         }
 
-        // 1. 若处于拼音组词状态，优先流转拼音状态机
+        // 1. 若处于拼音组词状态，优先流转大网格展开态或拼音状态机
         if !self.engine.raw_input().is_empty() {
+            if self.is_grid_expanded {
+                if let Some(action) = self.handle_grid_expanded_key(keycode, now) {
+                    return action;
+                }
+            }
+
             let params = CompositionKeyParams {
                 key: keycode,
                 shift_active: self.is_shift_active(),
@@ -153,6 +159,9 @@ impl ImeCoreSession {
                 &mut self.punctuation_processor,
                 params,
             ) {
+                if action == ImeOutputAction::ExpandGrid {
+                    self.expand_grid();
+                }
                 return match action {
                     ImeOutputAction::Commit(text) => {
                         let final_text = if self.full_width_char {
