@@ -7,18 +7,18 @@ use super::process_key_event;
 
 /// 根据本次按键消费状态与连击设置更新连击计时器
 pub(super) fn update_key_repeat(session: &mut WaylanV2Session, key: u32, consumed: bool) {
-    let (rate, delay) = session.repeat_info;
+    let (rate, delay) = session.keyboard.repeat_info;
     if consumed && rate > 0 && delay > 0 && !session.runtime.core.engine.raw_input().is_empty() {
         let next_fire = Instant::now() + Duration::from_millis(delay.max(50) as u64);
-        session.repeat_state = Some((key, next_fire));
+        session.keyboard.repeat_state = Some((key, next_fire));
     } else {
-        session.repeat_state = None;
+        session.keyboard.repeat_state = None;
     }
 }
 
 /// 计算事件循环下一次 poll 的等待超时毫秒数（若存在活跃按键连击，按剩余到期时间缩短超时）
 pub(crate) fn next_poll_timeout_ms(session: &WaylanV2Session, default_ms: i32) -> i32 {
-    let Some((_, next_fire)) = session.repeat_state else {
+    let Some((_, next_fire)) = session.keyboard.repeat_state else {
         return default_ms;
     };
     let now = Instant::now();
@@ -35,12 +35,12 @@ pub(crate) fn next_poll_timeout_ms(session: &WaylanV2Session, default_ms: i32) -
 
 /// 检查并触发已到期的长按按键连击事件
 pub(crate) fn drive_key_repeat(session: &mut WaylanV2Session) {
-    let Some((key, next_fire)) = session.repeat_state else {
+    let Some((key, next_fire)) = session.keyboard.repeat_state else {
         return;
     };
-    let (rate, _) = session.repeat_info;
-    if rate <= 0 || !session.is_active || session.runtime.core.engine.raw_input().is_empty() {
-        session.repeat_state = None;
+    let (rate, _) = session.keyboard.repeat_info;
+    if rate <= 0 || !session.focus.is_active || session.runtime.core.engine.raw_input().is_empty() {
+        session.keyboard.repeat_state = None;
         return;
     };
 
@@ -49,9 +49,9 @@ pub(crate) fn drive_key_repeat(session: &mut WaylanV2Session) {
         let (consumed, _) = process_key_event(session, key, true);
         if consumed && !session.runtime.core.engine.raw_input().is_empty() {
             let interval_ms = (1000 / rate.max(1)).max(10) as u64;
-            session.repeat_state = Some((key, now + Duration::from_millis(interval_ms)));
+            session.keyboard.repeat_state = Some((key, now + Duration::from_millis(interval_ms)));
         } else {
-            session.repeat_state = None;
+            session.keyboard.repeat_state = None;
         }
     }
 }

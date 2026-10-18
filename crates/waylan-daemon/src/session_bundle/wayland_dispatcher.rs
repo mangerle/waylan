@@ -50,7 +50,7 @@ impl ReloadableWaylandSession for WaylanV1Session {
 impl ReloadableWaylandSession for WaylanV2Session {
     #[inline]
     fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
-        &mut self.surface_manager.renderer
+        &mut self.surface.surface_manager.renderer
     }
 
     #[inline]
@@ -120,15 +120,15 @@ fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
 fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
     info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
     let mut session_v2 = WaylanV2Session::new(params.engine);
-    session_v2.surface_manager.renderer = params.renderer;
-    session_v2.watched_paths = params.watched_paths;
-    session_v2.last_watched_mtime = params.initial_mtime;
+    session_v2.surface.surface_manager.renderer = params.renderer;
+    session_v2.watcher.watched_paths = params.watched_paths;
+    session_v2.watcher.last_watched_mtime = params.initial_mtime;
     session_v2.runtime.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
     session_v2.runtime.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
     session_v2.runtime.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-    session_v2.exit_requested = Some(params.coordinator.flag());
-    session_v2.loop_wakeup = params.coordinator.loop_wakeup();
-    session_v2.reload_callback = Some(Box::new(reload_wayland_v2_session));
+    session_v2.watcher.exit_requested = Some(params.coordinator.flag());
+    session_v2.watcher.loop_wakeup = params.coordinator.loop_wakeup();
+    session_v2.watcher.reload_callback = Some(Box::new(reload_wayland_v2_session));
     session_v2.runtime.reload_config(params.cfg);
     let v2_result = run_session_v2_loop_fallible(session_v2);
     match v2_result {
@@ -144,9 +144,9 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
             );
             let session = WaylanV1Session {
                 runtime: returned_session.runtime,
-                surface_manager: returned_session.surface_manager,
-                watched_paths: returned_session.watched_paths,
-                last_watched_mtime: returned_session.last_watched_mtime,
+                surface_manager: returned_session.surface.surface_manager,
+                watched_paths: returned_session.watcher.watched_paths,
+                last_watched_mtime: returned_session.watcher.last_watched_mtime,
                 exit_requested: Some(params.coordinator.flag()),
                 loop_wakeup: params.coordinator.loop_wakeup(),
                 reload_callback: Some(Box::new(reload_wayland_v1_session)),

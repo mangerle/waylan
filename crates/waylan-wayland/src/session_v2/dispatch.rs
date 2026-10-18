@@ -5,7 +5,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
 // 展开 7 组通用的基础 Wayland Dispatch trait (wl_seat, wl_compositor, wl_shm, wl_surface, wl_shm_pool, wl_buffer, wl_registry)
-impl_common_wayland_dispatch!(WaylanV2Session);
+impl_common_wayland_dispatch!(WaylanV2Session, surface.surface_manager);
 
 // 为 zwp_input_method_manager_v2 实现 Dispatch
 impl Dispatch<ZwpInputMethodManagerV2, ()> for WaylanV2Session {

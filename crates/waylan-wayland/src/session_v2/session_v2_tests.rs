@@ -8,11 +8,11 @@ fn test_v2_session_initialization() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let session = WaylanV2Session::new(engine);
 
-    assert!(!session.is_active);
+    assert!(!session.focus.is_active);
     assert_eq!(session.runtime.core.mode, InputMode::Chinese);
-    assert_eq!(session.done_serial, 0);
-    assert!(session.keyboard_grab.is_none());
-    assert!(session.input_method.is_none());
+    assert_eq!(session.protocol.done_serial, 0);
+    assert!(session.protocol.keyboard_grab.is_none());
+    assert!(session.protocol.input_method.is_none());
 
     let box_state = session.build_candidate_box_state();
     assert!(!box_state.visible);
@@ -23,7 +23,7 @@ fn test_v2_session_initialization() {
 fn test_v2_session_preedit_and_cancel() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
-    session.is_active = true;
+    session.focus.is_active = true;
 
     session.runtime.core.engine.push_char('n');
     session.runtime.core.engine.push_char('i');
@@ -88,7 +88,7 @@ fn test_shift_punctuation_and_modifier_tracking() {
 fn test_candidate_selection_navigation() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
-    session.is_active = true;
+    session.focus.is_active = true;
 
     for ch in "xian".chars() {
         session.runtime.core.engine.push_char(ch);
@@ -164,8 +164,8 @@ fn test_watched_paths_mtime_triggers_reload() {
     let temp_file = dir.path().join("waylan_test_mtime_watch.toml");
     let _ = std::fs::write(&temp_file, "page_size = 7\n");
 
-    session.watched_paths = vec![temp_file.clone()];
-    session.reload_callback = Some(Box::new(|s| {
+    session.watcher.watched_paths = vec![temp_file.clone()];
+    session.watcher.reload_callback = Some(Box::new(|s| {
         s.runtime.core.engine.config.page_size = 9;
     }));
 
@@ -174,7 +174,7 @@ fn test_watched_paths_mtime_triggers_reload() {
     assert_eq!(session.runtime.core.engine.config.page_size, 7);
 
     // 模拟外部进程将历史签名退后，使得当前文件签名更新于基准签名
-    session.last_watched_mtime = Some(waylan_core::FileSignature::SingleFile(
+    session.watcher.last_watched_mtime = Some(waylan_core::FileSignature::SingleFile(
         std::time::SystemTime::now() - std::time::Duration::from_secs(60),
     ));
     session.sync_external_state();
@@ -306,16 +306,16 @@ fn test_v2_double_buffered_done_atomic_commit() {
     // 挂起 Activate 与 SurroundingText，但在 Done 之前不应提前修改生效状态
     session.stage_activate();
     session.stage_surrounding_text("测试文本".to_string(), 6, 6);
-    assert!(!session.is_active);
-    assert!(session.surrounding_text.is_none());
-    assert_eq!(session.done_serial, 0);
+    assert!(!session.focus.is_active);
+    assert!(session.focus.surrounding_text.is_none());
+    assert_eq!(session.protocol.done_serial, 0);
 
     // 触发 Done 原子生效
     assert!(session.apply_done_state());
-    assert!(session.is_active);
-    assert_eq!(session.done_serial, 1);
+    assert!(session.focus.is_active);
+    assert_eq!(session.protocol.done_serial, 1);
     assert_eq!(
-        session.surrounding_text,
+        session.focus.surrounding_text,
         Some(("测试文本".to_string(), 6, 6))
     );
 
@@ -325,11 +325,11 @@ fn test_v2_double_buffered_done_atomic_commit() {
     session.stage_deactivate();
     session.stage_activate();
     assert!(session.apply_done_state());
-    assert!(session.is_active);
-    assert_eq!(session.done_serial, 2);
+    assert!(session.focus.is_active);
+    assert_eq!(session.protocol.done_serial, 2);
     assert!(session.runtime.core.engine.raw_input().is_empty());
     assert!(!session.runtime.core.punctuation_processor.double_quote_open);
-    assert!(session.surrounding_text.is_none());
+    assert!(session.focus.surrounding_text.is_none());
 }
 
 #[test]
@@ -369,7 +369,7 @@ fn test_key_press_release_symmetry() {
 fn test_v2_grid_expansion_state() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
-    session.is_active = true;
+    session.focus.is_active = true;
 
     session.runtime.core.engine.push_char('n');
     session.runtime.core.engine.push_char('i');
@@ -455,7 +455,7 @@ fn test_v2_grid_expanded_key_navigation_and_selection() {
 fn test_caps_lock_toggle_and_passthrough() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
-    session.is_active = true;
+    session.focus.is_active = true;
     assert_eq!(session.runtime.core.mode, InputMode::Chinese);
     assert!(!session.runtime.core.is_caps_locked());
 

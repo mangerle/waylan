@@ -263,7 +263,7 @@ fn bind_session_v2_globals(
             })?;
     let input_method = im_manager.get_input_method(&seat, qh, ());
     let pointer = seat.get_pointer(qh, ());
-    session.pointer = Some(pointer);
+    session.surface.pointer = Some(pointer);
     info!("[微澜 Wayland] 成功向 wl_seat 注册鼠标指针(wl_pointer)，支持候选框点击与网格展开交互。");
 
     let compositor: WlCompositor =
@@ -275,8 +275,8 @@ fn bind_session_v2_globals(
             })?;
     let wl_surface = compositor.create_surface(qh, ());
     let popup_surface = input_method.get_input_popup_surface(&wl_surface, qh, ());
-    session.popup_wl_surface = Some(wl_surface);
-    session.popup_surface = Some(popup_surface);
+    session.surface.popup_wl_surface = Some(wl_surface);
+    session.protocol.popup_surface = Some(popup_surface);
 
     let shm: WlShm =
         globals
@@ -285,14 +285,14 @@ fn bind_session_v2_globals(
                 interface: "wl_shm",
                 reason: e.to_string(),
             })?;
-    session.shm = Some(shm);
+    session.protocol.shm = Some(shm);
     session.qhandle = Some(qh.clone());
     session.set_input_method(input_method);
 
     match globals.bind::<ZwpVirtualKeyboardManagerV1, _, _>(qh, 1..=1, ()) {
         Ok(vk_mgr) => {
             let vk = vk_mgr.create_virtual_keyboard(&seat, qh, ());
-            session.virtual_keyboard = Some(vk);
+            session.protocol.virtual_keyboard = Some(vk);
             info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
         }
         Err(e) => {
@@ -336,6 +336,7 @@ pub fn run_session_v2_loop_fallible(
 
     loop {
         if session
+            .watcher
             .exit_requested
             .as_ref()
             .map(|f| f.load(Ordering::Acquire))
@@ -355,14 +356,14 @@ pub fn run_session_v2_loop_fallible(
 
         let default_poll_timeout = if session.is_voice_active() {
             40
-        } else if session.inotify_watcher.is_some() {
+        } else if session.watcher.inotify_watcher.is_some() {
             -1
         } else {
             2000
         };
         let timeout_ms = session.next_poll_timeout_ms(default_poll_timeout);
-        let inotify_fd = session.inotify_watcher.as_ref().map(|w| w.as_fd());
-        let wakeup_fd = session.loop_wakeup.as_ref().map(|w| w.as_fd());
+        let inotify_fd = session.watcher.inotify_watcher.as_ref().map(|w| w.as_fd());
+        let wakeup_fd = session.watcher.loop_wakeup.as_ref().map(|w| w.as_fd());
 
         if let Some(guard) = event_queue.prepare_read() {
             let outcome = match poll_and_read_events(guard, timeout_ms, inotify_fd, wakeup_fd) {
@@ -373,7 +374,7 @@ pub fn run_session_v2_loop_fallible(
             session.poll_voice_cycle();
             match outcome {
                 PollEventOutcome::TimedOut => {
-                    if session.inotify_watcher.is_none() {
+                    if session.watcher.inotify_watcher.is_none() {
                         session.sync_external_state();
                     }
                 }
@@ -382,7 +383,7 @@ pub fn run_session_v2_loop_fallible(
                     inotify_triggered,
                 } => {
                     if wakeup_triggered {
-                        if let Some(ref wakeup) = session.loop_wakeup {
+                        if let Some(ref wakeup) = session.watcher.loop_wakeup {
                             wakeup.drain();
                         }
                         session.sync_external_state();

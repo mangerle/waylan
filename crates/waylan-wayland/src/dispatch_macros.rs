@@ -9,6 +9,9 @@
 #[macro_export]
 macro_rules! impl_common_wayland_dispatch {
     ($session_type:ty) => {
+        $crate::impl_common_wayland_dispatch!($session_type, surface_manager);
+    };
+    ($session_type:ty, $($surface_mgr_path:ident).+) => {
         impl wayland_client::Dispatch<wayland_client::protocol::wl_seat::WlSeat, ()>
             for $session_type
         {
@@ -71,7 +74,7 @@ macro_rules! impl_common_wayland_dispatch {
                 if let wayland_client::protocol::wl_surface::Event::PreferredBufferScale { factor } =
                     event
                 {
-                    state.surface_manager.set_scale(factor);
+                    state.$($surface_mgr_path).+.set_scale(factor);
                 }
             }
         }
@@ -111,7 +114,7 @@ macro_rules! impl_common_wayland_dispatch {
                     event,
                     wayland_client::protocol::wl_buffer::Event::Release
                 ) {
-                    state.surface_manager.on_buffer_released(proxy);
+                    state.$($surface_mgr_path).+.on_buffer_released(proxy);
                 }
             }
         }

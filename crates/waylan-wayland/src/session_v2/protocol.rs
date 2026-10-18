@@ -31,11 +31,11 @@ fn handle_v2_done(
 ) {
     let now_active = state.apply_done_state();
     if now_active {
-        if state.keyboard_grab.is_none() {
+        if state.protocol.keyboard_grab.is_none() {
             let grab = proxy.grab_keyboard(qhandle, ());
-            state.keyboard_grab = Some(grab);
+            state.protocol.keyboard_grab = Some(grab);
         }
-    } else if let Some(grab) = state.keyboard_grab.take() {
+    } else if let Some(grab) = state.protocol.keyboard_grab.take() {
         grab.release();
     }
 }
@@ -43,10 +43,10 @@ fn handle_v2_done(
 /// 处理输入法 v2 协议不可用时的安全回退与资源释放
 fn handle_v2_unavailable(state: &mut WaylanV2Session, proxy: &ZwpInputMethodV2) {
     info!("[Wayland v2] 输入法 v2 协议不可用，正在自动降级兼容模式。");
-    state.pending_active = false;
-    state.is_active = false;
-    state.is_unavailable = true;
-    if let Some(grab) = state.keyboard_grab.take() {
+    state.focus.pending_active = false;
+    state.focus.is_active = false;
+    state.protocol.is_unavailable = true;
+    if let Some(grab) = state.protocol.keyboard_grab.take() {
         grab.release();
     }
     proxy.destroy();
@@ -86,7 +86,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for WaylanV2Session {
             }
             V2Event::TextChangeCause { cause: _ } => {}
             V2Event::ContentType { hint: _, purpose } => {
-                state.pending_is_password = matches!(
+                state.focus.pending_is_password = matches!(
                     purpose,
                     WEnum::Value(ContentPurpose::Password | ContentPurpose::Pin)
                 );
@@ -122,8 +122,9 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
                 width,
                 height
             );
-            state.current_cursor = CursorRect::new(x, y, width, height);
+            state.surface.current_cursor = CursorRect::new(x, y, width, height);
             state
+                .surface
                 .surface_manager
                 .update_cursor_rect(x, y, width, height);
         }
@@ -157,9 +158,9 @@ fn handle_grab_keymap(
             debug!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
         }
     }
-    if let Some(ref vk) = state.virtual_keyboard {
+    if let Some(ref vk) = state.protocol.virtual_keyboard {
         vk.keymap(u32::from(format), fd.as_fd(), size);
-        state.has_virtual_keymap = true;
+        state.protocol.has_virtual_keymap = true;
     }
 }
 
@@ -176,10 +177,10 @@ fn handle_grab_modifiers(
         .runtime
         .core
         .set_modifiers(mods_depressed, mods_locked);
-    state.mods_latched = mods_latched;
-    state.mods_group = group;
-    if state.has_virtual_keymap {
-        if let Some(ref vk) = state.virtual_keyboard {
+    state.keyboard.mods_latched = mods_latched;
+    state.keyboard.mods_group = group;
+    if state.protocol.has_virtual_keymap {
+        if let Some(ref vk) = state.protocol.virtual_keyboard {
             vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
         }
     }
@@ -243,7 +244,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                 handle_grab_modifiers(state, mods_depressed, mods_latched, mods_locked, group);
             }
             GrabEvent::RepeatInfo { rate, delay } => {
-                state.repeat_info = (rate, delay);
+                state.keyboard.repeat_info = (rate, delay);
                 debug!(
                     "[Wayland v2 键盘抓取] 收到按键连击设置: rate={}, delay={}",
                     rate, delay
@@ -287,8 +288,9 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
 
 /// 处理鼠标点击候选框事件（包含展开/折叠、选词上屏与翻页）
 fn handle_pointer_click(state: &mut WaylanV2Session) {
-    let (px, py) = state.pointer_pos;
+    let (px, py) = state.surface.pointer_pos;
     let hit = state
+        .surface
         .surface_manager
         .renderer
         .hit_test(px as f32, py as f32);
@@ -330,17 +332,17 @@ impl Dispatch<WlPointer, ()> for WaylanV2Session {
                 surface_y,
                 ..
             } => {
-                if let Some(ref popup_surface) = state.popup_wl_surface {
+                if let Some(ref popup_surface) = state.surface.popup_wl_surface {
                     if &surface == popup_surface {
-                        state.pointer_in_surface = true;
-                        state.pointer_pos = (surface_x, surface_y);
+                        state.surface.pointer_in_surface = true;
+                        state.surface.pointer_pos = (surface_x, surface_y);
                     }
                 }
             }
             PointerEvent::Leave { surface, .. } => {
-                if let Some(ref popup_surface) = state.popup_wl_surface {
+                if let Some(ref popup_surface) = state.surface.popup_wl_surface {
                     if &surface == popup_surface {
-                        state.pointer_in_surface = false;
+                        state.surface.pointer_in_surface = false;
                     }
                 }
             }
@@ -348,14 +350,14 @@ impl Dispatch<WlPointer, ()> for WaylanV2Session {
                 surface_x,
                 surface_y,
                 ..
-            } if state.pointer_in_surface => {
-                state.pointer_pos = (surface_x, surface_y);
+            } if state.surface.pointer_in_surface => {
+                state.surface.pointer_pos = (surface_x, surface_y);
             }
             PointerEvent::Button {
                 button: 0x110,
                 state: WEnum::Value(WlButtonState::Pressed),
                 ..
-            } if state.pointer_in_surface => {
+            } if state.surface.pointer_in_surface => {
                 handle_pointer_click(state);
             }
             _ => {}
