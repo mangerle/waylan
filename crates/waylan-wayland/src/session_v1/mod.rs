@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
-use std::time::SystemTime;
 
 use log::{debug, info};
 use waylan_algo::{AlgoEngine, ImeCoreSession};
@@ -48,8 +47,8 @@ pub struct WaylanV1Session {
     pub reload_callback: Option<V1ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
     pub watched_paths: Vec<PathBuf>,
-    /// 上次记录的被监控文件最新修改时间戳
-    pub last_watched_mtime: Option<SystemTime>,
+    /// 上次记录的被监控文件最新状态签名
+    pub last_watched_mtime: Option<waylan_core::FileSignature>,
     /// 当前激活的应用上下文引用
     pub active_context: Option<ZwpInputMethodContextV1>,
     /// 捕获的键盘对象

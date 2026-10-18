@@ -16,7 +16,7 @@ pub use config::{
 };
 pub use fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,
-    init_session_inotify_watcher, InotifyWatcher,
+    compute_initial_signature, init_session_inotify_watcher, FileSignature, InotifyWatcher,
 };
 pub use input::*;
 pub use loop_wakeup::LoopWakeup;

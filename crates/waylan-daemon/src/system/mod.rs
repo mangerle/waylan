@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use std::process::{self, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -114,8 +113,8 @@ impl ShutdownCoordinator {
     }
 }
 
-/// 收集被监控热重载的配置文件与词库路径及其初始修改时间
-pub fn collect_watched_paths() -> (Vec<PathBuf>, Option<SystemTime>) {
+/// 收集被监控热重载的配置文件与词库路径及其初始状态签名
+pub fn collect_watched_paths() -> (Vec<PathBuf>, Option<waylan_core::FileSignature>) {
     let mut watched_paths = Vec::with_capacity(3);
     if let Some(c_path) = AppConfig::config_path() {
         watched_paths.push(c_path);
@@ -123,11 +122,8 @@ pub fn collect_watched_paths() -> (Vec<PathBuf>, Option<SystemTime>) {
     watched_paths.push(CustomPhraseManager::default_path());
     watched_paths.push(AppConfig::user_aux_dict_path());
 
-    let initial_mtime = watched_paths
-        .iter()
-        .filter_map(|p| fs::metadata(p).ok().and_then(|m| m.modified().ok()))
-        .max();
-    (watched_paths, initial_mtime)
+    let initial_sig = waylan_core::compute_initial_signature(&watched_paths);
+    (watched_paths, initial_sig)
 }
 
 /// 计算托盘展示形态与独占输入源配置

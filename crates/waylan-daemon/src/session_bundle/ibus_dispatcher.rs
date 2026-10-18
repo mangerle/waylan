@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use log::info;
 use waylan_algo::AlgoEngine;
@@ -33,7 +32,7 @@ pub struct IbusDispatchOptions<'a> {
     pub should_spawn_tray: bool,
     pub exclusive_source: bool,
     pub watched_paths: Vec<PathBuf>,
-    pub initial_mtime: Option<SystemTime>,
+    pub initial_mtime: Option<waylan_core::FileSignature>,
     pub tray: Option<&'a TrayService>,
     pub coordinator: ShutdownCoordinator,
 }

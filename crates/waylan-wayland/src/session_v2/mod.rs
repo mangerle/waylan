@@ -4,7 +4,7 @@ mod surrounding;
 
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, mpsc::SyncSender, Arc};
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use log::{debug, warn};
 use waylan_algo::{AlgoEngine, ImeCoreSession};
@@ -69,8 +69,8 @@ pub struct WaylanV2Session {
     pub reload_callback: Option<ReloadCallback>,
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
     pub watched_paths: Vec<PathBuf>,
-    /// 上次记录的被监控文件最新修改时间戳
-    pub last_watched_mtime: Option<SystemTime>,
+    /// 上次记录的被监控文件最新状态签名
+    pub last_watched_mtime: Option<waylan_core::FileSignature>,
     /// 客户端同步的上下文环境文本及光标位置 (text, cursor_byte_idx, anchor_byte_idx)
     pub surrounding_text: Option<(String, u32, u32)>,
     /// 双缓冲挂起的会话激活状态（在收到 Done 事件时原子生效）

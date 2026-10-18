@@ -26,7 +26,6 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 pub use session::run_ibus_session;
 use waylan_core::LoopWakeup;
@@ -120,8 +119,8 @@ pub struct IbusSessionOptions {
     pub is_ibus_child_mode: bool,
     /// 被监控热重载的配置文件与词库路径列表
     pub watched_paths: Vec<PathBuf>,
-    /// 初始文件修改时间戳
-    pub initial_mtime: Option<SystemTime>,
+    /// 初始文件状态签名
+    pub initial_mtime: Option<waylan_core::FileSignature>,
     /// 与系统托盘共享的重载请求标志
     pub reload_requested: Option<Arc<AtomicBool>>,
     /// 进程停机协调器

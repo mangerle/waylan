@@ -161,13 +161,14 @@ fn test_watched_paths_mtime_triggers_reload() {
     session.sync_external_state();
     assert_eq!(session.core.engine.config.page_size, 7);
 
-    // 模拟外部进程将历史时间戳退后，使得当前文件时间戳更新于基准时间戳
-    session.last_watched_mtime =
-        Some(std::time::SystemTime::now() - std::time::Duration::from_secs(60));
+    // 模拟外部进程将历史签名退后，使得当前文件签名更新于基准签名
+    session.last_watched_mtime = Some(waylan_core::FileSignature::SingleFile(
+        std::time::SystemTime::now() - std::time::Duration::from_secs(60),
+    ));
     session.sync_external_state();
     assert_eq!(
         session.core.engine.config.page_size, 9,
-        "检测到被监控文件修改时间更新后应自动触发 reload_callback"
+        "检测到被监控文件状态签名变迁后应自动触发 reload_callback"
     );
 }
 
