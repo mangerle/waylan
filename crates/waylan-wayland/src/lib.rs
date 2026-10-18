@@ -26,7 +26,6 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 
-pub use session_common::{KeyFilterCallback, KeyFilterResult};
 pub use session_v1::WaylanV1Session;
 pub use session_v2::WaylanV2Session;
 

@@ -60,20 +60,6 @@ pub fn is_caps_locked_state(mods_locked: u32) -> bool {
     (mods_locked & MOD_CAPS) != 0
 }
 
-/// 外部按键事件拦截处理结果
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeyFilterResult {
-    /// 未拦截该按键，继续按默认输入法流程处理
-    PassThrough,
-    /// 该按键已被外部处理程序消费，不进入拼音/标点管线，亦不透传给客户端应用
-    Consumed,
-    /// 拦截消费并要求直接向当前客户端提交文本
-    Commit(String),
-}
-
-/// 外部按键拦截回调函数类型，入参为 (evdev_keycode, is_press, mods_depressed)
-pub type KeyFilterCallback = Box<dyn FnMut(u32, bool, u32) -> KeyFilterResult + Send>;
-
 #[cfg(test)]
 mod tests {
     use super::*;

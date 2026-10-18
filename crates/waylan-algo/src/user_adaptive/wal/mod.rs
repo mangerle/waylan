@@ -26,9 +26,7 @@ use crate::error::AlgoError;
 use crate::user_adaptive::UserAdaptiveModel;
 
 pub use compactor::compact_model;
-pub use constants::{
-    is_recent_internal_compact, mark_internal_compact, WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1,
-};
+pub use constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1};
 pub use replay::load_or_replay;
 
 /// 用户词库预写日志（WAL）与磁盘文件持久化管理器
@@ -89,7 +87,6 @@ impl UserAdaptiveWal {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         self.last_compact_ms.store(now, Ordering::Release);
-        constants::mark_internal_compact();
     }
 
     /// 设置运行期触发自动压缩的 WAL 追加流水阈值

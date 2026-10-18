@@ -57,40 +57,7 @@ fn handle_v1_key_event(
     key: u32,
     is_press: bool,
 ) {
-    // 1. 外部快捷键拦截器优先捕获
-    if let Some(mut filter) = state.key_filter.take() {
-        let filter_outcome = filter(key, is_press, state.runtime.core.mods_depressed());
-        state.key_filter = Some(filter);
-        match filter_outcome {
-            crate::session_common::KeyFilterResult::Consumed => {
-                if is_press {
-                    state.runtime.core.consumed_keys.record_press(key, true);
-                } else {
-                    state.runtime.core.consumed_keys.take_release(key);
-                }
-                return;
-            }
-            crate::session_common::KeyFilterResult::Commit(text) => {
-                context.commit_string(state.commit_serial, text.clone());
-                context.preedit_string(state.commit_serial, String::new(), String::new());
-                state
-                    .runtime
-                    .core
-                    .punctuation_processor
-                    .record_commit(&text);
-                state.hide_candidate_surface();
-                if is_press {
-                    state.runtime.core.consumed_keys.record_press(key, true);
-                } else {
-                    state.runtime.core.consumed_keys.take_release(key);
-                }
-                return;
-            }
-            crate::session_common::KeyFilterResult::PassThrough => {}
-        }
-    }
-
-    // 2. 全权委托统一运行时 ImeRuntime 处理（包含语音分发、核心决策与前端 UI 刷新）
+    // 1. 全权委托统一运行时 ImeRuntime 处理（包含语音分发、核心决策与前端 UI 刷新）
     let (runtime, mut frontend) = state.split_runtime_and_frontend();
     let (consumed, _commit) = runtime.process_key_event(
         &mut frontend,

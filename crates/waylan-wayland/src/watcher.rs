@@ -11,7 +11,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fs::inotify::ReadFlags;
 use waylan_core::fs_watcher::{DirEventFilter, InotifyWatcher};
-use waylan_engine::algo;
 use waylan_engine::algo::custom_phrase::CustomPhraseManager;
 use waylan_engine::AlgoEngine;
 
@@ -35,7 +34,7 @@ pub fn user_dict_filter_with_tracker(tracker: Option<Arc<AtomicU64>>) -> DirEven
                     false
                 }
             } else {
-                algo::user_adaptive::is_recent_internal_compact(2000)
+                false
             };
 
             if is_recent {
@@ -130,9 +129,10 @@ mod tests {
         let sibling_user_dict = temp_dir.path().join("user_dict.bin");
         let sibling_tmp = temp_dir.path().join("config.toml.tmp.999");
 
+        let tracker = Arc::new(AtomicU64::new(0));
         let mut watcher = InotifyWatcher::try_new_with_filter(
             std::slice::from_ref(&watched_aux),
-            Some(default_user_dict_filter()),
+            Some(user_dict_filter_with_tracker(Some(tracker.clone()))),
         )
         .expect("创建 InotifyWatcher 应当成功");
         assert!(!watcher.drain_events());
@@ -180,7 +180,11 @@ mod tests {
             "外部删除清空 user_dict.bin 应正常触发热重载"
         );
 
-        algo::user_adaptive::mark_internal_compact();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        tracker.store(now, Ordering::Release);
         let internal_tmp = temp_dir.path().join("user_dict.internal.tmp");
         File::create(&internal_tmp)
             .expect("创建内部归并临时文件")
@@ -192,7 +196,11 @@ mod tests {
             "内部 compact_wal 原子重命名 user_dict.bin 绝不能误触发热重载"
         );
 
-        algo::user_adaptive::mark_internal_compact();
+        let now2 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        tracker.store(now2, Ordering::Release);
         let internal_tmp2 = temp_dir.path().join("user_dict.internal2.tmp");
         File::create(&internal_tmp2)
             .expect("创建第二次内部归并临时文件")

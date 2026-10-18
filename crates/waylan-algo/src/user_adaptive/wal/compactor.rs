@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use rustix::fs::{flock, FlockOperation};
 
 use crate::error::AlgoError;
-use crate::user_adaptive::wal::constants::{mark_internal_compact, WAL_CHECKSUM_SEED, WAL_MAGIC};
+use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC};
 use crate::user_adaptive::UserAdaptiveModel;
 
 struct TempFileGuard<'a>(&'a Path, bool);
@@ -32,7 +32,7 @@ impl<'a> Drop for TempFileGuard<'a> {
 
 /// 针对任意 UserAdaptiveModel 实例执行单次 WAL 归并压缩（无常驻句柄依赖）
 pub fn compact_model<P: AsRef<Path>>(model: &UserAdaptiveModel, path: P) -> Result<(), AlgoError> {
-    compact_model_with_callback(model, path.as_ref(), mark_internal_compact)
+    compact_model_with_callback(model, path.as_ref(), || {})
 }
 
 /// 执行 WAL 压缩落盘并回调标记时间戳

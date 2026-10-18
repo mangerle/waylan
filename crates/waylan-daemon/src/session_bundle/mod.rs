@@ -6,7 +6,6 @@ mod dict_loader;
 mod engine_builder;
 mod ibus_dispatcher;
 mod system_env;
-mod voice_filter;
 mod wayland_dispatcher;
 
 pub use engine_builder::build_algo_engine;
@@ -20,7 +19,6 @@ pub use wayland_dispatcher::{reload_wayland_v1_session, reload_wayland_v2_sessio
 #[cfg(test)]
 mod tests {
     use super::dict_loader::{load_auxiliary_dict, load_lexicon_table, load_opencc_dict};
-    use super::voice_filter::build_wayland_voice_manager;
     use super::*;
     use waylan_algo::{AlgoConfig, AlgoEngine};
     use waylan_core::config::AppConfig;
@@ -78,32 +76,6 @@ mod tests {
             runtime.core.punctuation_processor.recent_context,
             "“https://example.com"
         );
-    }
-
-    #[test]
-    fn test_build_wayland_voice_manager_lifecycle() {
-        let cfg_disabled = VoiceConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        assert!(build_wayland_voice_manager(&cfg_disabled).is_none());
-
-        let cfg_no_shortcuts = VoiceConfig {
-            enabled: true,
-            push_to_talk_shortcut: String::new(),
-            toggle_shortcut: String::new(),
-            ..Default::default()
-        };
-        assert!(build_wayland_voice_manager(&cfg_no_shortcuts).is_none());
-
-        let cfg_enabled = VoiceConfig {
-            enabled: true,
-            push_to_talk_shortcut: "F8".to_string(),
-            ..Default::default()
-        };
-        let vm = build_wayland_voice_manager(&cfg_enabled);
-        assert!(vm.is_some());
-        assert_eq!(vm.unwrap().config.push_to_talk_shortcut, "F8");
     }
 
     #[test]
