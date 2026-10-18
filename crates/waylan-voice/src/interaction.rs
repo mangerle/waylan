@@ -7,10 +7,10 @@
 //!   保证不同显示服务与输入协议下语音交互行为的完全一致性。
 //! - **代价与局限**：按键分发需提供 evdev 物理键码与修饰键掩码，对协议层的按键抽象有轻量依赖。
 
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{sync_channel, Receiver};
 use std::time::{Duration, Instant};
 
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use waylan_core::input::*;
 use waylan_core::VoiceConfig;
 
@@ -38,13 +38,19 @@ pub struct VoiceInteractionManager {
     pub is_push_to_talk_active: bool,
     /// 长按对讲机模式下的触发主键扫描码
     pub push_to_talk_key: Option<u32>,
+    /// 是否处于停止录音后等待最终结算状态
+    pub is_finalizing: bool,
+    /// 是否已将保底流式文本提交上屏（防止最终结算到达时重复提交）
+    pub is_fallback_committed: bool,
+    /// 进入最终结算状态的时间戳（用于超时防挂死保底）
+    pub finalize_start_time: Option<Instant>,
     /// 上次切换开关模式的时间戳（用于按键防抖）
     pub last_toggle_time: Instant,
     /// 后台语音事件接收通道
     pub voice_rx: Option<Receiver<VoiceEvent>>,
     /// 当前实时识别的流式预览文字
     pub partial_text: Option<String>,
-    /// 状态栏/悬浮条展示文案（如 "正在聆听中..."）
+    /// 状态栏/悬浮条展示文案（如 "正在聆听中..." 或 "正在转录中..."）
     pub display_text: Option<String>,
     /// 当前音频振幅波形可视化数据
     pub waveform: Option<String>,
@@ -64,6 +70,9 @@ impl VoiceInteractionManager {
             config,
             is_push_to_talk_active: false,
             push_to_talk_key: None,
+            is_finalizing: false,
+            is_fallback_committed: false,
+            finalize_start_time: None,
             last_toggle_time: Instant::now() - Duration::from_secs(10),
             voice_rx: None,
             partial_text: None,
@@ -72,10 +81,13 @@ impl VoiceInteractionManager {
         }
     }
 
-    /// 查询当前是否处于语音激活状态（录音中或有展示浮条）
+    /// 查询当前是否处于语音激活状态（录音中、等待转录结算中或有展示浮条）
     #[inline]
     pub fn is_active(&self) -> bool {
-        self.controller.is_recording() || self.display_text.is_some()
+        self.controller.is_recording()
+            || self.is_finalizing
+            || self.display_text.is_some()
+            || self.voice_rx.is_some()
     }
 
     /// 查询当前是否正在执行底层音频录制
@@ -88,6 +100,9 @@ impl VoiceInteractionManager {
     pub fn clear_state(&mut self) {
         self.is_push_to_talk_active = false;
         self.push_to_talk_key = None;
+        self.is_finalizing = false;
+        self.is_fallback_committed = false;
+        self.finalize_start_time = None;
         self.display_text = None;
         self.waveform = None;
         self.partial_text = None;
@@ -107,16 +122,18 @@ impl VoiceInteractionManager {
         }
     }
 
-    /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
+    /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字（完全非阻塞）
     pub fn poll_events(&mut self) -> Option<String> {
         let mut final_commit = None;
         if let Some(ref rx) = self.voice_rx {
             while let Ok(event) = rx.try_recv() {
                 match event {
                     VoiceEvent::WaveformUpdated { waveform, .. } => {
-                        if self.config.interaction.show_floating_bar {
+                        if !self.is_finalizing && self.config.interaction.show_floating_bar {
                             self.display_text = Some("正在聆听中...".to_string());
                             self.waveform = Some(waveform);
+                        } else if self.is_finalizing {
+                            self.waveform = None;
                         } else {
                             self.display_text = None;
                             self.waveform = None;
@@ -130,16 +147,46 @@ impl VoiceInteractionManager {
                         }
                     }
                     VoiceEvent::SegmentCommit(text) => {
-                        final_commit = Some(text);
-                        self.partial_text = None;
-                        break;
+                        let trimmed = text.trim().to_string();
+                        if !trimmed.is_empty() {
+                            final_commit = Some(trimmed);
+                            self.partial_text = None;
+                            break;
+                        }
                     }
                     VoiceEvent::FinalCommit(text) => {
-                        final_commit = Some(text);
+                        let trimmed = text.trim().to_string();
+                        // 若此前停止录音时已经把保底文本上屏过，静默吸收最终事件，避免重复出字
+                        if self.is_fallback_committed {
+                            debug!("[微澜语音] 收到后台最终结算，此前已保底上屏，静默同步状态");
+                            self.clear_state();
+                            break;
+                        }
+
+                        let commit_text = if !trimmed.is_empty() {
+                            trimmed
+                        } else if let Some(fallback) = self.partial_text.take() {
+                            let fb_trimmed = fallback.trim().to_string();
+                            if !fb_trimmed.is_empty() {
+                                debug!(
+                                    "[微澜语音] 最终识别文本为空，启用流式预览保底上屏: \"{}\"",
+                                    fb_trimmed
+                                );
+                            }
+                            fb_trimmed
+                        } else {
+                            String::new()
+                        };
+
                         self.clear_state();
+                        if !commit_text.is_empty() {
+                            info!("[微澜语音] 成功生成文字上屏: \"{}\"", commit_text);
+                            final_commit = Some(commit_text);
+                        }
                         break;
                     }
                     VoiceEvent::Cancelled => {
+                        debug!("[微澜语音] 语音会话已取消");
                         self.clear_state();
                         break;
                     }
@@ -151,6 +198,29 @@ impl VoiceInteractionManager {
                 }
             }
         }
+
+        // 超时防假死保底检测：若处于等待最终结算状态超过 2 秒未收到 FinalCommit 则安全降级
+        if self.is_finalizing {
+            let is_timeout = self
+                .finalize_start_time
+                .map(|t| t.elapsed() >= Duration::from_millis(2000))
+                .unwrap_or(false);
+            if is_timeout {
+                warn!("[微澜语音] 等待最终结算超时(2s)，启用流式预览兜底并强制重置状态");
+                let fallback = self.partial_text.take();
+                let already_committed = self.is_fallback_committed;
+                self.clear_state();
+                if !already_committed {
+                    if let Some(fb) = fallback {
+                        let trimmed = fb.trim().to_string();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed);
+                        }
+                    }
+                }
+            }
+        }
+
         final_commit
     }
 
@@ -166,6 +236,9 @@ impl VoiceInteractionManager {
         } else {
             self.is_push_to_talk_active = is_ptt;
             self.push_to_talk_key = main_key;
+            self.is_finalizing = false;
+            self.is_fallback_committed = false;
+            self.finalize_start_time = None;
             self.voice_rx = Some(rx);
             self.partial_text = None;
             if self.config.interaction.show_floating_bar {
@@ -175,71 +248,39 @@ impl VoiceInteractionManager {
         }
     }
 
-    /// 在指定截止时间内等待语音终态事件
-    fn wait_for_voice_completion(&mut self, deadline: Instant) -> Option<String> {
-        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-            if remaining.is_zero() {
-                break;
-            }
-            if let Some(text) = self.poll_events() {
-                if !text.is_empty() {
-                    return Some(text);
-                }
-            }
-            let Some(ref rx) = self.voice_rx else {
-                break;
-            };
-            match rx.recv_timeout(remaining.min(Duration::from_millis(50))) {
-                Ok(VoiceEvent::FinalCommit(text)) | Ok(VoiceEvent::SegmentCommit(text)) => {
-                    self.clear_state();
-                    if !text.is_empty() {
-                        return Some(text);
-                    }
-                    break;
-                }
-                Ok(VoiceEvent::PartialText(text)) => {
-                    if self.config.interaction.real_time_preview {
-                        self.partial_text = Some(text);
-                    }
-                }
-                Ok(VoiceEvent::Cancelled) => {
-                    self.clear_state();
-                    break;
-                }
-                Ok(_) => {}
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break,
-            }
-        }
-        None
-    }
-
-    /// 停止录音并结算最终文本（带流式保底降级）
+    /// 停止录音并触发非阻塞最终结算
     pub fn stop_and_resolve_commit(&mut self) -> Option<String> {
         self.controller.stop_and_commit();
-        let fallback_preview = self.partial_text.take();
-        let deadline = Instant::now() + Duration::from_millis(50);
-        let final_text = self.wait_for_voice_completion(deadline);
+        self.is_push_to_talk_active = false;
+        self.push_to_talk_key = None;
+        self.waveform = None;
+        self.display_text = None;
 
-        let commit_text = final_text.or_else(|| {
-            if let Some(preview) = fallback_preview {
-                let trimmed = preview.trim().to_string();
-                if !trimmed.is_empty() {
-                    info!(
-                        "[微澜语音] 最终结算文本为空，启用实时流式预览保底上屏: \"{}\"",
-                        trimmed
-                    );
-                    return Some(trimmed);
-                }
-            }
-            None
-        });
-
-        self.clear_state();
-        if let Some(ref text) = commit_text {
-            info!("[微澜语音] 成功生成文字上屏: \"{}\"", text);
+        // 立即尝试一次非阻塞轮询，若后台工作线程已就绪则直接返回上屏文字
+        if let Some(text) = self.poll_events() {
+            return Some(text);
         }
-        commit_text
+
+        // 若当前已存在流式部分识别文本，立即作为保底文字上屏提交（零延迟交互），并保持通道开启等待结算吸收
+        if let Some(preview) = self.partial_text.take() {
+            let trimmed = preview.trim().to_string();
+            if !trimmed.is_empty() {
+                self.is_fallback_committed = true;
+                self.is_finalizing = true;
+                self.finalize_start_time = Some(Instant::now());
+                info!(
+                    "[微澜语音] 录音停止立即启用流式预览保底上屏: \"{}\"",
+                    trimmed
+                );
+                return Some(trimmed);
+            }
+        }
+
+        // 若当前尚无流式文字（如整句云端识别），进入结算等待状态
+        self.is_fallback_committed = false;
+        self.is_finalizing = true;
+        self.finalize_start_time = Some(Instant::now());
+        None
     }
 
     /// 取消当前录音并清空状态
@@ -287,7 +328,7 @@ impl VoiceInteractionManager {
                     | KEY_RIGHTMETA
             );
             if is_main_release || is_mod_release {
-                info!("[微澜语音] 对讲机快捷键松开，自动断句上屏提交");
+                info!("[微澜语音] 对讲机快捷键松开，进入转录结算");
                 if let Some(text) = self.stop_and_resolve_commit() {
                     let trimmed = text.trim().to_string();
                     if !trimmed.is_empty() {
@@ -298,13 +339,19 @@ impl VoiceInteractionManager {
             }
         }
 
-        // 2. 录音过程中的按键拦截（按下阶段）
-        if is_press && self.controller.is_recording() {
+        // 2. 录音或转录结算过程中的按键拦截（按下阶段）
+        if is_press && (self.controller.is_recording() || self.is_finalizing) {
             if evdev_key == KEY_ESC {
-                info!("[微澜语音] 收到 Esc 键，取消语音录制");
+                info!("[微澜语音] 收到 Esc 键，取消语音录制或转录");
                 self.cancel();
                 return VoiceKeyAction::Consumed;
             }
+
+            // 若处于转录结算阶段，非 Esc 按键一律静默拦截，防止按键误打字抢先上屏
+            if self.is_finalizing {
+                return VoiceKeyAction::Consumed;
+            }
+
             if evdev_key == KEY_ENTER {
                 info!("[微澜语音] 收到 Enter 键，提前完成录音并请求转录上屏");
                 if let Some(text) = self.stop_and_resolve_commit() {
@@ -398,5 +445,107 @@ impl VoiceInteractionManager {
         }
 
         VoiceKeyAction::PassThrough
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::sync_channel;
+
+    #[test]
+    fn test_voice_interaction_manager_initial_state() {
+        let mut mgr = VoiceInteractionManager::new(VoiceConfig::default());
+        assert!(!mgr.is_active());
+        assert!(!mgr.is_recording());
+        assert!(!mgr.is_finalizing);
+        assert!(mgr.poll_events().is_none());
+
+        mgr.clear_state();
+        assert!(!mgr.is_active());
+    }
+
+    #[test]
+    fn test_voice_interaction_manager_poll_events() {
+        let mut mgr = VoiceInteractionManager::new(VoiceConfig::default());
+        let (tx, rx) = sync_channel(16);
+        mgr.voice_rx = Some(rx);
+
+        // 1. 测试波形与文案更新
+        tx.send(VoiceEvent::WaveformUpdated {
+            volume: 0.5,
+            waveform: "||||".to_string(),
+        })
+        .unwrap();
+        assert!(mgr.poll_events().is_none());
+        assert_eq!(mgr.waveform.as_deref(), Some("||||"));
+        assert_eq!(mgr.display_text.as_deref(), Some("正在聆听中..."));
+
+        // 2. 测试流式预览文字
+        tx.send(VoiceEvent::PartialText("测试预览".to_string()))
+            .unwrap();
+        assert!(mgr.poll_events().is_none());
+        assert_eq!(mgr.partial_text.as_deref(), Some("测试预览"));
+
+        // 3. 测试自动分句提交
+        tx.send(VoiceEvent::SegmentCommit("分句一".to_string()))
+            .unwrap();
+        assert_eq!(mgr.poll_events().as_deref(), Some("分句一"));
+        assert!(mgr.partial_text.is_none());
+
+        // 4. 测试最终完成结算
+        tx.send(VoiceEvent::FinalCommit("最终识别文本。".to_string()))
+            .unwrap();
+        assert_eq!(mgr.poll_events().as_deref(), Some("最终识别文本。"));
+        assert!(!mgr.is_active());
+        assert!(mgr.voice_rx.is_none());
+    }
+
+    #[test]
+    fn test_voice_interaction_manager_finalize_and_fallback() {
+        let mut mgr = VoiceInteractionManager::new(VoiceConfig::default());
+        let (tx, rx) = sync_channel(16);
+        mgr.voice_rx = Some(rx);
+        mgr.is_finalizing = true;
+        mgr.finalize_start_time = Some(Instant::now());
+        mgr.partial_text = Some("保底预览文字".to_string());
+
+        // 当最终结果为空时，自动启用流式预览作为保底上屏
+        tx.send(VoiceEvent::FinalCommit("   ".to_string())).unwrap();
+        assert_eq!(mgr.poll_events().as_deref(), Some("保底预览文字"));
+        assert!(!mgr.is_active());
+        assert!(!mgr.is_finalizing);
+    }
+
+    #[test]
+    fn test_voice_interaction_manager_finalize_timeout_fallback() {
+        let mut mgr = VoiceInteractionManager::new(VoiceConfig::default());
+        let (_tx, rx) = sync_channel(16);
+        mgr.voice_rx = Some(rx);
+        mgr.is_finalizing = true;
+        // 模拟 3 秒前进入结算（超过 2 秒超时限制）
+        mgr.finalize_start_time = Some(Instant::now() - Duration::from_secs(3));
+        mgr.partial_text = Some("超时保底文本".to_string());
+
+        assert_eq!(mgr.poll_events().as_deref(), Some("超时保底文本"));
+        assert!(!mgr.is_active());
+        assert!(!mgr.is_finalizing);
+    }
+
+    #[test]
+    fn test_voice_interaction_manager_key_interception_during_finalizing() {
+        let mut mgr = VoiceInteractionManager::new(VoiceConfig::default());
+        mgr.config.enabled = true;
+        mgr.is_finalizing = true;
+
+        // 1. 转录结算期间按普通键应被静默拦截
+        let action = mgr.handle_key_event(KEY_SPACE, true, 0);
+        assert_eq!(action, VoiceKeyAction::Consumed);
+
+        // 2. 转录结算期间按 Esc 键应取消并清理状态
+        let action = mgr.handle_key_event(KEY_ESC, true, 0);
+        assert_eq!(action, VoiceKeyAction::Consumed);
+        assert!(!mgr.is_finalizing);
+        assert!(!mgr.is_active());
     }
 }
