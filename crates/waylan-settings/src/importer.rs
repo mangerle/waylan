@@ -5,9 +5,11 @@
 //! - **核心优势**：
 //!   1. 彻底将词库校验、解析与合入逻辑下沉委托至 `waylan-algo::dict_importer::DictImportService`；
 //!   2. 本模块仅保留 UI 交互所需的状态报告字符串拼装与界面级错误映射；
-//!   3. 零技术债与逻辑复制，确保 CLI 与 GUI 导入行为 100% 严格一致。
+//!   3. 零技术债与逻辑复制，确保 CLI 与 GUI 导入行为 100% 严格一致；
+//!   4. 前端调用点已通过 `tasks.rs` 在独立后台工作线程（如 `pinyin-importer`）中异步执行，
+//!      配合 `TaskRunningGuard` 杜绝重入，彻底避免百 MB 大词库解析阻塞 Slint GUI 事件循环。
 //! - **代价与局限**：
-//!   界面调用时同步执行文件解析与持久化，超大文件导入时建议通过后台工作线程触发。
+//!   错误契约需跨 Crate 映射为界面友好的强类型 `ImportError`。
 
 use std::path::Path;
 use thiserror::Error;
@@ -91,6 +93,10 @@ fn map_algo_error(err: AlgoError, fallback_path: &str) -> ImportError {
         AlgoError::UserDictPersistFailed { path, source } => ImportError::SaveError {
             path: path.to_string_lossy().to_string(),
             message: source.to_string(),
+        },
+        AlgoError::UnsupportedDictFormat { path, format } => ImportError::ParseError {
+            path: path.to_string_lossy().to_string(),
+            message: format!("不支持的词库文件格式: {format}"),
         },
         AlgoError::DictParseFailed { reason } | AlgoError::DeserializeFailed { reason, .. } => {
             ImportError::ParseError {
@@ -211,5 +217,22 @@ mod tests {
             import_symbols_dict_file(&temp_sym.path().to_string_lossy(), &mut aux).unwrap();
         assert_eq!(count_sym, 2);
         assert!(msg_sym.contains("成功导入 2 组符号联想项"));
+    }
+
+    #[test]
+    fn test_map_algo_error_unsupported_format() {
+        use std::path::PathBuf;
+        let err = AlgoError::UnsupportedDictFormat {
+            path: PathBuf::from("foo.unknown"),
+            format: "unknown".to_string(),
+        };
+        let mapped = map_algo_error(err, "foo.unknown");
+        match mapped {
+            ImportError::ParseError { message, path } => {
+                assert!(message.contains("不支持的词库文件格式: unknown"));
+                assert_eq!(path, "foo.unknown");
+            }
+            other => panic!("预期为 ParseError，实际收到: {:?}", other),
+        }
     }
 }
