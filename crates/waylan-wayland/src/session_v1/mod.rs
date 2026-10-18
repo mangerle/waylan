@@ -215,11 +215,9 @@ impl WaylanV1Session {
             let (phys_w, phys_h) = self.surface_manager.current_size;
             let logical_w = (phys_w / scale).max(1);
             let logical_h = (phys_h / scale).max(1);
-            let (screen_w, screen_h) = self.surface_manager.screen_size;
             let (pos_x, pos_y) = self
                 .surface_manager
-                .cursor_rect
-                .compute_popup_position_constrained(logical_w, logical_h, screen_w, screen_h);
+                .compute_popup_position(logical_w, logical_h);
             layer_surf.set_size(logical_w, logical_h);
             layer_surf.set_margin(pos_y.max(0), 0, 0, pos_x.max(0));
             if let Some(ref surf) = self.popup_wl_surface {

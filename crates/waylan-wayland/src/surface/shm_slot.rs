@@ -64,6 +64,51 @@ impl ShmSlot {
         }
         Ok(())
     }
+
+    /// 将 RGBA 像素流直接写入槽位的共享内存映射中（ARGB8888/BGRA 格式，零中间缓冲与零系统调用拷贝）
+    pub(crate) fn write_rgba(&mut self, rgba: &[u8]) -> Option<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let len = rgba.len();
+        if let Some(ref mut mmap) = self.mmap {
+            if mmap.len() >= len {
+                let src_chunks = rgba.as_chunks::<4>().0;
+                let dst_chunks = mmap[..len].as_chunks_mut::<4>().0;
+                for (src, dst) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
+                    dst[0] = src[2]; // B
+                    dst[1] = src[1]; // G
+                    dst[2] = src[0]; // R
+                    dst[3] = src[3]; // A
+                }
+                return Some(());
+            }
+        }
+
+        // 回退逻辑：若 mmap 不可用，采用 1024 字节栈缓冲流式分块写入，杜绝频繁堆分配
+        if self.file.seek(SeekFrom::Start(0)).is_err() {
+            return None;
+        }
+        let total_pixels = len / 4;
+        let mut pixel_idx = 0;
+        let mut chunk_buf = [0u8; 1024];
+        let max_pixels_per_chunk = chunk_buf.len() / 4;
+        while pixel_idx < total_pixels {
+            let batch = (total_pixels - pixel_idx).min(max_pixels_per_chunk);
+            for i in 0..batch {
+                let src_idx = (pixel_idx + i) * 4;
+                let dst_idx = i * 4;
+                chunk_buf[dst_idx] = rgba[src_idx + 2];
+                chunk_buf[dst_idx + 1] = rgba[src_idx + 1];
+                chunk_buf[dst_idx + 2] = rgba[src_idx];
+                chunk_buf[dst_idx + 3] = rgba[src_idx + 3];
+            }
+            if self.file.write_all(&chunk_buf[..batch * 4]).is_err() {
+                return None;
+            }
+            pixel_idx += batch;
+        }
+        Some(())
+    }
 }
 
 /// 创建用于跨进程传递给 Wayland 合成器的匿名共享内存文件
