@@ -178,7 +178,44 @@ pub struct CandidateBoxState {
     pub voice: Option<VoiceBoxState>,
 }
 
+/// 候选框界面顶级互斥呈现形态
+///
+/// 遵循“非法状态不可表示 (Make Illegal States Unrepresentable)”的设计原则，
+/// 将隐藏、语音胶囊、网格展开、二级卡片展开与普通紧凑条收敛为单层严格互斥枚举。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CandidateViewMode {
+    /// 隐藏或未激活状态
+    #[default]
+    Hidden,
+    /// 语音听写流式波形与胶囊展示态
+    VoiceCapsule,
+    /// 5 行大候选网格展开态
+    GridExpanded,
+    /// 二级扩展卡片展开态（如日期时间格式多选）
+    ExpandedCard,
+    /// 标准单行/紧凑候选条展示态
+    Compact,
+}
+
 impl CandidateBoxState {
+    /// 计算当前唯一确定的顶级互斥呈现形态
+    #[inline]
+    pub fn view_mode(&self) -> CandidateViewMode {
+        if self.is_voice_active() {
+            return CandidateViewMode::VoiceCapsule;
+        }
+        if self.candidates.is_empty() {
+            return CandidateViewMode::Hidden;
+        }
+        if self.is_grid_expanded() {
+            return CandidateViewMode::GridExpanded;
+        }
+        if self.is_expanded() {
+            return CandidateViewMode::ExpandedCard;
+        }
+        CandidateViewMode::Compact
+    }
+
     /// 查询当前是否处于语音听写激活状态
     #[inline]
     pub fn is_voice_active(&self) -> bool {
@@ -272,5 +309,30 @@ mod tests {
         state.set_expanded(false, 0);
         assert!(!state.is_expanded());
         assert_eq!(state.expanded_selected_index(), 0);
+    }
+
+    #[test]
+    fn test_candidate_view_mode_mutually_exclusive() {
+        let mut state = CandidateBoxState::default();
+        assert_eq!(state.view_mode(), CandidateViewMode::Hidden);
+
+        // 包含普通候选时为 Compact
+        state.candidates.push(Candidate::new("测试", "ce'shi", 100));
+        assert_eq!(state.view_mode(), CandidateViewMode::Compact);
+
+        // 展开二级卡片时为 ExpandedCard
+        state.set_expanded(true, 0);
+        assert_eq!(state.view_mode(), CandidateViewMode::ExpandedCard);
+
+        // 网格展开时优先为 GridExpanded
+        state.set_grid_state(GridState::Expanded { selected_index: 0 });
+        assert_eq!(state.view_mode(), CandidateViewMode::GridExpanded);
+
+        // 激活语音时最高优先级为 VoiceCapsule
+        state.voice = Some(VoiceBoxState {
+            is_listening: true,
+            ..Default::default()
+        });
+        assert_eq!(state.view_mode(), CandidateViewMode::VoiceCapsule);
     }
 }

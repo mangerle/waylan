@@ -15,7 +15,7 @@ use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, ItemMeasure,
 use measure_cache::TextMeasureCache;
 use std::path::Path;
 use tiny_skia::Pixmap;
-use waylan_core::CandidateBoxState;
+use waylan_core::{CandidateBoxState, CandidateViewMode};
 
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
@@ -309,66 +309,63 @@ impl CandidateBoxRenderer {
 
     /// 渲染单行胶囊候选栏及二级展开浮层卡片
     pub fn render(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
-        if state.candidates.is_empty() && !state.is_voice_active() {
-            return None;
-        }
+        match state.view_mode() {
+            CandidateViewMode::Hidden => None,
+            CandidateViewMode::VoiceCapsule => {
+                let mut regions = Vec::with_capacity(4);
+                let pix = capsule::render_voice_capsule_bar(self, state, &mut regions);
+                self.hit_regions = regions;
+                pix
+            }
+            CandidateViewMode::GridExpanded => {
+                let mut regions = Vec::with_capacity(36);
+                let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
+                self.hit_regions = regions;
+                pix
+            }
+            CandidateViewMode::Compact | CandidateViewMode::ExpandedCard => {
+                let geom = self.calculate_geometry(state)?;
+                let mut pixmap = Pixmap::new(geom.canvas_w, geom.canvas_h)?;
 
-        // 若处于语音听写状态，优先渲染语音流式胶囊波形栏
-        if state.is_voice_active() {
-            let mut regions = Vec::with_capacity(4);
-            let pix = capsule::render_voice_capsule_bar(self, state, &mut regions);
-            self.hit_regions = regions;
-            return pix;
-        }
-
-        // 若处于 5 行网格大面板展开状态，优先渲染网格面板
-        if state.is_grid_expanded() {
-            let mut regions = Vec::with_capacity(36);
-            let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
-            self.hit_regions = regions;
-            return pix;
-        }
-
-        let geom = self.calculate_geometry(state)?;
-        let mut pixmap = Pixmap::new(geom.canvas_w, geom.canvas_h)?;
-
-        let mut regions = capsule::render_capsule_bar(
-            self,
-            &mut pixmap,
-            state,
-            capsule::CapsuleBarParams {
-                measured_items: &geom.measured_items,
-                total_bar_width: geom.total_bar_width,
-                bar_height: geom.bar_height,
-                padding_h: geom.padding_h,
-                corner_radius: geom.corner_radius,
-                font_size: geom.font_size,
-                scale: geom.scale,
-            },
-        );
-
-        if geom.has_active_sub {
-            render_expanded_popup_card(
-                self,
-                &mut pixmap,
-                &mut regions,
-                ExpandedCardRenderParams {
+                let mut regions = capsule::render_capsule_bar(
+                    self,
+                    &mut pixmap,
                     state,
-                    sub_candidates: geom.sub_candidates,
-                    popup_x: geom.popup_x,
-                    popup_top_y: geom.bar_height + 6.0 * geom.scale,
-                    popup_w: geom.popup_w,
-                    popup_h: geom.popup_h,
-                    row_height: geom.row_height,
-                    corner_radius: geom.corner_radius,
-                    font_size: geom.font_size,
-                    scale: geom.scale,
-                },
-            );
-        }
+                    capsule::CapsuleBarParams {
+                        measured_items: &geom.measured_items,
+                        total_bar_width: geom.total_bar_width,
+                        bar_height: geom.bar_height,
+                        padding_h: geom.padding_h,
+                        corner_radius: geom.corner_radius,
+                        font_size: geom.font_size,
+                        scale: geom.scale,
+                    },
+                );
 
-        self.hit_regions = regions;
-        Some(pixmap)
+                if geom.has_active_sub {
+                    render_expanded_popup_card(
+                        self,
+                        &mut pixmap,
+                        &mut regions,
+                        ExpandedCardRenderParams {
+                            state,
+                            sub_candidates: geom.sub_candidates,
+                            popup_x: geom.popup_x,
+                            popup_top_y: geom.bar_height + 6.0 * geom.scale,
+                            popup_w: geom.popup_w,
+                            popup_h: geom.popup_h,
+                            row_height: geom.row_height,
+                            corner_radius: geom.corner_radius,
+                            font_size: geom.font_size,
+                            scale: geom.scale,
+                        },
+                    );
+                }
+
+                self.hit_regions = regions;
+                Some(pixmap)
+            }
+        }
     }
 }
 

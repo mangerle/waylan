@@ -8,8 +8,8 @@ pub mod state;
 pub mod text;
 
 pub use candidate::{
-    Candidate, CandidateBoxState, ExpandedCardState, GridState, InputMode, TextAction,
-    VoiceBoxState,
+    Candidate, CandidateBoxState, CandidateViewMode, ExpandedCardState, GridState, InputMode,
+    TextAction, VoiceBoxState,
 };
 pub use config::{
     format_key_combination, AppConfig, AudioFrontEndConfig, CandidateIndexStyle,
