@@ -5,7 +5,7 @@
 //!   消除不同协议实现中重复手写的密码模式规避、CapsLock 截断提交、中英模式切换与按键追踪逻辑。
 //! - **核心优势**：单一状态真相源（Single Source of Truth）；实现跨平台按键处理行为 100% 对齐；
 //!   任何按键处理的改进或修复仅需在此单一模块中维护即可全局生效。
-//! - **代价与局限**：协议适配层需将平台特定事件参数包装为 [`KeyProcessContext`] 并消费 [`KeyProcessResult`]。
+//! - **代价与局限**：协议适配层需将平台特定事件参数包装为 [`KeyProcessContext`] 并消费 [`ImeOutputAction`]。
 
 use waylan_core::input::*;
 use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
@@ -33,7 +33,7 @@ impl ImeCoreSession {
     /// - **单一状态真相源**：将密码模式规避、CapsLock 截断提交、修饰键跟踪、
     ///   按键释放追踪、中英 Shift 切换、全局模式快捷键与核心拼音/标点组词统一闭环。
     /// - **跨端零差异**：Wayland V1、Wayland V2 与 IBus 前端无需重复编写分发分支，
-    ///   只需将物理按键封装为 [`KeyProcessContext`] 传入，并执行返回的 [`KeyProcessResult`]。
+    ///   只需将物理按键封装为 [`KeyProcessContext`] 传入，并执行返回的 [`ImeOutputAction`]。
     pub fn process_key(&mut self, ctx: KeyProcessContext<'_>, now: u64) -> ImeOutputAction {
         // 1. 更新修饰键掩码与防误触状态机
         self.update_modifier_by_key(ctx.keycode, ctx.is_press);

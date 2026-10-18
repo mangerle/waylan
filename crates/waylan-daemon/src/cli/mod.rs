@@ -13,6 +13,9 @@ use waylan_algo::builder::DictBuilder;
 use waylan_algo::opencc::OpenCcDict;
 use waylan_algo::AlgoEngine;
 
+pub mod self_check;
+pub use self_check::run_self_check;
+
 /// 顶层命令行解析决策枚举
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
@@ -296,37 +299,6 @@ pub fn print_dict_usage() {
     println!("  build-opencc [STCharacters.txt] [STPhrases.txt] [输出文件]");
     println!("  build-aux <英文词表> <符号表> <输出文件>");
     println!("  import-user <用户文本词库> <用户二进制WAL路径>");
-}
-
-/// 执行算法与词典自检测试
-///
-/// # Errors
-/// 当引擎内部状态异常或校验失败时返回错误。
-pub fn run_self_check(engine: &mut AlgoEngine) -> Result<(), DaemonError> {
-    info!("=== 微澜核心算法引擎自检 ===");
-    for ch in "xian".chars() {
-        engine.push_char(ch);
-    }
-    let cands = engine.candidates();
-    info!("输入: 'xian' => 召回候选数: {}", cands.len());
-    for (i, c) in cands.iter().enumerate().take(5) {
-        info!(
-            "  [{}] {} (拼音: {}, 得分: {})",
-            i + 1,
-            c.text,
-            c.pinyin,
-            c.score
-        );
-    }
-    let is_empty = cands.is_empty();
-    engine.reset();
-    if is_empty {
-        return Err(DaemonError::Validation(
-            "自检测试失败：键入 'xian' 未能召回任何候选词，请检查词库完整性！".into(),
-        ));
-    }
-    info!("自检测试通过！");
-    Ok(())
 }
 
 #[cfg(test)]

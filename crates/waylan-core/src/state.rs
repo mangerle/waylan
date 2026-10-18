@@ -5,10 +5,10 @@
 //! - **核心优势**：
 //!   1. 内部采用单原子位图 (`AtomicU8`) 统一驱动，`snapshot()` 仅需单次原子指令，从物理上杜绝状态撕裂 (State Tearing)；
 //!   2. 支持单次 CAS 原子批量更新中英模式与 CapsLock 状态，避免瞬时非法状态组合；
-//!   3. 提供向后兼容的独立原子布尔句柄，保障渐进式平滑重构。
-//! - **代价与局限**：在兼容过渡期维护双写同步，后续将全面废弃单原子布尔暴露。
+//!   3. 零多余堆内存分配，无需双写同步。
+//! - **代价与局限**：状态受限于 8 位位图（最多 8 种布尔标志组合）。
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 /// 中文输入模式状态位 (bit 0)
@@ -37,21 +37,11 @@ pub struct InputStateSnapshot {
     pub full_width_char: bool,
 }
 
-/// 聚合的输入法状态原子标志容器（基于单原子位图实现，杜绝状态撕裂）
+/// 聚合的输入法状态原子标志容器（基于单原子位图实现，杜绝状态撕裂与冗余堆分配）
 #[derive(Debug, Clone)]
 pub struct SharedInputFlags {
     /// 核心单原子位图
     flags: Arc<AtomicU8>,
-    /// 中文模式兼容标志
-    pub is_chinese: Arc<AtomicBool>,
-    /// CapsLock 锁定兼容标志
-    pub is_caps_locked: Arc<AtomicBool>,
-    /// 简繁体状态兼容标志
-    pub traditional_chinese: Arc<AtomicBool>,
-    /// 全半角标点兼容标志
-    pub full_width_punct: Arc<AtomicBool>,
-    /// 全半角字符兼容标志
-    pub full_width_char: Arc<AtomicBool>,
 }
 
 impl SharedInputFlags {
@@ -78,11 +68,6 @@ impl SharedInputFlags {
 
         Self {
             flags: Arc::new(AtomicU8::new(bits)),
-            is_chinese: Arc::new(AtomicBool::new(init_chinese)),
-            is_caps_locked: Arc::new(AtomicBool::new(false)),
-            traditional_chinese: Arc::new(AtomicBool::new(traditional_chinese)),
-            full_width_punct: Arc::new(AtomicBool::new(full_width_punct)),
-            full_width_char: Arc::new(AtomicBool::new(full_width_char)),
         }
     }
 
@@ -117,7 +102,6 @@ impl SharedInputFlags {
     #[inline]
     pub fn set_chinese(&self, val: bool) {
         self.set_bit(FLAG_CHINESE, val);
-        self.is_chinese.store(val, Ordering::Release);
     }
 
     /// 查询当前是否处于大写锁定状态
@@ -130,7 +114,6 @@ impl SharedInputFlags {
     #[inline]
     pub fn set_caps_locked(&self, val: bool) {
         self.set_bit(FLAG_CAPS_LOCKED, val);
-        self.is_caps_locked.store(val, Ordering::Release);
     }
 
     /// 原子化批量更新中英模式与 CapsLock 状态（CAS 循环保障单次原子更新，杜绝瞬时组合撕裂）
@@ -158,8 +141,6 @@ impl SharedInputFlags {
                 Err(actual) => current = actual,
             }
         }
-        self.is_chinese.store(is_chinese, Ordering::Release);
-        self.is_caps_locked.store(is_caps_locked, Ordering::Release);
     }
 
     /// 查询当前是否处于繁体输出模式
@@ -172,7 +153,6 @@ impl SharedInputFlags {
     #[inline]
     pub fn set_traditional(&self, val: bool) {
         self.set_bit(FLAG_TRADITIONAL, val);
-        self.traditional_chinese.store(val, Ordering::Release);
     }
 
     /// 查询当前是否处于全角标点模式
@@ -185,7 +165,6 @@ impl SharedInputFlags {
     #[inline]
     pub fn set_full_width_punct(&self, val: bool) {
         self.set_bit(FLAG_FULL_WIDTH_PUNCT, val);
-        self.full_width_punct.store(val, Ordering::Release);
     }
 
     /// 获取全角字符标志
@@ -198,37 +177,11 @@ impl SharedInputFlags {
     #[inline]
     pub fn set_full_width_char(&self, val: bool) {
         self.set_bit(FLAG_FULL_WIDTH_CHAR, val);
-        self.full_width_char.store(val, Ordering::Release);
     }
 
     /// 获取底层单原子位图引用句柄
     pub fn raw_flag(&self) -> Arc<AtomicU8> {
         Arc::clone(&self.flags)
-    }
-
-    /// 获取中文模式原子标志句柄
-    pub fn is_chinese_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.is_chinese)
-    }
-
-    /// 获取 CapsLock 大写锁定原子标志句柄
-    pub fn is_caps_locked_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.is_caps_locked)
-    }
-
-    /// 获取繁体输出原子标志句柄
-    pub fn traditional_chinese_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.traditional_chinese)
-    }
-
-    /// 获取全角标点原子标志句柄
-    pub fn full_width_punct_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.full_width_punct)
-    }
-
-    /// 获取全角字符原子标志句柄
-    pub fn full_width_char_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.full_width_char)
     }
 }
 

@@ -72,13 +72,6 @@ pub enum ImeOutputAction {
     },
 }
 
-/// 兼容别名：核心会话决策结果类型
-pub type KeyProcessResult = ImeOutputAction;
-/// 兼容别名：核心按键动作类型
-pub type ImeAction = ImeOutputAction;
-/// 兼容别名：组词按键处理响应
-pub type KeyProcessAction = ImeOutputAction;
-
 /// 微澜输入法核心会话上下文与按键驱动状态机 (IME Core Session)
 #[derive(Debug)]
 pub struct ImeCoreSession {

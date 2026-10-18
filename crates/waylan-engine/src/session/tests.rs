@@ -21,7 +21,7 @@ fn test_ime_core_session_input_and_commit() {
 
     // 空格确认首选词 "你"
     let act_space = session.handle_key_press(KEY_SPACE, 1002, None);
-    assert_eq!(act_space, ImeAction::Commit("你".to_string()));
+    assert_eq!(act_space, ImeOutputAction::Commit("你".to_string()));
     assert!(session.engine.raw_input().is_empty());
 }
 
@@ -44,7 +44,7 @@ fn test_ime_core_session_idle_punctuation() {
     let mut session = make_test_session();
     // 空闲状态下按逗号 (KEY_COMMA: 51)
     let act = session.handle_key_press(51, 1000, None);
-    assert_eq!(act, ImeAction::Commit("，".to_string()));
+    assert_eq!(act, ImeOutputAction::Commit("，".to_string()));
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn test_ime_core_session_shortcuts() {
     let act = session.handle_key_press(KEY_F, 1000, None);
     assert_eq!(
         act,
-        ImeAction::ShortcutToggled(ShortcutToggleAction::Traditional(true))
+        ImeOutputAction::ShortcutToggled(ShortcutToggleAction::Traditional(true))
     );
     assert!(session.engine.config.traditional_chinese);
 
@@ -65,7 +65,7 @@ fn test_ime_core_session_shortcuts() {
     let act2 = session.handle_key_press(KEY_F, 1001, None);
     assert_eq!(
         act2,
-        ImeAction::ShortcutToggled(ShortcutToggleAction::Traditional(false))
+        ImeOutputAction::ShortcutToggled(ShortcutToggleAction::Traditional(false))
     );
     assert!(!session.engine.config.traditional_chinese);
 
@@ -75,7 +75,7 @@ fn test_ime_core_session_shortcuts() {
     let act_punct = session.handle_key_press(KEY_DOT, 1002, None);
     assert_eq!(
         act_punct,
-        ImeAction::ShortcutToggled(ShortcutToggleAction::FullWidthPunct(false))
+        ImeOutputAction::ShortcutToggled(ShortcutToggleAction::FullWidthPunct(false))
     );
     assert!(!session.punctuation_processor.full_width_punct);
 }
@@ -88,7 +88,7 @@ fn test_ime_core_session_full_width_char() {
 
     // 英文模式下键入 'a' (扫描码 30)
     let act = session.handle_key_press(30, 1000, None);
-    assert_eq!(act, ImeAction::Commit("ａ".to_string()));
+    assert_eq!(act, ImeOutputAction::Commit("ａ".to_string()));
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn test_process_key_password_and_lock_bypass() {
         },
         1000,
     );
-    assert_eq!(res, KeyProcessResult::PassThrough);
+    assert_eq!(res, ImeOutputAction::PassThrough);
     assert!(session.engine.raw_input().is_empty());
 
     // 模拟密码框中的按键释放 'a'
@@ -125,7 +125,7 @@ fn test_process_key_password_and_lock_bypass() {
         },
         1001,
     );
-    assert_eq!(res_rel, KeyProcessResult::PassThrough);
+    assert_eq!(res_rel, ImeOutputAction::PassThrough);
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn test_process_key_capslock_commit_and_passthrough() {
     );
     assert_eq!(
         res_caps,
-        KeyProcessResult::CommitAndPassThrough("ni".to_string())
+        ImeOutputAction::CommitAndPassThrough("ni".to_string())
     );
     assert!(session.engine.raw_input().is_empty());
 }
@@ -197,7 +197,7 @@ fn test_process_key_shift_mode_toggle() {
     );
     assert_eq!(
         res,
-        KeyProcessResult::ModeChanged {
+        ImeOutputAction::ModeChanged {
             new_mode: InputMode::English,
             committed: None,
             was_consumed: false,

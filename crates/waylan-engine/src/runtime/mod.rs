@@ -16,9 +16,7 @@ use waylan_algo::AlgoEngine;
 use waylan_core::input::sync_mode_from_shared_flags;
 use waylan_core::input::MOD_CAPS;
 use waylan_core::state::SharedInputFlags;
-use waylan_core::{
-    Candidate, CandidateBoxState, ExpandedCardState, InputMode, VoiceBoxState, VoiceConfig,
-};
+use waylan_core::{CandidateBoxState, InputMode, VoiceConfig};
 use waylan_voice::{VoiceInteractionManager, VoiceKeyAction};
 
 use crate::frontend::InputMethodFrontend;
@@ -27,16 +25,8 @@ use crate::session::{
     ShortcutToggleAction,
 };
 
-/// 候选词卡片构建参数配置
-#[derive(Clone, Copy)]
-pub struct CandidateBoxBuildOptions<'a> {
-    pub mode: InputMode,
-    pub is_active: bool,
-    pub is_grid_expanded: bool,
-    pub grid_selected_index: usize,
-    pub inline_preedit: bool,
-    pub voice_manager: Option<&'a VoiceInteractionManager>,
-}
+pub mod candidate_builder;
+pub use candidate_builder::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 
 /// 微澜统一输入法交互运行时 (IME Runtime)
 pub struct ImeRuntime {
@@ -396,113 +386,5 @@ impl ImeRuntime {
                 voice_manager: self.voice_manager.as_ref(),
             },
         )
-    }
-}
-
-/// 统合构建通用候选框渲染状态模型
-pub fn build_common_candidate_box_state(
-    engine: &AlgoEngine,
-    opts: CandidateBoxBuildOptions<'_>,
-) -> CandidateBoxState {
-    let CandidateBoxBuildOptions {
-        mode,
-        is_active,
-        is_grid_expanded,
-        grid_selected_index,
-        inline_preedit,
-        voice_manager,
-    } = opts;
-
-    // 若当前处于语音输入状态，优先呈现语音识别流式预览与动态波形（与 IBus 视觉契约 100% 对齐）
-    if let Some(vm) = voice_manager {
-        if vm.is_active() {
-            let partial_text = vm.partial_text.clone().unwrap_or_default();
-            let waveform = vm.waveform.clone().unwrap_or_default();
-            let display_text = vm.display_text.clone();
-
-            let voice_state = VoiceBoxState {
-                partial_text: partial_text.clone(),
-                waveform: waveform.clone(),
-                display_text: display_text.clone(),
-                is_listening: true,
-            };
-
-            let candidates = if let Some(ref voice_text) = display_text {
-                vec![Candidate::new(voice_text.clone(), waveform, 1000)]
-            } else {
-                Vec::new()
-            };
-
-            return CandidateBoxState {
-                visible: is_active,
-                preedit: partial_text,
-                candidates,
-                selected_index: 0,
-                expanded_card: ExpandedCardState::Collapsed,
-                mode_badge: String::new(),
-                is_grid_expanded: false,
-                grid_candidates: Vec::new(),
-                voice: Some(voice_state),
-            };
-        }
-    }
-
-    let core_candidates: Vec<Candidate> = engine.candidates().iter().map(Candidate::from).collect();
-
-    let grid_candidates: Vec<Candidate> = if is_grid_expanded {
-        engine
-            .all_candidates()
-            .iter()
-            .take(30)
-            .map(Candidate::from)
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let expanded_card = if engine.is_expanded() {
-        ExpandedCardState::Expanded {
-            selected_index: engine.expanded_selected_index(),
-        }
-    } else {
-        ExpandedCardState::Collapsed
-    };
-
-    let is_dynamic_v_mode = engine.raw_input().starts_with('v');
-    let (preedit, mode_badge) = if inline_preedit {
-        if is_dynamic_v_mode {
-            (engine.raw_input().to_string(), "V模式".to_string())
-        } else {
-            match mode {
-                InputMode::Chinese => (String::new(), String::new()),
-                InputMode::English => (String::new(), "英".to_string()),
-                InputMode::VMode => (engine.formatted_preedit(), "V".to_string()),
-            }
-        }
-    } else {
-        let badge = match mode {
-            InputMode::Chinese => "中".to_string(),
-            InputMode::English => "英".to_string(),
-            InputMode::VMode => "V".to_string(),
-        };
-        (engine.formatted_preedit(), badge)
-    };
-
-    let selected_index = if is_grid_expanded {
-        grid_selected_index
-    } else {
-        engine.selected_index()
-    };
-
-    CandidateBoxState {
-        visible: is_active && !engine.raw_input().is_empty(),
-        preedit,
-        candidates: core_candidates,
-        selected_index,
-        expanded_card,
-        mode_badge,
-        is_grid_expanded,
-        grid_candidates,
-        voice: None,
     }
 }

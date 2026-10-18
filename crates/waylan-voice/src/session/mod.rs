@@ -6,6 +6,7 @@
 //!   高达 200MB 的模型权重文件；消除近 1 秒的冷启动延迟，实现快捷键按下后 0 延迟秒开录音与识别。
 //! - **代价与局限**：后台常驻线程需通过命令通道安全纳管状态流转，并在 Drop 时平滑停机。
 
+mod model_cache;
 mod pipeline;
 mod types;
 
@@ -15,24 +16,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use log::{info, warn};
-use waylan_core::VoiceConfig;
 
-use self::pipeline::{active_recording_loop, compute_asr_fingerprint};
-use self::types::{ActiveRecordingContext, WorkerCommand, IDLE_MODEL_UNLOAD_TIMEOUT};
+use self::model_cache::{check_idle_timeout_and_calculate_deadline, WorkerModelCache};
+use self::pipeline::active_recording_loop;
+use self::types::{ActiveRecordingContext, WorkerCommand};
 
-type AsrFingerprint = (
-    waylan_core::VoiceEngineType,
-    Option<String>,
-    Option<waylan_core::CloudAsrConfig>,
-    Option<String>,
-);
 use crate::capture::AudioCapture;
 use crate::error::VoiceError;
-use crate::recognizer::{create_recognizer, PunctuationRestorer, VoiceRecognizer};
-use crate::vad::{create_vad, VadProcessor, WaveformVisualizer};
+use crate::vad::WaveformVisualizer;
 
 /// 语音会话状态纳管器（长生命周期常驻控制器）
 pub struct VoiceSessionController {
@@ -156,85 +150,6 @@ impl VoiceSessionController {
         if self.worker_handle.is_some() {
             let _ = self.cmd_tx.send(WorkerCommand::UnloadModels);
         }
-    }
-}
-
-/// 语音会话工作线程常驻模型与指纹缓存容器
-#[derive(Default)]
-struct WorkerModelCache {
-    recognizer: Option<Box<dyn VoiceRecognizer>>,
-    vad: Option<Box<dyn VadProcessor>>,
-    punct: Option<PunctuationRestorer>,
-    last_asr_fingerprint: Option<AsrFingerprint>,
-}
-
-impl WorkerModelCache {
-    /// 清空所有模型权重缓存以释放常驻内存
-    fn unload(&mut self) {
-        self.recognizer = None;
-        self.vad = None;
-        self.punct = None;
-        self.last_asr_fingerprint = None;
-    }
-
-    /// 查询是否有任何模型权重驻留在内存中
-    #[inline]
-    fn has_cached_models(&self) -> bool {
-        self.recognizer.is_some() || self.vad.is_some()
-    }
-
-    /// 校验或按需初始化识别器、VAD与标点模型实例
-    fn prepare_models(
-        &mut self,
-        voice_config: &VoiceConfig,
-    ) -> Option<(
-        &mut (dyn VoiceRecognizer + 'static),
-        &mut (dyn VadProcessor + 'static),
-        Option<&PunctuationRestorer>,
-    )> {
-        let current_fingerprint = compute_asr_fingerprint(voice_config);
-        if self.last_asr_fingerprint.as_ref() != Some(&current_fingerprint) {
-            self.recognizer = None;
-            self.last_asr_fingerprint = Some(current_fingerprint);
-        }
-
-        if self.recognizer.is_none() {
-            self.recognizer = Some(create_recognizer(voice_config));
-        }
-        if self.vad.is_none() {
-            self.vad = Some(create_vad(&voice_config.vad));
-        }
-        if self.punct.is_none() && voice_config.auto_punctuation {
-            self.punct = Some(PunctuationRestorer::with_custom_path(
-                voice_config.punct_model_path.as_deref(),
-            ));
-        }
-
-        let recognizer = self.recognizer.as_mut()?;
-        let vad = self.vad.as_mut()?;
-        recognizer.reset();
-        vad.reset();
-
-        Some((recognizer.as_mut(), vad.as_mut(), self.punct.as_ref()))
-    }
-}
-
-/// 计算下一次接收命令的等待超时并执行模型空闲超时自动卸载
-fn check_idle_timeout_and_calculate_deadline(
-    cache: &mut WorkerModelCache,
-    last_activity: Instant,
-) -> Duration {
-    if cache.has_cached_models() {
-        let elapsed = last_activity.elapsed();
-        if elapsed >= IDLE_MODEL_UNLOAD_TIMEOUT {
-            cache.unload();
-            info!("[语音会话] 语音模块已持续空闲超过 5 分钟，自动卸载模型权重以释放常驻内存");
-            Duration::from_secs(3600)
-        } else {
-            IDLE_MODEL_UNLOAD_TIMEOUT.saturating_sub(elapsed)
-        }
-    } else {
-        Duration::from_secs(3600)
     }
 }
 

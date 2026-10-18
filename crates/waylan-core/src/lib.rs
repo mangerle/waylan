@@ -1,7 +1,6 @@
 pub mod assets;
 pub mod candidate_format;
 pub mod config;
-pub mod config_types;
 pub mod fs_watcher;
 pub mod input;
 pub mod loop_wakeup;

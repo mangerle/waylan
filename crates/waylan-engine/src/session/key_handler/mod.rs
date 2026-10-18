@@ -14,7 +14,7 @@ use waylan_algo::preprocessor::PunctuationProcessor;
 use waylan_algo::AlgoEngine;
 use waylan_core::input::page_keys::PageKeyConfig;
 
-pub use crate::session::{ImeOutputAction, KeyProcessAction};
+pub use crate::session::ImeOutputAction;
 
 /// 拼音组词状态按键决策输入参数
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +30,7 @@ pub fn handle_composition_key_with_params(
     engine: &mut AlgoEngine,
     punct_processor: &mut PunctuationProcessor,
     params: CompositionKeyParams,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     let CompositionKeyParams {
         key,
         shift_active,
@@ -77,7 +77,7 @@ pub fn handle_composition_key(
     shift_active: bool,
     page_keys: PageKeyConfig,
     now: u64,
-) -> Option<KeyProcessAction> {
+) -> Option<ImeOutputAction> {
     handle_composition_key_with_params(
         engine,
         punct_processor,

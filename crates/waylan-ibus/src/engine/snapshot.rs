@@ -6,6 +6,7 @@
 //! - **代价与局限**：每次 UI 刷新需要浅克隆当前的候选列表与预编辑字符串。
 
 use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation};
+use waylan_engine::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 
 use super::super::keys::IbusSessionCore;
 
@@ -20,48 +21,36 @@ pub(crate) struct UiSnapshot {
 }
 
 impl UiSnapshot {
-    /// 提取处于语音录入或语音展示期间的 UI 快照
-    fn capture_voice_snapshot(core: &IbusSessionCore) -> Self {
-        let (display_text, waveform, partial_text) =
-            if let Some(ref vm) = core.runtime.voice_manager {
-                (
-                    vm.display_text.clone(),
-                    vm.waveform.clone().unwrap_or_default(),
-                    vm.partial_text.clone().unwrap_or_default(),
-                )
-            } else {
-                (None, String::new(), String::new())
-            };
-        let candidates = if let Some(ref voice_text) = display_text {
-            vec![Candidate::new(voice_text.clone(), waveform, 1000)]
-        } else {
-            Vec::new()
-        };
-        Self {
-            preedit: partial_text,
-            candidates,
-            page_size: 1,
-            selected_index: 0,
-            orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
-            index_style: CandidateIndexStyle::None,
-        }
-    }
+    /// 从当前会话核心提取 UI 快照
+    pub(crate) fn capture(core: &IbusSessionCore) -> Self {
+        let is_voice = core.is_voice_active();
+        let box_state = build_common_candidate_box_state(
+            &core.runtime.core.engine,
+            CandidateBoxBuildOptions {
+                mode: core.runtime.core.mode,
+                is_active: true,
+                is_grid_expanded: false,
+                grid_selected_index: 0,
+                inline_preedit: false,
+                voice_manager: core.runtime.voice_manager.as_ref(),
+            },
+        );
 
-    /// 提取常规键盘输入组词状态下的 UI 快照
-    fn capture_input_snapshot(core: &IbusSessionCore) -> Self {
-        let is_v_mode = core.runtime.core.engine.raw_input().starts_with('v');
-        let preedit = if core.runtime.core.engine.raw_input().is_empty() {
-            String::new()
-        } else if is_v_mode {
-            core.runtime.core.engine.raw_input().to_string()
-        } else {
-            core.runtime.core.engine.formatted_preedit()
-        };
+        if is_voice {
+            return Self {
+                preedit: box_state.preedit,
+                candidates: box_state.candidates,
+                page_size: 1,
+                selected_index: 0,
+                orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
+                index_style: CandidateIndexStyle::None,
+            };
+        }
+
         let is_expanded = core.runtime.core.engine.is_expanded();
-        let candidates = core.current_candidates();
         let (page_size, selected_index, orientation) = if is_expanded {
             (
-                candidates.len().max(1),
+                box_state.candidates.len().max(1),
                 core.runtime.core.engine.expanded_selected_index(),
                 super::super::types::IBUS_ORIENTATION_VERTICAL,
             )
@@ -74,26 +63,24 @@ impl UiSnapshot {
             };
             (
                 core.runtime.core.engine.config.page_size,
-                core.runtime.core.engine.selected_index(),
+                box_state.selected_index,
                 orientation,
             )
         };
+
+        let preedit = if core.runtime.core.engine.raw_input().starts_with('v') {
+            core.runtime.core.engine.raw_input().to_string()
+        } else {
+            box_state.preedit
+        };
+
         Self {
             preedit,
-            candidates,
+            candidates: box_state.candidates,
             page_size,
             selected_index,
             orientation,
             index_style: core.candidate_index_style,
-        }
-    }
-
-    /// 从当前会话核心提取 UI 快照
-    pub(crate) fn capture(core: &IbusSessionCore) -> Self {
-        if core.is_voice_active() {
-            Self::capture_voice_snapshot(core)
-        } else {
-            Self::capture_input_snapshot(core)
         }
     }
 }

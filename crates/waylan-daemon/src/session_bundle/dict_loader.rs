@@ -5,14 +5,16 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Instant, SystemTime};
+#[cfg(test)]
+use std::sync::Arc;
+use std::time::Instant;
 
 use log::{info, warn};
 use waylan_algo::table::LexiconTable;
 #[cfg(test)]
+use waylan_algo::AuxiliaryDict;
+#[cfg(test)]
 use waylan_algo::OpenCcDict;
-use waylan_algo::{AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager};
 use waylan_core::AppConfig;
 
 /// 自动建立用户数据目录 (~/.local/share/waylan/) 与外部全量词库的符号链接
@@ -116,87 +118,7 @@ pub fn load_auxiliary_dict() -> AuxiliaryDict {
     AuxiliaryDict::with_default_data()
 }
 
-struct AuxManagerCache {
-    source_path: Option<PathBuf>,
-    mtime: Option<SystemTime>,
-    managers: (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>),
-}
-
-static CACHED_AUX_MANAGERS: OnceLock<Mutex<AuxManagerCache>> = OnceLock::new();
-
-/// 探测当前应当生效的辅助词库文件路径及其最新修改时间
-fn probe_active_aux_dict_meta() -> (Option<PathBuf>, Option<SystemTime>) {
-    for path in AppConfig::aux_dict_search_paths() {
-        if path.exists() {
-            let mtime = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-            return (Some(path), mtime);
-        }
-    }
-    (None, None)
-}
-
-/// 从磁盘构建辅助与混输词库管理器缓存实例
-fn build_auxiliary_managers() -> AuxManagerCache {
-    info!("[辅助词库] 正在定位并初始化辅助与混输词典索引...");
-    let search_paths = AppConfig::aux_dict_search_paths();
-
-    for path in search_paths {
-        if path.exists() {
-            let mtime = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-            let load_start = Instant::now();
-            match AuxiliaryDict::load_from_file(&path) {
-                Ok(dict) => {
-                    let elapsed = load_start.elapsed();
-                    info!(
-                        "  - 成功加载辅助混输词库: {:?} (耗时: {:.2} ms, 英文词数: {}, 符号表情: {} 组)",
-                        path,
-                        elapsed.as_secs_f64() * 1000.0,
-                        dict.english_words.len(),
-                        dict.symbols.len()
-                    );
-                    let en = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
-                    let sym = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
-                    return AuxManagerCache {
-                        source_path: Some(path),
-                        mtime,
-                        managers: (en, sym),
-                    };
-                }
-                Err(e) => {
-                    warn!("  - 读取辅助词库文件 {:?} 失败: {}", path, e);
-                }
-            }
-        }
-    }
-
-    info!("  - 未检测到外部辅助词库文件，使用系统内置单例保底英文与符号表情库。");
-    AuxManagerCache {
-        source_path: None,
-        mtime: None,
-        managers: (
-            EnglishSuggestionManager::default_global(),
-            SymbolSuggestionManager::default_global(),
-        ),
-    }
-}
-
-/// 按照多级搜索策略加载辅助与混输词库管理器（带文件时间戳感知的单例缓存，未变动时零拷贝复用，变动时自动热更新）
-pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
-    let cache_mutex = CACHED_AUX_MANAGERS.get_or_init(|| Mutex::new(build_auxiliary_managers()));
-
-    let (active_path, active_mtime) = probe_active_aux_dict_meta();
-    if let Ok(mut guard) = cache_mutex.lock() {
-        if guard.source_path == active_path && guard.mtime == active_mtime {
-            return guard.managers.clone();
-        }
-        let fresh = build_auxiliary_managers();
-        let out = fresh.managers.clone();
-        *guard = fresh;
-        return out;
-    }
-
-    build_auxiliary_managers().managers
-}
+pub use waylan_algo::load_auxiliary_managers;
 
 /// 按照多级搜索策略加载简繁转换两级词库（复用 OpenCcDict 全局单例缓存，供测试使用）
 #[cfg(test)]

@@ -11,7 +11,7 @@ use waylan_core::input::{update_modifier_masks, ModifierState, MOD_CAPS};
 
 pub use crate::surface::state_builder::*;
 pub use crate::watcher::*;
-pub use waylan_core::input::{sync_mode_from_shared_flag, sync_mode_from_shared_flags};
+pub use waylan_core::input::sync_mode_from_shared_flags;
 
 /// 判断热重载原子标志是否被触发（用于按键热路径轻量检测，避免高频系统调用）
 #[inline]
@@ -78,25 +78,27 @@ pub type KeyFilterCallback = Box<dyn FnMut(u32, bool, u32) -> KeyFilterResult + 
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+    use waylan_core::state::SharedInputFlags;
     use waylan_core::InputMode;
 
     #[test]
-    fn test_sync_mode_from_shared_flag() {
-        let flag = AtomicBool::new(false);
+    fn test_sync_mode_from_shared_flags() {
+        let flags = SharedInputFlags::new(true, false, false, false);
         let mut mode = InputMode::Chinese;
 
-        let changed = sync_mode_from_shared_flag(Some(&flag), &mut mode);
+        flags.set_chinese(false);
+        let changed = sync_mode_from_shared_flags(Some(&flags), &mut mode);
         assert_eq!(changed, Some(InputMode::English));
         assert_eq!(mode, InputMode::English);
 
         // 再次同步，无变化
-        let changed = sync_mode_from_shared_flag(Some(&flag), &mut mode);
+        let changed = sync_mode_from_shared_flags(Some(&flags), &mut mode);
         assert_eq!(changed, None);
         assert_eq!(mode, InputMode::English);
 
         // 切换回中文
-        flag.store(true, Ordering::Release);
-        let changed = sync_mode_from_shared_flag(Some(&flag), &mut mode);
+        flags.set_chinese(true);
+        let changed = sync_mode_from_shared_flags(Some(&flags), &mut mode);
         assert_eq!(changed, Some(InputMode::Chinese));
         assert_eq!(mode, InputMode::Chinese);
     }

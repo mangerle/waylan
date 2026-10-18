@@ -15,15 +15,8 @@ pub use paths::{
 };
 use serde::{Deserialize, Serialize};
 
-pub use crate::config_types::{
-    AudioFrontEndConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation,
-    CandidateThemePreset, CandidateWindowMode, CloudAsrConfig, CloudProfile, CloudProviderType,
-    DesktopConfig, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, NsEngineType,
-    OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, PinyinConfig, ShortcutConfig,
-    SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules, UiConfig, VadConfig,
-    VadModelType, VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig,
-    VoiceVisualEffect,
-};
+pub mod models;
+pub use models::*;
 
 /// 微澜输入法全局分层配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
