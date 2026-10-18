@@ -1,5 +1,5 @@
 import { ComboBox } from "std-widgets.slint";
-import { SettingCard, Keycap, AppCheckBox } from "common.slint";
+import { SettingCard, Keycap, AppCheckBox, ShortcutRecorder } from "common.slint";
 
 export component ShortcutsTab inherits VerticalLayout {
     spacing: 16px;
@@ -10,9 +10,9 @@ export component ShortcutsTab inherits VerticalLayout {
     in-out property <bool> page_keys_bracket: false;
     in-out property <bool> page_keys_comma_period: false;
 
-    in-out property <int> traditional_shortcut_index: 0;
-    in-out property <int> full_width_char_shortcut_index: 0;
-    in-out property <int> full_width_punct_shortcut_index: 0;
+    in-out property <string> traditional_shortcut: "Ctrl + Shift + F";
+    in-out property <string> full_width_char_shortcut: "Shift + Space";
+    in-out property <string> full_width_punct_shortcut: "Ctrl + .";
 
     SettingCard {
         title: "常用按键与翻页配置";
@@ -84,10 +84,8 @@ export component ShortcutsTab inherits VerticalLayout {
                     Text { text: "简繁体即时切换"; font-size: 13px; font-weight: 600; color: #0f172a; }
                     Text { text: "在简体中文与繁体中文输出模式之间无缝转换"; font-size: 12px; color: #64748b; }
                 }
-                ComboBox {
-                    model: ["Ctrl + Shift + F", "Ctrl + Alt + F", "Ctrl + Shift + T", "已禁用"];
-                    current-index <=> root.traditional_shortcut_index;
-                    width: 180px;
+                ShortcutRecorder {
+                    shortcut <=> root.traditional_shortcut;
                 }
             }
 
@@ -103,10 +101,8 @@ export component ShortcutsTab inherits VerticalLayout {
                     Text { text: "字符全角 / 半角切换"; font-size: 13px; font-weight: 600; color: #0f172a; }
                     Text { text: "切换字母与数字的半角宽度或全角宽度形态"; font-size: 12px; color: #64748b; }
                 }
-                ComboBox {
-                    model: ["Shift + Space", "Ctrl + Shift + Space", "已禁用"];
-                    current-index <=> root.full_width_char_shortcut_index;
-                    width: 180px;
+                ShortcutRecorder {
+                    shortcut <=> root.full_width_char_shortcut;
                 }
             }
 
@@ -122,10 +118,8 @@ export component ShortcutsTab inherits VerticalLayout {
                     Text { text: "标点全角 / 半角切换"; font-size: 13px; font-weight: 600; color: #0f172a; }
                     Text { text: "切换中文全角标点符号与英文半角标点符号"; font-size: 12px; color: #64748b; }
                 }
-                ComboBox {
-                    model: ["Ctrl + . (句点)", "Alt + . (句点)", "已禁用"];
-                    current-index <=> root.full_width_punct_shortcut_index;
-                    width: 180px;
+                ShortcutRecorder {
+                    shortcut <=> root.full_width_punct_shortcut;
                 }
             }
         }

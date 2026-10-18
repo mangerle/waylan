@@ -133,12 +133,117 @@ fn parse_key_name(name: &str) -> Option<u32> {
         "minus" | "-" => 12,
         "equal" | "=" => 13,
         "comma" | "," => 51,
-        "period" | "dot" | "." => 52,
+        "period" | "dot" | "." | "句点" => 52,
         "slash" | "/" => 53,
         "semicolon" | ";" => 39,
+        "[" | "leftbracket" => 26,
+        "]" | "rightbracket" => 27,
+        "\\" | "backslash" => 43,
+        "'" | "apostrophe" => 40,
+        "pageup" => 104,
+        "pagedown" => 109,
+        "up" => 103,
+        "down" => 108,
+        "left" => 105,
+        "right" => 106,
+        "delete" => 111,
         _ => return None,
     };
     Some(code)
+}
+
+/// 将键盘组合键格式化为规范的展示文本（如 "Ctrl + Shift + F"、"Shift + Space"、"Ctrl + ."）
+///
+/// 若未按下有效主键或仅按下修饰键，则返回 `None`。
+pub fn format_key_combination(
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    super_key: bool,
+    text: &str,
+) -> Option<String> {
+    if text != " " && text.trim().is_empty() {
+        return None;
+    }
+
+    // 规整主键名称
+    let trimmed = text.trim();
+    let key_display = match text {
+        " " => "Space",
+        _ => match trimmed {
+            "space" | "Space" => "Space",
+            "\n" | "\r" | "Return" | "Enter" => "Enter",
+            "\t" | "Tab" => "Tab",
+            f if f.len() >= 2
+                && (f.starts_with('F') || f.starts_with('f'))
+                && f[1..].chars().all(|c| c.is_ascii_digit()) =>
+            {
+                let num = &f[1..];
+                return Some(format_with_modifiers(
+                    ctrl,
+                    alt,
+                    shift,
+                    super_key,
+                    &format!("F{}", num),
+                ));
+            }
+            "." | "dot" | "period" | "句点" => ".",
+            "," | "comma" => ",",
+            "-" | "minus" => "-",
+            "=" | "equal" => "=",
+            "/" | "slash" => "/",
+            ";" | "semicolon" => ";",
+            "`" | "grave" => "`",
+            "[" | "leftbracket" => "[",
+            "]" | "rightbracket" => "]",
+            "\\" | "backslash" => "\\",
+            "'" | "apostrophe" => "'",
+            ch if ch.len() == 1 && ch.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) => {
+                return Some(format_with_modifiers(
+                    ctrl,
+                    alt,
+                    shift,
+                    super_key,
+                    &ch.to_ascii_uppercase(),
+                ));
+            }
+            ch if ch.len() == 1 && ch.chars().next().is_some_and(|c| c.is_ascii_digit()) => ch,
+            "PageUp" | "pageup" => "PageUp",
+            "PageDown" | "pagedown" => "PageDown",
+            "Up" | "up" | "UpArrow" => "Up",
+            "Down" | "down" | "DownArrow" => "Down",
+            "Left" | "left" | "LeftArrow" => "Left",
+            "Right" | "right" | "RightArrow" => "Right",
+            _ if trimmed.chars().all(|c| c.is_ascii_control()) => return None,
+            _ => return None,
+        },
+    };
+
+    Some(format_with_modifiers(
+        ctrl,
+        alt,
+        shift,
+        super_key,
+        key_display,
+    ))
+}
+
+fn format_with_modifiers(ctrl: bool, alt: bool, shift: bool, super_key: bool, key: &str) -> String {
+    let mut parts = Vec::with_capacity(5);
+    if ctrl {
+        parts.push("Ctrl");
+    }
+    if alt {
+        parts.push("Alt");
+    }
+    if shift {
+        parts.push("Shift");
+    }
+    if super_key {
+        parts.push("Super");
+    }
+    parts.push(key);
+    parts.join(" + ")
 }
 
 #[cfg(test)]
@@ -166,5 +271,39 @@ mod tests {
 
         assert!(ParsedShortcut::parse("已禁用").is_none());
         assert!(ParsedShortcut::parse("   ").is_none());
+
+        let p4 = ParsedShortcut::parse("Ctrl + .").expect("标点快捷键解析");
+        assert!(p4.ctrl);
+        assert_eq!(p4.evdev_key, 52);
+
+        let p5 = ParsedShortcut::parse("Shift + Space").expect("空格快捷键解析");
+        assert!(p5.shift);
+        assert_eq!(p5.evdev_key, 57);
+    }
+
+    #[test]
+    fn test_format_key_combination() {
+        assert_eq!(
+            format_key_combination(true, false, true, false, "f").as_deref(),
+            Some("Ctrl + Shift + F")
+        );
+        assert_eq!(
+            format_key_combination(false, false, true, false, " ").as_deref(),
+            Some("Shift + Space")
+        );
+        assert_eq!(
+            format_key_combination(true, false, false, false, ".").as_deref(),
+            Some("Ctrl + .")
+        );
+        assert_eq!(
+            format_key_combination(false, false, false, true, "v").as_deref(),
+            Some("Super + V")
+        );
+        assert_eq!(
+            format_key_combination(false, false, false, false, "F8").as_deref(),
+            Some("F8")
+        );
+        assert!(format_key_combination(true, false, false, false, "").is_none());
+        assert!(format_key_combination(true, false, false, false, "\u{0001}").is_none());
     }
 }

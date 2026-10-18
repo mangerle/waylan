@@ -22,9 +22,7 @@ pub use key_handler::{
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
-use waylan_core::{
-    FullWidthCharShortcut, FullWidthPunctShortcut, GridState, InputMode, TraditionalShortcut,
-};
+use waylan_core::{GridState, InputMode, ParsedShortcut};
 
 /// 全局模式与功能快捷键切换动作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,11 +92,11 @@ pub struct ImeCoreSession {
     /// 统一修饰键状态跟踪器
     pub modifiers: ModifierState,
     /// 简繁即时切换快捷键选项
-    pub traditional_shortcut: TraditionalShortcut,
+    pub traditional_shortcut: Option<ParsedShortcut>,
     /// 字符全角/半角切换快捷键选项
-    pub full_width_char_shortcut: FullWidthCharShortcut,
+    pub full_width_char_shortcut: Option<ParsedShortcut>,
     /// 标点全角/半角切换快捷键选项
-    pub full_width_punct_shortcut: FullWidthPunctShortcut,
+    pub full_width_punct_shortcut: Option<ParsedShortcut>,
     /// 是否开启全角字符/字母输入
     pub full_width_char: bool,
     /// 候选词 5 行大网格展开状态机（杜绝未展开时选中项悬空的非法状态）
@@ -125,9 +123,9 @@ impl ImeCoreSession {
             mode: InputMode::Chinese,
             consumed_keys: ConsumedKeyTracker::new(),
             modifiers: ModifierState::default(),
-            traditional_shortcut: TraditionalShortcut::default(),
-            full_width_char_shortcut: FullWidthCharShortcut::default(),
-            full_width_punct_shortcut: FullWidthPunctShortcut::default(),
+            traditional_shortcut: ParsedShortcut::parse("Ctrl + Shift + F"),
+            full_width_char_shortcut: ParsedShortcut::parse("Shift + Space"),
+            full_width_punct_shortcut: ParsedShortcut::parse("Ctrl + ."),
             full_width_char: false,
             grid_state: GridState::Collapsed,
         }
@@ -267,53 +265,30 @@ impl ImeCoreSession {
         let shift_active = self.is_shift_active();
         let ctrl_active = (self.modifiers.depressed & MOD_CTRL) != 0;
         let alt_active = (self.modifiers.depressed & MOD_ALT) != 0;
+        let super_active = (self.modifiers.depressed & MOD_SUPER) != 0;
 
         // 1. 尝试匹配简繁切换快捷键
-        let trad_match = match self.traditional_shortcut {
-            TraditionalShortcut::CtrlShiftF => {
-                ctrl_active && shift_active && !alt_active && keycode == KEY_F
-            }
-            TraditionalShortcut::CtrlAltF => {
-                ctrl_active && alt_active && !shift_active && keycode == KEY_F
-            }
-            TraditionalShortcut::CtrlShiftT => {
-                ctrl_active && shift_active && !alt_active && keycode == KEY_T
-            }
-            TraditionalShortcut::Disabled => false,
-        };
-        if trad_match {
+        if self.traditional_shortcut.as_ref().is_some_and(|s| {
+            s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
+        }) {
             let next_val = !self.engine.config.traditional_chinese;
             self.engine.config.traditional_chinese = next_val;
             return Some(ShortcutToggleAction::Traditional(next_val));
         }
 
         // 2. 尝试匹配字符全半角切换快捷键
-        let char_match = match self.full_width_char_shortcut {
-            FullWidthCharShortcut::ShiftSpace => {
-                shift_active && !ctrl_active && !alt_active && keycode == KEY_SPACE
-            }
-            FullWidthCharShortcut::CtrlShiftSpace => {
-                ctrl_active && shift_active && !alt_active && keycode == KEY_SPACE
-            }
-            FullWidthCharShortcut::Disabled => false,
-        };
-        if char_match {
+        if self.full_width_char_shortcut.as_ref().is_some_and(|s| {
+            s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
+        }) {
             let next_val = !self.full_width_char;
             self.full_width_char = next_val;
             return Some(ShortcutToggleAction::FullWidthChar(next_val));
         }
 
         // 3. 尝试匹配标点全半角切换快捷键
-        let punct_match = match self.full_width_punct_shortcut {
-            FullWidthPunctShortcut::CtrlPeriod => {
-                ctrl_active && !shift_active && !alt_active && keycode == KEY_DOT
-            }
-            FullWidthPunctShortcut::AltPeriod => {
-                alt_active && !ctrl_active && !shift_active && keycode == KEY_DOT
-            }
-            FullWidthPunctShortcut::Disabled => false,
-        };
-        if punct_match {
+        if self.full_width_punct_shortcut.as_ref().is_some_and(|s| {
+            s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
+        }) {
             let next_val = !self.punctuation_processor.full_width_punct;
             self.punctuation_processor.full_width_punct = next_val;
             return Some(ShortcutToggleAction::FullWidthPunct(next_val));

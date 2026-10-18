@@ -59,6 +59,19 @@ pub fn run_settings_gui() -> Result<(), SettingsError> {
 
     window.set_app_version(SharedString::from(env!("CARGO_PKG_VERSION")));
 
+    // 注册全局快捷键按键捕获与格式化回调
+    let shortcut_helper = window.global::<ShortcutHelper>();
+    shortcut_helper.on_format_key(|ctrl, alt, shift, meta, text| {
+        let text_str = text.as_str();
+        if let Some(formatted) =
+            waylan_core::config::format_key_combination(ctrl, alt, shift, meta, text_str)
+        {
+            SharedString::from(formatted)
+        } else {
+            SharedString::from("")
+        }
+    });
+
     // 1. 加载持久化配置并同步到界面
     let config = AppConfig::load_or_create();
     sync_config_to_window(&window, &config);
@@ -86,9 +99,8 @@ mod tests {
     use super::*;
     use waylan_core::config::{
         CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
-        CandidateWindowMode, DesktopConfig, FullWidthCharShortcut, FullWidthPunctShortcut,
-        FuzzyPinyinRules, PageKeys, PinyinConfig, ShortcutConfig, SwitchKey, ThemeMode,
-        TraditionalShortcut, TypoCorrectionRules, UiConfig,
+        CandidateWindowMode, DesktopConfig, FuzzyPinyinRules, PageKeys, PinyinConfig,
+        ShortcutConfig, SwitchKey, ThemeMode, TypoCorrectionRules, UiConfig,
     };
 
     #[test]
@@ -117,9 +129,9 @@ mod tests {
                     bracket: true,
                     comma_period: true,
                 },
-                traditional_shortcut: TraditionalShortcut::CtrlShiftF,
-                full_width_char_shortcut: FullWidthCharShortcut::ShiftSpace,
-                full_width_punct_shortcut: FullWidthPunctShortcut::CtrlPeriod,
+                traditional_shortcut: "Ctrl + Shift + F".to_string(),
+                full_width_char_shortcut: "Shift + Space".to_string(),
+                full_width_punct_shortcut: "Ctrl + .".to_string(),
                 shift_select_second: true,
             },
             pinyin: PinyinConfig {

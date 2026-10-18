@@ -4,7 +4,7 @@ use super::super::keyval::{
 };
 use waylan_core::input::*;
 use waylan_core::state::SharedInputFlags;
-use waylan_core::{FullWidthCharShortcut, FullWidthPunctShortcut, InputMode, TraditionalShortcut};
+use waylan_core::{InputMode, ParsedShortcut};
 use waylan_engine::{AlgoConfig, AlgoEngine};
 
 #[test]
@@ -205,15 +205,15 @@ fn test_ibus_global_shortcuts_toggle() {
     // 默认快捷键：Ctrl+Shift+F (简繁), Shift+Space (字符全半角), Ctrl+. (标点全半角)
     assert_eq!(
         core.runtime.core.traditional_shortcut,
-        TraditionalShortcut::CtrlShiftF
+        ParsedShortcut::parse("Ctrl + Shift + F")
     );
     assert_eq!(
         core.runtime.core.full_width_char_shortcut,
-        FullWidthCharShortcut::ShiftSpace
+        ParsedShortcut::parse("Shift + Space")
     );
     assert_eq!(
         core.runtime.core.full_width_punct_shortcut,
-        FullWidthPunctShortcut::CtrlPeriod
+        ParsedShortcut::parse("Ctrl + .")
     );
 
     // 1. 测试简繁切换快捷键 (Ctrl + Shift + F)

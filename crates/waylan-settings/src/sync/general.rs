@@ -3,8 +3,8 @@
 use crate::SettingsWindow;
 use waylan_core::config::{
     AppConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
-    CandidateWindowMode, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, PageKeys,
-    SwitchKey, TraditionalShortcut, TrayDisplayMode, TypoCorrectionRules,
+    CandidateWindowMode, FuzzyPinyinRules, PageKeys, SwitchKey, TrayDisplayMode,
+    TypoCorrectionRules,
 };
 
 /// 同步常规输入、按键习惯与外观排版属性至 Slint 界面属性
@@ -60,22 +60,15 @@ pub(super) fn sync_general_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_page_keys_minus_equal(cfg.shortcuts.page_keys.minus_equal);
     window.set_page_keys_bracket(cfg.shortcuts.page_keys.bracket);
     window.set_page_keys_comma_period(cfg.shortcuts.page_keys.comma_period);
-    window.set_traditional_shortcut_index(match cfg.shortcuts.traditional_shortcut {
-        TraditionalShortcut::CtrlShiftF => 0,
-        TraditionalShortcut::CtrlAltF => 1,
-        TraditionalShortcut::CtrlShiftT => 2,
-        TraditionalShortcut::Disabled => 3,
-    });
-    window.set_full_width_char_shortcut_index(match cfg.shortcuts.full_width_char_shortcut {
-        FullWidthCharShortcut::ShiftSpace => 0,
-        FullWidthCharShortcut::CtrlShiftSpace => 1,
-        FullWidthCharShortcut::Disabled => 2,
-    });
-    window.set_full_width_punct_shortcut_index(match cfg.shortcuts.full_width_punct_shortcut {
-        FullWidthPunctShortcut::CtrlPeriod => 0,
-        FullWidthPunctShortcut::AltPeriod => 1,
-        FullWidthPunctShortcut::Disabled => 2,
-    });
+    window.set_traditional_shortcut(slint::SharedString::from(
+        cfg.shortcuts.traditional_shortcut.as_str(),
+    ));
+    window.set_full_width_char_shortcut(slint::SharedString::from(
+        cfg.shortcuts.full_width_char_shortcut.as_str(),
+    ));
+    window.set_full_width_punct_shortcut(slint::SharedString::from(
+        cfg.shortcuts.full_width_punct_shortcut.as_str(),
+    ));
 
     // 输入与标点特性
     window.set_dynamic_adjust_freq(cfg.pinyin.dynamic_adjust_freq);
@@ -145,21 +138,29 @@ pub(super) fn update_general_from_window(window: &SettingsWindow, cfg: &mut AppC
         bracket: window.get_page_keys_bracket(),
         comma_period: window.get_page_keys_comma_period(),
     };
-    cfg.shortcuts.traditional_shortcut = match window.get_traditional_shortcut_index() {
-        1 => TraditionalShortcut::CtrlAltF,
-        2 => TraditionalShortcut::CtrlShiftT,
-        3 => TraditionalShortcut::Disabled,
-        _ => TraditionalShortcut::CtrlShiftF,
+    cfg.shortcuts.traditional_shortcut = {
+        let s = window.get_traditional_shortcut().trim().to_string();
+        if s.is_empty() {
+            "已禁用".to_string()
+        } else {
+            s
+        }
     };
-    cfg.shortcuts.full_width_char_shortcut = match window.get_full_width_char_shortcut_index() {
-        1 => FullWidthCharShortcut::CtrlShiftSpace,
-        2 => FullWidthCharShortcut::Disabled,
-        _ => FullWidthCharShortcut::ShiftSpace,
+    cfg.shortcuts.full_width_char_shortcut = {
+        let s = window.get_full_width_char_shortcut().trim().to_string();
+        if s.is_empty() {
+            "已禁用".to_string()
+        } else {
+            s
+        }
     };
-    cfg.shortcuts.full_width_punct_shortcut = match window.get_full_width_punct_shortcut_index() {
-        1 => FullWidthPunctShortcut::AltPeriod,
-        2 => FullWidthPunctShortcut::Disabled,
-        _ => FullWidthPunctShortcut::CtrlPeriod,
+    cfg.shortcuts.full_width_punct_shortcut = {
+        let s = window.get_full_width_punct_shortcut().trim().to_string();
+        if s.is_empty() {
+            "已禁用".to_string()
+        } else {
+            s
+        }
     };
     cfg.ui.candidate_window_mode = match window.get_window_mode_index() {
         1 => CandidateWindowMode::Native,

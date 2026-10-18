@@ -41,8 +41,7 @@ mod tests {
     use super::*;
     use waylan_core::config::{
         CandidateDensity, CandidateIndexStyle, CandidateThemePreset, CandidateWindowMode,
-        DesktopConfig, FullWidthCharShortcut, FullWidthPunctShortcut, PinyinConfig,
-        TraditionalShortcut, TrayDisplayMode, UiConfig, VoiceVisualEffect,
+        DesktopConfig, PinyinConfig, TrayDisplayMode, UiConfig, VoiceVisualEffect,
     };
 
     #[test]
@@ -80,9 +79,15 @@ mod tests {
         assert!(!window.get_show_pinyin_comment());
         assert!(!window.get_auto_dedup());
 
-        assert_eq!(window.get_traditional_shortcut_index(), 0);
-        assert_eq!(window.get_full_width_char_shortcut_index(), 0);
-        assert_eq!(window.get_full_width_punct_shortcut_index(), 0);
+        assert_eq!(
+            window.get_traditional_shortcut().as_str(),
+            "Ctrl + Shift + F"
+        );
+        assert_eq!(
+            window.get_full_width_char_shortcut().as_str(),
+            "Shift + Space"
+        );
+        assert_eq!(window.get_full_width_punct_shortcut().as_str(), "Ctrl + .");
         assert_eq!(window.get_window_mode_index(), 0); // 默认 WaylanCustom
         assert_eq!(window.get_density_index(), 1); // 默认 Normal
         assert_eq!(window.get_theme_preset_index(), 0); // 默认 Emerald
@@ -107,9 +112,9 @@ mod tests {
         window.set_candidate_corner_radius(10.0);
         window.set_candidate_opacity(90.0);
         window.set_voice_visual_effect_index(1); // BreathingPulse
-        window.set_traditional_shortcut_index(1); // CtrlAltF
-        window.set_full_width_char_shortcut_index(1); // CtrlShiftSpace
-        window.set_full_width_punct_shortcut_index(1); // AltPeriod
+        window.set_traditional_shortcut("Ctrl + Alt + F".into());
+        window.set_full_width_char_shortcut("Ctrl + Shift + Space".into());
+        window.set_full_width_punct_shortcut("Alt + .".into());
 
         let mut updated_cfg = initial_cfg.clone();
         update_config_from_window(&window, &mut updated_cfg);
@@ -140,18 +145,12 @@ mod tests {
         );
         assert_eq!(updated_cfg.desktop.enable_tray, TrayDisplayMode::Never);
         assert!(!updated_cfg.desktop.exclusive_input_source);
-        assert_eq!(
-            updated_cfg.shortcuts.traditional_shortcut,
-            TraditionalShortcut::CtrlAltF
-        );
+        assert_eq!(updated_cfg.shortcuts.traditional_shortcut, "Ctrl + Alt + F");
         assert_eq!(
             updated_cfg.shortcuts.full_width_char_shortcut,
-            FullWidthCharShortcut::CtrlShiftSpace
+            "Ctrl + Shift + Space"
         );
-        assert_eq!(
-            updated_cfg.shortcuts.full_width_punct_shortcut,
-            FullWidthPunctShortcut::AltPeriod
-        );
+        assert_eq!(updated_cfg.shortcuts.full_width_punct_shortcut, "Alt + .");
         // 关键：未在界面展示的高级图标配置绝对不可被清空
         assert_eq!(
             updated_cfg.desktop.tray_icon_theme_path.as_deref(),

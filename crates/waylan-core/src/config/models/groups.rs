@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::general::{
     CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
-    CandidateWindowMode, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, PageKeys,
-    SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules,
+    CandidateWindowMode, FuzzyPinyinRules, PageKeys, SwitchKey, ThemeMode, TypoCorrectionRules,
 };
 
 fn default_candidate_item_spacing() -> f32 {
@@ -134,14 +133,60 @@ pub struct ShortcutConfig {
     pub switch_key: SwitchKey,
     /// 翻页快捷键
     pub page_keys: PageKeys,
-    /// 简繁体即时切换快捷键
-    pub traditional_shortcut: TraditionalShortcut,
-    /// 字符全角/半角切换快捷键
-    pub full_width_char_shortcut: FullWidthCharShortcut,
-    /// 标点全角/半角切换快捷键
-    pub full_width_punct_shortcut: FullWidthPunctShortcut,
+    /// 简繁体即时切换快捷键（如 "Ctrl + Shift + F"、"已禁用"）
+    #[serde(deserialize_with = "deserialize_traditional_shortcut")]
+    pub traditional_shortcut: String,
+    /// 字符全角/半角切换快捷键（如 "Shift + Space"、"已禁用"）
+    #[serde(deserialize_with = "deserialize_full_width_char_shortcut")]
+    pub full_width_char_shortcut: String,
+    /// 标点全角/半角切换快捷键（如 "Ctrl + ."、"已禁用"）
+    #[serde(deserialize_with = "deserialize_full_width_punct_shortcut")]
+    pub full_width_punct_shortcut: String,
     /// 是否允许使用 Shift 键选择次选词
     pub shift_select_second: bool,
+}
+
+fn deserialize_traditional_shortcut<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let normalized = match s.trim() {
+        "CtrlShiftF" => "Ctrl + Shift + F".to_string(),
+        "CtrlAltF" => "Ctrl + Alt + F".to_string(),
+        "CtrlShiftT" => "Ctrl + Shift + T".to_string(),
+        "Disabled" => "已禁用".to_string(),
+        other => other.to_string(),
+    };
+    Ok(normalized)
+}
+
+fn deserialize_full_width_char_shortcut<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let normalized = match s.trim() {
+        "ShiftSpace" => "Shift + Space".to_string(),
+        "CtrlShiftSpace" => "Ctrl + Shift + Space".to_string(),
+        "Disabled" => "已禁用".to_string(),
+        other => other.to_string(),
+    };
+    Ok(normalized)
+}
+
+fn deserialize_full_width_punct_shortcut<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let normalized = match s.trim() {
+        "CtrlPeriod" => "Ctrl + .".to_string(),
+        "AltPeriod" => "Alt + .".to_string(),
+        "Disabled" => "已禁用".to_string(),
+        other => other.to_string(),
+    };
+    Ok(normalized)
 }
 
 impl Default for ShortcutConfig {
@@ -149,9 +194,9 @@ impl Default for ShortcutConfig {
         Self {
             switch_key: SwitchKey::Shift,
             page_keys: PageKeys::default(),
-            traditional_shortcut: TraditionalShortcut::default(),
-            full_width_char_shortcut: FullWidthCharShortcut::default(),
-            full_width_punct_shortcut: FullWidthPunctShortcut::default(),
+            traditional_shortcut: "Ctrl + Shift + F".to_string(),
+            full_width_char_shortcut: "Shift + Space".to_string(),
+            full_width_punct_shortcut: "Ctrl + .".to_string(),
             shift_select_second: false,
         }
     }

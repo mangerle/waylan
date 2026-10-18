@@ -16,7 +16,7 @@ use waylan_algo::AlgoEngine;
 use waylan_core::input::sync_mode_from_shared_flags;
 use waylan_core::input::MOD_CAPS;
 use waylan_core::state::SharedInputFlags;
-use waylan_core::{CandidateBoxState, InputMode, VoiceConfig};
+use waylan_core::{CandidateBoxState, InputMode, ParsedShortcut, VoiceConfig};
 #[cfg(feature = "voice")]
 use waylan_voice::{VoiceInteractionManager, VoiceKeyAction};
 
@@ -121,9 +121,11 @@ impl ImeRuntime {
         self.core.punctuation_processor.auto_complete_pairs = cfg.pinyin.auto_complete_pairs;
         self.core.punctuation_processor.full_width_punct = cfg.pinyin.full_width_punct;
         self.core.page_keys = waylan_core::input::PageKeyConfig::from(cfg.shortcuts.page_keys);
-        self.core.traditional_shortcut = cfg.shortcuts.traditional_shortcut;
-        self.core.full_width_char_shortcut = cfg.shortcuts.full_width_char_shortcut;
-        self.core.full_width_punct_shortcut = cfg.shortcuts.full_width_punct_shortcut;
+        self.core.traditional_shortcut = ParsedShortcut::parse(&cfg.shortcuts.traditional_shortcut);
+        self.core.full_width_char_shortcut =
+            ParsedShortcut::parse(&cfg.shortcuts.full_width_char_shortcut);
+        self.core.full_width_punct_shortcut =
+            ParsedShortcut::parse(&cfg.shortcuts.full_width_punct_shortcut);
 
         // 语音配置同步
         if let Some(ref mut vm) = self.voice_manager {

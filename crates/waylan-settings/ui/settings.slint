@@ -1,5 +1,5 @@
 import { Button, ScrollView } from "std-widgets.slint";
-import { PhraseItem, NavItem, PrimaryButton, CloudProfileItem } from "common.slint";
+import { PhraseItem, NavItem, PrimaryButton, CloudProfileItem, ShortcutHelper, ShortcutRecorder } from "common.slint";
 import { GeneralTab } from "general_tab.slint";
 import { ThemeTab } from "theme_tab.slint";
 import { PinyinTab } from "pinyin_tab.slint";
@@ -10,7 +10,7 @@ import { ShortcutsTab } from "shortcuts_tab.slint";
 import { VoiceTab } from "voice_tab.slint";
 import { AboutTab } from "about_tab.slint";
 
-export { PhraseItem, CloudProfileItem }
+export { PhraseItem, CloudProfileItem, ShortcutHelper }
 
 export component SettingsWindow inherits Window {
     title: "WayLan Settings";
@@ -108,9 +108,9 @@ export component SettingsWindow inherits Window {
 
     // 快捷键属性
     in-out property <int> switch_key_index: 0;
-    in-out property <int> traditional_shortcut_index: 0;
-    in-out property <int> full_width_char_shortcut_index: 0;
-    in-out property <int> full_width_punct_shortcut_index: 0;
+    in-out property <string> traditional_shortcut: "Ctrl + Shift + F";
+    in-out property <string> full_width_char_shortcut: "Shift + Space";
+    in-out property <string> full_width_punct_shortcut: "Ctrl + .";
 
     // 语音输入属性
     in-out property <bool> voice_enabled: false;
@@ -449,9 +449,9 @@ export component SettingsWindow inherits Window {
                         page_keys_minus_equal <=> root.page_keys_minus_equal;
                         page_keys_bracket <=> root.page_keys_bracket;
                         page_keys_comma_period <=> root.page_keys_comma_period;
-                        traditional_shortcut_index <=> root.traditional_shortcut_index;
-                        full_width_char_shortcut_index <=> root.full_width_char_shortcut_index;
-                        full_width_punct_shortcut_index <=> root.full_width_punct_shortcut_index;
+                        traditional_shortcut <=> root.traditional_shortcut;
+                        full_width_char_shortcut <=> root.full_width_char_shortcut;
+                        full_width_punct_shortcut <=> root.full_width_punct_shortcut;
                     }
 
                     if root.active_tab == 7: VoiceTab {

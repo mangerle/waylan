@@ -10,56 +10,10 @@ pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     // 连续听写开关快捷键 (Toggle)
     let toggle_str = cfg.voice.toggle_shortcut.trim();
     window.set_toggle_shortcut(slint::SharedString::from(toggle_str));
-    let toggle_idx = if toggle_str.is_empty()
-        || toggle_str.eq_ignore_ascii_case("disabled")
-        || toggle_str == "已禁用"
-    {
-        5
-    } else if toggle_str.eq_ignore_ascii_case("ctrl + alt + v")
-        || toggle_str.eq_ignore_ascii_case("ctrl+alt+v")
-    {
-        0
-    } else if toggle_str.eq_ignore_ascii_case("alt + space")
-        || toggle_str.eq_ignore_ascii_case("alt+space")
-    {
-        1
-    } else if toggle_str.eq_ignore_ascii_case("ctrl + space")
-        || toggle_str.eq_ignore_ascii_case("ctrl+space")
-    {
-        2
-    } else if toggle_str.eq_ignore_ascii_case("super + v")
-        || toggle_str.eq_ignore_ascii_case("super+v")
-    {
-        3
-    } else {
-        4
-    };
-    window.set_toggle_shortcut_index(toggle_idx);
 
     // 长按对讲机快捷键 (Push-to-Talk)
     let ptt_str = cfg.voice.push_to_talk_shortcut.trim();
     window.set_push_to_talk_shortcut(slint::SharedString::from(ptt_str));
-    let ptt_idx = if ptt_str.is_empty()
-        || ptt_str.eq_ignore_ascii_case("disabled")
-        || ptt_str == "已禁用"
-    {
-        5
-    } else if ptt_str.eq_ignore_ascii_case("f8") {
-        0
-    } else if ptt_str.eq_ignore_ascii_case("alt + space")
-        || ptt_str.eq_ignore_ascii_case("alt+space")
-    {
-        1
-    } else if ptt_str.eq_ignore_ascii_case("ctrl + space")
-        || ptt_str.eq_ignore_ascii_case("ctrl+space")
-    {
-        2
-    } else if ptt_str.eq_ignore_ascii_case("super + v") || ptt_str.eq_ignore_ascii_case("super+v") {
-        3
-    } else {
-        4
-    };
-    window.set_ptt_shortcut_index(ptt_idx);
 
     // 阶段一 AFE 前端增强
     window.set_afe_enabled(cfg.voice.afe.enabled);
@@ -281,8 +235,7 @@ pub(super) fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppCon
 
     // 连续听写开关快捷键 (Toggle)
     let toggle_str = window.get_toggle_shortcut().trim().to_string();
-    cfg.voice.toggle_shortcut = if window.get_toggle_shortcut_index() == 5
-        || toggle_str.is_empty()
+    cfg.voice.toggle_shortcut = if toggle_str.is_empty()
         || toggle_str.eq_ignore_ascii_case("disabled")
         || toggle_str == "已禁用"
     {
@@ -293,15 +246,13 @@ pub(super) fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppCon
 
     // 长按对讲机快捷键 (Push-to-Talk)
     let ptt_str = window.get_push_to_talk_shortcut().trim().to_string();
-    cfg.voice.push_to_talk_shortcut = if window.get_ptt_shortcut_index() == 5
-        || ptt_str.is_empty()
-        || ptt_str.eq_ignore_ascii_case("disabled")
-        || ptt_str == "已禁用"
-    {
-        "已禁用".to_string()
-    } else {
-        ptt_str
-    };
+    cfg.voice.push_to_talk_shortcut =
+        if ptt_str.is_empty() || ptt_str.eq_ignore_ascii_case("disabled") || ptt_str == "已禁用"
+        {
+            "已禁用".to_string()
+        } else {
+            ptt_str
+        };
 
     // 阶段一 AFE 前端增强
     cfg.voice.afe.enabled = window.get_afe_enabled();

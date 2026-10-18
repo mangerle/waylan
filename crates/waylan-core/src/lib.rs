@@ -13,12 +13,12 @@ pub use candidate::{
     VoiceBoxState,
 };
 pub use config::{
-    AppConfig, AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
-    CloudProfile, CloudProviderType, ConfigError, FullWidthCharShortcut, FullWidthPunctShortcut,
-    FuzzyPinyinRules, NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut,
-    SwitchKey, ThemeMode, TraditionalShortcut, TrayDisplayMode, TypoCorrectionRules, VadConfig,
-    VadModelType, VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig,
-    VoiceVisualEffect,
+    format_key_combination, AppConfig, AudioFrontEndConfig, CandidateIndexStyle,
+    CandidateOrientation, CloudAsrConfig, CloudProfile, CloudProviderType, ConfigError,
+    FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, NsEngineType,
+    OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, SwitchKey, ThemeMode,
+    TraditionalShortcut, TrayDisplayMode, TypoCorrectionRules, VadConfig, VadModelType,
+    VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
 };
 pub use constants::{MAX_IMPORT_FILE_BYTES, MAX_USER_DICT_BYTES};
 pub use input::*;

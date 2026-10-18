@@ -1,5 +1,5 @@
 import { ComboBox, LineEdit } from "std-widgets.slint";
-import { SettingCard, AppSwitch, SecondaryButton } from "common.slint";
+import { SettingCard, AppSwitch, SecondaryButton, ShortcutRecorder } from "common.slint";
 import { VoiceStageFourCard, VoiceStageFiveCard, VoiceStageSixCard } from "voice_pipeline_cards.slint";
 
 export component VoicePipelineTab inherits VerticalLayout {
@@ -98,7 +98,7 @@ export component VoicePipelineTab inherits VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
                     alignment: center;
-                    Text { text: "连续听写开关快捷键 (Toggle)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text { text: "按下开始，再按结束（连续听写开关）"; font-size: 13px; font-weight: 600; color: #0f172a; }
                     Text {
                         text: "按一次持续收音并流式上屏，再次按或回车结束";
                         font-size: 12px;
@@ -106,30 +106,8 @@ export component VoicePipelineTab inherits VerticalLayout {
                         wrap: word-wrap;
                     }
                 }
-                HorizontalLayout {
-                    horizontal-stretch: 0;
-                    spacing: 8px;
-                    alignment: end;
-                    ComboBox {
-                        model: ["Ctrl + Alt + V", "Alt + Space", "Ctrl + Space", "Super + V", "自定义快捷键", "已禁用"];
-                        current-index <=> root.toggle_shortcut_index;
-                        width: 140px;
-                        selected(text) => {
-                            if (root.toggle_shortcut_index == 0) { root.toggle_shortcut = "Ctrl + Alt + V"; }
-                            if (root.toggle_shortcut_index == 1) { root.toggle_shortcut = "Alt + Space"; }
-                            if (root.toggle_shortcut_index == 2) { root.toggle_shortcut = "Ctrl + Space"; }
-                            if (root.toggle_shortcut_index == 3) { root.toggle_shortcut = "Super + V"; }
-                            if (root.toggle_shortcut_index == 5) { root.toggle_shortcut = "已禁用"; }
-                        }
-                    }
-                    LineEdit {
-                        text <=> root.toggle_shortcut;
-                        placeholder-text: "如: Ctrl + Alt + V";
-                        width: 115px;
-                        edited(text) => {
-                            root.toggle_shortcut_index = 4;
-                        }
-                    }
+                ShortcutRecorder {
+                    shortcut <=> root.toggle_shortcut;
                 }
             }
 
@@ -143,7 +121,7 @@ export component VoicePipelineTab inherits VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
                     alignment: center;
-                    Text { text: "长按对讲机快捷键 (Push-to-Talk)"; font-size: 13px; font-weight: 600; color: #0f172a; }
+                    Text { text: "按住（长按对讲机）"; font-size: 13px; font-weight: 600; color: #0f172a; }
                     Text {
                         text: "按住按键说话，松开手指瞬间断句上屏并停止录音";
                         font-size: 12px;
@@ -151,30 +129,8 @@ export component VoicePipelineTab inherits VerticalLayout {
                         wrap: word-wrap;
                     }
                 }
-                HorizontalLayout {
-                    horizontal-stretch: 0;
-                    spacing: 8px;
-                    alignment: end;
-                    ComboBox {
-                        model: ["F8 (单键推荐)", "Alt + Space", "Ctrl + Space", "Super + V", "自定义快捷键", "已禁用"];
-                        current-index <=> root.ptt_shortcut_index;
-                        width: 140px;
-                        selected(text) => {
-                            if (root.ptt_shortcut_index == 0) { root.push_to_talk_shortcut = "F8"; }
-                            if (root.ptt_shortcut_index == 1) { root.push_to_talk_shortcut = "Alt + Space"; }
-                            if (root.ptt_shortcut_index == 2) { root.push_to_talk_shortcut = "Ctrl + Space"; }
-                            if (root.ptt_shortcut_index == 3) { root.push_to_talk_shortcut = "Super + V"; }
-                            if (root.ptt_shortcut_index == 5) { root.push_to_talk_shortcut = "已禁用"; }
-                        }
-                    }
-                    LineEdit {
-                        text <=> root.push_to_talk_shortcut;
-                        placeholder-text: "如: F8";
-                        width: 115px;
-                        edited(text) => {
-                            root.ptt_shortcut_index = 4;
-                        }
-                    }
+                ShortcutRecorder {
+                    shortcut <=> root.push_to_talk_shortcut;
                 }
             }
         }
