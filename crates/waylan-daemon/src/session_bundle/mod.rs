@@ -20,7 +20,7 @@ pub use wayland_dispatcher::{dispatch_wayland_session, WaylandDispatchOptions};
 #[cfg(test)]
 mod tests {
     use super::dict_loader::{load_auxiliary_dict, load_lexicon_table, load_opencc_dict};
-    use super::voice_filter::build_wayland_voice_filter;
+    use super::voice_filter::build_wayland_voice_manager;
     use super::*;
     use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
     use waylan_algo::{AlgoConfig, AlgoEngine};
@@ -73,25 +73,29 @@ mod tests {
     }
 
     #[test]
-    fn test_build_wayland_voice_filter_lifecycle() {
+    fn test_build_wayland_voice_manager_lifecycle() {
         let cfg_disabled = VoiceConfig {
             enabled: false,
             ..Default::default()
         };
-        assert!(build_wayland_voice_filter(&cfg_disabled).is_none());
+        assert!(build_wayland_voice_manager(&cfg_disabled).is_none());
+
+        let cfg_no_shortcuts = VoiceConfig {
+            enabled: true,
+            push_to_talk_shortcut: String::new(),
+            toggle_shortcut: String::new(),
+            ..Default::default()
+        };
+        assert!(build_wayland_voice_manager(&cfg_no_shortcuts).is_none());
 
         let cfg_enabled = VoiceConfig {
             enabled: true,
             push_to_talk_shortcut: "F8".to_string(),
             ..Default::default()
         };
-        let filter = build_wayland_voice_filter(&cfg_enabled);
-        assert!(filter.is_some());
-
-        let mut filter = filter.unwrap();
-        // 普通按键应放行透传
-        let res = filter(waylan_core::input::KEY_SPACE, true, 0);
-        assert_eq!(res, waylan_wayland::KeyFilterResult::PassThrough);
+        let vm = build_wayland_voice_manager(&cfg_enabled);
+        assert!(vm.is_some());
+        assert_eq!(vm.unwrap().config.push_to_talk_shortcut, "F8");
     }
 
     #[test]
