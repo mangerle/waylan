@@ -8,7 +8,9 @@ description = "微澜 (WayLan) - 纯 Rust 现代中文拼音输入核心算法�
 
 [features]
 default = []
-tools = []
+dict-importer = []
+dict-builder = []
+tools = ["dict-importer", "dict-builder"]
 corpus-builder = ["dep:jieba-rs", "dep:rayon", "dep:regex", "dep:serde_json"]
 
 [[bin]]

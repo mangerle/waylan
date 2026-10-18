@@ -10,8 +10,8 @@
 //! - **代价与局限**：
 //!   仅负责单文件的语法与二进制解码，不直接负责自适应历史记录合入与去重。
 
-use crate::builder::normalize_pinyin_tones;
 use crate::error::AlgoError;
+use crate::syllables::normalize_pinyin_tones;
 use crate::types::ImportedDictEntry;
 use std::collections::HashMap;
 use std::fs;

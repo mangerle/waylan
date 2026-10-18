@@ -1,3 +1,10 @@
+//! 基础词典与辅助词库离线二进制压缩构建工具
+//!
+//! # 设计原理
+//! - **实现初衷**：为微澜输入法提供离线编译原始文本词表为超紧凑二进制二分查找词典（`base.dict.bin` / `aux.dict.bin`）的编译工具。
+//! - **核心优势**：通过 `dict-builder` 特性独立门控，在打字引擎运行时完全不参与编译，将繁重构建逻辑与只读运行时彻底隔离。
+//! - **代价与局限**：仅在 CLI 词库管理或离线预构建时按需启用。
+
 use crate::custom_phrase::AuxiliaryDict;
 use crate::error::AlgoError;
 use crate::user_adaptive::UserAdaptiveModel;
@@ -23,33 +30,7 @@ pub struct BuildStats {
     pub elapsed_ms: u64,
 }
 
-/// 将带声调的拼音字符归一化为无声调的 ASCII 拼音，并将空格转换为单引号切分符（支持大写声调字符并合并连续单引号）
-pub fn normalize_pinyin_tones(pinyin: &str) -> String {
-    let mut s = String::with_capacity(pinyin.len());
-    for orig_c in pinyin.chars() {
-        for c in orig_c.to_lowercase() {
-            match c {
-                'ā' | 'á' | 'ǎ' | 'à' => s.push('a'),
-                'ō' | 'ó' | 'ǒ' | 'ò' => s.push('o'),
-                'ē' | 'é' | 'ě' | 'è' | 'ê' => s.push('e'),
-                'ī' | 'í' | 'ǐ' | 'ì' => s.push('i'),
-                'ū' | 'ú' | 'ǔ' | 'ù' => s.push('u'),
-                'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ü' => s.push('v'),
-                'ń' | 'ň' | 'ǹ' => s.push('n'),
-                'ḿ' => s.push('m'),
-                c if c.is_ascii_alphabetic() => s.push(c),
-                ' ' | '\'' if !s.is_empty() && !s.ends_with('\'') => {
-                    s.push('\'');
-                }
-                _ => {}
-            }
-        }
-    }
-    if s.ends_with('\'') {
-        s.pop();
-    }
-    s
-}
+pub use crate::syllables::normalize_pinyin_tones;
 
 #[derive(Debug, Default)]
 pub struct DictBuilder;
