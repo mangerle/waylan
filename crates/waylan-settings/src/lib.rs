@@ -12,7 +12,8 @@ slint::include_modules!();
 pub mod callbacks;
 pub mod importer;
 pub mod sync;
-pub mod voice_handlers;
+pub mod voice;
+pub use voice as voice_handlers;
 
 pub use importer::ImportError;
 
@@ -23,7 +24,7 @@ use waylan_core::config::AppConfig;
 
 use crate::callbacks::{populate_lexicon_statistics, register_settings_callbacks};
 use crate::sync::sync_config_to_window;
-use crate::voice_handlers::register_voice_callbacks;
+use crate::voice::register_voice_callbacks;
 
 /// 设置中心运行与初始化强类型错误枚举
 #[derive(Debug, thiserror::Error)]

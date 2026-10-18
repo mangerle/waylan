@@ -1,9 +1,9 @@
-//! 语音输入设置事件处理器（模型导入与云端 Whisper 服务管理）
+//! 云端语音识别 (Whisper/OpenAI 兼容) 服务 Profile 配置管理与连通性测试
 //!
 //! # 设计原理
-//! - **实现初衷**：将语音流水线四大阶段的模型导入、目录浏览以及云端多 Profile 增删改查事件与主窗口解耦。
-//! - **核心优势**：职责高度内聚，避免设置主窗口代码膨胀，保障模块化清晰度与可测性。
-//! - **代价与局限**：事件依赖 Slint 弱引用升级（as_weak），在窗口析构后安全取消执行。
+//! - **实现初衷**：为用户管理多个云端语音端点（OpenAI、自建 vLLM/Faster-Whisper、Groq 等）提供增删改查与测试。
+//! - **核心优势**：连通性测试派发至后台独立线程并具备防重入保护，接口故障反馈直观安全。
+//! - **代价与局限**：测试连通性需要访问外部网络。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -13,223 +13,16 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_core::{CloudAsrConfig, CloudProfile, CloudProviderType};
-use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory};
 
-use crate::callbacks::{pick_directory_dialog, pick_file_dialog, TaskRunningGuard};
+use crate::callbacks::TaskRunningGuard;
 use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::SettingsWindow;
 
-/// 注册所有语音输入相关界面回调事件
-pub fn register_voice_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
-    register_model_import_callbacks(window, loaded_config.clone());
-    register_cloud_profile_callbacks(window, loaded_config);
-}
-
-/// 注册 ASR、VAD、标点与降噪模型导入及目录打开事件
-fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    window.on_import_asr_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            handle_import_asr_model(&win, &current_cfg_cell);
-        }
-    });
-
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    window.on_import_vad_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            handle_import_onnx_model(
-                &win,
-                &current_cfg_cell,
-                ModelSubdirectory::Vad,
-                "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
-                |cfg, path| {
-                    cfg.voice.vad.model_path = Some(path.to_string());
-                    cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
-                },
-            );
-        }
-    });
-
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    window.on_import_punct_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            handle_import_onnx_model(
-                &win,
-                &current_cfg_cell,
-                ModelSubdirectory::Punct,
-                "请选择要导入的标点符号预测模型文件 (.onnx)",
-                |cfg, path| {
-                    cfg.voice.punct_model_path = Some(path.to_string());
-                },
-            );
-        }
-    });
-
-    let window_weak = window.as_weak();
-    window.on_import_ns_model(move || {
-        if let Some(win) = window_weak.upgrade() {
-            win.set_global_status(SharedString::from(
-                "系统已内置 RNNoise、DeepFilterNet3 与 GTCRN 三大优质降噪引擎，无需手动导入",
-            ));
-        }
-    });
-
-    window.on_open_models_directory(move || {
-        waylan_voice::open_user_models_directory();
-    });
-}
-
-/// 执行 ASR 复合模型包目录导入（派发后台线程执行大文件递归复制，防止阻塞主 UI 线程）
-fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Arc<Mutex<AppConfig>>) {
-    let Some(src_path) =
-        pick_directory_dialog("请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)")
-    else {
-        return;
-    };
-    win.set_global_status_is_error(false);
-    win.set_global_status(SharedString::from("正在后台导入 ASR 复合模型包，请稍候..."));
-
-    let win_weak = win.as_weak();
-    let cfg_cell = current_cfg_cell.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name("asr-importer".to_string())
-        .spawn(move || {
-            let imported_opt = waylan_voice::import_asr_model_from_dir(&src_path);
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak.upgrade() {
-                    match imported_opt {
-                        Some(imported_path) => {
-                            let name = imported_path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
-                            update_config_from_window(&w, &mut cfg);
-                            cfg.voice.offline.model_dir =
-                                Some(imported_path.to_string_lossy().to_string());
-                            save_config_and_notify_status(
-                                &w,
-                                &cfg_cell,
-                                cfg,
-                                &format!("成功导入 ASR 模型: {}", name),
-                                "保存 ASR 模型配置失败",
-                            );
-                        }
-                        None => {
-                            w.set_global_status_is_error(true);
-                            w.set_global_status(SharedString::from(
-                                "导入 ASR 复合模型包失败，请检查文件权限与目录完整性",
-                            ));
-                        }
-                    }
-                }
-            });
-        })
-    {
-        log::warn!("[偏好设置 警告] 派发 ASR 导入后台线程失败: {}", e);
-        win.set_global_status_is_error(true);
-        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
-    }
-}
-
-/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改（后台线程异步复制）
-fn handle_import_onnx_model<F>(
-    win: &SettingsWindow,
-    current_cfg_cell: &Arc<Mutex<AppConfig>>,
-    category: ModelSubdirectory,
-    title: &str,
-    mut apply_fn: F,
-) where
-    F: FnMut(&mut AppConfig, &str) + Send + 'static,
-{
-    let Some(src_path) = pick_file_dialog(title, "ONNX 神经网络模型 (*.onnx)", "*.onnx")
-    else {
-        return;
-    };
-    win.set_global_status_is_error(false);
-    win.set_global_status(SharedString::from(format!(
-        "正在后台导入 {} 神经网络模型，请稍候...",
-        category.as_str().to_uppercase()
-    )));
-
-    let win_weak = win.as_weak();
-    let cfg_cell = current_cfg_cell.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name(format!("{}-model-importer", category.as_str()))
-        .spawn(move || {
-            let imported_opt = import_onnx_model_from_file(category, &src_path);
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak.upgrade() {
-                    match imported_opt {
-                        Some(imported_path) => {
-                            let name = imported_path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
-                            update_config_from_window(&w, &mut cfg);
-                            apply_fn(&mut cfg, &imported_path.to_string_lossy());
-                            save_config_and_notify_status(
-                                &w,
-                                &cfg_cell,
-                                cfg,
-                                &format!(
-                                    "成功导入 {} 模型: {}",
-                                    category.as_str().to_uppercase(),
-                                    name
-                                ),
-                                &format!("保存 {} 模型配置失败", category.as_str().to_uppercase()),
-                            );
-                        }
-                        None => {
-                            w.set_global_status_is_error(true);
-                            w.set_global_status(SharedString::from(format!(
-                                "导入 {} 神经网络模型失败，请检查文件权限",
-                                category.as_str().to_uppercase()
-                            )));
-                        }
-                    }
-                }
-            });
-        })
-    {
-        log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
-        win.set_global_status_is_error(true);
-        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
-    }
-}
-
-/// 保存配置并更新主窗口全局状态栏提示
-fn save_config_and_notify_status(
-    win: &SettingsWindow,
-    current_cfg_cell: &Arc<Mutex<AppConfig>>,
-    cfg: AppConfig,
-    success_msg: &str,
-    fail_prefix: &str,
-) {
-    match cfg.save_default() {
-        Ok(()) => {
-            if let Ok(mut g) = current_cfg_cell.lock() {
-                *g = cfg.clone();
-            }
-            sync_config_to_window(win, &cfg);
-            win.set_global_status_is_error(false);
-            win.set_global_status(SharedString::from(success_msg));
-        }
-        Err(e) => {
-            win.set_global_status_is_error(true);
-            win.set_global_status(SharedString::from(format!("{}: {}", fail_prefix, e)));
-        }
-    }
-}
-
 /// 注册云端语音服务管理相关回调（新增、编辑、删除、保存、取消、连接测试）
-fn register_cloud_profile_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
+pub(crate) fn register_cloud_profile_callbacks(
+    window: &SettingsWindow,
+    loaded_config: Arc<Mutex<AppConfig>>,
+) {
     let editing_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
     // 1. 开始新增
