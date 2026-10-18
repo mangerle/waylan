@@ -1,8 +1,7 @@
-use super::pangu::PanguSpacing;
 use super::AlgoEngine;
 use crate::dispatcher::ModeDispatcher;
 use crate::types::{AlgoCandidate, CandidateTier};
-use waylan_core::is_cjk_character;
+use waylan_core::{is_cjk_character, PanguSpacing};
 
 impl AlgoEngine {
     /// 判断当前选中的候选词是否应当被记录到用户自适应词频模型中

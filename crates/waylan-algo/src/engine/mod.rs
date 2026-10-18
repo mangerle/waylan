@@ -1,7 +1,6 @@
 pub mod adaptive;
 pub mod candidates;
 pub mod composition_buffer;
-pub mod pangu;
 pub(crate) mod prefix_synthesis;
 pub mod resources;
 pub mod selection;
@@ -13,9 +12,9 @@ mod tests;
 
 pub use adaptive::UserAdaptiveState;
 pub use composition_buffer::CompositionBuffer;
-pub use pangu::PanguSpacing;
 pub use resources::LexiconResources;
 pub use viewport::CandidateViewport;
+pub use waylan_core::PanguSpacing;
 
 use std::borrow::Cow;
 use std::path::Path;
