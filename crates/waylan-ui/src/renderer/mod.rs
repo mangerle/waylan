@@ -322,7 +322,7 @@ impl CandidateBoxRenderer {
         }
 
         // 若处于 5 行网格大面板展开状态，优先渲染网格面板
-        if state.is_grid_expanded {
+        if state.is_grid_expanded() {
             let mut regions = Vec::with_capacity(36);
             let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
             self.hit_regions = regions;

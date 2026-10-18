@@ -124,46 +124,52 @@ pub fn render_grid_expanded_panel(
     render_grid_items(
         renderer,
         &mut pixmap,
-        state,
-        candidates_source,
-        &dims,
-        regions,
-        s,
+        GridRenderContext {
+            state,
+            candidates: candidates_source,
+            dims: &dims,
+            regions,
+        },
     );
     render_grid_controls(renderer, &mut pixmap, &dims, regions);
 
     Some(pixmap)
 }
 
+/// 网格项渲染上下文参数对象
+struct GridRenderContext<'a, 'b> {
+    state: &'a CandidateBoxState,
+    candidates: &'a [Candidate],
+    dims: &'a GridDimensions,
+    regions: &'b mut Vec<HitRegion>,
+}
+
 /// 渲染网格内所有候选词项
 fn render_grid_items(
     renderer: &mut CandidateBoxRenderer,
     pixmap: &mut Pixmap,
-    state: &CandidateBoxState,
-    candidates: &[Candidate],
-    dims: &GridDimensions,
-    regions: &mut Vec<HitRegion>,
-    s: f32,
+    ctx: GridRenderContext<'_, '_>,
 ) {
+    let s = ctx.dims.s;
     let font_size = renderer.font_size * s;
     let col_gap = 8.0 * s;
 
     let mut col_starts = [0.0; GRID_COLS];
-    let mut acc_x = dims.padding_h;
+    let mut acc_x = ctx.dims.padding_h;
     for (c, start) in col_starts.iter_mut().enumerate() {
         *start = acc_x;
-        acc_x += dims.col_widths[c] + col_gap;
+        acc_x += ctx.dims.col_widths[c] + col_gap;
     }
 
-    for (idx, cand) in candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
+    for (idx, cand) in ctx.candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
         let row = idx / GRID_COLS;
         let col = idx % GRID_COLS;
         let item_x = col_starts[col];
-        let item_y = dims.padding_v + row as f32 * dims.row_height;
-        let item_w = dims.col_widths[col];
-        let item_h = dims.row_height;
+        let item_y = ctx.dims.padding_v + row as f32 * ctx.dims.row_height;
+        let item_w = ctx.dims.col_widths[col];
+        let item_h = ctx.dims.row_height;
 
-        let is_selected = idx == state.selected_index;
+        let is_selected = idx == ctx.state.selected_index;
         if is_selected {
             draw_rounded_rect(
                 pixmap,
@@ -181,7 +187,7 @@ fn render_grid_items(
         let baseline_y = item_y + (item_h + font_size * 0.72) / 2.0;
         let mut cur_x = item_x + 4.0 * s;
 
-        if row == dims.selected_row {
+        if row == ctx.dims.selected_row {
             let num_str = if col < PRECACHED_INDEX_STRINGS.len() {
                 PRECACHED_INDEX_STRINGS[col]
             } else {
@@ -222,7 +228,7 @@ fn render_grid_items(
             },
         );
 
-        regions.push(HitRegion::new(
+        ctx.regions.push(HitRegion::new(
             item_x,
             item_y,
             item_w,

@@ -168,8 +168,6 @@ pub struct CandidateBoxState {
     pub expanded_card: ExpandedCardState,
     /// 当前工作模式提示文字（如：“中”、“英”、“V”、“语”）
     pub mode_badge: String,
-    /// 是否处于 5 行大候选网格面板展开状态
-    pub is_grid_expanded: bool,
     /// 5 行大候选网格面板展开状态机
     #[serde(default)]
     pub grid_state: GridState,
@@ -211,7 +209,7 @@ impl CandidateBoxState {
     /// 查询当前是否处于大候选网格展开态
     #[inline]
     pub fn is_grid_expanded(&self) -> bool {
-        self.grid_state.is_expanded() || self.is_grid_expanded
+        self.grid_state.is_expanded()
     }
 
     /// 获取大候选网格展开态下的选中索引，未展开则返回 0
@@ -220,9 +218,8 @@ impl CandidateBoxState {
         self.grid_state.selected_index().unwrap_or(0)
     }
 
-    /// 切换或设置大网格展开状态机，并同步向后兼容标志位
+    /// 切换或设置大网格展开状态机
     pub fn set_grid_state(&mut self, state: GridState) {
-        self.is_grid_expanded = state.is_expanded();
         self.grid_state = state;
     }
 }
@@ -257,7 +254,7 @@ mod tests {
         assert_eq!(state.selected_index, 0);
         assert_eq!(state.expanded_card, ExpandedCardState::Collapsed);
         assert_eq!(state.mode_badge, "");
-        assert!(!state.is_grid_expanded);
+        assert!(!state.is_grid_expanded());
         assert!(state.grid_candidates.is_empty());
         assert_eq!(state.voice, None);
         assert!(!state.is_voice_active());

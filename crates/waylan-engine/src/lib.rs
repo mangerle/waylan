@@ -19,7 +19,9 @@ pub use factory::{
 pub use frontend::InputMethodFrontend;
 #[cfg(not(feature = "voice"))]
 pub use runtime::voice_stub::{VoiceInteractionManager, VoiceKeyAction};
-pub use runtime::{build_common_candidate_box_state, CandidateBoxBuildOptions, ImeRuntime};
+pub use runtime::{
+    build_common_candidate_box_state, CandidateBoxBuildOptions, ImeRuntime, ProcessKeyEventParams,
+};
 pub use session::{
     extract_surrounding_prefix, handle_composition_key, handle_composition_key_with_params,
     CompositionKeyParams, ImeCoreSession, ImeOutputAction, KeyProcessContext, ShortcutToggleAction,

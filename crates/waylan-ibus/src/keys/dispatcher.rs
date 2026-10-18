@@ -123,11 +123,13 @@ impl IbusSessionCore {
             };
             self.runtime.process_key_event(
                 &mut frontend,
-                evdev_key,
-                is_press,
-                is_password_or_locked,
-                surrounding.as_ref(),
-                false,
+                waylan_engine::ProcessKeyEventParams {
+                    key: evdev_key,
+                    is_press,
+                    is_password_or_locked,
+                    surrounding_text: surrounding.as_ref(),
+                    inline_preedit: false,
+                },
             )
         };
         self.runtime.core.modifiers.depressed = saved_mods;

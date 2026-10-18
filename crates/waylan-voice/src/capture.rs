@@ -188,32 +188,15 @@ impl AudioCapture {
             SampleFormat::F32 => device.build_input_stream(
                 &config,
                 move |data: &[f32], _| {
-                    mono_buf.clear();
-                    resampled_buf.clear();
-
-                    // 多通道向下均值合并为单声道
-                    if channels > 1 {
-                        let ch = channels as usize;
-                        let frames = data.len() / ch;
-                        mono_buf.reserve(frames);
-                        for i in 0..frames {
-                            let mut sum = 0.0;
-                            for c in 0..ch {
-                                sum += data[i * ch + c];
-                            }
-                            mono_buf.push(sum / channels as f32);
-                        }
-                    } else {
-                        mono_buf.extend_from_slice(data);
-                    }
-
-                    // 重采样为 16000 Hz
-                    resampler.process(&mono_buf, &mut resampled_buf);
-
-                    // 非阻塞发送至有界缓冲通道，缓冲打满时丢弃以防背压导致音频线程死锁
-                    if !resampled_buf.is_empty() {
-                        let _ = pcm_sender.try_send(resampled_buf.clone());
-                    }
+                    convert_and_downsample(
+                        data,
+                        channels,
+                        |s| s,
+                        &mut resampler,
+                        &mut mono_buf,
+                        &mut resampled_buf,
+                        &pcm_sender,
+                    );
                 },
                 err_fn,
                 None,
@@ -221,32 +204,15 @@ impl AudioCapture {
             SampleFormat::I16 => device.build_input_stream(
                 &config,
                 move |data: &[i16], _| {
-                    mono_buf.clear();
-                    resampled_buf.clear();
-
-                    if channels > 1 {
-                        let ch = channels as usize;
-                        let frames = data.len() / ch;
-                        mono_buf.reserve(frames);
-                        for i in 0..frames {
-                            let mut sum = 0.0;
-                            for c in 0..ch {
-                                sum += (data[i * ch + c] as f32) / 32768.0;
-                            }
-                            mono_buf.push(sum / channels as f32);
-                        }
-                    } else {
-                        mono_buf.reserve(data.len());
-                        for &sample in data {
-                            mono_buf.push((sample as f32) / 32768.0);
-                        }
-                    }
-
-                    resampler.process(&mono_buf, &mut resampled_buf);
-
-                    if !resampled_buf.is_empty() {
-                        let _ = pcm_sender.try_send(resampled_buf.clone());
-                    }
+                    convert_and_downsample(
+                        data,
+                        channels,
+                        |s| (s as f32) / 32768.0,
+                        &mut resampler,
+                        &mut mono_buf,
+                        &mut resampled_buf,
+                        &pcm_sender,
+                    );
                 },
                 err_fn,
                 None,
@@ -254,34 +220,15 @@ impl AudioCapture {
             SampleFormat::U16 => device.build_input_stream(
                 &config,
                 move |data: &[u16], _| {
-                    mono_buf.clear();
-                    resampled_buf.clear();
-
-                    if channels > 1 {
-                        let ch = channels as usize;
-                        let frames = data.len() / ch;
-                        mono_buf.reserve(frames);
-                        for i in 0..frames {
-                            let mut sum = 0.0;
-                            for c in 0..ch {
-                                let f = (data[i * ch + c] as f32 - 32768.0) / 32768.0;
-                                sum += f;
-                            }
-                            mono_buf.push(sum / channels as f32);
-                        }
-                    } else {
-                        mono_buf.reserve(data.len());
-                        for &sample in data {
-                            let f = (sample as f32 - 32768.0) / 32768.0;
-                            mono_buf.push(f);
-                        }
-                    }
-
-                    resampler.process(&mono_buf, &mut resampled_buf);
-
-                    if !resampled_buf.is_empty() {
-                        let _ = pcm_sender.try_send(resampled_buf.clone());
-                    }
+                    convert_and_downsample(
+                        data,
+                        channels,
+                        |s| (s as f32 - 32768.0) / 32768.0,
+                        &mut resampler,
+                        &mut mono_buf,
+                        &mut resampled_buf,
+                        &pcm_sender,
+                    );
                 },
                 err_fn,
                 None,
@@ -323,6 +270,44 @@ impl AudioCapture {
     /// 获取硬件声道数
     pub fn channels(&self) -> u16 {
         self.channels
+    }
+}
+
+/// 通用音频采样转换、多通道合并与重采样分发辅助函数
+fn convert_and_downsample<T: Copy, F: Fn(T) -> f32>(
+    data: &[T],
+    channels: u16,
+    converter: F,
+    resampler: &mut LinearResampler,
+    mono_buf: &mut Vec<f32>,
+    resampled_buf: &mut Vec<f32>,
+    pcm_sender: &SyncSender<Vec<f32>>,
+) {
+    mono_buf.clear();
+    resampled_buf.clear();
+
+    if channels > 1 {
+        let ch = channels as usize;
+        let frames = data.len() / ch;
+        mono_buf.reserve(frames);
+        for i in 0..frames {
+            let mut sum = 0.0;
+            for c in 0..ch {
+                sum += converter(data[i * ch + c]);
+            }
+            mono_buf.push(sum / channels as f32);
+        }
+    } else {
+        mono_buf.reserve(data.len());
+        for &sample in data {
+            mono_buf.push(converter(sample));
+        }
+    }
+
+    resampler.process(mono_buf, resampled_buf);
+
+    if !resampled_buf.is_empty() {
+        let _ = pcm_sender.try_send(resampled_buf.clone());
     }
 }
 

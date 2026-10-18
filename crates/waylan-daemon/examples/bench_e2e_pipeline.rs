@@ -80,7 +80,6 @@ fn main() {
         selected_index: 0,
         expanded_card: waylan_core::ExpandedCardState::Collapsed,
         mode_badge: "中".to_string(),
-        is_grid_expanded: false,
         grid_state: waylan_core::GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,

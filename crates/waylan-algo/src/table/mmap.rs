@@ -310,10 +310,24 @@ impl CompactMmapLexicon {
     }
 }
 
+/// 将 32 位原始词频单调映射为 16 位紧凑存储分：
+/// - `0..=32_767` 保持 1:1 线性原值；
+/// - `> 32_767` 采用对数压缩映射至 `32_768..=65_534`，保留百万级高频词之间的相对梯度。
+#[allow(dead_code)]
+#[inline]
+pub(crate) fn encode_compact_score(score: u32) -> u16 {
+    if score <= 32_767 {
+        score as u16
+    } else {
+        let extra = ((score - 32_767) as f64 + 1.0).ln() * 2_000.0;
+        (32_768 + (extra as u32).min(32_766)) as u16
+    }
+}
+
 /// 将 16 位紧凑存储分还原为 32 位真实词频量纲
 ///
 /// # 设计说明
-/// - `builder_compact::encode_compact_score` 对 `<= 32_767` 保持线性原值，对 `> 32_767` 采用对数压缩；
+/// - `encode_compact_score` 对 `<= 32_767` 保持线性原值，对 `> 32_767` 采用对数压缩；
 /// - 此处执行对称的逆指数反演，还原真实词频量纲，消除 Viterbi 解码阶段双重取对数导致的词频梯度坍缩。
 #[inline]
 pub(crate) fn decode_compact_score(score_u16: u16) -> u32 {
@@ -329,7 +343,6 @@ pub(crate) fn decode_compact_score(score_u16: u16) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::compact::encode_compact_score;
 
     #[test]
     fn test_compact_score_encode_decode_roundtrip() {

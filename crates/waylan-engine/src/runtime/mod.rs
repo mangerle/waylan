@@ -34,6 +34,16 @@ use crate::session::{
 pub mod candidate_builder;
 pub use candidate_builder::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 
+/// 统一按键事件输入参数对象
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProcessKeyEventParams<'a> {
+    pub key: u32,
+    pub is_press: bool,
+    pub is_password_or_locked: bool,
+    pub surrounding_text: Option<&'a (String, u32, u32)>,
+    pub inline_preedit: bool,
+}
+
 /// 微澜统一输入法交互运行时 (IME Runtime)
 pub struct ImeRuntime {
     /// 核心算法与按键决策会话状态机
@@ -186,12 +196,16 @@ impl ImeRuntime {
     pub fn process_key_event<F: InputMethodFrontend>(
         &mut self,
         frontend: &mut F,
-        key: u32,
-        is_press: bool,
-        is_password_or_locked: bool,
-        surrounding_text: Option<&(String, u32, u32)>,
-        inline_preedit: bool,
+        params: ProcessKeyEventParams<'_>,
     ) -> (bool, Option<String>) {
+        let ProcessKeyEventParams {
+            key,
+            is_press,
+            is_password_or_locked,
+            surrounding_text,
+            inline_preedit,
+        } = params;
+
         // 1. 统一语音按键状态机优先分发
         if let Some(ref mut vm) = self.voice_manager {
             match vm.dispatch_voice_key(

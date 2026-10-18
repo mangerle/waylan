@@ -375,13 +375,13 @@ fn test_v2_grid_expansion_state() {
     session.runtime.core.engine.push_char('i');
 
     let initial_box = session.build_candidate_box_state();
-    assert!(!initial_box.is_grid_expanded);
+    assert!(!initial_box.is_grid_expanded());
     assert!(initial_box.grid_candidates.is_empty());
 
     // 展开 5 行大网格大候选词面板
     session.runtime.core.expand_grid();
     let expanded_box = session.build_candidate_box_state();
-    assert!(expanded_box.is_grid_expanded);
+    assert!(expanded_box.is_grid_expanded());
     assert!(!expanded_box.grid_candidates.is_empty());
     assert!(expanded_box.grid_candidates.len() <= 30);
 

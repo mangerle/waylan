@@ -19,11 +19,13 @@ pub(crate) fn process_key_event(
 
     let outcome = runtime.process_key_event(
         &mut frontend,
-        key,
-        is_press,
-        is_password,
-        surrounding.as_ref(),
-        true, // inline_preedit
+        waylan_engine::ProcessKeyEventParams {
+            key,
+            is_press,
+            is_password_or_locked: is_password,
+            surrounding_text: surrounding.as_ref(),
+            inline_preedit: true,
+        },
     );
 
     // 3. 按键长按连击跟踪处理

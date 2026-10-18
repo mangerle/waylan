@@ -11,6 +11,22 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+/// 候选词二元组（词汇 ID, 频次分值）
+type CandidateScore = (u32, u32);
+
+/// 键名到候选词元组列表的映射
+type KeyCandidateMap = HashMap<String, Vec<CandidateScore>>;
+
+/// 合并后的键表（存储键类型标记与候选词列表）
+type CombinedKeyMap = HashMap<String, (u8, Vec<CandidateScore>)>;
+
+/// 文本词典解析结果摘要
+struct ParsedTextSources {
+    dict_map: KeyCandidateMap,
+    total_lines: usize,
+    total_words: usize,
+}
+
 /// 紧凑二进制词库构建器
 pub struct CompactDictBuilder;
 
@@ -20,13 +36,51 @@ impl CompactDictBuilder {
         output_path: Q,
     ) -> Result<BuildStats, AlgoError> {
         let start = Instant::now();
-        let mut total_lines: usize = 0;
-        let mut total_words: usize = 0;
+        let out_ref = output_path.as_ref();
 
-        // 1. 构建严格稳定的全局 Word ID 词表
-        // 优先检查同一目录是否存在旧版 vocab.bin，若存在则继承其 Word ID 顺序，确保与现有 Bigram 模型 100% 对应
-        let mut word_to_id: HashMap<String, u32> = HashMap::new();
-        let mut words: Vec<String> = Vec::new();
+        // 1. 初始化或继承全局 Word ID 词表
+        let (mut word_to_id, mut words) = Self::init_vocab(out_ref);
+
+        // 2. 解析文本词库源文件并更新词表
+        let parsed = Self::parse_text_sources(input_paths, &mut word_to_id, &mut words)?;
+
+        // 3. 生成全拼、简拼、声母三类隔离索引键并严格排序
+        let (combined_keys, sorted_keys) = Self::build_combined_keys(parsed.dict_map, &words);
+
+        // 4. 构建双数组 Trie (DAT + Tail 压缩)
+        let key_values: Vec<u32> = (0..sorted_keys.len() as u32).collect();
+        let dat = DoubleArrayTrie::build(&sorted_keys, &key_values);
+
+        // 5. 编码候选值与键元数据
+        let (key_metas_data, candidates_data, num_candidates) =
+            Self::encode_keys_and_candidates(&combined_keys, &sorted_keys);
+
+        // 6. 计算绝对偏移并持久化写入目标二进制文件
+        Self::write_compact_file(
+            out_ref,
+            &dat,
+            &key_metas_data,
+            &candidates_data,
+            &words,
+            sorted_keys.len(),
+            num_candidates,
+        )?;
+
+        let total_keys = sorted_keys.len();
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        Ok(BuildStats {
+            total_lines: parsed.total_lines,
+            total_words: parsed.total_words,
+            total_keys,
+            elapsed_ms,
+        })
+    }
+
+    /// 初始化或继承旧版词表以保持 Word ID 稳定性
+    fn init_vocab(output_path: &Path) -> (HashMap<String, u32>, Vec<String>) {
+        let mut word_to_id = HashMap::new();
+        let mut words = Vec::new();
 
         let vocab_path = Path::new("data/vocab.bin");
         if vocab_path.exists() {
@@ -38,10 +92,10 @@ impl CompactDictBuilder {
             }
         }
         if words.is_empty() {
-            if let Some(parent) = output_path.as_ref().parent() {
+            if let Some(parent) = output_path.parent() {
                 if parent.join("bigram.table.bin").exists() {
                     let candidates_bin = [
-                        output_path.as_ref().to_path_buf(),
+                        output_path.to_path_buf(),
                         PathBuf::from("/usr/share/waylan/data/base.dict.bin"),
                     ];
                     for bin_path in &candidates_bin {
@@ -63,9 +117,18 @@ impl CompactDictBuilder {
                 }
             }
         }
+        (word_to_id, words)
+    }
 
-        // 2. 解析文本词库源文件
-        let mut dict_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+    /// 解析文本词典源文件并去重排序
+    fn parse_text_sources<P: AsRef<Path>>(
+        input_paths: &[P],
+        word_to_id: &mut HashMap<String, u32>,
+        words: &mut Vec<String>,
+    ) -> Result<ParsedTextSources, AlgoError> {
+        let mut dict_map: KeyCandidateMap = HashMap::new();
+        let mut total_lines = 0usize;
+        let mut total_words = 0usize;
 
         for in_path in input_paths {
             let path_ref = in_path.as_ref();
@@ -123,17 +186,27 @@ impl CompactDictBuilder {
             }
         }
 
-        // 按原始词频降序排序并对同音同词去重（保留最高分）
+        // 按原始词频降序排序并去重（保留最高分）
         for entries in dict_map.values_mut() {
             entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
             entries.dedup_by(|a, b| a.0 == b.0);
             entries.sort_by_key(|b| std::cmp::Reverse(b.1));
         }
 
-        // 3. 提取简拼缩写索引 (key_type = 1)
-        // 分级准入门槛：2字词碰撞率高，要求基础词频 >= 200；3字及以上长词与四字成语碰撞率低，保留全部有效词频 (score >= 1)，
-        // 并由后续按词频降序排序与 Top-8 截断统一保障索引紧凑度与成语召回率。
-        let mut acronym_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+        Ok(ParsedTextSources {
+            dict_map,
+            total_lines,
+            total_words,
+        })
+    }
+
+    /// 提取简拼与声母单字索引，合并并生成前缀隔离的排序键集合
+    fn build_combined_keys(
+        dict_map: KeyCandidateMap,
+        words: &[String],
+    ) -> (CombinedKeyMap, Vec<String>) {
+        // 提取简拼缩写索引 (key_type = 1)
+        let mut acronym_map: KeyCandidateMap = HashMap::new();
         for (pinyin, cand_list) in &dict_map {
             if pinyin.contains('\'') {
                 let parts: Vec<&str> = pinyin.split('\'').collect();
@@ -163,8 +236,8 @@ impl CompactDictBuilder {
             list.truncate(8);
         }
 
-        // 4. 提取声母单字索引 (key_type = 2)
-        let mut initial_map: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+        // 提取声母单字索引 (key_type = 2)
+        let mut initial_map: KeyCandidateMap = HashMap::new();
         for &initial in STANDARD_INITIALS {
             let mut list = Vec::new();
             for &syl in STANDARD_SYLLABLES {
@@ -189,10 +262,8 @@ impl CompactDictBuilder {
             }
         }
 
-        // 5. 汇总所有唯一键：全拼(0)、简拼(1)、声母(2)
-        // 采用内部单引号前缀隔离三类键空间（全拼: "{k}", 简拼: "'{k}", 声母: "''{k}"），
-        // 避免同形全拼、简拼、声母（如 "zh", "xian", "ma"）在 DAT 中发生键名覆盖冲突。
-        let mut combined_keys: HashMap<String, (u8, Vec<(u32, u32)>)> = HashMap::new();
+        // 汇总隔离键空间：全拼("{k}"), 简拼("'{k}"), 声母("''{k}")
+        let mut combined_keys: CombinedKeyMap = HashMap::new();
         for (k, v) in dict_map {
             combined_keys.insert(k, (0, v));
         }
@@ -207,22 +278,23 @@ impl CompactDictBuilder {
             }
         }
 
-        // 严格按字典序排序所有键
         let mut sorted_keys: Vec<String> = combined_keys.keys().cloned().collect();
         sorted_keys.sort();
 
+        (combined_keys, sorted_keys)
+    }
+
+    /// 编码键元数据与紧凑候选值数组
+    fn encode_keys_and_candidates(
+        combined_keys: &CombinedKeyMap,
+        sorted_keys: &[String],
+    ) -> (Vec<u8>, Vec<u8>, usize) {
         let num_keys = sorted_keys.len();
-        let key_values: Vec<u32> = (0..num_keys as u32).collect();
-
-        // 6. 构建双数组 Trie (DAT + Tail 压缩)
-        let dat = DoubleArrayTrie::build(&sorted_keys, &key_values);
-
-        // 7. 构建候选值数组与键元数据数组
         let mut key_metas_data = Vec::with_capacity(num_keys * 8);
         let mut candidates_data = Vec::new();
         let mut cand_counter: u32 = 0;
 
-        for k in &sorted_keys {
+        for k in sorted_keys {
             let (k_type, cands) = combined_keys
                 .get(k)
                 .expect("键来自于 combined_keys 自身集合，查询必定命中");
@@ -243,15 +315,25 @@ impl CompactDictBuilder {
             key_metas_data.push(0); // 对齐 padding
         }
 
-        let num_candidates = cand_counter as usize;
+        (key_metas_data, candidates_data, cand_counter as usize)
+    }
 
-        // 8. 构建单源词表段 (Vocab Offsets + String Pool + Sorted Vocab IDs)
+    /// 组装文件头与各段数据并写入目标磁盘文件
+    fn write_compact_file(
+        output_path: &Path,
+        dat: &DoubleArrayTrie,
+        key_metas_data: &[u8],
+        candidates_data: &[u8],
+        words: &[String],
+        num_keys: usize,
+        num_candidates: usize,
+    ) -> Result<(), AlgoError> {
         let vocab_size = words.len();
         let mut vocab_offsets: Vec<u32> = Vec::with_capacity(vocab_size + 1);
         let mut vocab_strings: Vec<u8> = Vec::new();
         let mut current_str_offset: u32 = 0;
 
-        for w in &words {
+        for w in words {
             vocab_offsets.push(current_str_offset);
             let b = w.as_bytes();
             vocab_strings.extend_from_slice(b);
@@ -259,18 +341,15 @@ impl CompactDictBuilder {
         }
         vocab_offsets.push(current_str_offset);
 
-        // 构建按字典序排序的 sorted_vocab_ids
         let mut sorted_vocab_ids: Vec<u32> = (0..vocab_size as u32).collect();
         sorted_vocab_ids.sort_by(|&a, &b| words[a as usize].cmp(&words[b as usize]));
 
-        // 9. 计算各段文件绝对偏移量
         let header_len = 64usize;
         let dat_base_bytes = dat.base.len() * 4;
         let dat_check_bytes = dat.check.len() * 4;
         let dat_tail_bytes = dat.tail.len();
 
         let mut current_offset = header_len + dat_base_bytes + dat_check_bytes + dat_tail_bytes;
-        // 4 字节对齐
         let pad1 = (4 - (current_offset % 4)) % 4;
         current_offset += pad1;
 
@@ -285,18 +364,15 @@ impl CompactDictBuilder {
 
         let vocab_offset = current_offset as u64;
 
-        // 10. 写入目标文件
-        let out_ref = output_path.as_ref();
-        let out_file = File::create(out_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(out_ref),
+        let out_file = File::create(output_path).map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(output_path),
             source: e,
         })?;
         let mut writer = BufWriter::new(out_file);
 
-        // Header (64 字节)
         let mut header = [0u8; 64];
         header[0..16].copy_from_slice(COMPACT_DICT_MAGIC);
-        header[16..20].copy_from_slice(&2u32.to_le_bytes()); // version = 2
+        header[16..20].copy_from_slice(&2u32.to_le_bytes());
         header[20..24].copy_from_slice(&(num_keys as u32).to_le_bytes());
         header[24..28].copy_from_slice(&(num_candidates as u32).to_le_bytes());
         header[28..32].copy_from_slice(&(vocab_size as u32).to_le_bytes());
@@ -305,117 +381,41 @@ impl CompactDictBuilder {
         header[40..48].copy_from_slice(&key_metas_offset.to_le_bytes());
         header[48..56].copy_from_slice(&candidates_offset.to_le_bytes());
         header[56..64].copy_from_slice(&vocab_offset.to_le_bytes());
-        writer
-            .write_all(&header)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(out_ref),
-                source: e,
-            })?;
 
-        // DAT 数据
+        let io_err = |e| AlgoError::DictionaryIo {
+            path: PathBuf::from(output_path),
+            source: e,
+        };
+
+        writer.write_all(&header).map_err(io_err)?;
         for &b in &dat.base {
-            writer
-                .write_all(&b.to_le_bytes())
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(out_ref),
-                    source: e,
-                })?;
+            writer.write_all(&b.to_le_bytes()).map_err(io_err)?;
         }
         for &c in &dat.check {
-            writer
-                .write_all(&c.to_le_bytes())
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(out_ref),
-                    source: e,
-                })?;
+            writer.write_all(&c.to_le_bytes()).map_err(io_err)?;
         }
-        writer
-            .write_all(&dat.tail)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(out_ref),
-                source: e,
-            })?;
+        writer.write_all(&dat.tail).map_err(io_err)?;
         if pad1 > 0 {
-            writer
-                .write_all(&vec![0u8; pad1])
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(out_ref),
-                    source: e,
-                })?;
+            writer.write_all(&vec![0u8; pad1]).map_err(io_err)?;
         }
 
-        // Key Metas 与 Candidates
-        writer
-            .write_all(&key_metas_data)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(out_ref),
-                source: e,
-            })?;
-        writer
-            .write_all(&candidates_data)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(out_ref),
-                source: e,
-            })?;
+        writer.write_all(key_metas_data).map_err(io_err)?;
+        writer.write_all(candidates_data).map_err(io_err)?;
         if pad2 > 0 {
-            writer
-                .write_all(&vec![0u8; pad2])
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(out_ref),
-                    source: e,
-                })?;
+            writer.write_all(&vec![0u8; pad2]).map_err(io_err)?;
         }
 
-        // Vocab 段
         for &off in &vocab_offsets {
-            writer
-                .write_all(&off.to_le_bytes())
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(out_ref),
-                    source: e,
-                })?;
+            writer.write_all(&off.to_le_bytes()).map_err(io_err)?;
         }
         for &id in &sorted_vocab_ids {
-            writer
-                .write_all(&id.to_le_bytes())
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(out_ref),
-                    source: e,
-                })?;
+            writer.write_all(&id.to_le_bytes()).map_err(io_err)?;
         }
-        writer
-            .write_all(&vocab_strings)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(out_ref),
-                source: e,
-            })?;
+        writer.write_all(&vocab_strings).map_err(io_err)?;
 
-        writer.flush().map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(out_ref),
-            source: e,
-        })?;
-
-        let total_keys = sorted_keys.len();
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-
-        Ok(BuildStats {
-            total_lines,
-            total_words,
-            total_keys,
-            elapsed_ms,
-        })
+        writer.flush().map_err(io_err)?;
+        Ok(())
     }
 }
 
-/// 将 32 位原始词频单调映射为 16 位紧凑存储分：
-/// - `0..=32_767` 保持 1:1 线性原值；
-/// - `> 32_767` 采用对数压缩映射至 `32_768..=65_534`，保留百万级高频词之间的相对梯度。
-#[inline]
-pub(crate) fn encode_compact_score(score: u32) -> u16 {
-    if score <= 32_767 {
-        score as u16
-    } else {
-        let extra = ((score - 32_767) as f64 + 1.0).ln() * 2_000.0;
-        (32_768 + (extra as u32).min(32_766)) as u16
-    }
-}
+pub(crate) use crate::table::mmap::encode_compact_score;

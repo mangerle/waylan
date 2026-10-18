@@ -26,6 +26,11 @@ name = "build_base_dict"
 path = "examples/build_base_dict.rs"
 required-features = ["tools"]
 
+[[example]]
+name = "bench_dat"
+path = "examples/bench_dat.rs"
+required-features = ["tools"]
+
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 serde.workspace = true
