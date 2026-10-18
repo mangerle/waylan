@@ -262,7 +262,7 @@ pub(crate) fn run_ibus_monitor_loop(
     inotify_watcher: &mut Option<InotifyWatcher>,
     mut params: IbusMonitorParams,
 ) {
-    let mut startup_healing_rounds: u32 = 25;
+    let mut startup_healing_rounds: u32 = 3;
     let initial_screen_locked = Connection::session()
         .ok()
         .as_ref()
@@ -280,6 +280,7 @@ pub(crate) fn run_ibus_monitor_loop(
         spawn_screen_saver_listener(initial_screen_locked, params.coordinator.clone());
     let mut last_screen_locked = initial_screen_locked;
     let mut last_voice_active = false;
+    let mut last_lock_probe_instant = Instant::now();
     let mut last_reload_instant = Instant::now()
         .checked_sub(Duration::from_secs(10))
         .unwrap_or_else(Instant::now);
@@ -296,9 +297,12 @@ pub(crate) fn run_ibus_monitor_loop(
         }
 
         let mut current_locked = screen_locked_flag.load(Ordering::Acquire);
-        // 处于锁屏保护期时的自愈探活：若内部记录为锁屏状态，主动向会话总线校验一次真实状态，
-        // 彻底杜绝桌面环境解锁信号滞后数秒或信号丢失导致状态机脱节
-        if current_locked || last_screen_locked {
+        // 处于锁屏保护期时的自愈探活：通过 3 秒防抖节流避免每一轮循环均发起阻塞式 D-Bus RPC，
+        // 既杜绝锁屏信号丢失导致状态机脱节，又彻底消除总线 IPC 洪泛
+        if (current_locked || last_screen_locked)
+            && last_lock_probe_instant.elapsed() >= Duration::from_secs(3)
+        {
+            last_lock_probe_instant = Instant::now();
             let real_locked = Connection::session()
                 .ok()
                 .as_ref()
@@ -312,7 +316,7 @@ pub(crate) fn run_ibus_monitor_loop(
         handle_screen_saver_transition(conn, shared_core, current_locked, &mut last_screen_locked);
 
         let (is_voice_active, target_engine_path) = query_voice_active_and_path(shared_core);
-        let poll_timeout_ms = if is_voice_active { 60 } else { 1000 };
+        let poll_timeout_ms = if is_voice_active { 60 } else { 2000 };
         poll_wakeup_and_inotify(
             inotify_watcher.as_ref(),
             params.coordinator.loop_wakeup(),
