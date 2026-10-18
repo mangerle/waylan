@@ -98,7 +98,9 @@ fn apply_bundle_to_ibus_core(bundle: SessionConfigBundle, core: &mut IbusSession
     core.core.traditional_shortcut = bundle.traditional_shortcut;
     core.core.full_width_char_shortcut = bundle.full_width_char_shortcut;
     core.core.full_width_punct_shortcut = bundle.full_width_punct_shortcut;
-    core.voice_manager.update_config(bundle.voice.clone());
+    if let Some(ref mut vm) = core.voice_manager {
+        vm.update_config(bundle.voice.clone());
+    }
     bundle.apply_to_core(&mut core.core);
 }
 

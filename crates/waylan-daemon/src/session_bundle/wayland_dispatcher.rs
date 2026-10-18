@@ -104,22 +104,17 @@ fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(
                 "[微澜守护进程 警告] Wayland V2 会话建立或运行失败 ({})，正在优雅降级至广泛兼容的 V1 会话...",
                 e
             );
-            let session = WaylanV1Session {
-                core: returned_session.core,
+            let mut session = WaylanV1Session {
+                runtime: returned_session.runtime,
                 surface_manager: returned_session.surface_manager,
                 watched_paths: returned_session.watched_paths,
                 last_watched_mtime: returned_session.last_watched_mtime,
-                shared_flags: params.tray.as_ref().map(|t| t.shared_flags().clone()),
-                shared_is_chinese: params.tray.as_ref().map(|t| t.mode_flag()),
-                shared_is_caps_locked: params.tray.as_ref().map(|t| t.caps_lock_flag()),
-                mode_notify_tx: params.tray.as_ref().map(|t| t.icon_notifier()),
-                reload_requested: params.tray.as_ref().map(|t| t.reload_flag()),
                 exit_requested: Some(params.coordinator.flag()),
                 loop_wakeup: params.coordinator.loop_wakeup(),
                 reload_callback: Some(Box::new(apply_reload_v1)),
-                voice_manager: build_wayland_voice_manager(&params.cfg.voice),
                 ..WaylanV1Session::default()
             };
+            session.voice_manager = build_wayland_voice_manager(&params.cfg.voice);
             run_session_v1_loop(session).map_err(Into::into)
         }
     }

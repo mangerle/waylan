@@ -149,7 +149,7 @@ impl SessionConfigBundle {
     }
 
     /// 将配置包原子应用到输入法核心会话状态中
-    pub fn apply_to_core(self, core: &mut waylan_algo::ImeCoreSession) {
+    pub fn apply_to_core(self, core: &mut waylan_engine::ImeCoreSession) {
         self.apply_to_engine_and_input(
             &mut core.engine,
             &mut core.shift_sm,
@@ -164,7 +164,7 @@ pub trait ReloadableWaylandSession {
     /// 获取候选表面渲染器的可变引用
     fn renderer_mut(&mut self) -> &mut waylan_ui::CandidateBoxRenderer;
     /// 获取核心输入会话的可变引用
-    fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession;
+    fn core_mut(&mut self) -> &mut waylan_engine::ImeCoreSession;
     /// 获取可选语音交互管理器的可变引用
     fn voice_manager_mut(&mut self) -> Option<&mut waylan_voice::VoiceInteractionManager>;
     /// 当拼音输入非空时刷新候选框表面
@@ -176,7 +176,7 @@ impl ReloadableWaylandSession for WaylanV1Session {
         &mut self.surface_manager.renderer
     }
 
-    fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession {
+    fn core_mut(&mut self) -> &mut waylan_engine::ImeCoreSession {
         &mut self.core
     }
 
@@ -196,7 +196,7 @@ impl ReloadableWaylandSession for WaylanV2Session {
         &mut self.surface_manager.renderer
     }
 
-    fn core_mut(&mut self) -> &mut waylan_algo::ImeCoreSession {
+    fn core_mut(&mut self) -> &mut waylan_engine::ImeCoreSession {
         &mut self.core
     }
 

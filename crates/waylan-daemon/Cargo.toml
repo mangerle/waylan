@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 waylan-algo = { path = "../waylan-algo" }
+waylan-engine = { path = "../waylan-engine" }
 waylan-ui = { path = "../waylan-ui" }
 waylan-wayland = { path = "../waylan-wayland" }
 waylan-ibus = { path = "../waylan-ibus" }
