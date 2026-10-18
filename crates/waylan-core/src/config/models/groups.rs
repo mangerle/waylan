@@ -224,6 +224,19 @@ impl Default for PinyinConfig {
     }
 }
 
+/// 独立系统托盘显示模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayDisplayMode {
+    /// 自动检测（默认推荐：Wayland 下自动判定，若具备桌面原生指示器则隐藏独立托盘）
+    #[default]
+    Auto,
+    /// 强制开启专属独立托盘
+    Always,
+    /// 强制关闭独立托盘
+    Never,
+}
+
 /// 桌面环境集成与系统托盘配置
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
@@ -234,8 +247,8 @@ pub struct DesktopConfig {
     pub tray_icon_zh: Option<String>,
     /// 自定义英文状态托盘图标名称或路径
     pub tray_icon_en: Option<String>,
-    /// 独立系统托盘显示模式（None=自动判定，Some(true)=强制启用专属托盘，Some(false)=强制关闭）
-    pub enable_tray: Option<bool>,
+    /// 独立系统托盘显示模式
+    pub enable_tray: TrayDisplayMode,
     /// 是否将微澜设为系统唯一独占输入源
     pub exclusive_input_source: bool,
 }

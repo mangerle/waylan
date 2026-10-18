@@ -10,8 +10,9 @@ pub use config::{
     AppConfig, AudioFrontEndConfig, CandidateIndexStyle, CandidateOrientation, CloudAsrConfig,
     CloudProfile, CloudProviderType, ConfigError, FullWidthCharShortcut, FullWidthPunctShortcut,
     FuzzyPinyinRules, NsEngineType, OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut,
-    SwitchKey, ThemeMode, TraditionalShortcut, TypoCorrectionRules, VadConfig, VadModelType,
-    VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
+    SwitchKey, ThemeMode, TraditionalShortcut, TrayDisplayMode, TypoCorrectionRules, VadConfig,
+    VadModelType, VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig,
+    VoiceVisualEffect,
 };
 pub use fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,

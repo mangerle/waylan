@@ -4,7 +4,7 @@ use crate::SettingsWindow;
 use waylan_core::config::{
     AppConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
     CandidateWindowMode, FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, PageKeys,
-    SwitchKey, TraditionalShortcut, TypoCorrectionRules,
+    SwitchKey, TraditionalShortcut, TrayDisplayMode, TypoCorrectionRules,
 };
 
 /// 同步常规输入、按键习惯与外观排版属性至 Slint 界面属性
@@ -114,9 +114,9 @@ pub(super) fn sync_general_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     // 系统托盘与指示器
     window.set_enable_tray_index(
         match (cfg.desktop.enable_tray, cfg.desktop.exclusive_input_source) {
-            (Some(false), _) => 1,    // GNOME 原生单图标
-            (Some(true), false) => 2, // 双指示器并存
-            _ => 0,                   // 微澜专属彩色托盘（推荐）
+            (TrayDisplayMode::Never, _) => 1,      // GNOME 原生单图标
+            (TrayDisplayMode::Always, false) => 2, // 双指示器并存
+            _ => 0,                                // 微澜专属彩色托盘（推荐）
         },
     );
 
@@ -230,17 +230,17 @@ pub(super) fn update_general_from_window(window: &SettingsWindow, cfg: &mut AppC
     match window.get_enable_tray_index() {
         1 => {
             // GNOME 原生单图标（融入系统，关闭微澜独立托盘）
-            cfg.desktop.enable_tray = Some(false);
+            cfg.desktop.enable_tray = TrayDisplayMode::Never;
             cfg.desktop.exclusive_input_source = false;
         }
         2 => {
             // 双指示器并存
-            cfg.desktop.enable_tray = Some(true);
+            cfg.desktop.enable_tray = TrayDisplayMode::Always;
             cfg.desktop.exclusive_input_source = false;
         }
         _ => {
             // 微澜专属彩色托盘（推荐）
-            cfg.desktop.enable_tray = Some(true);
+            cfg.desktop.enable_tray = TrayDisplayMode::Always;
             cfg.desktop.exclusive_input_source = true;
         }
     }

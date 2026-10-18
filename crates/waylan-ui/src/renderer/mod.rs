@@ -4,111 +4,25 @@ pub mod expanded;
 pub mod font;
 pub mod grid;
 pub mod layout;
+pub mod measure_cache;
 
 use crate::theme::{Color, UiTheme};
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
+use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache};
 use draw::blend_swash_image;
 use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 use font::FontManager;
 use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, ItemMeasure, LayoutParams};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use measure_cache::TextMeasureCache;
 use std::path::Path;
 use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
-
-/// 文本排版测量与字形缓存大小（固定 128 项直接映射，零堆分配淘汰）
-const MEASURE_CACHE_SIZE: usize = 128;
-
-/// 单个排版字形的物理光栅化定位参数
-#[derive(Clone, Copy)]
-struct CachedGlyph {
-    cache_key: cosmic_text::CacheKey,
-    x: i32,
-    y: i32,
-}
-
-/// 单项文本排版度量与字形序列缓存条目
-#[derive(Clone, Default)]
-struct ShapedTextEntry {
-    hash: u64,
-    size_bits: u32,
-    width: f32,
-    glyphs: Vec<CachedGlyph>,
-    text: String,
-}
-
-/// 计算文本测量查询键的哈希指纹
-fn calculate_measure_hash(text: &str, size_bits: u32) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    size_bits.hash(&mut hasher);
-    let h = hasher.finish();
-    if h == 0 {
-        1
-    } else {
-        h
-    }
-}
-
-/// 确保文本完成 HarfBuzz 排版塑形并存入直接映射缓存，消除同一文本测量与绘制时的双重排版
-fn ensure_shaped<'a>(
-    measure_cache: &'a mut [ShapedTextEntry; MEASURE_CACHE_SIZE],
-    buffer: &mut Buffer,
-    font_system: &mut FontSystem,
-    text: &str,
-    size: f32,
-) -> &'a ShapedTextEntry {
-    let size_bits = size.to_bits();
-    let hash = calculate_measure_hash(text, size_bits);
-    let idx = (hash as usize) & (MEASURE_CACHE_SIZE - 1);
-
-    if measure_cache[idx].hash == hash
-        && measure_cache[idx].size_bits == size_bits
-        && measure_cache[idx].text == text
-    {
-        return &measure_cache[idx];
-    }
-
-    buffer.set_metrics(Metrics::new(size, size * 1.2));
-    let shaping = if text.is_ascii() {
-        Shaping::Basic
-    } else {
-        Shaping::Advanced
-    };
-    buffer.set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
-    buffer.shape_until_scroll(font_system, false);
-
-    let mut width = 0.0f32;
-    let mut glyphs = Vec::with_capacity(text.len().max(4));
-    for run in buffer.layout_runs() {
-        width = width.max(run.line_w);
-        for glyph in run.glyphs {
-            let physical = glyph.physical((0.0, -run.line_y), 1.0);
-            glyphs.push(CachedGlyph {
-                cache_key: physical.cache_key,
-                x: physical.x,
-                y: physical.y,
-            });
-        }
-    }
-
-    let entry = &mut measure_cache[idx];
-    entry.hash = hash;
-    entry.size_bits = size_bits;
-    entry.width = width;
-    entry.glyphs = glyphs;
-    entry.text.clear();
-    entry.text.push_str(text);
-
-    &measure_cache[idx]
-}
 
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
     font_system: FontSystem,
     swash_cache: SwashCache,
     buffer: Buffer,
-    measure_cache: [ShapedTextEntry; MEASURE_CACHE_SIZE],
+    measure_cache: TextMeasureCache,
 }
 
 /// 文本绘制选项参数对象
@@ -167,7 +81,7 @@ impl CandidateBoxRenderer {
                 font_system,
                 swash_cache,
                 buffer,
-                measure_cache: std::array::from_fn(|_| ShapedTextEntry::default()),
+                measure_cache: TextMeasureCache::new(),
             },
             hit_regions: Vec::with_capacity(36),
         }
@@ -229,23 +143,20 @@ impl CandidateBoxRenderer {
     /// 清空字形光栅化与排版测量缓存
     pub fn clear_glyph_cache(&mut self) {
         self.text_engine.swash_cache = SwashCache::new();
-        for entry in &mut self.text_engine.measure_cache {
-            entry.hash = 0;
-            entry.glyphs.clear();
-            entry.text.clear();
-        }
+        self.text_engine.measure_cache.clear();
     }
 
     /// 测量一段文字的排版宽度（基于 cosmic-text 高级塑形与布局，复用 Buffer 与直接映射缓存消除多余塑形）
     pub fn measure_text(&mut self, text: &str, size: f32) -> f32 {
-        ensure_shaped(
-            &mut self.text_engine.measure_cache,
-            &mut self.text_engine.buffer,
-            &mut self.text_engine.font_system,
-            text,
-            size,
-        )
-        .width
+        self.text_engine
+            .measure_cache
+            .ensure_shaped(
+                &mut self.text_engine.buffer,
+                &mut self.text_engine.font_system,
+                text,
+                size,
+            )
+            .width
     }
 
     /// 绘制文本（基线对齐，支持复杂连字、特殊符号与多色 Emoji，使用参数对象收敛入参）
@@ -257,8 +168,7 @@ impl CandidateBoxRenderer {
             size,
             color,
         } = opts;
-        let entry = ensure_shaped(
-            &mut self.text_engine.measure_cache,
+        let entry = self.text_engine.measure_cache.ensure_shaped(
             &mut self.text_engine.buffer,
             &mut self.text_engine.font_system,
             text,

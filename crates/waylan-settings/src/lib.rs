@@ -151,7 +151,7 @@ mod tests {
                 auto_dedup: true,
             },
             desktop: DesktopConfig {
-                enable_tray: Some(true),
+                enable_tray: waylan_core::TrayDisplayMode::Always,
                 exclusive_input_source: true,
                 tray_icon_theme_path: Some("/custom/icons".into()),
                 tray_icon_zh: Some("custom-zh".into()),
@@ -183,7 +183,10 @@ mod tests {
         assert!(cfg.pinyin.fuzzy_rules.g_k);
         assert!(cfg.pinyin.typo_rules.gn_ng);
         assert!(cfg.pinyin.auto_pangu_spacing);
-        assert_eq!(cfg.desktop.enable_tray, Some(true));
+        assert_eq!(
+            cfg.desktop.enable_tray,
+            waylan_core::TrayDisplayMode::Always
+        );
         assert!(cfg.desktop.exclusive_input_source);
         assert!(cfg.pinyin.enable_u_mode);
         assert!(cfg.pinyin.enable_i_mode);

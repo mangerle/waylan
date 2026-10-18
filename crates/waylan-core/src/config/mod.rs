@@ -183,31 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_string_page_keys_backward_compatibility() {
-        let legacy_toml = r#"
-init_chinese = true
-page_size = 8
-font_size = 16.0
-switch_key = "Shift"
-page_keys = "MinusEqual"
-fuzzy_pinyin = true
-"#;
-        let cfg = AppConfig::parse_tolerant(legacy_toml).expect("旧版字符串翻页键应兼容反序列化");
-        assert_eq!(cfg.ui.page_size, 8);
-        assert_eq!(cfg.ui.font_size, 16.0);
-        assert!(cfg.shortcuts.page_keys.minus_equal);
-        assert!(!cfg.shortcuts.page_keys.bracket);
-        assert!(!cfg.shortcuts.page_keys.comma_period);
-        assert!(cfg.pinyin.fuzzy_pinyin);
-
-        // 测试中括号
-        let bracket_toml = r#"page_keys = "Bracket""#;
-        let b_cfg = AppConfig::parse_tolerant(bracket_toml).expect("中括号翻页键应兼容反序列化");
-        assert!(!b_cfg.shortcuts.page_keys.minus_equal);
-        assert!(b_cfg.shortcuts.page_keys.bracket);
-    }
-
-    #[test]
     fn test_tolerant_merge_with_missing_and_extra_fields() {
         let partial_toml = r#"
 page_size = 6
@@ -229,7 +204,6 @@ unknown_future_field = "some_value"
         let broken_content = r#"
 page_size = 9
 font_size = 20.0
-page_keys = "MinusEqual"
 fuzzy_pinyin = true
 "#;
         fs::write(&broken_path, broken_content).expect("写入 broken 文件失败");

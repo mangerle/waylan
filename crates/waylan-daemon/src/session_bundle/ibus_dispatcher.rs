@@ -65,7 +65,11 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
         let is_gnome = env::var("XDG_CURRENT_DESKTOP")
             .map(|d| d.to_uppercase().contains("GNOME"))
             .unwrap_or(false);
-        let expected_tray = new_cfg.desktop.enable_tray.unwrap_or(!is_gnome);
+        let expected_tray = match new_cfg.desktop.enable_tray {
+            waylan_core::TrayDisplayMode::Always => true,
+            waylan_core::TrayDisplayMode::Never => false,
+            waylan_core::TrayDisplayMode::Auto => !is_gnome,
+        };
 
         if expected_tray != current_has_tray {
             return true;

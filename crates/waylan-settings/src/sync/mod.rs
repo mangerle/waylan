@@ -42,7 +42,7 @@ mod tests {
     use waylan_core::config::{
         CandidateDensity, CandidateIndexStyle, CandidateThemePreset, CandidateWindowMode,
         DesktopConfig, FullWidthCharShortcut, FullWidthPunctShortcut, PinyinConfig,
-        TraditionalShortcut, UiConfig, VoiceVisualEffect,
+        TraditionalShortcut, TrayDisplayMode, UiConfig, VoiceVisualEffect,
     };
 
     #[test]
@@ -53,7 +53,7 @@ mod tests {
                 tray_icon_theme_path: Some("/opt/my-theme".to_string()),
                 tray_icon_zh: Some("custom-zh.svg".to_string()),
                 tray_icon_en: Some("custom-en.svg".to_string()),
-                enable_tray: Some(true),
+                enable_tray: TrayDisplayMode::Always,
                 exclusive_input_source: true,
             },
             pinyin: PinyinConfig {
@@ -138,7 +138,7 @@ mod tests {
             updated_cfg.ui.candidate_index_style,
             CandidateIndexStyle::Circled
         );
-        assert_eq!(updated_cfg.desktop.enable_tray, Some(false));
+        assert_eq!(updated_cfg.desktop.enable_tray, TrayDisplayMode::Never);
         assert!(!updated_cfg.desktop.exclusive_input_source);
         assert_eq!(
             updated_cfg.shortcuts.traditional_shortcut,
