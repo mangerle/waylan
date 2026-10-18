@@ -76,100 +76,20 @@ impl AuxiliaryDict {
         })?;
         let mut writer = std::io::BufWriter::new(file);
 
-        let mut string_pool = Vec::new();
-        let mut string_offset_map: HashMap<String, (u32, u16)> = HashMap::new();
+        let mut interner = StringPoolInterner::default();
+        let en_buf = encode_english_words(&self.english_words, &mut interner);
+        let sym_buf = encode_symbols(&self.symbols, &mut interner);
 
-        let mut intern = |s: &str| -> (u32, u16) {
-            if let Some(&loc) = string_offset_map.get(s) {
-                return loc;
-            }
-            let off = string_pool.len() as u32;
-            let bytes = s.as_bytes();
-            let mut capped_len = bytes.len().min(u16::MAX as usize);
-            while !s.is_char_boundary(capped_len) {
-                capped_len -= 1;
-            }
-            let len = capped_len as u16;
-            string_pool.extend_from_slice(&bytes[..capped_len]);
-            string_offset_map.insert(s.to_string(), (off, len));
-            (off, len)
+        let payload = AuxDictPayload {
+            num_english: self.english_words.len() as u32,
+            num_symbols: self.symbols.len() as u32,
+            en_buf: &en_buf,
+            sym_buf: &sym_buf,
+            string_pool: &interner.pool,
         };
 
-        // 1. 写入魔数与头部
-        writer
-            .write_all(AUX_DICT_MAGIC)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        writer
-            .write_all(&(self.english_words.len() as u32).to_le_bytes())
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        writer
-            .write_all(&(self.symbols.len() as u32).to_le_bytes())
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        writer
-            .write_all(&0u64.to_le_bytes())
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+        write_dict_data(&mut writer, path_ref, &payload)?;
 
-        // 2. 编码英文词库段
-        let mut en_buf = Vec::with_capacity(self.english_words.len() * 12);
-        for (w, score) in &self.english_words {
-            let (off, len) = intern(w);
-            en_buf.extend_from_slice(&off.to_le_bytes());
-            en_buf.extend_from_slice(&len.to_le_bytes());
-            en_buf.extend_from_slice(&0u16.to_le_bytes());
-            en_buf.extend_from_slice(&score.to_le_bytes());
-        }
-        writer
-            .write_all(&en_buf)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-
-        // 3. 编码符号表情段
-        let mut sym_buf = Vec::with_capacity(self.symbols.len() * 18);
-        for (k, sym, desc) in &self.symbols {
-            let (k_off, k_len) = intern(k);
-            let (s_off, s_len) = intern(sym);
-            let (d_off, d_len) = intern(desc);
-            sym_buf.extend_from_slice(&k_off.to_le_bytes());
-            sym_buf.extend_from_slice(&k_len.to_le_bytes());
-            sym_buf.extend_from_slice(&s_off.to_le_bytes());
-            sym_buf.extend_from_slice(&s_len.to_le_bytes());
-            sym_buf.extend_from_slice(&d_off.to_le_bytes());
-            sym_buf.extend_from_slice(&d_len.to_le_bytes());
-        }
-        writer
-            .write_all(&sym_buf)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-
-        // 4. 编码字符串池
-        writer
-            .write_all(&(string_pool.len() as u32).to_le_bytes())
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        writer
-            .write_all(&string_pool)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
         writer.flush().map_err(|e| AlgoError::DictionaryIo {
             path: temp_path.clone(),
             source: e,
@@ -205,135 +125,259 @@ impl AuxiliaryDict {
             source: e,
         })?;
         let file_len = metadata.len() as usize;
-        if file_len < 36 {
-            return Err(AlgoError::deserialize_failed(
-                path_ref,
-                "辅助词典文件体积过小或已损坏",
-            ));
-        }
 
-        let mut magic = [0u8; 16];
-        file.read_exact(&mut magic)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        if &magic != AUX_DICT_MAGIC {
-            return Err(AlgoError::deserialize_failed(
-                path_ref,
-                "无效的辅助词典魔数标识",
-            ));
-        }
+        let (num_english, num_symbols, meta_end) =
+            read_and_validate_header(&mut file, path_ref, file_len)?;
 
-        let mut header = [0u8; 16];
-        file.read_exact(&mut header)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        let num_english = u32::from_le_bytes(header[0..4].try_into().unwrap_or([0; 4])) as usize;
-        let num_symbols = u32::from_le_bytes(header[4..8].try_into().unwrap_or([0; 4])) as usize;
-
-        let en_bytes = num_english.saturating_mul(12);
-        let sym_bytes = num_symbols.saturating_mul(18);
-        let meta_end = 32usize
-            .saturating_add(en_bytes)
-            .saturating_add(sym_bytes)
-            .saturating_add(4);
-        if meta_end > file_len {
-            return Err(AlgoError::deserialize_failed(
-                path_ref,
-                "辅助词典索引段长度超出文件边界，文件可能已损坏",
-            ));
-        }
-
-        let mut en_buf = vec![0u8; en_bytes];
+        let mut en_buf = vec![0u8; num_english.saturating_mul(12)];
         file.read_exact(&mut en_buf)
             .map_err(|e| AlgoError::DictionaryIo {
                 path: PathBuf::from(path_ref),
                 source: e,
             })?;
 
-        let mut sym_buf = vec![0u8; sym_bytes];
+        let mut sym_buf = vec![0u8; num_symbols.saturating_mul(18)];
         file.read_exact(&mut sym_buf)
             .map_err(|e| AlgoError::DictionaryIo {
                 path: PathBuf::from(path_ref),
                 source: e,
             })?;
 
-        let mut pool_len_buf = [0u8; 4];
-        file.read_exact(&mut pool_len_buf)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        let pool_len = u32::from_le_bytes(pool_len_buf) as usize;
-        if meta_end.saturating_add(pool_len) > file_len {
-            return Err(AlgoError::deserialize_failed(
-                path_ref,
-                "辅助词典字符串池长度超出文件边界，文件可能已损坏",
-            ));
-        }
-
-        let mut string_pool = vec![0u8; pool_len];
-        file.read_exact(&mut string_pool)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-
-        let get_str = |off: usize, len: usize| -> String {
-            let end = off.saturating_add(len);
-            if end <= string_pool.len() {
-                std::str::from_utf8(&string_pool[off..end])
-                    .unwrap_or("")
-                    .to_string()
-            } else {
-                String::new()
-            }
-        };
-
-        let mut english_words = Vec::with_capacity(num_english);
-        for i in 0..num_english {
-            let base = i * 12;
-            let off =
-                u32::from_le_bytes(en_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
-            let len = u16::from_le_bytes(en_buf[base + 4..base + 6].try_into().unwrap_or([0; 2]))
-                as usize;
-            let score =
-                u32::from_le_bytes(en_buf[base + 8..base + 12].try_into().unwrap_or([0; 4]));
-            english_words.push((get_str(off, len), score));
-        }
-
-        let mut symbols = Vec::with_capacity(num_symbols);
-        for i in 0..num_symbols {
-            let base = i * 18;
-            let k_off =
-                u32::from_le_bytes(sym_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
-            let k_len = u16::from_le_bytes(sym_buf[base + 4..base + 6].try_into().unwrap_or([0; 2]))
-                as usize;
-            let s_off =
-                u32::from_le_bytes(sym_buf[base + 6..base + 10].try_into().unwrap_or([0; 4]))
-                    as usize;
-            let s_len =
-                u16::from_le_bytes(sym_buf[base + 10..base + 12].try_into().unwrap_or([0; 2]))
-                    as usize;
-            let d_off =
-                u32::from_le_bytes(sym_buf[base + 12..base + 16].try_into().unwrap_or([0; 4]))
-                    as usize;
-            let d_len =
-                u16::from_le_bytes(sym_buf[base + 16..base + 18].try_into().unwrap_or([0; 2]))
-                    as usize;
-            symbols.push((
-                get_str(k_off, k_len),
-                get_str(s_off, s_len),
-                get_str(d_off, d_len),
-            ));
-        }
+        let string_pool = read_string_pool(&mut file, path_ref, meta_end, file_len)?;
+        let english_words = decode_english_words(&en_buf, num_english, &string_pool);
+        let symbols = decode_symbols(&sym_buf, num_symbols, &string_pool);
 
         Ok(Self {
             english_words,
             symbols,
         })
     }
+}
+
+/// 辅助词库构建期字符串驻留池管理器
+#[derive(Default)]
+struct StringPoolInterner {
+    pool: Vec<u8>,
+    offset_map: HashMap<String, (u32, u16)>,
+}
+
+impl StringPoolInterner {
+    fn intern(&mut self, s: &str) -> (u32, u16) {
+        if let Some(&loc) = self.offset_map.get(s) {
+            return loc;
+        }
+        let off = self.pool.len() as u32;
+        let bytes = s.as_bytes();
+        let mut capped_len = bytes.len().min(u16::MAX as usize);
+        while !s.is_char_boundary(capped_len) {
+            capped_len -= 1;
+        }
+        let len = capped_len as u16;
+        self.pool.extend_from_slice(&bytes[..capped_len]);
+        self.offset_map.insert(s.to_string(), (off, len));
+        (off, len)
+    }
+}
+
+/// 编码英文混输词目索引段
+fn encode_english_words(words: &[(String, u32)], interner: &mut StringPoolInterner) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(words.len() * 12);
+    for (w, score) in words {
+        let (off, len) = interner.intern(w);
+        buf.extend_from_slice(&off.to_le_bytes());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&score.to_le_bytes());
+    }
+    buf
+}
+
+/// 编码符号表情映射索引段
+fn encode_symbols(
+    symbols: &[(String, String, String)],
+    interner: &mut StringPoolInterner,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(symbols.len() * 18);
+    for (k, sym, desc) in symbols {
+        let (k_off, k_len) = interner.intern(k);
+        let (s_off, s_len) = interner.intern(sym);
+        let (d_off, d_len) = interner.intern(desc);
+        buf.extend_from_slice(&k_off.to_le_bytes());
+        buf.extend_from_slice(&k_len.to_le_bytes());
+        buf.extend_from_slice(&s_off.to_le_bytes());
+        buf.extend_from_slice(&s_len.to_le_bytes());
+        buf.extend_from_slice(&d_off.to_le_bytes());
+        buf.extend_from_slice(&d_len.to_le_bytes());
+    }
+    buf
+}
+
+/// 辅助词库待落盘数据段负载载荷
+struct AuxDictPayload<'a> {
+    num_english: u32,
+    num_symbols: u32,
+    en_buf: &'a [u8],
+    sym_buf: &'a [u8],
+    string_pool: &'a [u8],
+}
+
+/// 写入词典魔数、统计头及数据段负载
+fn write_dict_data(
+    writer: &mut impl Write,
+    path: &Path,
+    payload: &AuxDictPayload<'_>,
+) -> Result<(), AlgoError> {
+    let io_err = |e| AlgoError::DictionaryIo {
+        path: PathBuf::from(path),
+        source: e,
+    };
+    writer.write_all(AUX_DICT_MAGIC).map_err(io_err)?;
+    writer
+        .write_all(&payload.num_english.to_le_bytes())
+        .map_err(io_err)?;
+    writer
+        .write_all(&payload.num_symbols.to_le_bytes())
+        .map_err(io_err)?;
+    writer.write_all(&0u64.to_le_bytes()).map_err(io_err)?;
+    writer.write_all(payload.en_buf).map_err(io_err)?;
+    writer.write_all(payload.sym_buf).map_err(io_err)?;
+    writer
+        .write_all(&(payload.string_pool.len() as u32).to_le_bytes())
+        .map_err(io_err)?;
+    writer.write_all(payload.string_pool).map_err(io_err)?;
+    Ok(())
+}
+
+/// 读取并校验词库文件头部与段边界
+fn read_and_validate_header(
+    file: &mut fs::File,
+    path: &Path,
+    file_len: usize,
+) -> Result<(usize, usize, usize), AlgoError> {
+    if file_len < 36 {
+        return Err(AlgoError::deserialize_failed(
+            path,
+            "辅助词典文件体积过小或已损坏",
+        ));
+    }
+
+    let mut magic = [0u8; 16];
+    file.read_exact(&mut magic)
+        .map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path),
+            source: e,
+        })?;
+    if &magic != AUX_DICT_MAGIC {
+        return Err(AlgoError::deserialize_failed(
+            path,
+            "无效的辅助词典魔数标识",
+        ));
+    }
+
+    let mut header = [0u8; 16];
+    file.read_exact(&mut header)
+        .map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path),
+            source: e,
+        })?;
+    let num_english = u32::from_le_bytes(header[0..4].try_into().unwrap_or([0; 4])) as usize;
+    let num_symbols = u32::from_le_bytes(header[4..8].try_into().unwrap_or([0; 4])) as usize;
+
+    let en_bytes = num_english.saturating_mul(12);
+    let sym_bytes = num_symbols.saturating_mul(18);
+    let meta_end = 32usize
+        .saturating_add(en_bytes)
+        .saturating_add(sym_bytes)
+        .saturating_add(4);
+    if meta_end > file_len {
+        return Err(AlgoError::deserialize_failed(
+            path,
+            "辅助词典索引段长度超出文件边界，文件可能已损坏",
+        ));
+    }
+
+    Ok((num_english, num_symbols, meta_end))
+}
+
+/// 读取并校验紧凑字符串池切片
+fn read_string_pool(
+    file: &mut fs::File,
+    path: &Path,
+    meta_end: usize,
+    file_len: usize,
+) -> Result<Vec<u8>, AlgoError> {
+    let mut pool_len_buf = [0u8; 4];
+    file.read_exact(&mut pool_len_buf)
+        .map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path),
+            source: e,
+        })?;
+    let pool_len = u32::from_le_bytes(pool_len_buf) as usize;
+    if meta_end.saturating_add(pool_len) > file_len {
+        return Err(AlgoError::deserialize_failed(
+            path,
+            "辅助词典字符串池长度超出文件边界，文件可能已损坏",
+        ));
+    }
+
+    let mut string_pool = vec![0u8; pool_len];
+    file.read_exact(&mut string_pool)
+        .map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path),
+            source: e,
+        })?;
+    Ok(string_pool)
+}
+
+/// 安全从字符串池提取 UTF-8 子字符串
+#[inline]
+fn slice_str_from_pool(pool: &[u8], off: usize, len: usize) -> String {
+    let end = off.saturating_add(len);
+    if end <= pool.len() {
+        std::str::from_utf8(&pool[off..end])
+            .unwrap_or("")
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// 解码英文混输词目列表
+fn decode_english_words(en_buf: &[u8], count: usize, pool: &[u8]) -> Vec<(String, u32)> {
+    let mut words = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = i * 12;
+        let off = u32::from_le_bytes(en_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
+        let len =
+            u16::from_le_bytes(en_buf[base + 4..base + 6].try_into().unwrap_or([0; 2])) as usize;
+        let score = u32::from_le_bytes(en_buf[base + 8..base + 12].try_into().unwrap_or([0; 4]));
+        words.push((slice_str_from_pool(pool, off, len), score));
+    }
+    words
+}
+
+/// 解码符号表情映射列表
+fn decode_symbols(sym_buf: &[u8], count: usize, pool: &[u8]) -> Vec<(String, String, String)> {
+    let mut symbols = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = i * 18;
+        let k_off =
+            u32::from_le_bytes(sym_buf[base..base + 4].try_into().unwrap_or([0; 4])) as usize;
+        let k_len =
+            u16::from_le_bytes(sym_buf[base + 4..base + 6].try_into().unwrap_or([0; 2])) as usize;
+        let s_off =
+            u32::from_le_bytes(sym_buf[base + 6..base + 10].try_into().unwrap_or([0; 4])) as usize;
+        let s_len =
+            u16::from_le_bytes(sym_buf[base + 10..base + 12].try_into().unwrap_or([0; 2])) as usize;
+        let d_off =
+            u32::from_le_bytes(sym_buf[base + 12..base + 16].try_into().unwrap_or([0; 4])) as usize;
+        let d_len =
+            u16::from_le_bytes(sym_buf[base + 16..base + 18].try_into().unwrap_or([0; 2])) as usize;
+        symbols.push((
+            slice_str_from_pool(pool, k_off, k_len),
+            slice_str_from_pool(pool, s_off, s_len),
+            slice_str_from_pool(pool, d_off, d_len),
+        ));
+    }
+    symbols
 }
