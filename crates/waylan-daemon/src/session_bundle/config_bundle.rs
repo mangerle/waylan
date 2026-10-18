@@ -41,36 +41,41 @@ pub struct SessionConfigBundle {
     pub voice: VoiceConfig,
 }
 
+/// 根据应用程序配置构建算法引擎配置（冷启动与热重载共用的单一真实源）
+pub fn build_algo_config(cfg: &AppConfig) -> AlgoConfig {
+    AlgoConfig {
+        page_size: cfg.ui.page_size,
+        enable_v_mode: cfg.pinyin.v_mode,
+        enable_u_mode: cfg.pinyin.enable_u_mode,
+        enable_i_mode: cfg.pinyin.enable_i_mode,
+        traditional_chinese: cfg.pinyin.traditional_chinese,
+        filter_uncommon_charset: cfg.pinyin.filter_uncommon_charset,
+        show_pinyin_comment: cfg.ui.show_pinyin_comment,
+        auto_dedup: cfg.pinyin.auto_dedup,
+        fuzzy: if cfg.pinyin.fuzzy_pinyin {
+            FuzzyConfig {
+                z_zh: cfg.pinyin.fuzzy_rules.z_zh,
+                c_ch: cfg.pinyin.fuzzy_rules.c_ch,
+                s_sh: cfg.pinyin.fuzzy_rules.s_sh,
+                an_ang: cfg.pinyin.fuzzy_rules.an_ang,
+                en_eng: cfg.pinyin.fuzzy_rules.en_eng,
+                in_ing: cfg.pinyin.fuzzy_rules.in_ing,
+                l_n: cfg.pinyin.fuzzy_rules.l_n,
+                f_h: cfg.pinyin.fuzzy_rules.f_h,
+                r_l: cfg.pinyin.fuzzy_rules.r_l,
+                g_k: cfg.pinyin.fuzzy_rules.g_k,
+            }
+        } else {
+            FuzzyConfig::default()
+        },
+        auto_pangu_spacing: cfg.pinyin.auto_pangu_spacing,
+    }
+}
+
 impl SessionConfigBundle {
     pub fn load_current() -> Self {
         let new_cfg = AppConfig::load_or_create();
-        let algo_config = AlgoConfig {
-            page_size: new_cfg.ui.page_size,
-            enable_v_mode: new_cfg.pinyin.v_mode,
-            enable_u_mode: new_cfg.pinyin.enable_u_mode,
-            enable_i_mode: new_cfg.pinyin.enable_i_mode,
-            traditional_chinese: new_cfg.pinyin.traditional_chinese,
-            filter_uncommon_charset: new_cfg.pinyin.filter_uncommon_charset,
-            show_pinyin_comment: new_cfg.ui.show_pinyin_comment,
-            auto_dedup: new_cfg.pinyin.auto_dedup,
-            fuzzy: if new_cfg.pinyin.fuzzy_pinyin {
-                FuzzyConfig {
-                    z_zh: new_cfg.pinyin.fuzzy_rules.z_zh,
-                    c_ch: new_cfg.pinyin.fuzzy_rules.c_ch,
-                    s_sh: new_cfg.pinyin.fuzzy_rules.s_sh,
-                    an_ang: new_cfg.pinyin.fuzzy_rules.an_ang,
-                    en_eng: new_cfg.pinyin.fuzzy_rules.en_eng,
-                    in_ing: new_cfg.pinyin.fuzzy_rules.in_ing,
-                    l_n: new_cfg.pinyin.fuzzy_rules.l_n,
-                    f_h: new_cfg.pinyin.fuzzy_rules.f_h,
-                    r_l: new_cfg.pinyin.fuzzy_rules.r_l,
-                    g_k: new_cfg.pinyin.fuzzy_rules.g_k,
-                }
-            } else {
-                FuzzyConfig::default()
-            },
-            auto_pangu_spacing: new_cfg.pinyin.auto_pangu_spacing,
-        };
+        let algo_config = build_algo_config(&new_cfg);
         let theme = match new_cfg.ui.theme {
             ThemeMode::Light => UiTheme::light(),
             ThemeMode::Dark => UiTheme::dark(),
