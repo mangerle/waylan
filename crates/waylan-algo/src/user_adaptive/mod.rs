@@ -111,18 +111,29 @@ impl UserAdaptiveModel {
     /// 查询用户自造新词（基础库未收录但在用户历史中出现过的词）
     pub fn lookup_user_words(&self, pinyin: &str, current_timestamp: u64) -> Vec<AlgoCandidate> {
         let mut results = Vec::new();
+        self.lookup_user_words_into(pinyin, current_timestamp, &mut results);
+        results
+    }
+
+    /// 查询用户自造新词并写入指定的复用容器中（避免堆重新分配）
+    pub fn lookup_user_words_into(
+        &self,
+        pinyin: &str,
+        current_timestamp: u64,
+        out: &mut Vec<AlgoCandidate>,
+    ) {
         if let Some(list) = self.entries.get(pinyin) {
+            out.reserve(list.len());
             for entry in list {
                 let boost = Self::calculate_decay_score(entry, current_timestamp);
                 let score = 5_000_000_u32.saturating_add(boost);
-                results.push(
+                out.push(
                     AlgoCandidate::new(&entry.text, pinyin, score)
                         .with_comment("自造词")
                         .with_tier(CandidateTier::UserHistory),
                 );
             }
         }
-        results
     }
 
     /// 基于 30 天半衰期计算时间衰减动态加权得分

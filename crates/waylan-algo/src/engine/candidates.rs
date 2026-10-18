@@ -179,15 +179,16 @@ impl AlgoEngine {
             let is_suboptimal = !path.is_typo
                 && (cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count);
 
-            // 词典精确及倒排检索
-            let mut matches = self.resources.table.lookup(&key);
+            // 词典精确及倒排检索（原地填充至复用容器）
+            let start_lex = results.len();
+            self.resources.table.lookup_into(&key, results);
             if path.is_typo {
-                for m in &mut matches {
+                for m in &mut results[start_lex..] {
                     m.tier = CandidateTier::TypoCorrection;
                     m.comment = Some(format!("[纠错: {}]", key));
                 }
             } else if is_suboptimal {
-                for m in &mut matches {
+                for m in &mut results[start_lex..] {
                     m.score = Self::calibrate_lexicon_path_score(
                         m.score,
                         &m.text,
@@ -196,21 +197,22 @@ impl AlgoEngine {
                     );
                 }
             }
-            results.append(&mut matches);
 
-            // 用户自造词检索
-            let mut user_matches = self.adaptive.model.lookup_user_words(&key, eval_ts);
+            // 用户自造词检索（原地填充至复用容器）
+            let start_usr = results.len();
+            self.adaptive
+                .model
+                .lookup_user_words_into(&key, eval_ts, results);
             if path.is_typo {
-                for m in &mut user_matches {
+                for m in &mut results[start_usr..] {
                     m.tier = CandidateTier::TypoCorrection;
                     m.comment = Some(format!("[纠错: {}]", key));
                 }
             } else if is_suboptimal {
-                for m in &mut user_matches {
+                for m in &mut results[start_usr..] {
                     m.score = m.score.saturating_sub(cost_penalty).max(1);
                 }
             }
-            results.append(&mut user_matches);
 
             // 模糊音等价查询键联合检索
             if self.config.fuzzy.has_active_rules() && !path.is_typo {
@@ -238,8 +240,9 @@ impl AlgoEngine {
         let is_suboptimal = cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count;
 
         for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
-            let mut fuzzy_matches = self.resources.table.lookup(&fuzzy_key);
-            for fm in &mut fuzzy_matches {
+            let start_fz = results.len();
+            self.resources.table.lookup_into(&fuzzy_key, results);
+            for fm in &mut results[start_fz..] {
                 fm.consumed_len = Some(key_len);
                 let base = if is_suboptimal {
                     Self::calibrate_lexicon_path_score(
@@ -253,10 +256,12 @@ impl AlgoEngine {
                 };
                 fm.score = base.saturating_sub(50);
             }
-            results.append(&mut fuzzy_matches);
 
-            let mut fuzzy_user_matches = self.adaptive.model.lookup_user_words(&fuzzy_key, eval_ts);
-            for fum in &mut fuzzy_user_matches {
+            let start_fzu = results.len();
+            self.adaptive
+                .model
+                .lookup_user_words_into(&fuzzy_key, eval_ts, results);
+            for fum in &mut results[start_fzu..] {
                 fum.consumed_len = Some(key_len);
                 fum.score = fum
                     .score
@@ -264,7 +269,6 @@ impl AlgoEngine {
                     .saturating_sub(50)
                     .max(1);
             }
-            results.append(&mut fuzzy_user_matches);
         }
     }
 
@@ -324,25 +328,26 @@ impl AlgoEngine {
 
         // 前缀残存拼音补全与跨词短语合成
         if !best_path.remaining.is_empty() {
-            let mut prefix_matches = self
-                .resources
-                .table
-                .lookup_prefix_extension(&best_path.syllables, &best_path.remaining);
-            results.append(&mut prefix_matches);
+            self.resources.table.lookup_prefix_extension_into(
+                &best_path.syllables,
+                &best_path.remaining,
+                results,
+            );
 
             if self.config.fuzzy.has_active_rules() && !best_path.syllables.is_empty() {
                 for fuzzy_syls in PrismFuzzy::expand_fuzzy_syllable_lists(
                     &best_path.syllables,
                     &self.config.fuzzy,
                 ) {
-                    let mut fuzzy_prefix = self
-                        .resources
-                        .table
-                        .lookup_prefix_extension(&fuzzy_syls, &best_path.remaining);
-                    for fp in &mut fuzzy_prefix {
+                    let start_fzp = results.len();
+                    self.resources.table.lookup_prefix_extension_into(
+                        &fuzzy_syls,
+                        &best_path.remaining,
+                        results,
+                    );
+                    for fp in &mut results[start_fzp..] {
                         fp.score = fp.score.saturating_sub(50);
                     }
-                    results.append(&mut fuzzy_prefix);
                 }
             }
 
@@ -352,11 +357,13 @@ impl AlgoEngine {
 
             if !best_path.syllables.is_empty() {
                 let base_key = best_path.syllables.join("'");
-                let mut base_matches = self.resources.table.lookup_top_k(&base_key, 32);
-                for bm in &mut base_matches {
+                let start_top = results.len();
+                self.resources
+                    .table
+                    .lookup_top_k_into(&base_key, 32, results);
+                for bm in &mut results[start_top..] {
                     bm.tier = CandidateTier::PrefixPartial;
                 }
-                results.append(&mut base_matches);
             }
         }
     }

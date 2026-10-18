@@ -9,8 +9,20 @@ impl LexiconTable {
         prefix_syllables: &[String],
         remaining_initial: &str,
     ) -> Vec<AlgoCandidate> {
+        let mut candidates = Vec::new();
+        self.lookup_prefix_extension_into(prefix_syllables, remaining_initial, &mut candidates);
+        candidates
+    }
+
+    /// 检索带末尾残存拼音前缀的补全候选词并写入指定的复用容器中（避免堆重新分配）
+    pub fn lookup_prefix_extension_into(
+        &self,
+        prefix_syllables: &[String],
+        remaining_initial: &str,
+        out: &mut Vec<AlgoCandidate>,
+    ) {
         if remaining_initial.is_empty() {
-            return Vec::new();
+            return;
         }
 
         let matched_syllables = find_syllables_by_prefix(remaining_initial);
@@ -54,16 +66,16 @@ impl LexiconTable {
         }
 
         candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
-        let mut unique = Vec::with_capacity(candidates.len().min(20));
+        let mut count = 0;
         for cand in candidates {
-            if !unique.iter().any(|u: &AlgoCandidate| u.text == cand.text) {
-                unique.push(cand);
-                if unique.len() >= 20 {
+            if !out.iter().any(|u: &AlgoCandidate| u.text == cand.text) {
+                out.push(cand);
+                count += 1;
+                if count >= 20 {
                     break;
                 }
             }
         }
-        unique
     }
 
     /// 检索指定单字母声母对应的高频单字原始词库条目列表（合并紧凑词库与内存动态索引，保留 word_id）

@@ -176,16 +176,21 @@ impl LexiconTable {
     /// 根据归一化拼音键检索候选词
     pub fn lookup(&self, key: &str) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::new();
+        self.lookup_into(key, &mut candidates);
+        candidates
+    }
 
+    /// 根据归一化拼音键检索候选词并写入指定的复用容器中（避免堆重新分配）
+    pub fn lookup_into(&self, key: &str, out: &mut Vec<AlgoCandidate>) {
         // 1. 若挂载了零拷贝 DAT 一体化紧凑词库，直接状态跳转检索
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup(key) {
-                candidates.reserve(matches.len());
+                out.reserve(matches.len());
                 for (text, score, word_id) in matches {
                     let char_len = text.chars().count() as u32;
                     let boost = char_len.saturating_sub(1).saturating_mul(600_000);
                     let final_score = score.saturating_add(boost);
-                    candidates.push(
+                    out.push(
                         AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
                     );
                 }
@@ -194,31 +199,36 @@ impl LexiconTable {
 
         // 2. 检索内存动态词表
         if let Some(matches) = self.entries.get(key) {
-            candidates.reserve(matches.len());
+            out.reserve(matches.len());
             for (text, score) in matches {
                 let char_len = text.chars().count() as u32;
                 let boost = char_len.saturating_sub(1).saturating_mul(600_000);
                 let final_score = score.saturating_add(boost);
-                candidates.push(AlgoCandidate::new(text.clone(), key, final_score));
+                out.push(AlgoCandidate::new(text.clone(), key, final_score));
             }
         }
-
-        candidates
     }
 
     /// 根据归一化拼音键检索按需截取 Top-K 候选词（避免全量同音词解码与分配）
     pub fn lookup_top_k(&self, key: &str, k: usize) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::with_capacity(k);
+        self.lookup_top_k_into(key, k, &mut candidates);
+        candidates
+    }
+
+    /// 根据归一化拼音键检索按需截取 Top-K 候选词并写入指定的复用容器中（避免堆重新分配）
+    pub fn lookup_top_k_into(&self, key: &str, k: usize, out: &mut Vec<AlgoCandidate>) {
+        let start_len = out.len();
 
         // 1. 若挂载了零拷贝 DAT 一体化紧凑词库，按需获取 Top-K
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup_top_k(key, k) {
-                candidates.reserve(matches.len());
+                out.reserve(matches.len());
                 for (text, score, word_id) in matches {
                     let char_len = text.chars().count() as u32;
                     let boost = char_len.saturating_sub(1).saturating_mul(600_000);
                     let final_score = score.saturating_add(boost);
-                    candidates.push(
+                    out.push(
                         AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
                     );
                 }
@@ -231,12 +241,13 @@ impl LexiconTable {
                 let char_len = text.chars().count() as u32;
                 let boost = char_len.saturating_sub(1).saturating_mul(600_000);
                 let final_score = score.saturating_add(boost);
-                candidates.push(AlgoCandidate::new(text.clone(), key, final_score));
+                out.push(AlgoCandidate::new(text.clone(), key, final_score));
             }
         }
 
-        candidates.truncate(k);
-        candidates
+        if out.len() > start_len + k {
+            out.truncate(start_len + k);
+        }
     }
 
     /// 获取指定拼音键的原始词库条目（合并紧凑词库与内存增量词表）

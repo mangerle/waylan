@@ -75,10 +75,13 @@ impl AlgoEngine {
 
         // 若选中的是可展开项，且直接按数字键确认（未展开时）：
         // 优先将首个格式化子候选文本（如当前标准日期 2026年10月9日）上屏
+        let mut selected = selected;
         let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
-            selected.sub_candidates[0].clone()
-        } else {
+            selected.sub_candidates.swap_remove(0)
+        } else if should_record {
             selected.text.clone()
+        } else {
+            std::mem::take(&mut selected.text)
         };
 
         // 当选中的候选词为合规中文拼音词条（支持简繁中文）时，记录用户选词并动态调频
@@ -87,26 +90,31 @@ impl AlgoEngine {
                 .record_commit(&selected.text, &selected.pinyin, current_timestamp);
         }
 
+        // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
+        let trimmed_commit = raw_commit.trim();
+        let last_context = if !trimmed_commit.is_empty() {
+            Some(trimmed_commit.to_string())
+        } else {
+            None
+        };
+
         // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
         let commit_text = if self.config.auto_pangu_spacing {
             if let Some(prev) = self.composition.last_commit_context() {
                 if PanguSpacing::should_insert_pangu_space(prev, &raw_commit) {
                     format!(" {}", raw_commit)
                 } else {
-                    raw_commit.clone()
+                    raw_commit
                 }
             } else {
-                raw_commit.clone()
+                raw_commit
             }
         } else {
-            raw_commit.clone()
+            raw_commit
         };
 
-        // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
-        let trimmed_commit = raw_commit.trim();
-        if !trimmed_commit.is_empty() {
-            self.composition
-                .set_last_commit_context(Some(trimmed_commit.to_string()));
+        if let Some(ctx) = last_context {
+            self.composition.set_last_commit_context(Some(ctx));
         }
 
         // 计算消费的拼音字母长度并执行分段确认（优先直接读取候选词产生时统一标记的 consumed_len，避免重复构图）
@@ -143,7 +151,7 @@ impl AlgoEngine {
 
         if should_record {
             self.composition
-                .record_partial_segment(selected.text.clone(), selected.pinyin.clone());
+                .record_partial_segment(selected.text, selected.pinyin);
         } else {
             self.composition.clear_partial_segments();
         }
