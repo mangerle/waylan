@@ -77,24 +77,28 @@ pub fn build_common_candidate_box_state(
         core_candidates.push(ac.to_core_candidate());
     }
 
-    let grid_candidates = if grid_state.is_expanded() {
+    let (expanded_card, grid_state_resolved, grid_candidates) = if grid_state.is_expanded() {
         let all = engine.all_candidates();
         let take_count = all.len().min(30);
         let mut grid = Vec::with_capacity(take_count);
         for ac in all.iter().take(take_count) {
             grid.push(ac.to_core_candidate());
         }
-        grid
+        (ExpandedCardState::Collapsed, grid_state, grid)
+    } else if engine.is_expanded() {
+        (
+            ExpandedCardState::Expanded {
+                selected_index: engine.expanded_selected_index(),
+            },
+            GridState::Collapsed,
+            Vec::new(),
+        )
     } else {
-        Vec::new()
-    };
-
-    let expanded_card = if engine.is_expanded() {
-        ExpandedCardState::Expanded {
-            selected_index: engine.expanded_selected_index(),
-        }
-    } else {
-        ExpandedCardState::Collapsed
+        (
+            ExpandedCardState::Collapsed,
+            GridState::Collapsed,
+            Vec::new(),
+        )
     };
 
     let is_dynamic_v_mode = engine.raw_input().starts_with('v');
@@ -117,7 +121,7 @@ pub fn build_common_candidate_box_state(
         (engine.formatted_preedit(), badge)
     };
 
-    let selected_index = if let Some(idx) = grid_state.selected_index() {
+    let selected_index = if let Some(idx) = grid_state_resolved.selected_index() {
         idx
     } else {
         engine.selected_index()
@@ -130,7 +134,7 @@ pub fn build_common_candidate_box_state(
         selected_index,
         expanded_card,
         mode_badge,
-        grid_state,
+        grid_state: grid_state_resolved,
         grid_candidates,
         voice: None,
     }
