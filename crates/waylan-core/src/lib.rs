@@ -191,53 +191,6 @@ impl CandidateBoxState {
     }
 }
 
-/// 输入法算法引擎通用抽象特型 (ImeEngine)
-///
-/// # 设计原理
-/// - **实现初衷**：解除顶层 Wayland 协议层与 Daemon 服务层对具体拼音算法实现的硬编码强耦合。
-///   实现该特型后，上层应用不仅可接入现有的双字前缀字典树/Viterbi 算法引擎，亦可无缝对接双拼、五笔或外部输入后端。
-/// - **核心优势**：接口边界清晰内聚，状态流转纯粹，便于上层快速编写基于 Mock 引擎的协议与界面测试。
-/// - **代价与局限**：高级特有功能（如特定字典热重载细节）需通过内部引用或辅助特型向下透传。
-pub trait ImeEngine: Send {
-    /// 向输入引擎推入一个 ASCII 字符
-    fn push_char(&mut self, ch: char) -> bool;
-
-    /// 从当前光标位置删除前一个字符（退格操作）
-    fn pop_char(&mut self) -> bool;
-
-    /// 获取当前未转换的原始字母输入串
-    fn raw_input(&self) -> &str;
-
-    /// 获取格式化后的预编辑字符串（含音节分词符）
-    fn formatted_preedit(&self) -> String;
-
-    /// 获取当前候选词列表
-    fn candidates(&self) -> &[Candidate];
-
-    /// 获取当前选中的高亮候选词索引
-    fn selected_index(&self) -> usize;
-
-    /// 确认选择指定序号的候选词并上屏
-    ///
-    /// 返回 `(上屏文本, 剩余预编辑文本长度)`
-    fn select_candidate(&mut self, index: usize, timestamp: u64) -> Option<(String, usize)>;
-
-    /// 翻至下一页候选词
-    fn next_page(&mut self) -> bool;
-
-    /// 翻至上一页候选词
-    fn prev_page(&mut self) -> bool;
-
-    /// 高亮移动到下一个候选词
-    fn next_candidate(&mut self);
-
-    /// 高亮移动到上一个候选词
-    fn prev_candidate(&mut self);
-
-    /// 重置清空当前输入状态
-    fn reset(&mut self);
-}
-
 /// 将半角 ASCII 字符转换为全角字符
 ///
 /// # 设计原理
