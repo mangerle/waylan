@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
-use waylan_core::{CloudAsrConfig, CloudProfile, CloudProviderType};
+use waylan_voice::{CloudAsrConfig, CloudProfile, CloudProviderType, VoiceEngineType};
 
 use crate::callbacks::TaskRunningGuard;
 use crate::sync::{sync_config_to_window, update_config_from_window};
@@ -213,7 +213,7 @@ fn handle_delete_cloud_profile(
         let removed = cfg.voice.cloud_profiles.remove(index);
         if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", removed.id)) {
             cfg.voice.selected_asr = None;
-            cfg.voice.engine_type = waylan_core::VoiceEngineType::Offline;
+            cfg.voice.engine_type = VoiceEngineType::Offline;
         }
         editing_id.borrow_mut().take();
         win.set_is_editing_cloud(false);

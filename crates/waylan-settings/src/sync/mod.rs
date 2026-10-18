@@ -192,20 +192,21 @@ mod tests {
         let mut voice_pipeline_cfg = updated_cfg.clone();
         voice_pipeline_cfg.voice.afe.enabled = true;
         voice_pipeline_cfg.voice.afe.high_pass_filter = false;
+        use waylan_voice::{CloudProfile, CloudProviderType, VoiceEngineType};
         voice_pipeline_cfg.voice.afe.noise_suppression = true;
         voice_pipeline_cfg.voice.afe.auto_gain_control = false;
         voice_pipeline_cfg.voice.vad.silence_timeout_ms = 800;
         voice_pipeline_cfg.voice.auto_punctuation = false;
-        voice_pipeline_cfg.voice.cloud_profiles = vec![waylan_core::CloudProfile {
+        voice_pipeline_cfg.voice.cloud_profiles = vec![CloudProfile {
             id: "test-openai".to_string(),
             name: "测试 OpenAI".to_string(),
-            provider: waylan_core::CloudProviderType::OpenAiCompatible,
+            provider: CloudProviderType::OpenAiCompatible,
             endpoint: "https://api.openai.com/v1/audio/transcriptions".to_string(),
             api_key: Some("sk-test12345678".to_string()),
             model: "whisper-1".to_string(),
         }];
         voice_pipeline_cfg.voice.selected_asr = Some("cloud:test-openai".to_string());
-        voice_pipeline_cfg.voice.engine_type = waylan_core::VoiceEngineType::Cloud;
+        voice_pipeline_cfg.voice.engine_type = VoiceEngineType::Cloud;
 
         sync_config_to_window(&window, &voice_pipeline_cfg);
 
@@ -243,10 +244,7 @@ mod tests {
         assert!(roundtrip_cfg.voice.itn.pangu_spacing);
         assert!(roundtrip_cfg.voice.interaction.real_time_preview);
         assert!(!roundtrip_cfg.voice.interaction.show_floating_bar);
-        assert_eq!(
-            roundtrip_cfg.voice.engine_type,
-            waylan_core::VoiceEngineType::Offline
-        );
+        assert_eq!(roundtrip_cfg.voice.engine_type, VoiceEngineType::Offline);
         assert!(roundtrip_cfg.voice.selected_asr.is_none());
         assert_eq!(roundtrip_cfg.voice.cloud_profiles.len(), 1);
         assert_eq!(roundtrip_cfg.voice.cloud_profiles[0].name, "测试 OpenAI");

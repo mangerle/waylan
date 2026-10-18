@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
-use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory};
+use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory, VadModelType};
 
 use super::save_config_and_notify_status;
 use crate::callbacks::{pick_directory_dialog_async, pick_file_dialog_async};
@@ -41,7 +41,7 @@ pub(crate) fn register_model_import_callbacks(
                 "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
                 |cfg, path| {
                     cfg.voice.vad.model_path = Some(path.to_string());
-                    cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
+                    cfg.voice.vad.vad_type = VadModelType::SileroOnnx;
                 },
             );
         }

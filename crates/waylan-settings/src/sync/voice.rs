@@ -1,7 +1,6 @@
-//! 语音输入配置与模型状态双向同步模块
-
 use crate::{CloudProfileItem, SettingsWindow};
-use waylan_core::config::{AppConfig, VoiceVisualEffect};
+use waylan_core::config::AppConfig;
+use waylan_voice::{NsEngineType, VadModelType, VoiceEngineType, VoiceVisualEffect};
 
 /// 同步语音输入配置与模型状态至 Slint 界面属性
 pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
@@ -166,7 +165,7 @@ fn sync_vad_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         .iter()
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
-    let vad_idx = if cfg.voice.vad.vad_type == waylan_core::VadModelType::Energy {
+    let vad_idx = if cfg.voice.vad.vad_type == VadModelType::Energy {
         vad_models
             .iter()
             .position(|m| m.path.as_deref() == Some("__energy__"))
@@ -210,9 +209,9 @@ fn sync_ns_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
     let ns_idx = match cfg.voice.afe.ns_engine {
-        waylan_core::NsEngineType::Rnnoise => 0,
-        waylan_core::NsEngineType::DeepFilterNet => 1,
-        waylan_core::NsEngineType::Gtcrn => 2,
+        NsEngineType::Rnnoise => 0,
+        NsEngineType::DeepFilterNet => 1,
+        NsEngineType::Gtcrn => 2,
         _ => 0,
     };
     window.set_ns_model_names(slint::ModelRc::from(std::rc::Rc::new(
@@ -295,7 +294,7 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
 
     if asr_idx < local_asrs.len() {
         // 选中本地离线 ASR 模型
-        cfg.voice.engine_type = waylan_core::VoiceEngineType::Offline;
+        cfg.voice.engine_type = VoiceEngineType::Offline;
         cfg.voice.selected_asr = None;
         if let Some(m) = local_asrs.get(asr_idx) {
             cfg.voice.offline.model_dir = m.path.clone();
@@ -304,7 +303,7 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
         // 选中云端 Profile
         let cloud_idx = asr_idx - local_asrs.len();
         if let Some(profile) = cfg.voice.cloud_profiles.get(cloud_idx) {
-            cfg.voice.engine_type = waylan_core::VoiceEngineType::Cloud;
+            cfg.voice.engine_type = VoiceEngineType::Cloud;
             cfg.voice.selected_asr = Some(format!("cloud:{}", profile.id));
             cfg.voice.cloud.endpoint = profile.endpoint.clone();
             cfg.voice.cloud.api_key = profile.api_key.clone();
@@ -316,10 +315,10 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
     let vad_idx = window.get_vad_model_index() as usize;
     if let Some(m) = vad_models.get(vad_idx) {
         if m.path.as_deref() == Some("__energy__") {
-            cfg.voice.vad.vad_type = waylan_core::VadModelType::Energy;
+            cfg.voice.vad.vad_type = VadModelType::Energy;
             cfg.voice.vad.model_path = None;
         } else {
-            cfg.voice.vad.vad_type = waylan_core::VadModelType::SileroOnnx;
+            cfg.voice.vad.vad_type = VadModelType::SileroOnnx;
             cfg.voice.vad.model_path = m.path.clone();
         }
     }
@@ -338,13 +337,13 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
     let ns_idx = window.get_ns_model_index() as usize;
     if let Some(m) = ns_filtered.get(ns_idx) {
         if m.path.as_deref() == Some("__rnnoise__") {
-            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Rnnoise;
+            cfg.voice.afe.ns_engine = NsEngineType::Rnnoise;
             cfg.voice.afe.custom_ns_model_path = None;
         } else if m.path.as_deref() == Some("__deepfilternet__") {
-            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::DeepFilterNet;
+            cfg.voice.afe.ns_engine = NsEngineType::DeepFilterNet;
             cfg.voice.afe.custom_ns_model_path = None;
         } else if m.path.as_deref() == Some("__gtcrn__") {
-            cfg.voice.afe.ns_engine = waylan_core::NsEngineType::Gtcrn;
+            cfg.voice.afe.ns_engine = NsEngineType::Gtcrn;
             cfg.voice.afe.custom_ns_model_path = None;
         }
     }

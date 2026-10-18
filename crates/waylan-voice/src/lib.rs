@@ -37,3 +37,9 @@ pub use session::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 pub use vad::{
     calculate_rms, create_vad, EnergyVad, ModelVad, VadDetector, VadProcessor, WaveformVisualizer,
 };
+
+pub use waylan_core::config::{
+    AudioFrontEndConfig, CloudAsrConfig, CloudProfile, CloudProviderType, NsEngineType,
+    OfflineAsrConfig, OfflineModelType, VadConfig, VadModelType, VoiceConfig, VoiceEngineType,
+    VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
+};
