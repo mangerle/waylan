@@ -1,3 +1,4 @@
+use super::calculate_length_boost;
 use crate::syllables::find_syllables_by_prefix;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
@@ -53,7 +54,7 @@ impl LexiconTable {
                 if let Some(matches) = self.get_top_raw_entries(&full_key, 8) {
                     for (text, score, word_id) in matches {
                         let char_len = text.chars().count() as u32;
-                        let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                        let boost = calculate_length_boost(char_len);
                         let final_score = score.saturating_add(boost);
                         candidates.push(
                             AlgoCandidate::new(text, full_key.as_str(), final_score)

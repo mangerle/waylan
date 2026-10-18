@@ -8,6 +8,7 @@
 
 use super::super::AlgoEngine;
 use crate::prism::{PrismEngine, PrismFuzzy, SegmentPath};
+use crate::table::LENGTH_BOOST_MULTIPLIER;
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
@@ -160,7 +161,7 @@ impl AlgoEngine {
     }
 
     /// 校准次优音节切分路径的词库候选得分：
-    /// 剥离因零声母借音碎切导致字数增加而虚增的字长加成（600,000/字），并扣除路径切分代价差值惩罚。
+    /// 剥离因零声母借音碎切导致字数增加而虚增的字长加成（LENGTH_BOOST_MULTIPLIER/字），并扣除路径切分代价差值惩罚。
     #[inline]
     fn calibrate_lexicon_path_score(
         score: u32,
@@ -171,7 +172,7 @@ impl AlgoEngine {
         let char_len = text.chars().count() as u32;
         let extra_boost = char_len
             .saturating_sub(best_syl_count)
-            .saturating_mul(600_000);
+            .saturating_mul(LENGTH_BOOST_MULTIPLIER);
         let deduction = extra_boost.saturating_add(cost_penalty);
         score.saturating_sub(deduction).max(1)
     }

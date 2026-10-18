@@ -12,6 +12,28 @@ mod sample;
 
 pub use mmap::{CompactMmapLexicon, COMPACT_DICT_MAGIC};
 
+/// 词长加权分基数（每增加一字长度提权 600,000 分，确保长词优先于单字短词）
+pub const LENGTH_BOOST_MULTIPLIER: u32 = 600_000;
+
+/// 计算词长带来的提权加分
+///
+/// # 设计原理
+/// - 单字（长度 <= 1）无提权加分；
+/// - 多字词每增加一字，获得 `LENGTH_BOOST_MULTIPLIER` 权重的提权加分；
+/// - 采用饱和算术防范潜在溢出。
+#[inline]
+pub fn calculate_length_boost(char_count: u32) -> u32 {
+    char_count
+        .saturating_sub(1)
+        .saturating_mul(LENGTH_BOOST_MULTIPLIER)
+}
+
+/// 剥离词长加权分，还原原始词库静态分
+#[inline]
+pub fn extract_raw_score(boosted_score: u32) -> u32 {
+    boosted_score % LENGTH_BOOST_MULTIPLIER
+}
+
 /// 紧凑词典索引表 (Table / Lexicon)
 ///
 /// # 设计原理
@@ -188,7 +210,7 @@ impl LexiconTable {
                 out.reserve(matches.len());
                 for (text, score, word_id) in matches {
                     let char_len = text.chars().count() as u32;
-                    let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                    let boost = calculate_length_boost(char_len);
                     let final_score = score.saturating_add(boost);
                     out.push(
                         AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
@@ -202,7 +224,7 @@ impl LexiconTable {
             out.reserve(matches.len());
             for (text, score) in matches {
                 let char_len = text.chars().count() as u32;
-                let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                let boost = calculate_length_boost(char_len);
                 let final_score = score.saturating_add(boost);
                 out.push(AlgoCandidate::new(text.clone(), key, final_score));
             }
@@ -226,7 +248,7 @@ impl LexiconTable {
                 out.reserve(matches.len());
                 for (text, score, word_id) in matches {
                     let char_len = text.chars().count() as u32;
-                    let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                    let boost = calculate_length_boost(char_len);
                     let final_score = score.saturating_add(boost);
                     out.push(
                         AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
@@ -239,7 +261,7 @@ impl LexiconTable {
         if let Some(matches) = self.entries.get(key) {
             for (text, score) in matches.iter().take(k) {
                 let char_len = text.chars().count() as u32;
-                let boost = char_len.saturating_sub(1).saturating_mul(600_000);
+                let boost = calculate_length_boost(char_len);
                 let final_score = score.saturating_add(boost);
                 out.push(AlgoCandidate::new(text.clone(), key, final_score));
             }

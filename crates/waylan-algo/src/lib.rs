@@ -28,7 +28,10 @@ pub use custom_phrase::{
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;
-pub use table::{CompactMmapLexicon, LexiconTable};
+pub use table::{
+    calculate_length_boost, extract_raw_score, CompactMmapLexicon, LexiconTable,
+    LENGTH_BOOST_MULTIPLIER,
+};
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 pub use user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};
 pub use vocab::Vocabulary;

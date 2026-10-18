@@ -5,6 +5,7 @@ use super::AlgoEngine;
 use crate::evaluator::DateTimeEvaluator;
 use crate::prism::SegmentPath;
 use crate::syllables::is_valid_syllable;
+use crate::table::{calculate_length_boost, extract_raw_score};
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
@@ -349,10 +350,7 @@ impl AlgoEngine {
                 let phrase_pinyin = format!("{}'{}", head_pinyin, tail.pinyin);
 
                 let char_len = (phrase_text.chars().count() as u32).min(64);
-                let length_boost = char_len
-                    .saturating_sub(1)
-                    .saturating_mul(600_000)
-                    .min(30_000_000);
+                let length_boost = calculate_length_boost(char_len).min(30_000_000);
 
                 let bigram_bonus = self
                     .resources
@@ -371,8 +369,8 @@ impl AlgoEngine {
                         }
                     });
 
-                let head_base = (*head_score % 600_000) / 8;
-                let tail_base = (tail.score % 600_000) / 4;
+                let head_base = extract_raw_score(*head_score) / 8;
+                let tail_base = extract_raw_score(tail.score) / 4;
                 let final_score = head_base
                     .saturating_add(tail_base)
                     .saturating_add(length_boost)
