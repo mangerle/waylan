@@ -21,9 +21,25 @@ pub(crate) struct UiSnapshot {
 }
 
 impl UiSnapshot {
+    /// 构造空 UI 快照（零堆分配开销）
+    pub(crate) fn empty() -> Self {
+        Self {
+            preedit: String::new(),
+            candidates: Vec::new(),
+            page_size: 1,
+            selected_index: 0,
+            orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
+            index_style: CandidateIndexStyle::None,
+        }
+    }
+
     /// 从当前会话核心提取 UI 快照
     pub(crate) fn capture(core: &IbusSessionCore) -> Self {
         let is_voice = core.is_voice_active();
+        if !is_voice && core.runtime.core.engine.raw_input().is_empty() {
+            return Self::empty();
+        }
+
         let box_state = build_common_candidate_box_state(
             &core.runtime.core.engine,
             CandidateBoxBuildOptions {

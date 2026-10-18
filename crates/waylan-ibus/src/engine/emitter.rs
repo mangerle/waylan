@@ -21,34 +21,30 @@ use super::snapshot::UiSnapshot;
 impl IbusEngineService {
     /// 在锁作用域之外根据快照向 `ibus-daemon` 发射预编辑与候选词表更新信号
     pub(crate) async fn emit_ui_snapshot(ctxt: &SignalContext<'_>, snap: &UiSnapshot) {
-        let preedit_visible = !snap.preedit.is_empty();
-        if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
+        if snap.preedit.is_empty() {
+            let _ = Self::hide_preedit_text(ctxt).await;
+        } else if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
             let char_len = snap.preedit.chars().count() as u32;
             let _ = Self::update_preedit_text(
                 ctxt,
                 Value::from(preedit_val),
                 char_len,
-                preedit_visible,
+                true,
                 IBUS_ENGINE_PREEDIT_CLEAR,
             )
             .await;
         }
-        if !preedit_visible {
-            let _ = Self::hide_preedit_text(ctxt).await;
-        }
 
-        let table_visible = !snap.candidates.is_empty();
-        if let Ok(table_val) = build_ibus_lookup_table(
+        if snap.candidates.is_empty() {
+            let _ = Self::hide_lookup_table(ctxt).await;
+        } else if let Ok(table_val) = build_ibus_lookup_table(
             &snap.candidates,
             snap.page_size,
             snap.selected_index,
             snap.orientation,
             snap.index_style,
         ) {
-            let _ = Self::update_lookup_table(ctxt, Value::from(table_val), table_visible).await;
-        }
-        if !table_visible {
-            let _ = Self::hide_lookup_table(ctxt).await;
+            let _ = Self::update_lookup_table(ctxt, Value::from(table_val), true).await;
         }
     }
 
