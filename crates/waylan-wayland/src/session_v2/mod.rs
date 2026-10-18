@@ -140,6 +140,7 @@ impl WaylanV2Session {
                 mode: self.runtime.core.mode,
                 is_active: self.focus.is_active,
                 grid_state: self.runtime.core.grid_state,
+                expanded_card: Some(self.runtime.core.expanded_card),
                 inline_preedit: true,
                 voice_manager: self.runtime.voice_manager.as_ref(),
             },

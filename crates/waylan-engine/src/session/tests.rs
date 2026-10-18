@@ -248,3 +248,21 @@ fn test_ime_core_session_grid_navigation_and_selection() {
     assert!(!session.is_grid_expanded());
     assert!(!session.engine.raw_input().is_empty());
 }
+
+#[test]
+fn test_ime_core_session_expanded_card_and_reset_context() {
+    let mut session = ImeCoreSession::default();
+    assert!(!session.is_card_expanded());
+    assert!(!session.is_grid_expanded());
+
+    session.expanded_card = ExpandedCardState::Expanded { selected_index: 2 };
+    assert!(session.is_card_expanded());
+
+    session.expand_grid();
+    assert!(session.is_grid_expanded());
+
+    session.reset_context();
+    assert!(!session.is_card_expanded());
+    assert!(!session.is_grid_expanded());
+    assert!(session.engine.raw_input().is_empty());
+}

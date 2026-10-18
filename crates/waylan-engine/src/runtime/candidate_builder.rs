@@ -20,6 +20,7 @@ pub struct CandidateBoxBuildOptions<'a> {
     pub mode: InputMode,
     pub is_active: bool,
     pub grid_state: GridState,
+    pub expanded_card: Option<ExpandedCardState>,
     pub inline_preedit: bool,
     pub voice_manager: Option<&'a VoiceInteractionManager>,
 }
@@ -33,6 +34,7 @@ pub fn build_common_candidate_box_state(
         mode,
         is_active,
         grid_state,
+        expanded_card: card_opt,
         inline_preedit,
         voice_manager,
     } = opts;
@@ -85,6 +87,8 @@ pub fn build_common_candidate_box_state(
             grid.push(ac.to_core_candidate());
         }
         (ExpandedCardState::Collapsed, grid_state, grid)
+    } else if let Some(card @ ExpandedCardState::Expanded { .. }) = card_opt {
+        (card, GridState::Collapsed, Vec::new())
     } else if engine.is_expanded() {
         (
             ExpandedCardState::Expanded {

@@ -22,7 +22,7 @@ pub use key_handler::{
 use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
-use waylan_core::{GridState, InputMode, ParsedShortcut};
+use waylan_core::{ExpandedCardState, GridState, InputMode, ParsedShortcut};
 
 /// 全局模式与功能快捷键切换动作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +101,8 @@ pub struct ImeCoreSession {
     pub full_width_char: bool,
     /// 候选词 5 行大网格展开状态机（杜绝未展开时选中项悬空的非法状态）
     pub grid_state: GridState,
+    /// 二级格式扩展卡片展开状态机（日期/时间格式多项挑选）
+    pub expanded_card: ExpandedCardState,
 }
 
 impl Default for ImeCoreSession {
@@ -128,6 +130,7 @@ impl ImeCoreSession {
             full_width_punct_shortcut: ParsedShortcut::parse("Ctrl + ."),
             full_width_char: false,
             grid_state: GridState::Collapsed,
+            expanded_card: ExpandedCardState::Collapsed,
         }
     }
 
@@ -135,6 +138,19 @@ impl ImeCoreSession {
     #[inline]
     pub fn is_grid_expanded(&self) -> bool {
         self.grid_state.is_expanded()
+    }
+
+    /// 查询当前是否处于二级扩展卡片展开态
+    #[inline]
+    pub fn is_card_expanded(&self) -> bool {
+        self.expanded_card.is_expanded()
+    }
+
+    /// 重置会话交互状态（大网格与二级卡片均收起，并清空算法组词缓冲区）
+    pub fn reset_context(&mut self) {
+        self.grid_state = GridState::Collapsed;
+        self.expanded_card = ExpandedCardState::Collapsed;
+        self.engine.reset();
     }
 
     /// 获取大候选网格展开态下的高亮选中项绝对索引，未展开则返回 0

@@ -377,6 +377,7 @@ impl ImeRuntime {
                 mode: self.core.mode,
                 is_active,
                 grid_state: self.core.grid_state,
+                expanded_card: Some(self.core.expanded_card),
                 inline_preedit,
                 voice_manager: self.voice_manager.as_ref(),
             },
