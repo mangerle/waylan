@@ -1,12 +1,26 @@
 //! 输入法会话与托盘/指示器间共享的原子状态容器
 //!
 //! # 设计原理
-//! - **实现初衷**：聚合散落在输入法会话（Wayland/IBus）与系统托盘之间的独立 `Arc<AtomicBool>`，消除分散状态传递与更新时序不一致隐患。
-//! - **核心优势**：单对象持有所有关键输入模式标志（中英、CapsLock、简繁、全半角标点、全半角字符），支持快速一致性快照与整体传递。
-//! - **代价与局限**：底层状态变迁仍基于各字段的独立原子操作，跨多状态修改需注意读取顺序。
+//! - **实现初衷**：聚合散落在输入法会话（Wayland/IBus）与系统托盘之间的独立状态，消除分散状态传递与更新时序不一致隐患。
+//! - **核心优势**：
+//!   1. 内部采用单原子位图 (`AtomicU8`) 统一驱动，`snapshot()` 仅需单次原子指令，从物理上杜绝状态撕裂 (State Tearing)；
+//!   2. 支持单次 CAS 原子批量更新中英模式与 CapsLock 状态，避免瞬时非法状态组合；
+//!   3. 提供向后兼容的独立原子布尔句柄，保障渐进式平滑重构。
+//! - **代价与局限**：在兼容过渡期维护双写同步，后续将全面废弃单原子布尔暴露。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
+
+/// 中文输入模式状态位 (bit 0)
+pub const FLAG_CHINESE: u8 = 1 << 0;
+/// CapsLock 大写锁定状态位 (bit 1)
+pub const FLAG_CAPS_LOCKED: u8 = 1 << 1;
+/// 繁体中文输出状态位 (bit 2)
+pub const FLAG_TRADITIONAL: u8 = 1 << 2;
+/// 全角标点状态位 (bit 3)
+pub const FLAG_FULL_WIDTH_PUNCT: u8 = 1 << 3;
+/// 全角字符状态位 (bit 4)
+pub const FLAG_FULL_WIDTH_CHAR: u8 = 1 << 4;
 
 /// 共享输入状态快照（不可变只读值对象）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,18 +37,20 @@ pub struct InputStateSnapshot {
     pub full_width_char: bool,
 }
 
-/// 聚合的输入法状态原子标志容器
+/// 聚合的输入法状态原子标志容器（基于单原子位图实现，杜绝状态撕裂）
 #[derive(Debug, Clone)]
 pub struct SharedInputFlags {
-    /// 中文模式标志
+    /// 核心单原子位图
+    flags: Arc<AtomicU8>,
+    /// 中文模式兼容标志
     pub is_chinese: Arc<AtomicBool>,
-    /// CapsLock 锁定标志
+    /// CapsLock 锁定兼容标志
     pub is_caps_locked: Arc<AtomicBool>,
-    /// 简繁体状态标志
+    /// 简繁体状态兼容标志
     pub traditional_chinese: Arc<AtomicBool>,
-    /// 全半角标点标志
+    /// 全半角标点兼容标志
     pub full_width_punct: Arc<AtomicBool>,
-    /// 全半角字符标志
+    /// 全半角字符兼容标志
     pub full_width_char: Arc<AtomicBool>,
 }
 
@@ -46,7 +62,22 @@ impl SharedInputFlags {
         full_width_punct: bool,
         full_width_char: bool,
     ) -> Self {
+        let mut bits = 0u8;
+        if init_chinese {
+            bits |= FLAG_CHINESE;
+        }
+        if traditional_chinese {
+            bits |= FLAG_TRADITIONAL;
+        }
+        if full_width_punct {
+            bits |= FLAG_FULL_WIDTH_PUNCT;
+        }
+        if full_width_char {
+            bits |= FLAG_FULL_WIDTH_CHAR;
+        }
+
         Self {
+            flags: Arc::new(AtomicU8::new(bits)),
             is_chinese: Arc::new(AtomicBool::new(init_chinese)),
             is_caps_locked: Arc::new(AtomicBool::new(false)),
             traditional_chinese: Arc::new(AtomicBool::new(traditional_chinese)),
@@ -55,75 +86,124 @@ impl SharedInputFlags {
         }
     }
 
-    /// 获取当前所有状态的一致性快照
+    /// 获取当前所有状态的一致性快照（单原子指令，物理杜绝状态撕裂）
     pub fn snapshot(&self) -> InputStateSnapshot {
+        let bits = self.flags.load(Ordering::Acquire);
         InputStateSnapshot {
-            is_chinese: self.is_chinese.load(Ordering::Acquire),
-            is_caps_locked: self.is_caps_locked.load(Ordering::Acquire),
-            traditional_chinese: self.traditional_chinese.load(Ordering::Acquire),
-            full_width_punct: self.full_width_punct.load(Ordering::Acquire),
-            full_width_char: self.full_width_char.load(Ordering::Acquire),
+            is_chinese: (bits & FLAG_CHINESE) != 0,
+            is_caps_locked: (bits & FLAG_CAPS_LOCKED) != 0,
+            traditional_chinese: (bits & FLAG_TRADITIONAL) != 0,
+            full_width_punct: (bits & FLAG_FULL_WIDTH_PUNCT) != 0,
+            full_width_char: (bits & FLAG_FULL_WIDTH_CHAR) != 0,
+        }
+    }
+
+    /// 内部位操作辅助函数
+    fn set_bit(&self, mask: u8, val: bool) {
+        if val {
+            self.flags.fetch_or(mask, Ordering::Release);
+        } else {
+            self.flags.fetch_and(!mask, Ordering::Release);
         }
     }
 
     /// 查询当前是否处于中文模式
     #[inline]
     pub fn is_chinese(&self) -> bool {
-        self.is_chinese.load(Ordering::Acquire)
+        (self.flags.load(Ordering::Acquire) & FLAG_CHINESE) != 0
     }
 
     /// 设置中文模式标志
     #[inline]
     pub fn set_chinese(&self, val: bool) {
+        self.set_bit(FLAG_CHINESE, val);
         self.is_chinese.store(val, Ordering::Release);
     }
 
     /// 查询当前是否处于大写锁定状态
     #[inline]
     pub fn is_caps_locked(&self) -> bool {
-        self.is_caps_locked.load(Ordering::Acquire)
+        (self.flags.load(Ordering::Acquire) & FLAG_CAPS_LOCKED) != 0
     }
 
     /// 设置大写锁定标志
     #[inline]
     pub fn set_caps_locked(&self, val: bool) {
+        self.set_bit(FLAG_CAPS_LOCKED, val);
         self.is_caps_locked.store(val, Ordering::Release);
+    }
+
+    /// 原子化批量更新中英模式与 CapsLock 状态（CAS 循环保障单次原子更新，杜绝瞬时组合撕裂）
+    pub fn update_chinese_and_caps(&self, is_chinese: bool, is_caps_locked: bool) {
+        let mut current = self.flags.load(Ordering::Acquire);
+        loop {
+            let mut target = current;
+            if is_chinese {
+                target |= FLAG_CHINESE;
+            } else {
+                target &= !FLAG_CHINESE;
+            }
+            if is_caps_locked {
+                target |= FLAG_CAPS_LOCKED;
+            } else {
+                target &= !FLAG_CAPS_LOCKED;
+            }
+            match self.flags.compare_exchange_weak(
+                current,
+                target,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+        self.is_chinese.store(is_chinese, Ordering::Release);
+        self.is_caps_locked.store(is_caps_locked, Ordering::Release);
     }
 
     /// 查询当前是否处于繁体输出模式
     #[inline]
     pub fn is_traditional(&self) -> bool {
-        self.traditional_chinese.load(Ordering::Acquire)
+        (self.flags.load(Ordering::Acquire) & FLAG_TRADITIONAL) != 0
     }
 
     /// 设置繁体输出标志
     #[inline]
     pub fn set_traditional(&self, val: bool) {
+        self.set_bit(FLAG_TRADITIONAL, val);
         self.traditional_chinese.store(val, Ordering::Release);
     }
 
     /// 查询当前是否处于全角标点模式
     #[inline]
     pub fn is_full_width_punct(&self) -> bool {
-        self.full_width_punct.load(Ordering::Acquire)
+        (self.flags.load(Ordering::Acquire) & FLAG_FULL_WIDTH_PUNCT) != 0
     }
 
     /// 设置全角标点标志
     #[inline]
     pub fn set_full_width_punct(&self, val: bool) {
+        self.set_bit(FLAG_FULL_WIDTH_PUNCT, val);
         self.full_width_punct.store(val, Ordering::Release);
     }
 
     /// 获取全角字符标志
     #[inline]
     pub fn is_full_width_char(&self) -> bool {
-        self.full_width_char.load(Ordering::Acquire)
+        (self.flags.load(Ordering::Acquire) & FLAG_FULL_WIDTH_CHAR) != 0
     }
 
     /// 设置全角字符标志
     #[inline]
     pub fn set_full_width_char(&self, val: bool) {
+        self.set_bit(FLAG_FULL_WIDTH_CHAR, val);
         self.full_width_char.store(val, Ordering::Release);
+    }
+
+    /// 获取底层单原子位图引用句柄
+    pub fn raw_flag(&self) -> Arc<AtomicU8> {
+        Arc::clone(&self.flags)
     }
 
     /// 获取中文模式原子标志句柄
@@ -171,5 +251,13 @@ mod tests {
         let snap2 = flags.snapshot();
         assert!(!snap2.is_chinese);
         assert!(snap2.is_caps_locked);
+
+        // 验证原子批量更新
+        flags.update_chinese_and_caps(true, false);
+        let snap3 = flags.snapshot();
+        assert!(snap3.is_chinese);
+        assert!(!snap3.is_caps_locked);
+        assert!(flags.is_chinese());
+        assert!(!flags.is_caps_locked());
     }
 }

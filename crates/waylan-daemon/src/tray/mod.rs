@@ -120,10 +120,8 @@ impl TrayService {
     #[cfg(test)]
     pub fn update_mode(&self, mode: InputMode) {
         let is_zh = matches!(mode, InputMode::Chinese);
-        let prev = self
-            .shared_flags
-            .is_chinese_flag()
-            .swap(is_zh, Ordering::AcqRel);
+        let prev = self.shared_flags.is_chinese();
+        self.shared_flags.set_chinese(is_zh);
         if prev != is_zh {
             let _ = self.icon_update_tx.try_send(());
         }
