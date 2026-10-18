@@ -9,77 +9,94 @@ impl AlgoEngine {
     /// 重新计算当前输入序列的全量候选词列表并分页刷新
     pub(crate) fn recompute_candidates(&mut self) {
         if self.composition.is_empty() {
-            self.viewport.reset_selection();
-            self.viewport.all_candidates_cache.clear();
-            self.viewport.current_candidates.clear();
-            self.composition.clear_cached_preedit();
+            self.clear_candidates_and_preedit();
             return;
         }
 
         self.viewport.reset_selection();
 
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
-        if let Some(dispatched) =
-            ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config)
-        {
-            let input_len = self.composition.len();
-            let raw_str = self.composition.as_str().to_string();
-            self.composition.set_cached_preedit(raw_str);
-            let mut cands = CandidatePipeline::process_all_with_opencc(
-                dispatched,
-                &self.config,
-                Some(&self.resources.opencc_dict),
-            );
-            for c in &mut cands {
-                if c.consumed_len.is_none() {
-                    c.consumed_len = Some(input_len);
-                }
-            }
-            self.viewport.all_candidates_cache = cands;
-            self.update_page_candidates();
+        if self.try_dispatch_special_mode() {
             return;
         }
 
-        // 2. 拼音模式：利用 Prism 构建 DAG 音节路径
-        let (paths, preedit_str) = {
-            let raw = self.composition.as_str();
-            let paths = PrismEngine::build_paths_with_entities(
-                raw,
-                &self.config.fuzzy,
-                Some(&self.resources.entity_manager),
-            );
-            let preedit_str = paths
-                .first()
-                .map(|p| {
-                    if p.is_broken_typo_fallback(&self.config.fuzzy) {
-                        paths
-                            .iter()
-                            .find(|tp| tp.is_typo && tp.remaining.is_empty())
-                            .and_then(|tp| tp.format_raw_with_spans(raw))
-                            .unwrap_or_else(|| p.to_key_string())
-                    } else {
-                        p.to_key_string()
-                    }
-                })
-                .unwrap_or_else(|| raw.to_string());
-            (paths, preedit_str)
-        };
+        // 2. 拼音模式：利用 Prism 构建 DAG 音节路径与预编辑字符串
+        let (paths, preedit_str) = self.build_pinyin_paths_and_preedit();
         self.composition.set_cached_preedit(preedit_str);
 
-        let raw_input = self.composition.as_str();
+        // 3. 聚合各层级候选词 (专名、DAG路径、长句合成、简拼与用户习惯)
+        let raw_candidates = self.collect_all_raw_candidates(&paths);
 
-        let mut best_units: Vec<String> = Vec::new();
-        if let Some(best) = paths.first() {
-            best_units.extend(best.syllables.iter().cloned());
-            if !best.remaining.is_empty() {
-                best_units.push(best.remaining.clone());
+        // 4. 流水线后处理、零页扩展注入与分页刷新
+        self.finalize_and_publish_candidates(&paths, raw_candidates);
+    }
+
+    /// 清空所有候选词缓存与预编辑内容
+    fn clear_candidates_and_preedit(&mut self) {
+        self.viewport.reset_selection();
+        self.viewport.all_candidates_cache.clear();
+        self.viewport.current_candidates.clear();
+        self.composition.clear_cached_preedit();
+    }
+
+    /// 尝试前缀特殊模式分流 (V计算器、U拆字、I特殊符号)，若命中则更新候选并返回 true
+    fn try_dispatch_special_mode(&mut self) -> bool {
+        let Some(dispatched) =
+            ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config)
+        else {
+            return false;
+        };
+
+        let input_len = self.composition.len();
+        let raw_str = self.composition.as_str().to_string();
+        self.composition.set_cached_preedit(raw_str);
+        let mut cands = CandidatePipeline::process_all_with_opencc(
+            dispatched,
+            &self.config,
+            Some(&self.resources.opencc_dict),
+        );
+        for c in &mut cands {
+            if c.consumed_len.is_none() {
+                c.consumed_len = Some(input_len);
             }
         }
+        self.viewport.all_candidates_cache = cands;
+        self.update_page_candidates();
+        true
+    }
 
+    /// 基于 Prism 构建音节切分 DAG 路径与预编辑字符串
+    fn build_pinyin_paths_and_preedit(&self) -> (Vec<SegmentPath>, String) {
+        let raw = self.composition.as_str();
+        let paths = PrismEngine::build_paths_with_entities(
+            raw,
+            &self.config.fuzzy,
+            Some(&self.resources.entity_manager),
+        );
+        let preedit_str = paths
+            .first()
+            .map(|p| {
+                if p.is_broken_typo_fallback(&self.config.fuzzy) {
+                    paths
+                        .iter()
+                        .find(|tp| tp.is_typo && tp.remaining.is_empty())
+                        .and_then(|tp| tp.format_raw_with_spans(raw))
+                        .unwrap_or_else(|| p.to_key_string())
+                } else {
+                    p.to_key_string()
+                }
+            })
+            .unwrap_or_else(|| raw.to_string());
+        (paths, preedit_str)
+    }
+
+    /// 聚合各维度候选词（专名实体、DAG 路径匹配、长句前缀合成、简拼降级与习惯加权）
+    fn collect_all_raw_candidates(&mut self, paths: &[SegmentPath]) -> Vec<AlgoCandidate> {
+        let raw_input = self.composition.as_str();
         let mut raw_candidates = std::mem::take(&mut self.scratch_candidates);
         raw_candidates.clear();
 
-        // 2.0 专名保护机制 (NER 原型)：精确命中受保护实体时注入置顶候选
+        // 1. 专名保护机制精确匹配
         if let Some(entity) = self.resources.entity_manager.match_exact(raw_input) {
             let mut cand = AlgoCandidate::new(entity, raw_input, 999_999);
             cand.tier = CandidateTier::ProtectedEntity;
@@ -94,28 +111,40 @@ impl AlgoEngine {
             .latest_timestamp()
             .max(self.adaptive.last_timestamp);
 
-        // 2.1 聚合 DAG 路径精确匹配与模糊音等价候选
-        self.collect_path_matches(&paths, eval_ts, &mut raw_candidates);
+        // 2. 收集各级候选
+        self.collect_path_matches(paths, eval_ts, &mut raw_candidates);
+        self.collect_sentence_and_prefix_matches(paths, &mut raw_candidates);
+        self.collect_acronym_and_fallback_matches(raw_input, paths, &mut raw_candidates);
 
-        // 2.2 聚合长句动态规划与前缀短语合成候选
-        self.collect_sentence_and_prefix_matches(&paths, &mut raw_candidates);
-
-        // 2.3 聚合首字母简拼与首音节单字降级候选
-        self.collect_acronym_and_fallback_matches(raw_input, &paths, &mut raw_candidates);
-
-        // 3. 动态应用用户习惯提权与上屏历史上下文亲和度加权
+        // 3. 应用用户词库提权与上下文亲和度加权
         self.apply_user_and_context_boost(&mut raw_candidates, eval_ts);
 
-        // 4. 送入后处理流水线（去重、简繁、字符集、注释），保留全量已排序去重候选
+        raw_candidates
+    }
+
+    /// 候选词流水线最终处理（去重、简繁、零页扩展、标记 consumed_len）并分页生效
+    fn finalize_and_publish_candidates(
+        &mut self,
+        paths: &[SegmentPath],
+        raw_candidates: Vec<AlgoCandidate>,
+    ) {
+        let raw_input = self.composition.as_str();
+        let mut best_units: Vec<String> = Vec::new();
+        if let Some(best) = paths.first() {
+            best_units.extend(best.syllables.iter().cloned());
+            if !best.remaining.is_empty() {
+                best_units.push(best.remaining.clone());
+            }
+        }
+
         let mut candidates = CandidatePipeline::process_all_with_opencc(
             raw_candidates,
             &self.config,
             Some(&self.resources.opencc_dict),
         );
 
-        self.inject_page_zero_extensions(raw_input, &paths, &mut candidates);
+        self.inject_page_zero_extensions(raw_input, paths, &mut candidates);
 
-        // 5. 在候选词产生时统一标记 consumed_len，消除选词上屏时重新计算音节图路径的微秒级冗余
         for cand in &mut candidates {
             if cand.consumed_len.is_none() {
                 cand.consumed_len = Some(Self::calculate_consumed_len(
