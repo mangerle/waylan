@@ -2,21 +2,7 @@ use super::pangu::PanguSpacing;
 use super::AlgoEngine;
 use crate::dispatcher::ModeDispatcher;
 use crate::types::{AlgoCandidate, CandidateTier};
-
-/// 判断字符是否为 CJK 表意汉字（覆盖基本区、扩展区 A~I、兼容表意文字及汉字零“〇”）
-#[inline]
-pub(crate) fn is_cjk_ideograph(c: char) -> bool {
-    matches!(
-        c,
-        '\u{3007}'
-            | '\u{3400}'..='\u{4DBF}'
-            | '\u{4E00}'..='\u{9FFF}'
-            | '\u{F900}'..='\u{FAFF}'
-            | '\u{20000}'..='\u{2EBEF}'
-            | '\u{2F800}'..='\u{2FA1F}'
-            | '\u{30000}'..='\u{323AF}'
-    )
-}
+use waylan_core::is_cjk_character;
 
 impl AlgoEngine {
     /// 判断当前选中的候选词是否应当被记录到用户自适应词频模型中
@@ -36,7 +22,7 @@ impl AlgoEngine {
         if ModeDispatcher::try_dispatch(self.composition.as_str(), &self.config).is_some() {
             return false;
         }
-        selected.text.chars().all(is_cjk_ideograph)
+        selected.text.chars().all(is_cjk_character)
     }
 
     pub fn select_candidate(

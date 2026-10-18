@@ -1,3 +1,5 @@
+use waylan_core::is_cjk_character;
+
 /// 盘古之白（中西文智能空格）与中文量词过滤模块
 pub struct PanguSpacing;
 
@@ -26,32 +28,20 @@ impl PanguSpacing {
             return false;
         }
 
-        let is_cjk = |c: char| -> bool {
-            matches!(
-                c,
-                '\u{3007}'
-                    | '\u{3400}'..='\u{4dbf}'
-                    | '\u{4e00}'..='\u{9fff}'
-                    | '\u{f900}'..='\u{faff}'
-                    | '\u{20000}'..='\u{2ebef}'
-                    | '\u{2f800}'..='\u{2fa1f}'
-                    | '\u{30000}'..='\u{323af}'
-            )
-        };
-
         // 场景 1：中文汉字接英文单词或数字（如："测试" + "Rust" => "测试 Rust"；"第" + "10" => "第 10"）
-        if is_cjk(prev_ch) && (curr_ch.is_ascii_alphabetic() || curr_ch.is_ascii_digit()) {
+        if is_cjk_character(prev_ch) && (curr_ch.is_ascii_alphabetic() || curr_ch.is_ascii_digit())
+        {
             return true;
         }
 
         // 场景 2：英文单词接中文汉字（如："Rust" + "代码" => "Rust 代码"）
-        if prev_ch.is_ascii_alphabetic() && is_cjk(curr_ch) {
+        if prev_ch.is_ascii_alphabetic() && is_cjk_character(curr_ch) {
             return true;
         }
 
         // 场景 3：数字接中文汉字（如："100" + "苹果" => "100 苹果"）
         // 豁免情况：若当前词为中文量词或单位（如："100" + "米" => "100米"），则不插入空格
-        if prev_ch.is_ascii_digit() && is_cjk(curr_ch) {
+        if prev_ch.is_ascii_digit() && is_cjk_character(curr_ch) {
             if Self::is_chinese_classifier(curr_text) {
                 return false;
             }
