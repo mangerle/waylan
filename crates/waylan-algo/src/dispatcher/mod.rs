@@ -54,125 +54,84 @@ impl ModeDispatcher {
     fn eval_v_mode(expr: &str) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::new();
 
-        // 1. 若只输入了 "v"，提供当前日期与时间快捷条目
-        if expr.is_empty() {
-            let now = chrono::Local::now();
-            let today = now.format("%Y年%m月%d日").to_string();
-            let time_str = now.format("%H:%M:%S").to_string();
-            candidates.push(AlgoCandidate::new(today, "v", 99_000).with_comment("当前日期"));
-            candidates.push(AlgoCandidate::new(time_str, "v", 95_000).with_comment("当前时间"));
-            return candidates;
+        // 1. 日期与时间快捷指令
+        if let Some(dt_cands) = Self::eval_v_datetime_shortcuts(expr) {
+            return dt_cands;
         }
 
-        let expr_lower = expr.to_lowercase();
-        // 2. 日期与时间快捷指令（如 vsd, vsj, vrq, vtime, vdate, vnow, vxq）
-        if matches!(
-            expr_lower.as_str(),
-            "sd" | "sj" | "rq" | "time" | "date" | "now" | "xq"
-        ) {
-            let now = chrono::Local::now();
-
-            match expr_lower.as_str() {
-                "sd" | "now" => {
-                    let dt_list = DateTimeEvaluator::format_datetime_formats(now);
-                    let date_list = DateTimeEvaluator::format_date_formats(now);
-                    for (idx, dt) in dt_list.into_iter().enumerate() {
-                        candidates.push(
-                            AlgoCandidate::new(
-                                dt,
-                                expr,
-                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
-                            )
-                            .with_comment("日期时间"),
-                        );
-                    }
-                    for (idx, d) in date_list.into_iter().enumerate() {
-                        candidates.push(
-                            AlgoCandidate::new(
-                                d,
-                                expr,
-                                90_000u32.saturating_sub((idx as u32).saturating_mul(100)),
-                            )
-                            .with_comment("当前日期"),
-                        );
-                    }
-                }
-                "rq" | "date" => {
-                    let date_list = DateTimeEvaluator::format_date_formats(now);
-                    for (idx, d) in date_list.into_iter().enumerate() {
-                        candidates.push(
-                            AlgoCandidate::new(
-                                d,
-                                expr,
-                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
-                            )
-                            .with_comment("当前日期"),
-                        );
-                    }
-                }
-                "sj" | "time" => {
-                    let time_list = DateTimeEvaluator::format_time_formats(now);
-                    for (idx, t) in time_list.into_iter().enumerate() {
-                        candidates.push(
-                            AlgoCandidate::new(
-                                t,
-                                expr,
-                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
-                            )
-                            .with_comment("当前时间"),
-                        );
-                    }
-                }
-                "xq" => {
-                    for (idx, w) in DateTimeEvaluator::format_weekday_formats(now)
-                        .into_iter()
-                        .enumerate()
-                    {
-                        candidates.push(
-                            AlgoCandidate::new(
-                                w,
-                                expr,
-                                99_000u32.saturating_sub((idx as u32).saturating_mul(100)),
-                            )
-                            .with_comment("星期"),
-                        );
-                    }
-                }
-                _ => {}
-            }
-            if !candidates.is_empty() {
-                return candidates;
-            }
-        }
-
-        // 3. 优先尝试财务金额大写转换（纯数字及小数，如 v12345, v12345.67）
+        // 2. 财务金额大写转换（纯数字及小数，如 v12345, v12345.67）
         if let Some(fin_cands) = FinancialEvaluator::try_evaluate(expr) {
             candidates.extend(fin_cands);
         }
 
-        // 4. 算术表达式安全求值（如 v20*5, v100+20）
+        // 3. 算术表达式安全求值（如 v20*5, v100+20）
+        candidates.extend(Self::eval_v_math_candidates(expr, &candidates));
+
+        // 4. 兜底友好引导
+        if candidates.is_empty() {
+            candidates.push(
+                AlgoCandidate::new(format!("v{}", expr), expr, 50_000)
+                    .with_comment("V模式: 输入数字/算式/sd/sj/rq"),
+            );
+        }
+
+        candidates
+    }
+
+    /// 评估 V 模式下的日期时间快捷指令（如 vsd, vsj, vrq, vtime 等）
+    fn eval_v_datetime_shortcuts(expr: &str) -> Option<Vec<AlgoCandidate>> {
+        if expr.is_empty() {
+            let now = chrono::Local::now();
+            let today = now.format("%Y年%m月%d日").to_string();
+            let time_str = now.format("%H:%M:%S").to_string();
+            return Some(vec![
+                AlgoCandidate::new(today, "v", 99_000).with_comment("当前日期"),
+                AlgoCandidate::new(time_str, "v", 95_000).with_comment("当前时间"),
+            ]);
+        }
+
+        let expr_lower = expr.to_lowercase();
+        let now = chrono::Local::now();
+        let mut candidates = Vec::new();
+
+        match expr_lower.as_str() {
+            "sd" | "now" => {
+                let dt_list = DateTimeEvaluator::format_datetime_formats(now);
+                let date_list = DateTimeEvaluator::format_date_formats(now);
+                append_staggered_candidates(&mut candidates, dt_list, expr, 99_000, "日期时间");
+                append_staggered_candidates(&mut candidates, date_list, expr, 90_000, "当前日期");
+            }
+            "rq" | "date" => {
+                let date_list = DateTimeEvaluator::format_date_formats(now);
+                append_staggered_candidates(&mut candidates, date_list, expr, 99_000, "当前日期");
+            }
+            "sj" | "time" => {
+                let time_list = DateTimeEvaluator::format_time_formats(now);
+                append_staggered_candidates(&mut candidates, time_list, expr, 99_000, "当前时间");
+            }
+            "xq" => {
+                let weekday_list = DateTimeEvaluator::format_weekday_formats(now);
+                append_staggered_candidates(&mut candidates, weekday_list, expr, 99_000, "星期");
+            }
+            _ => return None,
+        }
+
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(candidates)
+        }
+    }
+
+    /// 评估算术表达式并生成对应候选
+    fn eval_v_math_candidates(expr: &str, existing: &[AlgoCandidate]) -> Vec<AlgoCandidate> {
+        let mut candidates = Vec::new();
         if let Some(val) = Self::eval_math_simple(expr) {
             let effective_val = if val.abs() < 1e-9 { 0.0 } else { val };
-            let val_str = if effective_val.fract().abs() < 1e-9
-                && effective_val.abs() < 9_007_199_254_740_992.0
-            {
-                let round_int = effective_val.round() as i64;
-                if round_int == 0 {
-                    "0".to_string()
-                } else {
-                    format!("{}", round_int)
-                }
-            } else if effective_val.fract().abs() < 1e-9 {
-                format!("{:.0}", effective_val)
-            } else {
-                format!("{:.4}", effective_val)
-                    .trim_end_matches('0')
-                    .trim_end_matches('.')
-                    .to_string()
-            };
+            let val_str = format_math_val_str(effective_val);
 
             // 避免与已有纯数字候选重复
-            if !candidates.iter().any(|c| c.text == val_str) {
+            if !existing.iter().any(|c| c.text == val_str) {
                 candidates.push(
                     AlgoCandidate::new(val_str.clone(), expr, 85_000).with_comment("计算结果"),
                 );
@@ -184,15 +143,6 @@ impl ModeDispatcher {
                 );
             }
         }
-
-        // 5. 兜底友好引导
-        if candidates.is_empty() {
-            candidates.push(
-                AlgoCandidate::new(format!("v{}", expr), expr, 50_000)
-                    .with_comment("V模式: 输入数字/算式/sd/sj/rq"),
-            );
-        }
-
         candidates
     }
 
@@ -326,6 +276,39 @@ impl ModeDispatcher {
     /// I 模式：特殊序号与符号输出
     fn eval_i_mode(input: &str) -> Vec<AlgoCandidate> {
         symbols::query_i_mode(input)
+    }
+}
+
+/// 格式化浮点数值为紧凑显示字符串
+fn format_math_val_str(effective_val: f64) -> String {
+    if effective_val.fract().abs() < 1e-9 && effective_val.abs() < 9_007_199_254_740_992.0 {
+        let round_int = effective_val.round() as i64;
+        if round_int == 0 {
+            "0".to_string()
+        } else {
+            format!("{}", round_int)
+        }
+    } else if effective_val.fract().abs() < 1e-9 {
+        format!("{:.0}", effective_val)
+    } else {
+        format!("{:.4}", effective_val)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    }
+}
+
+/// 将文本条目按分值阶梯递减包装为算法候选列表
+fn append_staggered_candidates(
+    candidates: &mut Vec<AlgoCandidate>,
+    items: Vec<String>,
+    expr: &str,
+    base_score: u32,
+    comment: &'static str,
+) {
+    for (idx, item) in items.into_iter().enumerate() {
+        let score = base_score.saturating_sub((idx as u32).saturating_mul(100));
+        candidates.push(AlgoCandidate::new(item, expr, score).with_comment(comment));
     }
 }
 
