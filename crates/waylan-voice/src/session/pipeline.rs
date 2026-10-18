@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use waylan_core::VoiceConfig;
 
 use super::types::{
@@ -304,7 +304,7 @@ pub(super) fn process_recognition_feed(ctx: RecognitionFeedContext<'_>, samples:
     match feed_result {
         Ok(Some(partial)) => {
             if !partial.is_empty() && partial != *ctx.last_partial_text {
-                info!("[语音会话] 实时流式识别出字: \"{}\"", partial);
+                debug!("[语音会话] 实时流式识别出字: \"{}\"", partial);
                 *ctx.last_partial_text = partial.clone();
                 if ctx.real_time_preview {
                     if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
