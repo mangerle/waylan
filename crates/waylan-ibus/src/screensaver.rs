@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use waylan_core::LoopWakeup;
+use waylan_sys::LoopWakeup;
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Message;
 
@@ -289,7 +289,7 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
-    use waylan_core::LoopWakeup;
+    use waylan_sys::LoopWakeup;
 
     #[test]
     fn test_screen_saver_listener_lifecycle() {

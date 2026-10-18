@@ -8,6 +8,8 @@ description = "微澜 (WayLan) IBus 协议客户端与 D-Bus 输入法引擎服�
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 waylan-engine = { path = "../waylan-engine" }
+waylan-ui = { path = "../waylan-ui" }
+waylan-sys = { path = "../waylan-sys" }
 zbus.workspace = true
 log.workspace = true
 serde.workspace = true

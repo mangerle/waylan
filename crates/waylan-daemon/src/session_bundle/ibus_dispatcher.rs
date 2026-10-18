@@ -31,7 +31,7 @@ pub struct IbusDispatchOptions<'a> {
     pub should_spawn_tray: bool,
     pub exclusive_source: bool,
     pub watched_paths: Vec<PathBuf>,
-    pub initial_mtime: Option<waylan_core::FileSignature>,
+    pub initial_mtime: Option<waylan_sys::FileSignature>,
     pub tray: Option<&'a TrayService>,
     pub coordinator: ShutdownCoordinator,
 }

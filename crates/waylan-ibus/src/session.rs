@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex};
 
 use log::{debug, info};
-use waylan_core::fs_watcher::{init_session_inotify_watcher, InotifyWatcher};
+use waylan_sys::fs_watcher::{init_session_inotify_watcher, InotifyWatcher};
 use zbus::blocking::connection::Builder;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;

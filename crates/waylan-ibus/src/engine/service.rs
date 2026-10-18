@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use waylan_core::LoopWakeup;
+use waylan_sys::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;

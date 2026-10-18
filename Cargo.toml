@@ -10,6 +10,7 @@ members = [
     "crates/waylan-voice",
     "crates/waylan-ibus",
     "crates/waylan-engine",
+    "crates/waylan-sys",
 ]
 
 [workspace.package]

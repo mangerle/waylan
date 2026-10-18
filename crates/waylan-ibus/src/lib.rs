@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub use session::run_ibus_session;
-use waylan_core::LoopWakeup;
+use waylan_sys::LoopWakeup;
 
 use desktop_integration::{format_ibus_component_xml, format_ibus_engines_xml};
 
@@ -120,7 +120,7 @@ pub struct IbusSessionOptions {
     /// 被监控热重载的配置文件与词库路径列表
     pub watched_paths: Vec<PathBuf>,
     /// 初始文件状态签名
-    pub initial_mtime: Option<waylan_core::FileSignature>,
+    pub initial_mtime: Option<waylan_sys::FileSignature>,
     /// 与系统托盘共享的重载请求标志
     pub reload_requested: Option<Arc<AtomicBool>>,
     /// 进程停机协调器

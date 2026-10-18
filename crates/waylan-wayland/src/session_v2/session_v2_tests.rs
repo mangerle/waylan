@@ -174,7 +174,7 @@ fn test_watched_paths_mtime_triggers_reload() {
     assert_eq!(session.runtime.core.engine.config.page_size, 7);
 
     // 模拟外部进程将历史签名退后，使得当前文件签名更新于基准签名
-    session.watcher.last_watched_mtime = Some(waylan_core::FileSignature::SingleFile(
+    session.watcher.last_watched_mtime = Some(waylan_sys::FileSignature::SingleFile(
         std::time::SystemTime::now() - std::time::Duration::from_secs(60),
     ));
     session.sync_external_state();

@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fs::inotify::ReadFlags;
-use waylan_core::fs_watcher::{DirEventFilter, InotifyWatcher};
 use waylan_engine::algo::custom_phrase::CustomPhraseManager;
 use waylan_engine::AlgoEngine;
+use waylan_sys::fs_watcher::{DirEventFilter, InotifyWatcher};
 
-pub use waylan_core::fs_watcher::{
+pub use waylan_sys::fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,
 };
 
@@ -59,7 +59,7 @@ pub fn init_session_inotify_watcher(
     inotify_watcher: &mut Option<InotifyWatcher>,
     session_label: &str,
 ) {
-    waylan_core::fs_watcher::init_session_inotify_watcher_with_filter(
+    waylan_sys::fs_watcher::init_session_inotify_watcher_with_filter(
         watched_paths,
         inotify_watcher,
         session_label,

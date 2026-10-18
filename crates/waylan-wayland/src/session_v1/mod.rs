@@ -21,9 +21,9 @@ use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPan
 use crate::surface::CandidateSurfaceManager;
 
 use crate::session_common::*;
-use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
-use waylan_core::LoopWakeup;
+use waylan_sys::fs_watcher::InotifyWatcher;
+use waylan_sys::LoopWakeup;
 
 /// V1 会话配置与词库热重载回调函数类型
 pub type V1ReloadCallback = Box<dyn FnMut(&mut WaylanV1Session) + Send>;
@@ -40,7 +40,7 @@ pub struct WaylanV1Session {
     /// 监控外部进程修改的配置文件与词库路径列表（用于在焦点或按键事件时自动感知变更）
     pub watched_paths: Vec<PathBuf>,
     /// 上次记录的被监控文件最新状态签名
-    pub last_watched_mtime: Option<waylan_core::FileSignature>,
+    pub last_watched_mtime: Option<waylan_sys::FileSignature>,
     /// 当前激活的应用上下文引用
     pub active_context: Option<ZwpInputMethodContextV1>,
     /// 捕获的键盘对象

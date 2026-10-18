@@ -95,7 +95,7 @@ struct WaylandSessionParams<'a> {
     renderer: CandidateBoxRenderer,
     cfg: &'a AppConfig,
     watched_paths: Vec<PathBuf>,
-    initial_mtime: Option<waylan_core::FileSignature>,
+    initial_mtime: Option<waylan_sys::FileSignature>,
     tray: Option<&'a TrayService>,
     coordinator: &'a ShutdownCoordinator,
 }
@@ -164,7 +164,7 @@ pub struct WaylandDispatchOptions<'a> {
     pub cfg: &'a AppConfig,
     pub caps: &'a WaylandCapabilities,
     pub watched_paths: Vec<PathBuf>,
-    pub initial_mtime: Option<waylan_core::FileSignature>,
+    pub initial_mtime: Option<waylan_sys::FileSignature>,
     pub tray: Option<&'a TrayService>,
     pub coordinator: &'a ShutdownCoordinator,
 }

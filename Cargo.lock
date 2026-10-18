@@ -6147,7 +6147,6 @@ name = "waylan-core"
 version = "1.2.0"
 dependencies = [
  "log",
- "rustix 0.38.44",
  "serde",
  "serde_json",
  "tempfile",
@@ -6172,6 +6171,7 @@ dependencies = [
  "waylan-core",
  "waylan-engine",
  "waylan-ibus",
+ "waylan-sys",
  "waylan-ui",
  "waylan-voice",
  "waylan-wayland",
@@ -6199,6 +6199,8 @@ dependencies = [
  "thiserror 1.0.69",
  "waylan-core",
  "waylan-engine",
+ "waylan-sys",
+ "waylan-ui",
  "zbus 4.4.0",
 ]
 
@@ -6218,6 +6220,16 @@ dependencies = [
  "waylan-algo",
  "waylan-core",
  "waylan-voice",
+]
+
+[[package]]
+name = "waylan-sys"
+version = "1.2.0"
+dependencies = [
+ "log",
+ "rustix 0.38.44",
+ "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -6259,6 +6271,7 @@ dependencies = [
  "thiserror 1.0.69",
  "waylan-core",
  "waylan-engine",
+ "waylan-sys",
  "waylan-ui",
  "wayland-backend",
  "wayland-client",

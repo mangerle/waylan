@@ -21,8 +21,8 @@ use system::{
 };
 pub use waylan_core::config;
 use waylan_core::config::{AppConfig, ThemeMode};
-use waylan_core::LoopWakeup;
 use waylan_ibus::{print_ibus_component_xml, print_ibus_engines_xml};
+use waylan_sys::LoopWakeup;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 
 fn main() -> Result<(), DaemonError> {

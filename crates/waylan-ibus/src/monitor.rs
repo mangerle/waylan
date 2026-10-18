@@ -14,9 +14,9 @@ use std::time::{Duration, Instant};
 
 use log::{debug, info};
 use rustix::event::{poll, PollFd, PollFlags};
-use waylan_core::fs_watcher::{check_reload_requested_or_files_changed, InotifyWatcher};
 use waylan_core::CandidateIndexStyle;
-use waylan_core::LoopWakeup;
+use waylan_sys::fs_watcher::{check_reload_requested_or_files_changed, InotifyWatcher};
+use waylan_sys::LoopWakeup;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
@@ -33,7 +33,7 @@ use crate::{IbusConfigReloader, IbusShutdownCoordinator};
 /// 后台监控循环参数结构体
 pub(crate) struct IbusMonitorParams {
     pub(crate) watched_paths: Vec<PathBuf>,
-    pub(crate) last_mtime: Option<waylan_core::FileSignature>,
+    pub(crate) last_mtime: Option<waylan_sys::FileSignature>,
     pub(crate) reload_requested: Option<Arc<AtomicBool>>,
     pub(crate) coordinator: IbusShutdownCoordinator,
     pub(crate) config_reloader: Option<Arc<dyn IbusConfigReloader>>,

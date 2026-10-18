@@ -11,7 +11,7 @@
 //! - **代价与局限**：视图展示文本合并了序号，向目标应用提交（Commit）文本时必须始终使用原始的 `Candidate.text`，
 //!   严禁误提交格式化后的展示文本。
 
-use crate::config::CandidateIndexStyle;
+use waylan_core::CandidateIndexStyle;
 
 /// 常用圆圈序号字符常量映射（1..=10）
 pub const CIRCLED_NUMBERS: [&str; 10] = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];

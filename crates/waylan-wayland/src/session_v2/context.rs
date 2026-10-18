@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
-use waylan_core::fs_watcher::InotifyWatcher;
-use waylan_core::LoopWakeup;
+use waylan_sys::fs_watcher::InotifyWatcher;
+use waylan_sys::LoopWakeup;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_pointer::WlPointer, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -107,7 +107,7 @@ pub struct WaylandV2WatcherContext {
     /// 监控外部进程修改的配置文件与词库路径列表
     pub watched_paths: Vec<PathBuf>,
     /// 上次记录的被监控文件最新状态签名
-    pub last_watched_mtime: Option<waylan_core::FileSignature>,
+    pub last_watched_mtime: Option<waylan_sys::FileSignature>,
     /// 基于 Linux inotify 的配置文件与词库变更监控器
     pub inotify_watcher: Option<InotifyWatcher>,
     /// 事件循环跨线程唤醒器

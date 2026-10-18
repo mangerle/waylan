@@ -12,9 +12,9 @@ pub mod watcher;
 pub use error::WaylandRunnerError;
 pub use runner::*;
 
-pub use waylan_core::fs_watcher::InotifyWatcher;
 pub use waylan_core::input::*;
-pub use waylan_core::loop_wakeup::LoopWakeup;
+pub use waylan_sys::fs_watcher::InotifyWatcher;
+pub use waylan_sys::loop_wakeup::LoopWakeup;
 
 use std::fmt;
 
