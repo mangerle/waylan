@@ -4,7 +4,6 @@
 //! - **实现初衷**：将短语增删、词库异步导入、配置持久化与桌面 GNOME 指示器同步等 UI 回调注册集中收敛。
 //! - **核心优势**：使 `lib.rs` 保持极简的高层装配，将复杂事件交互隔离至专用模块。
 
-use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -102,7 +101,7 @@ pub fn populate_lexicon_statistics(
 /// 注册通用配置、自定义短语与外部词库导入回调事件
 pub fn register_settings_callbacks(
     window: &SettingsWindow,
-    loaded_config: Rc<RefCell<AppConfig>>,
+    loaded_config: Arc<Mutex<AppConfig>>,
     aux_dict: AuxiliaryDict,
     phrases_model: Rc<VecModel<PhraseItem>>,
     phrase_path: PathBuf,
@@ -112,12 +111,17 @@ pub fn register_settings_callbacks(
     let current_cfg_cell = loaded_config;
     window.on_save_settings(move || {
         if let Some(win) = window_weak.upgrade() {
-            let mut base_cfg = current_cfg_cell.borrow().clone();
+            let mut base_cfg = current_cfg_cell
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default();
             update_config_from_window(&win, &mut base_cfg);
             match base_cfg.save_default() {
                 Ok(()) => {
                     let hide_ext = base_cfg.desktop.exclusive_input_source;
-                    *current_cfg_cell.borrow_mut() = base_cfg;
+                    if let Ok(mut g) = current_cfg_cell.lock() {
+                        *g = base_cfg;
+                    }
                     sync_gnome_indicator_mode(hide_ext);
                     win.set_global_status_is_error(false);
                     win.set_global_status(SharedString::from("配置已成功保存并同步！"));

@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
@@ -20,13 +20,13 @@ use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::SettingsWindow;
 
 /// 注册所有语音输入相关界面回调事件
-pub fn register_voice_callbacks(window: &SettingsWindow, loaded_config: Rc<RefCell<AppConfig>>) {
+pub fn register_voice_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
     register_model_import_callbacks(window, loaded_config.clone());
     register_cloud_profile_callbacks(window, loaded_config);
 }
 
 /// 注册 ASR、VAD、标点与降噪模型导入及目录打开事件
-fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<RefCell<AppConfig>>) {
+fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
     let window_weak = window.as_weak();
     let current_cfg_cell = loaded_config.clone();
     window.on_import_asr_model(move || {
@@ -82,82 +82,141 @@ fn register_model_import_callbacks(window: &SettingsWindow, loaded_config: Rc<Re
     });
 }
 
-/// 执行 ASR 复合模型包目录导入
-fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Rc<RefCell<AppConfig>>) {
+/// 执行 ASR 复合模型包目录导入（派发后台线程执行大文件递归复制，防止阻塞主 UI 线程）
+fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Arc<Mutex<AppConfig>>) {
     let Some(src_path) =
         pick_directory_dialog("请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)")
     else {
         return;
     };
-    let Some(imported_path) = waylan_voice::import_asr_model_from_dir(&src_path) else {
-        return;
-    };
-    let name = imported_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let mut cfg = current_cfg_cell.borrow().clone();
-    update_config_from_window(win, &mut cfg);
-    cfg.voice.offline.model_dir = Some(imported_path.to_string_lossy().to_string());
-    save_config_and_notify_status(
-        win,
-        current_cfg_cell,
-        cfg,
-        &format!("成功导入 ASR 模型: {}", name),
-        "保存 ASR 模型配置失败",
-    );
+    win.set_global_status_is_error(false);
+    win.set_global_status(SharedString::from("正在后台导入 ASR 复合模型包，请稍候..."));
+
+    let win_weak = win.as_weak();
+    let cfg_cell = current_cfg_cell.clone();
+    if let Err(e) = std::thread::Builder::new()
+        .name("asr-importer".to_string())
+        .spawn(move || {
+            let imported_opt = waylan_voice::import_asr_model_from_dir(&src_path);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = win_weak.upgrade() {
+                    match imported_opt {
+                        Some(imported_path) => {
+                            let name = imported_path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
+                            update_config_from_window(&w, &mut cfg);
+                            cfg.voice.offline.model_dir =
+                                Some(imported_path.to_string_lossy().to_string());
+                            save_config_and_notify_status(
+                                &w,
+                                &cfg_cell,
+                                cfg,
+                                &format!("成功导入 ASR 模型: {}", name),
+                                "保存 ASR 模型配置失败",
+                            );
+                        }
+                        None => {
+                            w.set_global_status_is_error(true);
+                            w.set_global_status(SharedString::from(
+                                "导入 ASR 复合模型包失败，请检查文件权限与目录完整性",
+                            ));
+                        }
+                    }
+                }
+            });
+        })
+    {
+        log::warn!("[偏好设置 警告] 派发 ASR 导入后台线程失败: {}", e);
+        win.set_global_status_is_error(true);
+        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
+    }
 }
 
-/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改
+/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改（后台线程异步复制）
 fn handle_import_onnx_model<F>(
     win: &SettingsWindow,
-    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    current_cfg_cell: &Arc<Mutex<AppConfig>>,
     category: ModelSubdirectory,
     title: &str,
     mut apply_fn: F,
 ) where
-    F: FnMut(&mut AppConfig, &str),
+    F: FnMut(&mut AppConfig, &str) + Send + 'static,
 {
     let Some(src_path) = pick_file_dialog(title, "ONNX 神经网络模型 (*.onnx)", "*.onnx")
     else {
         return;
     };
-    let Some(imported_path) = import_onnx_model_from_file(category, &src_path) else {
-        return;
-    };
-    let name = imported_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let mut cfg = current_cfg_cell.borrow().clone();
-    update_config_from_window(win, &mut cfg);
-    apply_fn(&mut cfg, &imported_path.to_string_lossy());
-    save_config_and_notify_status(
-        win,
-        current_cfg_cell,
-        cfg,
-        &format!(
-            "成功导入 {} 模型: {}",
-            category.as_str().to_uppercase(),
-            name
-        ),
-        &format!("保存 {} 模型配置失败", category.as_str().to_uppercase()),
-    );
+    win.set_global_status_is_error(false);
+    win.set_global_status(SharedString::from(format!(
+        "正在后台导入 {} 神经网络模型，请稍候...",
+        category.as_str().to_uppercase()
+    )));
+
+    let win_weak = win.as_weak();
+    let cfg_cell = current_cfg_cell.clone();
+    if let Err(e) = std::thread::Builder::new()
+        .name(format!("{}-model-importer", category.as_str()))
+        .spawn(move || {
+            let imported_opt = import_onnx_model_from_file(category, &src_path);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = win_weak.upgrade() {
+                    match imported_opt {
+                        Some(imported_path) => {
+                            let name = imported_path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
+                            update_config_from_window(&w, &mut cfg);
+                            apply_fn(&mut cfg, &imported_path.to_string_lossy());
+                            save_config_and_notify_status(
+                                &w,
+                                &cfg_cell,
+                                cfg,
+                                &format!(
+                                    "成功导入 {} 模型: {}",
+                                    category.as_str().to_uppercase(),
+                                    name
+                                ),
+                                &format!("保存 {} 模型配置失败", category.as_str().to_uppercase()),
+                            );
+                        }
+                        None => {
+                            w.set_global_status_is_error(true);
+                            w.set_global_status(SharedString::from(format!(
+                                "导入 {} 神经网络模型失败，请检查文件权限",
+                                category.as_str().to_uppercase()
+                            )));
+                        }
+                    }
+                }
+            });
+        })
+    {
+        log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
+        win.set_global_status_is_error(true);
+        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
+    }
 }
 
 /// 保存配置并更新主窗口全局状态栏提示
 fn save_config_and_notify_status(
     win: &SettingsWindow,
-    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    current_cfg_cell: &Arc<Mutex<AppConfig>>,
     cfg: AppConfig,
     success_msg: &str,
     fail_prefix: &str,
 ) {
     match cfg.save_default() {
         Ok(()) => {
-            *current_cfg_cell.borrow_mut() = cfg.clone();
+            if let Ok(mut g) = current_cfg_cell.lock() {
+                *g = cfg.clone();
+            }
             sync_config_to_window(win, &cfg);
             win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from(success_msg));
@@ -170,10 +229,7 @@ fn save_config_and_notify_status(
 }
 
 /// 注册云端语音服务管理相关回调（新增、编辑、删除、保存、取消、连接测试）
-fn register_cloud_profile_callbacks(
-    window: &SettingsWindow,
-    loaded_config: Rc<RefCell<AppConfig>>,
-) {
+fn register_cloud_profile_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
     let editing_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
     // 1. 开始新增
@@ -200,7 +256,10 @@ fn register_cloud_profile_callbacks(
     window.on_start_edit_cloud_profile(move |idx| {
         if let Some(win) = window_weak.upgrade() {
             let index = idx as usize;
-            let cfg = current_cfg_cell.borrow();
+            let cfg = current_cfg_cell
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default();
             if let Some(p) = cfg.voice.cloud_profiles.get(index) {
                 *editing_id_edit.borrow_mut() = Some(p.id.clone());
                 win.set_edit_cloud_name(SharedString::from(&p.name));
@@ -234,7 +293,7 @@ fn register_cloud_profile_callbacks(
 /// 注册云端服务保存与删除回调
 fn register_cloud_save_and_delete(
     window: &SettingsWindow,
-    loaded_config: Rc<RefCell<AppConfig>>,
+    loaded_config: Arc<Mutex<AppConfig>>,
     editing_id: Rc<RefCell<Option<String>>>,
 ) {
     let window_weak = window.as_weak();
@@ -266,7 +325,7 @@ fn register_cloud_save_and_delete(
 /// 处理保存/更新云端语音服务配置
 fn handle_save_cloud_profile(
     win: &SettingsWindow,
-    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    current_cfg_cell: &Arc<Mutex<AppConfig>>,
     editing_id_save: &Rc<RefCell<Option<String>>>,
     name: &str,
     endpoint: &str,
@@ -288,7 +347,10 @@ fn handle_save_cloud_profile(
         Some(key_str.to_string())
     };
 
-    let mut cfg = current_cfg_cell.borrow().clone();
+    let mut cfg = current_cfg_cell
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     update_config_from_window(win, &mut cfg);
     let target_id = editing_id_save.borrow_mut().take();
     if let Some(ref tid) = target_id {
@@ -318,7 +380,9 @@ fn handle_save_cloud_profile(
     match cfg.save_default() {
         Ok(()) => {
             win.set_is_editing_cloud(false);
-            *current_cfg_cell.borrow_mut() = cfg.clone();
+            if let Ok(mut g) = current_cfg_cell.lock() {
+                *g = cfg.clone();
+            }
             sync_config_to_window(win, &cfg);
             win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from(format!(
@@ -336,11 +400,14 @@ fn handle_save_cloud_profile(
 /// 处理删除指定云端语音服务配置
 fn handle_delete_cloud_profile(
     win: &SettingsWindow,
-    current_cfg_cell: &Rc<RefCell<AppConfig>>,
+    current_cfg_cell: &Arc<Mutex<AppConfig>>,
     editing_id: &Rc<RefCell<Option<String>>>,
     index: usize,
 ) {
-    let mut cfg = current_cfg_cell.borrow().clone();
+    let mut cfg = current_cfg_cell
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     update_config_from_window(win, &mut cfg);
     if index < cfg.voice.cloud_profiles.len() {
         let removed = cfg.voice.cloud_profiles.remove(index);
@@ -352,7 +419,9 @@ fn handle_delete_cloud_profile(
         win.set_is_editing_cloud(false);
         match cfg.save_default() {
             Ok(()) => {
-                *current_cfg_cell.borrow_mut() = cfg.clone();
+                if let Ok(mut g) = current_cfg_cell.lock() {
+                    *g = cfg.clone();
+                }
                 sync_config_to_window(win, &cfg);
                 win.set_global_status_is_error(false);
                 win.set_global_status(SharedString::from(format!(
@@ -369,7 +438,7 @@ fn handle_delete_cloud_profile(
 }
 
 /// 注册云端服务异步连通性测试回调
-fn register_cloud_test_callback(window: &SettingsWindow, loaded_config: Rc<RefCell<AppConfig>>) {
+fn register_cloud_test_callback(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
     let is_testing = Arc::new(AtomicBool::new(false));
     let testing_flag = is_testing.clone();
     let window_weak = window.as_weak();
@@ -387,7 +456,10 @@ fn register_cloud_test_callback(window: &SettingsWindow, loaded_config: Rc<RefCe
                 return;
             }
             let index = idx as usize;
-            let cfg = current_cfg_cell.borrow();
+            let cfg = current_cfg_cell
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default();
             if let Some(p) = cfg.voice.cloud_profiles.get(index) {
                 let profile_name = p.name.clone();
                 let test_config = CloudAsrConfig {

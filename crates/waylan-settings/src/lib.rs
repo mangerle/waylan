@@ -16,8 +16,7 @@ pub mod voice_handlers;
 
 pub use importer::ImportError;
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
@@ -60,7 +59,7 @@ pub fn run_settings_gui() -> Result<(), SettingsError> {
     // 1. 加载持久化配置并同步到界面
     let config = AppConfig::load_or_create();
     sync_config_to_window(&window, &config);
-    let loaded_config = Rc::new(RefCell::new(config));
+    let loaded_config = Arc::new(Mutex::new(config));
 
     // 2. 统计信息装载
     let (aux_dict, phrases_model, phrase_path) = populate_lexicon_statistics(&window);
