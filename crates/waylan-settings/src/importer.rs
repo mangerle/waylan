@@ -12,11 +12,11 @@
 //!   模块依赖 `waylan-engine` 提供的错误模型契约。
 
 use std::path::Path;
-use waylan_algo::AuxiliaryDict;
 use waylan_core::config::AppConfig;
 pub use waylan_core::MAX_IMPORT_FILE_BYTES;
 pub use waylan_engine::importer::DictImportError as ImportError;
 use waylan_engine::importer::DictImportService;
+use waylan_engine::AuxiliaryDict;
 
 /// 解析并合入外部拼音词库
 ///

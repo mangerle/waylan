@@ -23,6 +23,7 @@ pub use factory::{
     apply_default_engine_reload, apply_default_runtime_reload, create_engine_with_table,
     create_standard_engine, ensure_user_dictionaries_linked, load_auxiliary_dict,
     load_auxiliary_managers, load_lexicon_table, load_opencc_dict, reload_engine_resources,
+    AuxiliaryDict, CustomPhraseManager, LexiconSummaryService,
 };
 pub use frontend::InputMethodFrontend;
 pub use runtime::{

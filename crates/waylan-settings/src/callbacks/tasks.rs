@@ -10,9 +10,8 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use slint::SharedString;
-use waylan_algo::user_adaptive::UserAdaptiveModel;
-use waylan_algo::AuxiliaryDict;
 use waylan_core::config::AppConfig;
+use waylan_engine::{AuxiliaryDict, LexiconSummaryService};
 
 use crate::importer::{
     import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file,
@@ -45,9 +44,7 @@ pub(crate) fn spawn_pinyin_import_task(
             if result.is_ok() {
                 AppConfig::touch_config_for_reload();
             }
-            let count = UserAdaptiveModel::load_or_replay_wal(AppConfig::user_dict_path())
-                .map(|m| m.total_entries())
-                .unwrap_or(0);
+            let count = LexiconSummaryService::query_user_adaptive_entry_count();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = win_weak.upgrade() {
                     match result {

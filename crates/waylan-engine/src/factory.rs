@@ -16,9 +16,10 @@ use std::time::Instant;
 
 use log::{info, warn};
 pub use waylan_algo::custom_phrase::load_auxiliary_managers;
-use waylan_algo::custom_phrase::{AuxiliaryDict, CustomPhraseManager};
+pub use waylan_algo::custom_phrase::{AuxiliaryDict, CustomPhraseManager};
 use waylan_algo::opencc::OpenCcDict;
-use waylan_algo::table::LexiconTable;
+use waylan_algo::table::{CompactMmapLexicon, LexiconTable};
+use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::{AlgoConfig, AlgoEngine};
 use waylan_core::config::AppConfig;
 
@@ -207,6 +208,44 @@ pub fn apply_default_runtime_reload(runtime: &mut crate::runtime::ImeRuntime) {
     runtime.reload_config(&cfg);
 }
 
+/// 词库概况与统计查询服务门面
+///
+/// # 设计原理
+/// - **实现初衷**：为偏好设置中心（waylan-settings）与外部诊断工具提供统一的词库状态查询入口，
+///   消除上层直接触碰底层 `CompactMmapLexicon` 或 `UserAdaptiveModel` 的穿透性依赖坏味道。
+/// - **核心优势**：集中收敛系统词库与自造词模型统计口径，保障 API 边界清晰内聚。
+pub struct LexiconSummaryService;
+
+impl LexiconSummaryService {
+    /// 查询系统预编译主词库（base.dict.bin）的状态描述信息
+    pub fn query_system_dict_info() -> String {
+        for path in AppConfig::base_dict_search_paths() {
+            if path.exists() {
+                if let Ok(lexicon) = CompactMmapLexicon::open(&path) {
+                    return format!(
+                        "系统预编译词库: base.dict.bin (约 {:.1} 万组词条已就绪)",
+                        lexicon.num_candidates as f64 / 10_000.0
+                    );
+                }
+            }
+        }
+        "系统预编译词库: base.dict.bin (未找到或未就绪)".to_string()
+    }
+
+    /// 查询用户自适应个性化历史词模型的记录总数
+    pub fn query_user_adaptive_entry_count() -> usize {
+        let user_dict_path = AppConfig::user_dict_path();
+        UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
+            .map(|m| m.total_entries())
+            .unwrap_or(0)
+    }
+
+    /// 加载并返回辅助混输词库（英文单词与特殊符号）
+    pub fn load_auxiliary_dict() -> AuxiliaryDict {
+        load_auxiliary_dict()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +281,19 @@ mod tests {
         ));
         apply_default_runtime_reload(&mut runtime);
         assert_eq!(runtime.core.engine.raw_input(), "");
+    }
+
+    #[test]
+    fn test_lexicon_summary_service() {
+        let sys_info = LexiconSummaryService::query_system_dict_info();
+        assert!(!sys_info.is_empty(), "系统词库信息不应为空");
+
+        let user_count = LexiconSummaryService::query_user_adaptive_entry_count();
+        // 允许为 0 或正常数量，不应发生 panic
+        let _ = user_count;
+
+        let aux = LexiconSummaryService::load_auxiliary_dict();
+        assert!(!aux.english_words.is_empty(), "内置英文单词应不为空");
+        assert!(!aux.symbols.is_empty(), "内置符号表情应不为空");
     }
 }

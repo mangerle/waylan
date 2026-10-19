@@ -13,10 +13,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use waylan_algo::custom_phrase::CustomPhraseManager;
-use waylan_algo::user_adaptive::UserAdaptiveModel;
-use waylan_algo::{AuxiliaryDict, CompactMmapLexicon};
-use waylan_core::config::AppConfig;
+use waylan_engine::{AuxiliaryDict, CustomPhraseManager, LexiconSummaryService};
 
 use super::desktop::pick_file_dialog_async;
 use super::tasks::{
@@ -49,16 +46,8 @@ pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundl
     let phrases_model = Rc::new(VecModel::from(phrases_data));
     window.set_phrase_list(ModelRc::from(phrases_model.clone()));
 
-    // 辅助词库装载
-    let mut aux_dict = AuxiliaryDict::with_default_data();
-    for path in AppConfig::aux_dict_search_paths() {
-        if path.exists() {
-            if let Ok(loaded) = AuxiliaryDict::load_from_file(&path) {
-                aux_dict = loaded;
-                break;
-            }
-        }
-    }
+    // 辅助词库装载与展示
+    let aux_dict = LexiconSummaryService::load_auxiliary_dict();
     window.set_english_dict_info(SharedString::from(format!(
         "已就绪常用英文单词: {} 词",
         aux_dict.english_words.len()
@@ -69,28 +58,14 @@ pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundl
     )));
 
     // 自造词模型统计
-    let user_dict_path = AppConfig::user_dict_path();
-    let user_model_count = UserAdaptiveModel::load_or_replay_wal(&user_dict_path)
-        .map(|m| m.total_entries())
-        .unwrap_or(0);
+    let user_model_count = LexiconSummaryService::query_user_adaptive_entry_count();
     window.set_user_model_info(SharedString::from(format!(
         "自适应个性化历史词模型: {} 条记忆",
         user_model_count
     )));
 
     // 系统预编译主词库状态统计
-    let mut base_dict_info = "系统预编译词库: base.dict.bin (未找到或未就绪)".to_string();
-    for path in AppConfig::base_dict_search_paths() {
-        if path.exists() {
-            if let Ok(lexicon) = CompactMmapLexicon::open(&path) {
-                base_dict_info = format!(
-                    "系统预编译词库: base.dict.bin (约 {:.1} 万组词条已就绪)",
-                    lexicon.num_candidates as f64 / 10_000.0
-                );
-                break;
-            }
-        }
-    }
+    let base_dict_info = LexiconSummaryService::query_system_dict_info();
     window.set_base_dict_info(SharedString::from(base_dict_info));
 
     LexiconStatsBundle {

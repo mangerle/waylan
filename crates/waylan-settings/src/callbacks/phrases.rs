@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use slint::{ComponentHandle, Model, SharedString, VecModel};
-use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_core::config::AppConfig;
+use waylan_engine::CustomPhraseManager;
 
 use crate::{PhraseItem, SettingsWindow};
 
