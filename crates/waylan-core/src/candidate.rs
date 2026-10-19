@@ -197,23 +197,79 @@ pub enum CandidateViewMode {
     Compact,
 }
 
+/// 候选框界面强类型代数视图（物理杜绝非法状态组合）
+#[derive(Debug, PartialEq, Eq)]
+pub enum CandidateBoxView<'a> {
+    /// 隐藏或未激活状态
+    Hidden,
+    /// 语音听写流式波形与胶囊展示态
+    VoiceCapsule(&'a VoiceBoxState),
+    /// 5 行大候选网格展开态
+    GridExpanded {
+        grid_candidates: &'a [Candidate],
+        selected_index: usize,
+    },
+    /// 二级扩展卡片展开态
+    ExpandedCard {
+        preedit: &'a str,
+        candidates: &'a [Candidate],
+        selected_index: usize,
+        expanded_selected_index: usize,
+        mode_badge: &'a str,
+    },
+    /// 标准单行/紧凑候选条展示态
+    Compact {
+        preedit: &'a str,
+        candidates: &'a [Candidate],
+        selected_index: usize,
+        mode_badge: &'a str,
+    },
+}
+
 impl CandidateBoxState {
+    /// 计算并提取当前唯一确定的强类型代数视图
+    pub fn view(&self) -> CandidateBoxView<'_> {
+        if let Some(ref voice) = self.voice {
+            if voice.is_listening {
+                return CandidateBoxView::VoiceCapsule(voice);
+            }
+        }
+        if self.is_grid_expanded() {
+            return CandidateBoxView::GridExpanded {
+                grid_candidates: &self.grid_candidates,
+                selected_index: self.grid_selected_index(),
+            };
+        }
+        if self.candidates.is_empty() {
+            return CandidateBoxView::Hidden;
+        }
+        if self.is_expanded() {
+            return CandidateBoxView::ExpandedCard {
+                preedit: &self.preedit,
+                candidates: &self.candidates,
+                selected_index: self.selected_index,
+                expanded_selected_index: self.expanded_selected_index(),
+                mode_badge: &self.mode_badge,
+            };
+        }
+        CandidateBoxView::Compact {
+            preedit: &self.preedit,
+            candidates: &self.candidates,
+            selected_index: self.selected_index,
+            mode_badge: &self.mode_badge,
+        }
+    }
+
     /// 计算当前唯一确定的顶级互斥呈现形态
     #[inline]
     pub fn view_mode(&self) -> CandidateViewMode {
-        if self.is_voice_active() {
-            return CandidateViewMode::VoiceCapsule;
+        match self.view() {
+            CandidateBoxView::Hidden => CandidateViewMode::Hidden,
+            CandidateBoxView::VoiceCapsule(_) => CandidateViewMode::VoiceCapsule,
+            CandidateBoxView::GridExpanded { .. } => CandidateViewMode::GridExpanded,
+            CandidateBoxView::ExpandedCard { .. } => CandidateViewMode::ExpandedCard,
+            CandidateBoxView::Compact { .. } => CandidateViewMode::Compact,
         }
-        if self.candidates.is_empty() {
-            return CandidateViewMode::Hidden;
-        }
-        if self.is_grid_expanded() {
-            return CandidateViewMode::GridExpanded;
-        }
-        if self.is_expanded() {
-            return CandidateViewMode::ExpandedCard;
-        }
-        CandidateViewMode::Compact
     }
 
     /// 查询当前是否处于语音听写激活状态
@@ -234,10 +290,11 @@ impl CandidateBoxState {
         self.expanded_card.selected_index().unwrap_or(0)
     }
 
-    /// 切换或设置展开状态
+    /// 切换或设置展开状态（排他收敛：展开卡片时自动折叠大网格）
     pub fn set_expanded(&mut self, expanded: bool, selected_index: usize) {
         if expanded {
             self.expanded_card = ExpandedCardState::Expanded { selected_index };
+            self.grid_state = GridState::Collapsed;
         } else {
             self.expanded_card = ExpandedCardState::Collapsed;
         }
@@ -255,8 +312,11 @@ impl CandidateBoxState {
         self.grid_state.selected_index().unwrap_or(0)
     }
 
-    /// 切换或设置大网格展开状态机
+    /// 切换或设置大网格展开状态机（排他收敛：展开网格时自动折叠二级卡片）
     pub fn set_grid_state(&mut self, state: GridState) {
+        if state.is_expanded() {
+            self.expanded_card = ExpandedCardState::Collapsed;
+        }
         self.grid_state = state;
     }
 }
@@ -334,5 +394,29 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(state.view_mode(), CandidateViewMode::VoiceCapsule);
+    }
+
+    #[test]
+    fn test_candidate_box_state_mutual_exclusion() {
+        let mut state = CandidateBoxState::default();
+        state.candidates.push(Candidate::new("测试", "ce'shi", 100));
+
+        // 展开二级卡片
+        state.set_expanded(true, 1);
+        assert!(state.is_expanded());
+        assert!(!state.is_grid_expanded());
+        assert_eq!(state.view_mode(), CandidateViewMode::ExpandedCard);
+
+        // 设置大网格展开，二级卡片必须被物理自动折叠
+        state.set_grid_state(GridState::Expanded { selected_index: 2 });
+        assert!(state.is_grid_expanded());
+        assert!(!state.is_expanded());
+        assert_eq!(state.view_mode(), CandidateViewMode::GridExpanded);
+
+        // 重新展开二级卡片，大网格必须被物理自动折叠
+        state.set_expanded(true, 0);
+        assert!(state.is_expanded());
+        assert!(!state.is_grid_expanded());
+        assert_eq!(state.view_mode(), CandidateViewMode::ExpandedCard);
     }
 }
