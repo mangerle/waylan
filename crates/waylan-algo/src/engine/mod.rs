@@ -1,6 +1,7 @@
 pub mod adaptive;
 pub mod candidates;
 pub mod composition_buffer;
+pub mod extension;
 pub(crate) mod prefix_synthesis;
 pub mod resources;
 pub mod selection;
@@ -11,6 +12,10 @@ mod tests;
 
 pub use adaptive::UserAdaptiveState;
 pub use composition_buffer::CompositionBuffer;
+pub use extension::{
+    CandidateExtensionProvider, CustomPhraseProvider, DateTimeProvider, EnglishSuggesterProvider,
+    ExtensionContext, ExtensionPipeline, SymbolSuggesterProvider,
+};
 pub use resources::LexiconResources;
 pub use waylan_core::PanguSpacing;
 
