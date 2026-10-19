@@ -16,10 +16,17 @@ use crate::frontend::InputMethodFrontend;
 use crate::session::{extract_surrounding_prefix, ImeOutputAction, KeyProcessContext};
 
 impl ImeRuntime {
+    /// 统一向前端提交上屏文本并同步登记到标点智能配对处理器
+    #[inline]
+    fn commit_text_with_record<F: InputMethodFrontend>(&mut self, frontend: &mut F, text: &str) {
+        frontend.commit_text(text);
+        self.core.punctuation_processor.record_commit(text);
+    }
+
     /// 统一按键事件驱动主流程
     ///
     /// # 设计原理
-    /// - 依次经过：1. 统一语音按键拦截与长按流转 -> 2. 核心状态机决策 -> 3. 前端回调通知。
+    /// - 依次经过：1. 统一语音按键拦截与长按流转 -> 2. 核心状态机决策 -> 3. 前端动作派发与界面刷新。
     /// - 彻底消灭 Wayland 与 IBus 前端在按键分发与文本提交上的重复逻辑。
     pub fn process_key_event<F: InputMethodFrontend>(
         &mut self,
@@ -47,8 +54,7 @@ impl ImeRuntime {
                     return (true, None);
                 }
                 VoiceKeyAction::Commit(text) => {
-                    frontend.commit_text(&text);
-                    self.core.punctuation_processor.record_commit(&text);
+                    self.commit_text_with_record(frontend, &text);
                     self.refresh_frontend_ui(frontend, inline_preedit);
                     return (true, Some(text));
                 }
@@ -70,10 +76,20 @@ impl ImeRuntime {
         };
 
         // 2. 调用核心决策状态机
-        let result = self.core.process_key(ctx, now);
+        let action = self.core.process_key(ctx, now);
 
         // 3. 翻译并消费决策动作
-        match result {
+        self.dispatch_ime_action(frontend, action, inline_preedit)
+    }
+
+    /// 消费核心会话产出的输入法动作并驱动前端与状态机同步
+    fn dispatch_ime_action<F: InputMethodFrontend>(
+        &mut self,
+        frontend: &mut F,
+        action: ImeOutputAction,
+        inline_preedit: bool,
+    ) -> (bool, Option<String>) {
+        match action {
             ImeOutputAction::PassThrough => (false, None),
             ImeOutputAction::Handled { update_ui } => {
                 if update_ui {
@@ -86,14 +102,12 @@ impl ImeRuntime {
                 (true, None)
             }
             ImeOutputAction::Commit(text) => {
-                frontend.commit_text(&text);
-                self.core.punctuation_processor.record_commit(&text);
+                self.commit_text_with_record(frontend, &text);
                 self.refresh_frontend_ui(frontend, inline_preedit);
                 (true, Some(text))
             }
             ImeOutputAction::CommitAndPassThrough(text) => {
-                frontend.commit_text(&text);
-                self.core.punctuation_processor.record_commit(&text);
+                self.commit_text_with_record(frontend, &text);
                 self.refresh_frontend_ui(frontend, inline_preedit);
                 (false, Some(text))
             }
@@ -101,20 +115,15 @@ impl ImeRuntime {
                 text,
                 cursor_offset,
             } => {
-                frontend.commit_text(&text);
-                self.core.punctuation_processor.record_commit(&text);
+                self.commit_text_with_record(frontend, &text);
                 if cursor_offset != 0 {
                     frontend.move_cursor(cursor_offset);
                 }
                 self.refresh_frontend_ui(frontend, inline_preedit);
                 (true, Some(text))
             }
-            ImeOutputAction::CommitPartial {
-                committed,
-                remaining_preedit: _,
-            } => {
-                frontend.commit_text(&committed);
-                self.core.punctuation_processor.record_commit(&committed);
+            ImeOutputAction::CommitPartial { committed, .. } => {
+                self.commit_text_with_record(frontend, &committed);
                 self.refresh_frontend_ui(frontend, inline_preedit);
                 (true, Some(committed))
             }
