@@ -73,19 +73,12 @@ pub fn build_common_candidate_box_state(
         }
     }
 
-    let candidates_slice = engine.candidates();
-    let mut core_candidates = Vec::with_capacity(candidates_slice.len());
-    for ac in candidates_slice {
-        core_candidates.push(ac.to_core_candidate());
-    }
+    let candidates = engine.candidates().to_vec();
 
     let (expanded_card, grid_state_resolved, grid_candidates) = if grid_state.is_expanded() {
         let all = engine.all_candidates();
         let take_count = all.len().min(30);
-        let mut grid = Vec::with_capacity(take_count);
-        for ac in all.iter().take(take_count) {
-            grid.push(ac.to_core_candidate());
-        }
+        let grid = all[..take_count].to_vec();
         (ExpandedCardState::Collapsed, grid_state, grid)
     } else if let Some(card @ ExpandedCardState::Expanded { .. }) = card_opt {
         (card, GridState::Collapsed, Vec::new())
@@ -126,7 +119,7 @@ pub fn build_common_candidate_box_state(
     CandidateBoxState {
         visible: is_active && !engine.raw_input().is_empty(),
         preedit,
-        candidates: core_candidates,
+        candidates,
         selected_index,
         expanded_card,
         mode_badge,

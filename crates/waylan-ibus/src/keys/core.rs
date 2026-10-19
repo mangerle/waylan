@@ -159,11 +159,7 @@ impl IbusSessionCore {
             }
         }
         let cands = self.runtime.core.engine.candidates();
-        let mut out = Vec::with_capacity(cands.len());
-        for c in cands {
-            out.push(c.to_core_candidate());
-        }
-        out
+        cands.to_vec()
     }
 
     /// 同步 CapsLock 大写锁定状态至共享标志并唤醒托盘刷新

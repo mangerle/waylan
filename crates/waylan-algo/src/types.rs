@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use waylan_core::config::FuzzyPinyinRules;
-use waylan_core::{AppConfig, Candidate};
+use waylan_core::AppConfig;
 
 /// 模糊音细粒度配置
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -178,140 +178,10 @@ impl From<&AppConfig> for AlgoConfig {
     }
 }
 
-/// 候选词优先级层级（数值越大优先级越高）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
-pub enum CandidateTier {
-    /// 部分前缀匹配或残余拼音
-    PrefixPartial = 1,
-    /// 次位邻键容错纠错候选
-    TypoCorrection = 2,
-    /// 首字母缩写简拼（如 bj 匹配 北京，yyds 匹配 永远的神）
-    Acronym = 3,
-    /// 整句预测（Viterbi 多音节长句拼接）
-    SentenceViterbi = 4,
-    /// 用户自适应学习词或动态自造词
-    UserHistory = 5,
-    /// 完整整词匹配（词库中完整匹配的成词，如“我们”、“中国”、“西安”、“先”）
-    #[default]
-    ExactWord = 6,
-    /// 专有名词与受保护实体（如技术专名、中英实体，享有最高置顶优先级）
-    ProtectedEntity = 7,
-}
+pub use waylan_core::{Candidate, CandidateTier};
 
-/// 算法内部候选词结构
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AlgoCandidate {
-    /// 候选汉字或词条文本
-    pub text: String,
-    /// 对应拼音切分或来源编码
-    pub pinyin: String,
-    /// 综合打分（静态词频 + 动态习惯加权）
-    pub score: u32,
-    /// 候选附加注释信息（如反查提示、计算结果来源）
-    pub comment: Option<String>,
-    /// 候选词优先级层级
-    pub tier: CandidateTier,
-    /// 是否为可展开的二级动态功能项
-    pub is_expandable: bool,
-    /// 二级子候选列表（如多种展开的日期或时间格式）
-    pub sub_candidates: Vec<String>,
-    /// 选词时显式消费的原始输入按键字节长度（若为 None 则回退至按 pinyin 自动推断）
-    #[serde(default)]
-    pub consumed_len: Option<usize>,
-    /// 词条在静态词库中的全局整数 ID（若来源于系统词典，可用于直接加速二元转移打分）
-    #[serde(default)]
-    pub word_id: Option<u32>,
-}
-
-impl AlgoCandidate {
-    /// 创建新的算法候选词（默认 ExactWord 级别）
-    pub fn new(text: impl Into<String>, pinyin: impl Into<String>, score: u32) -> Self {
-        Self {
-            text: text.into(),
-            pinyin: pinyin.into(),
-            score,
-            comment: None,
-            tier: CandidateTier::ExactWord,
-            is_expandable: false,
-            sub_candidates: Vec::new(),
-            consumed_len: None,
-            word_id: None,
-        }
-    }
-
-    /// 设置词库全局 ID
-    pub fn with_word_id(mut self, word_id: Option<u32>) -> Self {
-        self.word_id = word_id;
-        self
-    }
-
-    /// 附加注释说明
-    pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
-        self.comment = Some(comment.into());
-        self
-    }
-
-    /// 设置显式按键消费长度
-    pub fn with_consumed_len(mut self, len: usize) -> Self {
-        self.consumed_len = Some(len);
-        self
-    }
-
-    /// 指定优先级层级
-    pub fn with_tier(mut self, tier: CandidateTier) -> Self {
-        self.tier = tier;
-        self
-    }
-
-    /// 标记为可展开并挂载二级子候选格式列表
-    pub fn with_sub_candidates(mut self, sub_candidates: Vec<String>) -> Self {
-        self.is_expandable = !sub_candidates.is_empty();
-        self.sub_candidates = sub_candidates;
-        self
-    }
-
-    /// 转换为 Core 层定义的公共候选词结构体（避免空子候选容器分配与多重方法中转）
-    pub fn to_core_candidate(&self) -> Candidate {
-        let sub_candidates = if self.sub_candidates.is_empty() {
-            Vec::new()
-        } else {
-            self.sub_candidates.clone()
-        };
-        Candidate {
-            text: self.text.clone(),
-            pinyin: self.pinyin.clone(),
-            score: self.score,
-            is_expandable: !sub_candidates.is_empty(),
-            sub_candidates,
-            comment: self.comment.clone(),
-        }
-    }
-
-    /// 消费所有权转换为 Core 层定义的公共候选词结构体（零额外堆克隆）
-    pub fn into_core_candidate(self) -> Candidate {
-        let is_expandable = !self.sub_candidates.is_empty();
-        Candidate {
-            text: self.text,
-            pinyin: self.pinyin,
-            score: self.score,
-            is_expandable,
-            sub_candidates: self.sub_candidates,
-            comment: self.comment,
-        }
-    }
-}
-
-impl From<&AlgoCandidate> for Candidate {
-    fn from(algo: &AlgoCandidate) -> Self {
-        algo.to_core_candidate()
-    }
-}
-
-impl From<AlgoCandidate> for Candidate {
-    fn from(algo: AlgoCandidate) -> Self {
-        algo.into_core_candidate()
-    }
-}
+/// 算法内部候选词结构（别名，全链路与 Core 统一契约）
+pub type AlgoCandidate = Candidate;
 
 /// 外部词库导入条目数据契约 (文本, 拼音序列, 基础频次权重)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
