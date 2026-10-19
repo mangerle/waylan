@@ -8,16 +8,15 @@
 
 use super::{ImeCoreSession, ImeOutputAction};
 use waylan_core::input::*;
-use waylan_core::GridState;
+use waylan_core::CandidateExpansion;
 
 const GRID_COLS: usize = 6;
 const MAX_GRID_CANDIDATES: usize = 30;
 
 impl ImeCoreSession {
-    /// 展开 5 行网格大候选词面板（严格互斥：自动收起二级格式扩展卡片）
+    /// 展开 5 行网格大候选词面板（严格互斥：在类型上自动收起二级卡片）
     pub fn expand_grid(&mut self) {
-        self.collapse_card();
-        self.grid_state = GridState::Expanded {
+        self.expansion = CandidateExpansion::Grid {
             selected_index: self
                 .selected_global_index()
                 .min(MAX_GRID_CANDIDATES.saturating_sub(1)),
@@ -26,12 +25,14 @@ impl ImeCoreSession {
 
     /// 折叠 5 行网格大候选词面板并重置选中状态机
     pub fn collapse_grid(&mut self) {
-        self.grid_state = GridState::Collapsed;
+        if self.expansion.is_grid_expanded() {
+            self.expansion = CandidateExpansion::None;
+        }
     }
 
     /// 切换 5 行网格大候选词面板的展开/折叠状态
     pub fn toggle_grid_expansion(&mut self) {
-        if self.grid_state.is_expanded() {
+        if self.is_grid_expanded() {
             self.collapse_grid();
         } else {
             self.expand_grid();
@@ -49,7 +50,7 @@ impl ImeCoreSession {
         key: u32,
         now: u64,
     ) -> Option<ImeOutputAction> {
-        let GridState::Expanded { mut selected_index } = self.grid_state else {
+        let CandidateExpansion::Grid { mut selected_index } = self.expansion else {
             return None;
         };
 
@@ -67,7 +68,7 @@ impl ImeCoreSession {
             KEY_DOWN => {
                 let next_row = (row + 1) % row_count;
                 selected_index = (next_row * GRID_COLS + col).min(total.saturating_sub(1));
-                self.grid_state = GridState::Expanded { selected_index };
+                self.expansion = CandidateExpansion::Grid { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_UP => {
@@ -77,12 +78,12 @@ impl ImeCoreSession {
                     row - 1
                 };
                 selected_index = (prev_row * GRID_COLS + col).min(total.saturating_sub(1));
-                self.grid_state = GridState::Expanded { selected_index };
+                self.expansion = CandidateExpansion::Grid { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_RIGHT => {
                 selected_index = (selected_index + 1) % total;
-                self.grid_state = GridState::Expanded { selected_index };
+                self.expansion = CandidateExpansion::Grid { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_LEFT => {
@@ -91,7 +92,7 @@ impl ImeCoreSession {
                 } else {
                     selected_index - 1
                 };
-                self.grid_state = GridState::Expanded { selected_index };
+                self.expansion = CandidateExpansion::Grid { selected_index };
                 return Some(ImeOutputAction::Handled { update_ui: true });
             }
             KEY_ESC => {

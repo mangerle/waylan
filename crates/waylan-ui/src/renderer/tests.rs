@@ -1,6 +1,6 @@
 use super::*;
 
-use waylan_core::{Candidate, ExpandedCardState, GridState};
+use waylan_core::{Candidate, CandidateExpansion};
 
 #[test]
 fn test_renderer_basic() {
@@ -14,9 +14,8 @@ fn test_renderer_basic() {
             Candidate::new("泥豪", "ni'hao", 6000),
         ],
         selected_index: 0,
-        expanded_card: ExpandedCardState::Collapsed,
+        expansion: CandidateExpansion::None,
         mode_badge: "中".to_string(),
-        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -40,9 +39,8 @@ fn test_render_expanded_popup_card() {
                 .with_sub_candidates(vec!["2026年10月9日".to_string(), "20261009".to_string()]),
         ],
         selected_index: 1,
-        expanded_card: ExpandedCardState::Expanded { selected_index: 0 },
+        expansion: CandidateExpansion::Card { selected_index: 0 },
         mode_badge: "中".to_string(),
-        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -66,9 +64,8 @@ fn test_glyph_cache_hit_and_reuse() {
             Candidate::new("侧视", "ce'shi", 90),
         ],
         selected_index: 0,
-        expanded_card: ExpandedCardState::Collapsed,
+        expansion: CandidateExpansion::None,
         mode_badge: "中".to_string(),
-        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -94,9 +91,8 @@ fn test_hidpi_scale_rendering() {
         preedit: "ce".to_string(),
         candidates: vec![Candidate::new("测试", "ce'shi", 100)],
         selected_index: 0,
-        expanded_card: ExpandedCardState::Collapsed,
+        expansion: CandidateExpansion::None,
         mode_badge: "中".to_string(),
-        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };
@@ -161,9 +157,8 @@ fn test_render_grid_expanded_and_hit_test() {
         preedit: "hou'xuan".to_string(),
         candidates: grid_cands.iter().take(6).cloned().collect(),
         selected_index: 0,
-        expanded_card: ExpandedCardState::Collapsed,
+        expansion: CandidateExpansion::Grid { selected_index: 0 },
         mode_badge: String::new(),
-        grid_state: GridState::Expanded { selected_index: 0 },
         grid_candidates: grid_cands,
         voice: None,
     };
@@ -237,9 +232,8 @@ fn test_render_voice_capsule_bar() {
         preedit: "你好".to_string(),
         candidates: Vec::new(),
         selected_index: 0,
-        expanded_card: ExpandedCardState::Collapsed,
+        expansion: CandidateExpansion::None,
         mode_badge: String::new(),
-        grid_state: GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: Some(waylan_core::VoiceBoxState {
             partial_text: "正在识别中...".to_string(),

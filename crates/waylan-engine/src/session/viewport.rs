@@ -5,7 +5,7 @@
 //! - **核心优势**：职责单一（SRP），视口导航与状态机变更集中内聚，杜绝越界越权访问。
 //! - **代价与局限**：基于 `&[Candidate]` 切片返回借用，生命周期与会话自身绑定。
 
-use waylan_core::{Candidate, ExpandedCardState, GridState};
+use waylan_core::{Candidate, CandidateExpansion};
 
 use super::{ImeCoreSession, ImeOutputAction};
 
@@ -13,19 +13,18 @@ impl ImeCoreSession {
     /// 查询当前是否处于大候选网格展开态
     #[inline]
     pub fn is_grid_expanded(&self) -> bool {
-        self.grid_state.is_expanded()
+        self.expansion.is_grid_expanded()
     }
 
     /// 查询当前是否处于二级扩展卡片展开态
     #[inline]
     pub fn is_card_expanded(&self) -> bool {
-        self.expanded_card.is_expanded()
+        self.expansion.is_card_expanded()
     }
 
-    /// 展开二级格式扩展卡片（严格互斥：自动收起 5 行大网格面板）
+    /// 展开二级格式扩展卡片（严格互斥：在类型上自动收起大网格面板）
     pub fn expand_card(&mut self, selected_sub_index: usize) {
-        self.collapse_grid();
-        self.expanded_card = ExpandedCardState::Expanded {
+        self.expansion = CandidateExpansion::Card {
             selected_index: selected_sub_index,
         };
     }
@@ -33,13 +32,18 @@ impl ImeCoreSession {
     /// 折叠二级格式扩展卡片
     #[inline]
     pub fn collapse_card(&mut self) {
-        self.expanded_card = ExpandedCardState::Collapsed;
+        if self.expansion.is_card_expanded() {
+            self.expansion = CandidateExpansion::None;
+        }
     }
 
     /// 获取二级卡片展开态下的高亮子项索引，未展开则返回 0
     #[inline]
     pub fn card_selected_index(&self) -> usize {
-        self.expanded_card.selected_index().unwrap_or(0)
+        match self.expansion {
+            CandidateExpansion::Card { selected_index } => selected_index,
+            _ => 0,
+        }
     }
 
     /// 获取当前展示页码（从 0 开始）
@@ -174,8 +178,7 @@ impl ImeCoreSession {
     pub fn reset_viewport(&mut self) {
         self.page_index = 0;
         self.selected_index = 0;
-        self.grid_state = GridState::Collapsed;
-        self.expanded_card = ExpandedCardState::Collapsed;
+        self.expansion = CandidateExpansion::None;
     }
 
     /// 在二级展开卡片中向下移动选中项
@@ -188,9 +191,9 @@ impl ImeCoreSession {
             .map(|c| c.sub_candidates.len())
             .unwrap_or(0);
         if sub_len > 0 {
-            if let ExpandedCardState::Expanded {
+            if let CandidateExpansion::Card {
                 ref mut selected_index,
-            } = self.expanded_card
+            } = self.expansion
             {
                 *selected_index = (*selected_index + 1) % sub_len;
             }
@@ -207,9 +210,9 @@ impl ImeCoreSession {
             .map(|c| c.sub_candidates.len())
             .unwrap_or(0);
         if sub_len > 0 {
-            if let ExpandedCardState::Expanded {
+            if let CandidateExpansion::Card {
                 ref mut selected_index,
-            } = self.expanded_card
+            } = self.expansion
             {
                 *selected_index = if *selected_index == 0 {
                     sub_len.saturating_sub(1)
@@ -223,14 +226,17 @@ impl ImeCoreSession {
     /// 获取大候选网格展开态下的高亮选中项绝对索引，未展开则返回 0
     #[inline]
     pub fn grid_selected_index(&self) -> usize {
-        self.grid_state.selected_index().unwrap_or(0)
+        match self.expansion {
+            CandidateExpansion::Grid { selected_index } => selected_index,
+            _ => 0,
+        }
     }
 
     /// 设置大候选网格展开态下的选中索引
     #[inline]
     pub fn set_grid_selected_index(&mut self, idx: usize) {
-        if self.grid_state.is_expanded() {
-            self.grid_state = GridState::Expanded {
+        if self.expansion.is_grid_expanded() {
+            self.expansion = CandidateExpansion::Grid {
                 selected_index: idx,
             };
         }

@@ -6,9 +6,7 @@
 //! - **代价与局限**：对算法引擎与语音管理器采用借用传递。
 
 use waylan_algo::AlgoEngine;
-use waylan_core::{
-    Candidate, CandidateBoxState, ExpandedCardState, GridState, InputMode, VoiceBoxState,
-};
+use waylan_core::{Candidate, CandidateBoxState, CandidateExpansion, InputMode, VoiceBoxState};
 
 /// 候选词卡片构建参数配置
 #[derive(Clone, Default)]
@@ -18,8 +16,7 @@ pub struct CandidateBoxBuildOptions {
     pub page_index: usize,
     pub selected_index: usize,
     pub page_size: usize,
-    pub grid_state: GridState,
-    pub expanded_card: Option<ExpandedCardState>,
+    pub expansion: CandidateExpansion,
     pub inline_preedit: bool,
     pub voice_state: Option<VoiceBoxState>,
 }
@@ -38,8 +35,7 @@ impl CandidateBoxBuildOptions {
             page_index: core.page_index,
             selected_index: core.selected_index,
             page_size: core.page_size,
-            grid_state: core.grid_state,
-            expanded_card: Some(core.expanded_card),
+            expansion: core.expansion,
             inline_preedit,
             voice_state,
         }
@@ -57,8 +53,7 @@ pub fn build_common_candidate_box_state(
         page_index,
         selected_index,
         page_size,
-        grid_state,
-        expanded_card: card_opt,
+        expansion: expansion_in,
         inline_preedit,
         voice_state,
     } = opts;
@@ -81,9 +76,8 @@ pub fn build_common_candidate_box_state(
                 preedit: voice_box.partial_text.clone(),
                 candidates,
                 selected_index: 0,
-                expanded_card: ExpandedCardState::Collapsed,
+                expansion: CandidateExpansion::None,
                 mode_badge: String::new(),
-                grid_state: GridState::Collapsed,
                 grid_candidates: Vec::new(),
                 voice: Some(voice_box.clone()),
             };
@@ -100,18 +94,14 @@ pub fn build_common_candidate_box_state(
         Vec::new()
     };
 
-    let (expanded_card, grid_state_resolved, grid_candidates) = if grid_state.is_expanded() {
-        let take_count = all.len().min(30);
-        let grid = all[..take_count].to_vec();
-        (ExpandedCardState::Collapsed, grid_state, grid)
-    } else if let Some(card @ ExpandedCardState::Expanded { .. }) = card_opt {
-        (card, GridState::Collapsed, Vec::new())
-    } else {
-        (
-            ExpandedCardState::Collapsed,
-            GridState::Collapsed,
-            Vec::new(),
-        )
+    let (expansion, grid_candidates) = match expansion_in {
+        CandidateExpansion::Grid { selected_index } => {
+            let take_count = all.len().min(30);
+            let grid = all[..take_count].to_vec();
+            (CandidateExpansion::Grid { selected_index }, grid)
+        }
+        card @ CandidateExpansion::Card { .. } => (card, Vec::new()),
+        CandidateExpansion::None => (CandidateExpansion::None, Vec::new()),
     };
 
     let is_dynamic_v_mode = engine.raw_input().starts_with('v');
@@ -134,8 +124,8 @@ pub fn build_common_candidate_box_state(
         (engine.formatted_preedit(), badge)
     };
 
-    let final_selected_index = if let Some(idx) = grid_state_resolved.selected_index() {
-        idx
+    let final_selected_index = if let CandidateExpansion::Grid { selected_index } = expansion {
+        selected_index
     } else {
         selected_index
     };
@@ -145,9 +135,8 @@ pub fn build_common_candidate_box_state(
         preedit,
         candidates,
         selected_index: final_selected_index,
-        expanded_card,
+        expansion,
         mode_badge,
-        grid_state: grid_state_resolved,
         grid_candidates,
         voice: None,
     }

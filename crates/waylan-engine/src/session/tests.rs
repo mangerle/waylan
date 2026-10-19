@@ -3,6 +3,7 @@
 use super::*;
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::AlgoConfig;
+use waylan_core::CandidateExpansion;
 
 fn make_test_session() -> ImeCoreSession {
     let engine = AlgoEngine::new(LexiconTable::with_sample_data(), AlgoConfig::default());
@@ -255,11 +256,12 @@ fn test_ime_core_session_expanded_card_and_reset_context() {
     assert!(!session.is_card_expanded());
     assert!(!session.is_grid_expanded());
 
-    session.expanded_card = ExpandedCardState::Expanded { selected_index: 2 };
+    session.expansion = CandidateExpansion::Card { selected_index: 2 };
     assert!(session.is_card_expanded());
 
     session.expand_grid();
     assert!(session.is_grid_expanded());
+    assert!(!session.is_card_expanded());
 
     session.reset_context();
     assert!(!session.is_card_expanded());

@@ -30,7 +30,7 @@ fn test_candidate_box_state_defaults() {
     assert!(!state.visible);
     assert_eq!(state.preedit, "");
     assert_eq!(state.selected_index, 0);
-    assert_eq!(state.expanded_card, ExpandedCardState::Collapsed);
+    assert_eq!(state.expansion, CandidateExpansion::None);
     assert_eq!(state.mode_badge, "");
     assert!(!state.is_grid_expanded());
     assert!(state.grid_candidates.is_empty());
@@ -70,7 +70,7 @@ fn test_candidate_view_mode_mutually_exclusive() {
     assert_eq!(state.view_mode(), CandidateViewMode::ExpandedCard);
 
     // 网格展开时优先为 GridExpanded
-    state.set_grid_state(GridState::Expanded { selected_index: 0 });
+    state.set_grid_expanded(true, 0);
     assert_eq!(state.view_mode(), CandidateViewMode::GridExpanded);
 
     // 激活语音时最高优先级为 VoiceCapsule
@@ -98,18 +98,30 @@ fn test_candidate_box_state_mutual_exclusion() {
     assert!(state.is_expanded());
     assert!(!state.is_grid_expanded());
     assert_eq!(state.view_mode(), CandidateViewMode::ExpandedCard);
+    assert_eq!(
+        state.expansion,
+        CandidateExpansion::Card { selected_index: 1 }
+    );
 
-    // 设置大网格展开，二级卡片必须被物理自动折叠
-    state.set_grid_state(GridState::Expanded { selected_index: 2 });
+    // 设置大网格展开，在类型系统层面收敛为互斥枚举
+    state.set_grid_expanded(true, 2);
     assert!(state.is_grid_expanded());
     assert!(!state.is_expanded());
     assert_eq!(state.view_mode(), CandidateViewMode::GridExpanded);
+    assert_eq!(
+        state.expansion,
+        CandidateExpansion::Grid { selected_index: 2 }
+    );
 
     // 重新展开二级卡片，大网格必须被物理自动折叠
     state.set_expanded(true, 0);
     assert!(state.is_expanded());
     assert!(!state.is_grid_expanded());
     assert_eq!(state.view_mode(), CandidateViewMode::ExpandedCard);
+    assert_eq!(
+        state.expansion,
+        CandidateExpansion::Card { selected_index: 0 }
+    );
 }
 
 #[test]

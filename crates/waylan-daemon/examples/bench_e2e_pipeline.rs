@@ -78,9 +78,8 @@ fn main() {
             Candidate::new("线", "xian", 4000),
         ],
         selected_index: 0,
-        expanded_card: waylan_core::ExpandedCardState::Collapsed,
+        expansion: waylan_core::CandidateExpansion::None,
         mode_badge: "中".to_string(),
-        grid_state: waylan_core::GridState::Collapsed,
         grid_candidates: Vec::new(),
         voice: None,
     };

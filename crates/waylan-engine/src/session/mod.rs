@@ -23,7 +23,7 @@ pub use types::*;
 use crate::input::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
-use waylan_core::{ExpandedCardState, GridState, InputMode, ParsedShortcut};
+use waylan_core::{CandidateExpansion, InputMode, ParsedShortcut};
 
 /// 微澜输入法核心会话上下文与按键驱动状态机 (IME Core Session)
 #[derive(Debug)]
@@ -58,10 +58,8 @@ pub struct ImeCoreSession {
     pub selected_index: usize,
     /// 候选框单页展示的最大候选词数量
     pub page_size: usize,
-    /// 候选词 5 行大网格展开状态机（杜绝未展开时选中项悬空的非法状态）
-    pub grid_state: GridState,
-    /// 二级格式扩展卡片展开状态机（日期/时间格式多项挑选）
-    pub expanded_card: ExpandedCardState,
+    /// 候选框展开交互状态机（大卡片与多行大网格在类型层面严格互斥）
+    pub expansion: CandidateExpansion,
 }
 
 impl Default for ImeCoreSession {
@@ -92,8 +90,7 @@ impl ImeCoreSession {
             page_index: 0,
             selected_index: 0,
             page_size,
-            grid_state: GridState::Collapsed,
-            expanded_card: ExpandedCardState::Collapsed,
+            expansion: CandidateExpansion::None,
         }
     }
 
