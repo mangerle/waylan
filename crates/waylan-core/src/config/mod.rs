@@ -83,6 +83,30 @@ impl AppConfig {
     pub fn opencc_dict_search_paths() -> Vec<PathBuf> {
         paths::opencc_dict_search_paths()
     }
+
+    /// 触发通知常驻输入法守护进程即时执行词库与配置热重载
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在偏好设置中心（waylan-settings）或外部工具完成词库导入（拼音/英文/符号）后，
+    ///   通过更新默认配置文件（`config.toml`）的修改时间戳，唤醒常驻守护进程的内核级 inotify 监听，
+    ///   实现词库导入后即刻生效，无需手动重启守护进程。
+    /// - **核心优势**：零外部 IPC/D-Bus 协议开销，利用现有的 inotify 基础设施精准触发。
+    pub fn touch_config_for_reload() {
+        if let Some(config_path) = Self::config_path() {
+            Self::touch_file_for_reload(&config_path);
+        }
+    }
+
+    /// 触碰指定文件以更新其修改时间戳触发外部文件监听
+    pub fn touch_file_for_reload(path: &std::path::Path) {
+        if path.exists() {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+                let _ = file.set_modified(std::time::SystemTime::now());
+            }
+        } else {
+            let _ = Self::default().save_to_file(path);
+        }
+    }
 }
 
 #[cfg(test)]
