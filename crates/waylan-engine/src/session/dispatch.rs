@@ -190,12 +190,7 @@ impl ImeCoreSession {
             page_keys: self.page_keys,
             now,
         };
-        let action = handle_composition_key_with_params(
-            &mut self.engine,
-            &mut self.expanded_card,
-            &mut self.punctuation_processor,
-            params,
-        )?;
+        let action = handle_composition_key_with_params(self, params)?;
 
         if action == ImeOutputAction::ExpandGrid {
             self.expand_grid();

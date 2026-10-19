@@ -142,14 +142,12 @@ impl WaylanV2Session {
 
         build_common_candidate_box_state(
             &self.runtime.core.engine,
-            CandidateBoxBuildOptions {
-                mode: self.runtime.core.mode,
-                is_active: self.focus.is_active,
-                grid_state: self.runtime.core.grid_state,
-                expanded_card: Some(self.runtime.core.expanded_card),
-                inline_preedit: true,
+            CandidateBoxBuildOptions::from_session(
+                &self.runtime.core,
+                self.focus.is_active,
+                true,
                 voice_state,
-            },
+            ),
         )
     }
 

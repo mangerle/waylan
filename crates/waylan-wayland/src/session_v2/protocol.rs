@@ -300,11 +300,11 @@ fn handle_pointer_click(state: &mut WaylanV2Session) {
         }
         CandidateHitTarget::Select(idx) => handle_pointer_select_candidate(state, idx),
         CandidateHitTarget::NextPage => {
-            state.runtime.core.engine.next_page();
+            state.runtime.core.next_page();
             state.refresh_candidate_surface();
         }
         CandidateHitTarget::PrevPage => {
-            state.runtime.core.engine.prev_page();
+            state.runtime.core.prev_page();
             state.refresh_candidate_surface();
         }
     }

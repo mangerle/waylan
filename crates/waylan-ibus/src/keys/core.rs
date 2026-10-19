@@ -141,14 +141,9 @@ impl IbusSessionCore {
 
     /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
     pub fn current_candidates(&self) -> Vec<Candidate> {
-        if self.runtime.core.engine.is_expanded() {
-            if let Some(cand) = self
-                .runtime
-                .core
-                .engine
-                .candidates()
-                .get(self.runtime.core.engine.selected_index())
-            {
+        if self.runtime.core.is_card_expanded() {
+            let sel = self.runtime.core.selected_global_index();
+            if let Some(cand) = self.runtime.core.engine.candidates().get(sel) {
                 if cand.is_expandable && !cand.sub_candidates.is_empty() {
                     let mut out = Vec::with_capacity(cand.sub_candidates.len());
                     for sub in &cand.sub_candidates {
@@ -158,8 +153,7 @@ impl IbusSessionCore {
                 }
             }
         }
-        let cands = self.runtime.core.engine.candidates();
-        cands.to_vec()
+        self.runtime.core.current_page_candidates().to_vec()
     }
 
     /// 同步 CapsLock 大写锁定状态至共享标志并唤醒托盘刷新

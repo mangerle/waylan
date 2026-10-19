@@ -10,11 +10,9 @@ mod expanded;
 mod navigation;
 mod selection;
 
-use crate::input::PunctuationProcessor;
-use waylan_algo::AlgoEngine;
 use waylan_core::input::page_keys::PageKeyConfig;
-use waylan_core::ExpandedCardState;
 
+use crate::session::ImeCoreSession;
 pub use crate::session::ImeOutputAction;
 
 /// 拼音组词状态按键决策输入参数
@@ -28,9 +26,7 @@ pub struct CompositionKeyParams {
 
 /// 使用收敛的参数结构体处理处于拼音组词状态（raw_input 非空）下的核心按键拦截决策
 pub fn handle_composition_key_with_params(
-    engine: &mut AlgoEngine,
-    card: &mut ExpandedCardState,
-    punct_processor: &mut PunctuationProcessor,
+    session: &mut ImeCoreSession,
     params: CompositionKeyParams,
 ) -> Option<ImeOutputAction> {
     let CompositionKeyParams {
@@ -40,69 +36,44 @@ pub fn handle_composition_key_with_params(
         now,
     } = params;
 
-    if let Some(act) = expanded::handle_expanded_tab_key(engine, card, punct_processor, key) {
+    if let Some(act) = expanded::handle_expanded_tab_key(session, key) {
         return Some(act);
     }
 
-    if !card.is_expanded() && !engine.is_expanded() {
-        if let Some(act) = navigation::handle_smart_navigation_key(engine, key) {
+    if !session.is_card_expanded() {
+        if let Some(act) = navigation::handle_smart_navigation_key(session, key) {
             return Some(act);
         }
     }
 
-    if let Some(act) = selection::handle_v_mode_key(engine, key, shift_active) {
-        *card = ExpandedCardState::Collapsed;
+    if let Some(act) = selection::handle_v_mode_key(session, key, shift_active) {
+        session.collapse_card();
         return Some(act);
     }
 
-    if let Some(act) =
-        selection::handle_digit_selection(engine, punct_processor, key, shift_active, now)
-    {
+    if let Some(act) = selection::handle_digit_selection(session, key, shift_active, now) {
         if matches!(act, ImeOutputAction::Commit(_)) {
-            *card = ExpandedCardState::Collapsed;
+            session.collapse_card();
         }
         return Some(act);
     }
 
-    if let Some(act) = selection::handle_action_keys(engine, punct_processor, key, now) {
+    if let Some(act) = selection::handle_action_keys(session, key, now) {
         if matches!(act, ImeOutputAction::Commit(_) | ImeOutputAction::Reset) {
-            *card = ExpandedCardState::Collapsed;
+            session.collapse_card();
         }
         return Some(act);
     }
 
-    if let Some(act) = selection::handle_editing_keys(engine, key, shift_active) {
-        *card = ExpandedCardState::Collapsed;
+    if let Some(act) = selection::handle_editing_keys(session, key, shift_active) {
+        session.collapse_card();
         return Some(act);
     }
 
-    if let Some(act) = navigation::handle_page_flip_keys(engine, key, shift_active, page_keys) {
-        *card = ExpandedCardState::Collapsed;
+    if let Some(act) = navigation::handle_page_flip_keys(session, key, shift_active, page_keys) {
+        session.collapse_card();
         return Some(act);
     }
 
     None
-}
-
-/// 处理处于拼音组词状态（raw_input 非空）下的核心按键拦截决策
-pub fn handle_composition_key(
-    engine: &mut AlgoEngine,
-    card: &mut ExpandedCardState,
-    punct_processor: &mut PunctuationProcessor,
-    key: u32,
-    shift_active: bool,
-    page_keys: PageKeyConfig,
-    now: u64,
-) -> Option<ImeOutputAction> {
-    handle_composition_key_with_params(
-        engine,
-        card,
-        punct_processor,
-        CompositionKeyParams {
-            key,
-            shift_active,
-            page_keys,
-            now,
-        },
-    )
 }

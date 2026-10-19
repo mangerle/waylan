@@ -5,7 +5,6 @@ pub(crate) mod prefix_synthesis;
 pub mod resources;
 pub mod selection;
 pub mod typo;
-pub mod viewport;
 
 #[cfg(test)]
 mod tests;
@@ -13,7 +12,6 @@ mod tests;
 pub use adaptive::UserAdaptiveState;
 pub use composition_buffer::CompositionBuffer;
 pub use resources::LexiconResources;
-pub use viewport::CandidateViewport;
 pub use waylan_core::PanguSpacing;
 
 use std::borrow::Cow;
@@ -40,8 +38,8 @@ use crate::types::{AlgoCandidate, AlgoConfig, ImportedDictEntry};
 pub struct AlgoEngine {
     /// 静态系统词典与语言学规则资源包
     pub(crate) resources: LexiconResources,
-    /// 候选词展示视口与分页交互状态机
-    pub(crate) viewport: CandidateViewport,
+    /// 全量候选词计算结果缓存池（由算法解码计算产出，由上层会话层负责分页视口呈现）
+    pub(crate) candidates: Vec<AlgoCandidate>,
     /// 用户自适应词频学习与预写日志持久化子系统
     pub(crate) adaptive: UserAdaptiveState,
     /// 增量击键编辑缓冲区与预编辑切分状态机
@@ -69,7 +67,7 @@ impl AlgoEngine {
     pub fn new(table: LexiconTable, config: AlgoConfig) -> Self {
         Self {
             resources: LexiconResources::new(table),
-            viewport: CandidateViewport::new(),
+            candidates: Vec::new(),
             adaptive: UserAdaptiveState::new(),
             composition: CompositionBuffer::new(),
             config,
@@ -123,128 +121,46 @@ impl AlgoEngine {
     /// 键入一个字符
     pub fn push_char(&mut self, ch: char) -> &[AlgoCandidate] {
         self.composition.push_char(ch);
-        self.viewport.page_index = 0;
         self.recompute_candidates();
-        &self.viewport.current_candidates
+        &self.candidates
     }
 
     /// 退格删除一个字符（修改输入时清空分段自造词累积器，防止拼装错误脏词）
     pub fn pop_char(&mut self) -> &[AlgoCandidate] {
         self.composition.pop_char();
-        self.viewport.page_index = 0;
         self.recompute_candidates();
-        &self.viewport.current_candidates
+        &self.candidates
     }
 
     /// 向后删除光标右侧的一个字符（Delete 键行为，并清空分段自造词累积器）
     pub fn delete_char_at_cursor(&mut self) -> &[AlgoCandidate] {
         self.composition.delete_char_at_cursor();
-        self.viewport.page_index = 0;
         self.recompute_candidates();
-        &self.viewport.current_candidates
+        &self.candidates
     }
 
     /// 光标左移
     pub fn move_cursor_left(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_cursor_left() {
-            self.viewport.page_index = 0;
-            self.viewport.reset_selection();
             self.recompute_candidates();
         }
-        &self.viewport.current_candidates
+        &self.candidates
     }
 
     /// 光标右移
     pub fn move_cursor_right(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_cursor_right() {
-            self.viewport.page_index = 0;
-            self.viewport.reset_selection();
             self.recompute_candidates();
         }
-        &self.viewport.current_candidates
-    }
-
-    /// 候选翻下一页（若已处于末页则保持当前页不产生空白页）
-    pub fn next_page(&mut self) -> &[AlgoCandidate] {
-        self.viewport.next_page(self.config.page_size)
-    }
-
-    /// 候选翻上一页
-    pub fn prev_page(&mut self) -> &[AlgoCandidate] {
-        self.viewport.prev_page(self.config.page_size)
-    }
-
-    /// 检查是否能够向后（下一页）翻页
-    pub fn can_next_page(&self) -> bool {
-        self.viewport.can_next_page(self.config.page_size)
-    }
-
-    /// 检查是否能够向前（上一页）翻页
-    pub fn can_prev_page(&self) -> bool {
-        self.viewport.can_prev_page()
-    }
-
-    /// 获取当前展示页码（从 0 开始）
-    #[inline]
-    pub fn page_index(&self) -> usize {
-        self.viewport.page_index
-    }
-
-    /// 获取当前页内高亮选中的候选词索引（从 0 开始）
-    #[inline]
-    pub fn selected_index(&self) -> usize {
-        self.viewport.selected_index
-    }
-
-    /// 二级扩展卡片是否展开
-    #[inline]
-    pub fn is_expanded(&self) -> bool {
-        self.viewport.is_expanded
-    }
-
-    /// 二级扩展卡片中当前选中的子项索引（从 0 开始）
-    #[inline]
-    pub fn expanded_selected_index(&self) -> usize {
-        self.viewport.expanded_selected_index
-    }
-
-    /// 折叠并关闭二级卡片展开态
-    #[inline]
-    pub fn collapse_expanded(&mut self) {
-        self.viewport.is_expanded = false;
-        self.viewport.expanded_selected_index = 0;
+        &self.candidates
     }
 
     /// 将拼音编辑光标重置回末尾并刷新候选列表（恢复选词模式）
     pub fn move_cursor_to_end(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_to_end() {
-            self.viewport.page_index = 0;
-            self.viewport.reset_selection();
             self.recompute_candidates();
         }
-        &self.viewport.current_candidates
-    }
-
-    /// 根据当前页码与页面大小从全量候选缓存池中截取当前展示页切片
-    pub(crate) fn update_page_candidates(&mut self) {
-        self.viewport.update_page_candidates(self.config.page_size);
-    }
-
-    /// 在当前页候选词中向后（向下/向右）循环移动高亮选中项
-    pub fn next_candidate(&mut self) {
-        self.viewport.next_candidate();
-    }
-
-    /// 在当前页候选词中向前（向上/向左）循环移动高亮选中项
-    pub fn prev_candidate(&mut self) {
-        self.viewport.prev_candidate();
-    }
-
-    /// 设置当前展示页内的高亮候选词索引（自动边界保护）
-    #[inline]
-    pub fn set_selected_index(&mut self, index: usize) {
-        let max_idx = self.viewport.current_candidates.len().saturating_sub(1);
-        self.viewport.selected_index = index.min(max_idx);
+        &self.candidates
     }
 
     /// 获取用户自适应模型中已记录的历史词条总数
@@ -379,16 +295,16 @@ impl AlgoEngine {
         self.composition.cursor()
     }
 
-    /// 获取当前呈现的候选词切片
+    /// 获取当前输入下计算得到的全量候选词切片
     #[inline]
     pub fn candidates(&self) -> &[AlgoCandidate] {
-        self.viewport.candidates()
+        &self.candidates
     }
 
-    /// 获取当前输入下的全量候选词切片（用于展开大面板展示）
+    /// 获取当前输入下计算得到的全量候选词切片（用于展开大面板展示或与 candidates 保持一致）
     #[inline]
     pub fn all_candidates(&self) -> &[AlgoCandidate] {
-        self.viewport.all_candidates()
+        &self.candidates
     }
 
     /// 清空上屏历史上下文缓存
@@ -396,10 +312,10 @@ impl AlgoEngine {
         self.composition.clear_commit_context();
     }
 
-    /// 清空并重置引擎状态机与候选词视口
+    /// 清空并重置引擎状态机与候选词缓存
     pub fn reset(&mut self) {
         self.composition.reset();
-        self.viewport.reset();
+        self.candidates.clear();
     }
 
     /// 获取当前用户自适应词库持久化路径

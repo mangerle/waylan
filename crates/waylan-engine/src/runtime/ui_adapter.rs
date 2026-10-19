@@ -68,14 +68,12 @@ impl ImeRuntime {
 
         build_common_candidate_box_state(
             &self.core.engine,
-            CandidateBoxBuildOptions {
-                mode: self.core.mode,
+            CandidateBoxBuildOptions::from_session(
+                &self.core,
                 is_active,
-                grid_state: self.core.grid_state,
-                expanded_card: Some(self.core.expanded_card),
                 inline_preedit,
                 voice_state,
-            },
+            ),
         )
     }
 }

@@ -29,24 +29,20 @@ impl AlgoEngine {
         index: usize,
         current_timestamp: u64,
     ) -> Option<(String, usize)> {
-        if index >= self.viewport.current_candidates.len() {
+        if index >= self.candidates.len() {
             return None;
         }
-        let selected = self.viewport.current_candidates[index].clone();
+        let selected = self.candidates[index].clone();
         Some(self.commit_candidate_internal(selected, current_timestamp))
     }
 
-    /// 从当前输入的全量候选词缓存中直接选取指定全局索引的词条上屏
+    /// 从当前输入的全量候选词缓存中直接选取指定全局索引的词条上屏（兼容接口）
     pub fn select_candidate_from_all(
         &mut self,
         global_index: usize,
         current_timestamp: u64,
     ) -> Option<(String, usize)> {
-        if global_index >= self.viewport.all_candidates_cache.len() {
-            return None;
-        }
-        let selected = self.viewport.all_candidates_cache[global_index].clone();
-        Some(self.commit_candidate_internal(selected, current_timestamp))
+        self.select_candidate(global_index, current_timestamp)
     }
 
     /// 准备上屏文本并根据盘古之白规则注入空格，同时更新跨句历史上下文
@@ -185,9 +181,8 @@ impl AlgoEngine {
             current_timestamp,
         );
 
-        self.viewport.page_index = 0;
         if self.composition.is_empty() {
-            self.viewport.reset();
+            self.candidates.clear();
             self.composition.clear_cached_preedit();
         } else {
             self.recompute_candidates();
@@ -196,43 +191,20 @@ impl AlgoEngine {
         (commit_text, self.composition.len())
     }
 
-    /// 切换二级扩展卡片的展开状态（若当前选中的项不可展开但存在可展开项，则自动聚焦并展开）
-    pub fn toggle_expand(&mut self, selected_candidate_index: usize) -> bool {
-        self.viewport.toggle_expand(selected_candidate_index)
-    }
-
-    /// 在二级展开卡片中向下移动选中项
-    pub fn next_expanded_item(&mut self, selected_candidate_index: usize) {
-        self.viewport.next_expanded_item(selected_candidate_index);
-    }
-
-    /// 在二级展开卡片中向上移动选中项
-    pub fn prev_expanded_item(&mut self, selected_candidate_index: usize) {
-        self.viewport.prev_expanded_item(selected_candidate_index);
-    }
-
-    /// 在二级展开卡片中选中子项上屏
-    pub fn select_expanded_item(
-        &mut self,
-        main_index: usize,
-        sub_index: usize,
-    ) -> Option<(String, usize)> {
-        let cand = self.viewport.current_candidates.get(main_index)?;
-        let raw_text = cand.sub_candidates.get(sub_index)?.clone();
-
-        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
+    /// 直接提交指定文本上屏并消费全部拼音（用于二级扩展项、自定义短语等直接上屏）
+    pub fn commit_custom_text(&mut self, raw_text: &str) -> (String, usize) {
         let commit_text = if self.config.auto_pangu_spacing {
             if let Some(prev) = self.composition.last_commit_context() {
-                if PanguSpacing::should_insert_pangu_space(prev, &raw_text) {
+                if PanguSpacing::should_insert_pangu_space(prev, raw_text) {
                     format!(" {}", raw_text)
                 } else {
-                    raw_text.clone()
+                    raw_text.to_string()
                 }
             } else {
-                raw_text.clone()
+                raw_text.to_string()
             }
         } else {
-            raw_text.clone()
+            raw_text.to_string()
         };
 
         let trimmed_text = raw_text.trim();
@@ -242,9 +214,20 @@ impl AlgoEngine {
         }
 
         self.composition.reset();
-        self.viewport.reset();
+        self.candidates.clear();
 
-        Some((commit_text, 0))
+        (commit_text, 0)
+    }
+
+    /// 在二级展开卡片中选中子项上屏（兼容辅助方法）
+    pub fn select_expanded_item(
+        &mut self,
+        main_index: usize,
+        sub_index: usize,
+    ) -> Option<(String, usize)> {
+        let cand = self.candidates.get(main_index)?;
+        let raw_text = cand.sub_candidates.get(sub_index)?.clone();
+        Some(self.commit_custom_text(&raw_text))
     }
 
     /// 精确计算用户选词所消费的原始按键长度（含自动跳过隔音符）

@@ -21,8 +21,6 @@ impl AlgoEngine {
             return;
         }
 
-        self.viewport.reset_selection();
-
         // 1. 尝试前缀模式分流 (V计算器、U拆字、I特殊符号)
         if self.try_dispatch_special_mode() {
             return;
@@ -35,15 +33,13 @@ impl AlgoEngine {
         // 3. 聚合各层级候选词 (专名、DAG路径、长句合成、简拼与用户习惯)
         let raw_candidates = self.collect_all_raw_candidates(&paths);
 
-        // 4. 流水线后处理、零页扩展注入与分页刷新
+        // 4. 流水线后处理、零页扩展注入与候选发布
         self.finalize_and_publish_candidates(&paths, raw_candidates);
     }
 
     /// 清空所有候选词缓存与预编辑内容
     fn clear_candidates_and_preedit(&mut self) {
-        self.viewport.reset_selection();
-        self.viewport.all_candidates_cache.clear();
-        self.viewport.current_candidates.clear();
+        self.candidates.clear();
         self.composition.clear_cached_preedit();
     }
 
@@ -68,8 +64,7 @@ impl AlgoEngine {
                 c.consumed_len = Some(input_len);
             }
         }
-        self.viewport.all_candidates_cache = cands;
-        self.update_page_candidates();
+        self.candidates = cands;
         true
     }
 
@@ -131,8 +126,7 @@ impl AlgoEngine {
             }
         }
 
-        let old_cache = std::mem::replace(&mut self.viewport.all_candidates_cache, candidates);
+        let old_cache = std::mem::replace(&mut self.candidates, candidates);
         self.scratch_candidates = old_cache;
-        self.update_page_candidates();
     }
 }

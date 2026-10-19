@@ -12,20 +12,14 @@ fn test_pagination_truncate_and_last_page_guard() {
     for ch in "riqi".chars() {
         engine.push_char(ch);
     }
+    assert!(!engine.candidates().is_empty(), "必须成功生成候选列表");
     assert!(
-        !engine.candidates().is_empty() && engine.candidates().len() <= 5,
-        "注入日期动态扩展项后单页候选数不得超过 page_size"
+        engine
+            .candidates()
+            .iter()
+            .any(|c| c.is_expandable && !c.sub_candidates.is_empty()),
+        "必须成功注入可展开的日期动态扩展项"
     );
-
-    // 连续向后翻页，验证处于末页时不会翻入空白页
-    for _ in 0..5 {
-        let page_cands = engine.next_page();
-        assert!(
-            !page_cands.is_empty(),
-            "末页向后翻页应触发越界保护，始终保持非空候选列表"
-        );
-        assert!(page_cands.len() <= 5);
-    }
 }
 
 #[test]
@@ -207,31 +201,21 @@ fn test_engine_reset_clears_all_candidates_cache() {
 }
 
 #[test]
-fn test_cursor_move_resets_pagination_and_expansion() {
-    let mut engine = AlgoEngine::with_sample_data(AlgoConfig {
-        page_size: 2,
-        ..Default::default()
-    });
+fn test_cursor_move_recomputes_candidates() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     for ch in "xian".chars() {
         engine.push_char(ch);
     }
     assert!(engine.all_candidates().len() >= 3);
-    engine.next_page();
-    engine.viewport.is_expanded = true;
-    assert_eq!(engine.page_index(), 1);
-    assert!(engine.is_expanded());
+    assert_eq!(engine.cursor(), 4);
 
     engine.move_cursor_left();
-    assert_eq!(engine.page_index(), 0);
-    assert_eq!(engine.selected_index(), 0);
-    assert!(!engine.is_expanded());
+    assert_eq!(engine.cursor(), 3);
+    assert!(!engine.candidates().is_empty());
 
-    engine.next_page();
-    engine.viewport.is_expanded = true;
     engine.move_cursor_right();
-    assert_eq!(engine.page_index(), 0);
-    assert_eq!(engine.selected_index(), 0);
-    assert!(!engine.is_expanded());
+    assert_eq!(engine.cursor(), 4);
+    assert!(!engine.candidates().is_empty());
 }
 
 #[test]
@@ -357,7 +341,7 @@ fn test_select_candidate_zero_consumed_len_fallback() {
     let mut mock_cand = engine.candidates()[0].clone();
     mock_cand.consumed_len = Some(0);
     mock_cand.pinyin = "qun'ze".to_string();
-    engine.viewport.current_candidates.insert(0, mock_cand);
+    engine.candidates.insert(0, mock_cand);
 
     // 选中该候选词上屏
     let result = engine.select_candidate(0, 1000);

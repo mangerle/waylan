@@ -15,14 +15,12 @@ pub mod key_handler;
 mod tests;
 
 pub use dispatch::KeyProcessContext;
-pub use key_handler::{
-    handle_composition_key, handle_composition_key_with_params, CompositionKeyParams,
-};
+pub use key_handler::{handle_composition_key_with_params, CompositionKeyParams};
 
 use crate::input::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
-use waylan_core::{ExpandedCardState, GridState, InputMode, ParsedShortcut};
+use waylan_core::{Candidate, ExpandedCardState, GridState, InputMode, ParsedShortcut};
 
 /// 全局模式与功能快捷键切换动作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +97,12 @@ pub struct ImeCoreSession {
     pub full_width_punct_shortcut: Option<ParsedShortcut>,
     /// 是否开启全角字符/字母输入
     pub full_width_char: bool,
+    /// 当前候选词分页索引（0-indexed）
+    pub page_index: usize,
+    /// 当前页内选中的高亮候选词局部索引（0-indexed）
+    pub selected_index: usize,
+    /// 候选框单页展示的最大候选词数量
+    pub page_size: usize,
     /// 候选词 5 行大网格展开状态机（杜绝未展开时选中项悬空的非法状态）
     pub grid_state: GridState,
     /// 二级格式扩展卡片展开状态机（日期/时间格式多项挑选）
@@ -116,6 +120,7 @@ impl Default for ImeCoreSession {
 impl ImeCoreSession {
     /// 创建带有指定算法引擎的核心会话
     pub fn new(engine: AlgoEngine) -> Self {
+        let page_size = engine.config.page_size.max(1);
         Self {
             engine,
             shift_sm: ShiftToggleStateMachine::new(),
@@ -129,6 +134,9 @@ impl ImeCoreSession {
             full_width_char_shortcut: ParsedShortcut::parse("Shift + Space"),
             full_width_punct_shortcut: ParsedShortcut::parse("Ctrl + ."),
             full_width_char: false,
+            page_index: 0,
+            selected_index: 0,
+            page_size,
             grid_state: GridState::Collapsed,
             expanded_card: ExpandedCardState::Collapsed,
         }
@@ -166,44 +174,187 @@ impl ImeCoreSession {
         self.expanded_card.selected_index().unwrap_or(0)
     }
 
+    /// 获取当前展示页码（从 0 开始）
+    #[inline]
+    pub fn page_index(&self) -> usize {
+        self.page_index
+    }
+
+    /// 获取当前页内高亮选中的候选词索引（从 0 开始）
+    #[inline]
+    pub fn selected_index(&self) -> usize {
+        self.selected_index
+    }
+
+    /// 设置当前展示页内的高亮候选词索引（自动边界保护）
+    pub fn set_selected_index(&mut self, index: usize) {
+        let max_idx = self.current_page_candidates().len().saturating_sub(1);
+        self.selected_index = index.min(max_idx);
+    }
+
+    /// 获取当前候选框分页容量
+    #[inline]
+    pub fn page_size(&self) -> usize {
+        self.page_size.max(1)
+    }
+
+    /// 设置当前候选框分页容量
+    pub fn set_page_size(&mut self, size: usize) {
+        self.page_size = size.max(1);
+        let max_idx = self.current_page_candidates().len().saturating_sub(1);
+        self.selected_index = self.selected_index.min(max_idx);
+    }
+
+    /// 获取当前展示页切片的候选词列表
+    pub fn current_page_candidates(&self) -> &[Candidate] {
+        let all = self.engine.candidates();
+        let size = self.page_size();
+        let start = self.page_index.saturating_mul(size);
+        if start < all.len() {
+            let end = (start + size).min(all.len());
+            &all[start..end]
+        } else {
+            &[]
+        }
+    }
+
+    /// 检查是否能够向后（下一页）翻页
+    pub fn can_next_page(&self) -> bool {
+        let size = self.page_size();
+        let max_page = self.engine.candidates().len().saturating_sub(1) / size;
+        self.page_index < max_page
+    }
+
+    /// 检查是否能够向前（上一页）翻页
+    pub fn can_prev_page(&self) -> bool {
+        self.page_index > 0
+    }
+
+    /// 候选词翻下一页
+    pub fn next_page(&mut self) -> &[Candidate] {
+        if self.can_next_page() {
+            self.page_index += 1;
+            self.selected_index = 0;
+            self.collapse_card();
+        }
+        self.current_page_candidates()
+    }
+
+    /// 候选词翻上一页
+    pub fn prev_page(&mut self) -> &[Candidate] {
+        if self.can_prev_page() {
+            self.page_index -= 1;
+            self.selected_index = 0;
+            self.collapse_card();
+        }
+        self.current_page_candidates()
+    }
+
+    /// 在当前展示页中向后（向下/向右）循环移动高亮选中项
+    pub fn next_candidate(&mut self) {
+        let len = self.current_page_candidates().len();
+        if len > 0 {
+            self.selected_index = (self.selected_index + 1) % len;
+            self.collapse_card();
+        }
+    }
+
+    /// 在当前展示页中向前（向上/向左）循环移动高亮选中项
+    pub fn prev_candidate(&mut self) {
+        let len = self.current_page_candidates().len();
+        if len > 0 {
+            self.selected_index = if self.selected_index == 0 {
+                len.saturating_sub(1)
+            } else {
+                self.selected_index - 1
+            };
+            self.collapse_card();
+        }
+    }
+
+    /// 计算当前高亮候选词在全量候选池中的绝对全局索引
+    #[inline]
+    pub fn selected_global_index(&self) -> usize {
+        self.page_index.saturating_mul(self.page_size()) + self.selected_index
+    }
+
+    /// 提交指定全局索引的候选词上屏并更新会话视口状态机
+    pub fn commit_candidate_by_global_index(
+        &mut self,
+        target_idx: usize,
+        now: u64,
+    ) -> ImeOutputAction {
+        if let Some((committed_text, remaining_len)) = self.engine.select_candidate(target_idx, now)
+        {
+            self.reset_viewport();
+            self.punctuation_processor.record_commit(&committed_text);
+            if remaining_len > 0 {
+                let remaining_preedit = self.engine.formatted_preedit();
+                ImeOutputAction::CommitPartial {
+                    committed: committed_text,
+                    remaining_preedit,
+                }
+            } else {
+                ImeOutputAction::Commit(committed_text)
+            }
+        } else {
+            ImeOutputAction::Handled { update_ui: false }
+        }
+    }
+
+    /// 重置候选词视口状态（翻页归零、光标归零、关闭展开卡片与网格）
+    pub fn reset_viewport(&mut self) {
+        self.page_index = 0;
+        self.selected_index = 0;
+        self.grid_state = GridState::Collapsed;
+        self.expanded_card = ExpandedCardState::Collapsed;
+    }
+
     /// 在二级展开卡片中向下移动选中项
     pub fn next_card_item(&mut self) {
-        if let ExpandedCardState::Expanded {
-            ref mut selected_index,
-        } = self.expanded_card
-        {
-            let sel = self.engine.selected_index();
-            if let Some(cand) = self.engine.candidates().get(sel) {
-                if !cand.sub_candidates.is_empty() {
-                    *selected_index = (*selected_index + 1) % cand.sub_candidates.len();
-                }
+        let sel = self.selected_global_index();
+        let sub_len = self
+            .engine
+            .candidates()
+            .get(sel)
+            .map(|c| c.sub_candidates.len())
+            .unwrap_or(0);
+        if sub_len > 0 {
+            if let ExpandedCardState::Expanded {
+                ref mut selected_index,
+            } = self.expanded_card
+            {
+                *selected_index = (*selected_index + 1) % sub_len;
             }
         }
     }
 
     /// 在二级展开卡片中向上移动选中项
     pub fn prev_card_item(&mut self) {
-        if let ExpandedCardState::Expanded {
-            ref mut selected_index,
-        } = self.expanded_card
-        {
-            let sel = self.engine.selected_index();
-            if let Some(cand) = self.engine.candidates().get(sel) {
-                if !cand.sub_candidates.is_empty() {
-                    *selected_index = if *selected_index == 0 {
-                        cand.sub_candidates.len().saturating_sub(1)
-                    } else {
-                        *selected_index - 1
-                    };
-                }
+        let sel = self.selected_global_index();
+        let sub_len = self
+            .engine
+            .candidates()
+            .get(sel)
+            .map(|c| c.sub_candidates.len())
+            .unwrap_or(0);
+        if sub_len > 0 {
+            if let ExpandedCardState::Expanded {
+                ref mut selected_index,
+            } = self.expanded_card
+            {
+                *selected_index = if *selected_index == 0 {
+                    sub_len.saturating_sub(1)
+                } else {
+                    *selected_index - 1
+                };
             }
         }
     }
 
     /// 重置会话交互状态（大网格与二级卡片均收起，并清空算法组词缓冲区）
     pub fn reset_context(&mut self) {
-        self.grid_state = GridState::Collapsed;
-        self.expanded_card = ExpandedCardState::Collapsed;
+        self.reset_viewport();
         self.engine.reset();
     }
 

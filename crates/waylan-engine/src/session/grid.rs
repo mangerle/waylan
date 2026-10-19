@@ -18,7 +18,9 @@ impl ImeCoreSession {
     pub fn expand_grid(&mut self) {
         self.collapse_card();
         self.grid_state = GridState::Expanded {
-            selected_index: self.engine.selected_index(),
+            selected_index: self
+                .selected_global_index()
+                .min(MAX_GRID_CANDIDATES.saturating_sub(1)),
         };
     }
 
@@ -38,23 +40,7 @@ impl ImeCoreSession {
 
     /// 提交指定全局索引的网格候选词上屏并退出大网格展开态
     fn commit_grid_candidate_by_index(&mut self, target_idx: usize, now: u64) -> ImeOutputAction {
-        if let Some((committed_text, remaining_len)) =
-            self.engine.select_candidate_from_all(target_idx, now)
-        {
-            self.collapse_grid();
-            self.punctuation_processor.record_commit(&committed_text);
-            if remaining_len > 0 {
-                let remaining_preedit = self.engine.formatted_preedit();
-                ImeOutputAction::CommitPartial {
-                    committed: committed_text,
-                    remaining_preedit,
-                }
-            } else {
-                ImeOutputAction::Commit(committed_text)
-            }
-        } else {
-            ImeOutputAction::Handled { update_ui: false }
-        }
+        self.commit_candidate_by_global_index(target_idx, now)
     }
 
     /// 处理处于 5 行网格大候选词面板展开态下的专属键盘导航与选词

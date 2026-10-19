@@ -11,14 +11,39 @@ use waylan_core::{
 };
 
 /// 候选词卡片构建参数配置
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CandidateBoxBuildOptions {
     pub mode: InputMode,
     pub is_active: bool,
+    pub page_index: usize,
+    pub selected_index: usize,
+    pub page_size: usize,
     pub grid_state: GridState,
     pub expanded_card: Option<ExpandedCardState>,
     pub inline_preedit: bool,
     pub voice_state: Option<VoiceBoxState>,
+}
+
+impl CandidateBoxBuildOptions {
+    /// 从核心输入会话中直接提取构建参数
+    pub fn from_session(
+        core: &crate::session::ImeCoreSession,
+        is_active: bool,
+        inline_preedit: bool,
+        voice_state: Option<VoiceBoxState>,
+    ) -> Self {
+        Self {
+            mode: core.mode,
+            is_active,
+            page_index: core.page_index,
+            selected_index: core.selected_index,
+            page_size: core.page_size,
+            grid_state: core.grid_state,
+            expanded_card: Some(core.expanded_card),
+            inline_preedit,
+            voice_state,
+        }
+    }
 }
 
 /// 统合构建通用候选框渲染状态模型
@@ -29,6 +54,9 @@ pub fn build_common_candidate_box_state(
     let CandidateBoxBuildOptions {
         mode,
         is_active,
+        page_index,
+        selected_index,
+        page_size,
         grid_state,
         expanded_card: card_opt,
         inline_preedit,
@@ -62,10 +90,17 @@ pub fn build_common_candidate_box_state(
         }
     }
 
-    let candidates = engine.candidates().to_vec();
+    let all = engine.candidates();
+    let size = page_size.max(1);
+    let start = page_index.saturating_mul(size);
+    let candidates = if start < all.len() {
+        let end = (start + size).min(all.len());
+        all[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
 
     let (expanded_card, grid_state_resolved, grid_candidates) = if grid_state.is_expanded() {
-        let all = engine.all_candidates();
         let take_count = all.len().min(30);
         let grid = all[..take_count].to_vec();
         (ExpandedCardState::Collapsed, grid_state, grid)
@@ -99,17 +134,17 @@ pub fn build_common_candidate_box_state(
         (engine.formatted_preedit(), badge)
     };
 
-    let selected_index = if let Some(idx) = grid_state_resolved.selected_index() {
+    let final_selected_index = if let Some(idx) = grid_state_resolved.selected_index() {
         idx
     } else {
-        engine.selected_index()
+        selected_index
     };
 
     CandidateBoxState {
         visible: is_active && !engine.raw_input().is_empty(),
         preedit,
         candidates,
-        selected_index,
+        selected_index: final_selected_index,
         expanded_card,
         mode_badge,
         grid_state: grid_state_resolved,

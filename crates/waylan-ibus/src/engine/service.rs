@@ -165,7 +165,7 @@ impl IbusEngineService {
                 ..Default::default()
             };
             if guard.runtime.core.is_card_expanded() {
-                let sel = guard.runtime.core.engine.selected_index();
+                let sel = guard.runtime.core.selected_global_index();
                 guard.runtime.core.collapse_card();
                 if let Some((committed, _)) = guard
                     .runtime
@@ -282,7 +282,7 @@ impl IbusEngineService {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             if !guard.runtime.core.is_card_expanded() {
-                let _ = guard.runtime.core.engine.prev_page();
+                let _ = guard.runtime.core.prev_page();
             }
             UiSnapshot::capture(&guard)
         };
@@ -294,7 +294,7 @@ impl IbusEngineService {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
             if !guard.runtime.core.is_card_expanded() {
-                let _ = guard.runtime.core.engine.next_page();
+                let _ = guard.runtime.core.next_page();
             }
             UiSnapshot::capture(&guard)
         };
@@ -308,7 +308,7 @@ impl IbusEngineService {
             if guard.runtime.core.is_card_expanded() {
                 guard.runtime.core.prev_card_item();
             } else {
-                guard.runtime.core.engine.prev_candidate();
+                guard.runtime.core.prev_candidate();
             }
             UiSnapshot::capture(&guard)
         };
@@ -322,7 +322,7 @@ impl IbusEngineService {
             if guard.runtime.core.is_card_expanded() {
                 guard.runtime.core.next_card_item();
             } else {
-                guard.runtime.core.engine.next_candidate();
+                guard.runtime.core.next_candidate();
             }
             UiSnapshot::capture(&guard)
         };

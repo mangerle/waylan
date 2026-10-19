@@ -24,8 +24,8 @@ pub use runtime::{
     build_common_candidate_box_state, CandidateBoxBuildOptions, ImeRuntime, ProcessKeyEventParams,
 };
 pub use session::{
-    extract_surrounding_prefix, handle_composition_key, handle_composition_key_with_params,
-    CompositionKeyParams, ImeCoreSession, ImeOutputAction, KeyProcessContext, ShortcutToggleAction,
+    extract_surrounding_prefix, handle_composition_key_with_params, CompositionKeyParams,
+    ImeCoreSession, ImeOutputAction, KeyProcessContext, ShortcutToggleAction,
 };
 pub use waylan_algo as algo;
 pub use waylan_algo::{AlgoConfig, AlgoEngine};

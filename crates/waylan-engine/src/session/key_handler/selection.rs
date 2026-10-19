@@ -2,49 +2,26 @@
 //!
 //! # 设计原理
 //! - **实现初衷**：负责数字选词、空格/回车确认、ESC取消以及拼音退格与分词单引号编辑。
-//! - **核心优势**：将输入确认与基础编辑动作聚合在单一模块，保证选词提交与词频学习逻辑严密一致。
-//! - **代价与局限**：选词提交需向 PunctuationProcessor 记录提交历史以支持智能成对标点与自动推断。
+//! - **核心优势**：将输入确认与基础编辑动作聚合在单一模块，保证选词提交与视口状态流转严密一致。
+//! - **代价与局限**：对部分双功能按键进行多层条件拦截。
 
-use crate::input::PunctuationProcessor;
-use waylan_algo::AlgoEngine;
 use waylan_core::input::constants::{
     KEY_APOSTROPHE, KEY_BACKSPACE, KEY_DELETE, KEY_ENTER, KEY_ESC, KEY_KPENTER, KEY_SPACE,
 };
 use waylan_core::input::conversion::{keycode_to_digit, keycode_to_v_mode_char};
 
-use crate::session::ImeOutputAction;
-
-/// 选取指定索引候选词并转换为协议决策枚举
-pub(crate) fn select_candidate_action(
-    engine: &mut AlgoEngine,
-    punct_processor: &mut PunctuationProcessor,
-    cand_idx: usize,
-    now: u64,
-) -> ImeOutputAction {
-    if let Some((committed_text, remaining_len)) = engine.select_candidate(cand_idx, now) {
-        punct_processor.record_commit(&committed_text);
-        if remaining_len > 0 {
-            ImeOutputAction::CommitPartial {
-                committed: committed_text,
-                remaining_preedit: engine.formatted_preedit(),
-            }
-        } else {
-            ImeOutputAction::Commit(committed_text)
-        }
-    } else {
-        ImeOutputAction::Handled { update_ui: true }
-    }
-}
+use crate::session::{ImeCoreSession, ImeOutputAction};
 
 /// 处理 V模式字符输入
 pub(crate) fn handle_v_mode_key(
-    engine: &mut AlgoEngine,
+    session: &mut ImeCoreSession,
     key: u32,
     shift_active: bool,
 ) -> Option<ImeOutputAction> {
-    if engine.raw_input().starts_with('v') {
+    if session.engine.raw_input().starts_with('v') {
         if let Some(ch) = keycode_to_v_mode_char(key, shift_active) {
-            engine.push_char(ch);
+            session.engine.push_char(ch);
+            session.reset_viewport();
             return Some(ImeOutputAction::Handled { update_ui: true });
         }
     }
@@ -53,61 +30,68 @@ pub(crate) fn handle_v_mode_key(
 
 /// 处理数字按键选词（支持一级候选与二级展开卡片）
 pub(crate) fn handle_digit_selection(
-    engine: &mut AlgoEngine,
-    punct_processor: &mut PunctuationProcessor,
+    session: &mut ImeCoreSession,
     key: u32,
     shift_active: bool,
     now: u64,
 ) -> Option<ImeOutputAction> {
-    if shift_active || engine.raw_input().starts_with('v') {
+    if shift_active || session.engine.raw_input().starts_with('v') {
         return None;
     }
 
     let digit = keycode_to_digit(key)?;
-    if engine.is_expanded() {
-        let sel = engine.selected_index();
+    if session.is_card_expanded() {
         let sub_idx = digit.saturating_sub(1);
-        if let Some((committed, _)) = engine.select_expanded_item(sel, sub_idx) {
-            punct_processor.record_commit(&committed);
-            return Some(ImeOutputAction::Commit(committed));
+        let sel = session.selected_global_index();
+        session.collapse_card();
+
+        if let Some(cand) = session.engine.candidates().get(sel) {
+            if let Some(sub_text) = cand.sub_candidates.get(sub_idx).cloned() {
+                let (committed, _) = session.engine.commit_custom_text(&sub_text);
+                session.reset_viewport();
+                session.punctuation_processor.record_commit(&committed);
+                return Some(ImeOutputAction::Commit(committed));
+            }
         }
         Some(ImeOutputAction::Handled { update_ui: true })
     } else {
-        Some(select_candidate_action(
-            engine,
-            punct_processor,
-            digit.saturating_sub(1),
-            now,
-        ))
+        let offset = digit.saturating_sub(1);
+        if offset < session.current_page_candidates().len() {
+            let target_idx = session.page_index.saturating_mul(session.page_size()) + offset;
+            Some(session.commit_candidate_by_global_index(target_idx, now))
+        } else {
+            Some(ImeOutputAction::Handled { update_ui: false })
+        }
     }
 }
 
 /// 处理空格、回车与 ESC 确认或重置按键
 pub(crate) fn handle_action_keys(
-    engine: &mut AlgoEngine,
-    punct_processor: &mut PunctuationProcessor,
+    session: &mut ImeCoreSession,
     key: u32,
     now: u64,
 ) -> Option<ImeOutputAction> {
     if key == KEY_SPACE {
-        if engine.cursor() < engine.raw_input().len() {
-            engine.move_cursor_to_end();
+        if session.engine.cursor() < session.engine.raw_input().len() {
+            session.engine.move_cursor_to_end();
+            session.page_index = 0;
+            session.selected_index = 0;
             return Some(ImeOutputAction::Handled { update_ui: true });
         }
-        let sel = engine.selected_index();
-        return Some(select_candidate_action(engine, punct_processor, sel, now));
+        let target_idx = session.selected_global_index();
+        return Some(session.commit_candidate_by_global_index(target_idx, now));
     }
     if key == KEY_ENTER || key == KEY_KPENTER {
-        let raw = engine.raw_input().to_string();
-        engine.reset();
+        let raw = session.engine.raw_input().to_string();
+        session.reset_context();
         return Some(ImeOutputAction::Commit(raw));
     }
     if key == KEY_ESC {
-        if engine.is_expanded() {
-            engine.collapse_expanded();
+        if session.is_card_expanded() {
+            session.collapse_card();
             return Some(ImeOutputAction::Handled { update_ui: true });
         }
-        engine.reset();
+        session.reset_context();
         return Some(ImeOutputAction::Reset);
     }
     None
@@ -115,24 +99,31 @@ pub(crate) fn handle_action_keys(
 
 /// 处理退格删除与分词单引号
 pub(crate) fn handle_editing_keys(
-    engine: &mut AlgoEngine,
+    session: &mut ImeCoreSession,
     key: u32,
     shift_active: bool,
 ) -> Option<ImeOutputAction> {
     if key == KEY_BACKSPACE || key == KEY_DELETE {
         if key == KEY_BACKSPACE {
-            engine.pop_char();
+            session.engine.pop_char();
         } else {
-            engine.delete_char_at_cursor();
+            session.engine.delete_char_at_cursor();
         }
-        return Some(if engine.raw_input().is_empty() {
+        return Some(if session.engine.raw_input().is_empty() {
+            session.reset_context();
             ImeOutputAction::Reset
         } else {
+            session.page_index = 0;
+            session.selected_index = 0;
+            session.collapse_card();
             ImeOutputAction::Handled { update_ui: true }
         });
     }
     if !shift_active && key == KEY_APOSTROPHE {
-        engine.push_char('\'');
+        session.engine.push_char('\'');
+        session.page_index = 0;
+        session.selected_index = 0;
+        session.collapse_card();
         return Some(ImeOutputAction::Handled { update_ui: true });
     }
     None

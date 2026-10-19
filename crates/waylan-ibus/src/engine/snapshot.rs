@@ -5,7 +5,7 @@
 //! - **核心优势**：锁保护范围被极限压缩为纯内存快照提取，耗时的 D-Bus 序列化与信号发送均在锁外完成。
 //! - **代价与局限**：每次 UI 刷新需要浅克隆当前的候选列表与预编辑字符串。
 
-use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, GridState};
+use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation};
 use waylan_engine::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 
 use super::super::keys::IbusSessionCore;
@@ -48,14 +48,7 @@ impl UiSnapshot {
 
         let box_state = build_common_candidate_box_state(
             &core.runtime.core.engine,
-            CandidateBoxBuildOptions {
-                mode: core.runtime.core.mode,
-                is_active: true,
-                grid_state: GridState::Collapsed,
-                expanded_card: Some(core.runtime.core.expanded_card),
-                inline_preedit: false,
-                voice_state,
-            },
+            CandidateBoxBuildOptions::from_session(&core.runtime.core, true, false, voice_state),
         );
 
         if is_voice {

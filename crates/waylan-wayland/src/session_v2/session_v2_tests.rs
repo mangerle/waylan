@@ -96,9 +96,9 @@ fn test_candidate_selection_navigation() {
     assert!(session.runtime.core.engine.candidates().len() >= 2);
 
     assert_eq!(session.build_candidate_box_state().selected_index, 0);
-    session.runtime.core.engine.next_candidate();
+    session.runtime.core.next_candidate();
     assert_eq!(session.build_candidate_box_state().selected_index, 1);
-    session.runtime.core.engine.prev_candidate();
+    session.runtime.core.prev_candidate();
     assert_eq!(session.build_candidate_box_state().selected_index, 0);
 }
 
