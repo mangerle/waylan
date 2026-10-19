@@ -27,6 +27,17 @@ struct ParsedTextSources {
     total_words: usize,
 }
 
+/// 紧凑词库二进制持久化装配参数对象
+pub struct CompactWritePayload<'a> {
+    pub output_path: &'a Path,
+    pub dat: &'a DoubleArrayTrie,
+    pub key_metas_data: &'a [u8],
+    pub candidates_data: &'a [u8],
+    pub words: &'a [String],
+    pub num_keys: usize,
+    pub num_candidates: usize,
+}
+
 /// 紧凑二进制词库构建器
 pub struct CompactDictBuilder;
 
@@ -56,15 +67,15 @@ impl CompactDictBuilder {
             Self::encode_keys_and_candidates(&combined_keys, &sorted_keys);
 
         // 6. 计算绝对偏移并持久化写入目标二进制文件
-        Self::write_compact_file(
-            out_ref,
-            &dat,
-            &key_metas_data,
-            &candidates_data,
-            &words,
-            sorted_keys.len(),
+        Self::write_compact_file(CompactWritePayload {
+            output_path: out_ref,
+            dat: &dat,
+            key_metas_data: &key_metas_data,
+            candidates_data: &candidates_data,
+            words: &words,
+            num_keys: sorted_keys.len(),
             num_candidates,
-        )?;
+        })?;
 
         let total_keys = sorted_keys.len();
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -352,15 +363,16 @@ impl CompactDictBuilder {
     }
 
     /// 组装文件头与各段数据并写入目标磁盘文件
-    fn write_compact_file(
-        output_path: &Path,
-        dat: &DoubleArrayTrie,
-        key_metas_data: &[u8],
-        candidates_data: &[u8],
-        words: &[String],
-        num_keys: usize,
-        num_candidates: usize,
-    ) -> Result<(), AlgoError> {
+    fn write_compact_file(payload: CompactWritePayload<'_>) -> Result<(), AlgoError> {
+        let CompactWritePayload {
+            output_path,
+            dat,
+            key_metas_data,
+            candidates_data,
+            words,
+            num_keys,
+            num_candidates,
+        } = payload;
         let vocab_size = words.len();
         let mut vocab_offsets: Vec<u32> = Vec::with_capacity(vocab_size + 1);
         let mut vocab_strings: Vec<u8> = Vec::new();

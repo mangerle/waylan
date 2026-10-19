@@ -12,7 +12,7 @@ use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory, VadModelType};
 
-use super::save_config_and_notify_status;
+use super::{save_config_and_notify_status, SaveConfigParams};
 use crate::callbacks::{pick_directory_dialog_async, pick_file_dialog_async};
 use crate::sync::update_config_from_window;
 use crate::SettingsWindow;
@@ -34,16 +34,16 @@ pub(crate) fn register_model_import_callbacks(
     let current_cfg_cell = loaded_config.clone();
     window.on_import_vad_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            handle_import_onnx_model(
-                &win,
-                &current_cfg_cell,
-                ModelSubdirectory::Vad,
-                "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
-                |cfg, path| {
+            handle_import_onnx_model(OnnxModelImportOptions {
+                win: &win,
+                current_cfg_cell: &current_cfg_cell,
+                category: ModelSubdirectory::Vad,
+                title: "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
+                apply_fn: |cfg: &mut AppConfig, path: &str| {
                     cfg.voice.vad.model_path = Some(path.to_string());
                     cfg.voice.vad.vad_type = VadModelType::SileroOnnx;
                 },
-            );
+            });
         }
     });
 
@@ -51,15 +51,15 @@ pub(crate) fn register_model_import_callbacks(
     let current_cfg_cell = loaded_config;
     window.on_import_punct_model(move || {
         if let Some(win) = window_weak.upgrade() {
-            handle_import_onnx_model(
-                &win,
-                &current_cfg_cell,
-                ModelSubdirectory::Punct,
-                "请选择要导入的标点符号预测模型文件 (.onnx)",
-                |cfg, path| {
+            handle_import_onnx_model(OnnxModelImportOptions {
+                win: &win,
+                current_cfg_cell: &current_cfg_cell,
+                category: ModelSubdirectory::Punct,
+                title: "请选择要导入的标点符号预测模型文件 (.onnx)",
+                apply_fn: |cfg: &mut AppConfig, path: &str| {
                     cfg.voice.punct_model_path = Some(path.to_string());
                 },
-            );
+            });
         }
     });
 
@@ -121,13 +121,13 @@ fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Arc<Mutex<Ap
                                         update_config_from_window(&w, &mut cfg);
                                         cfg.voice.offline.model_dir =
                                             Some(imported_path.to_string_lossy().to_string());
-                                        save_config_and_notify_status(
-                                            &w,
-                                            &cfg_cell_inner,
+                                        save_config_and_notify_status(SaveConfigParams {
+                                            win: &w,
+                                            current_cfg_cell: &cfg_cell_inner,
                                             cfg,
-                                            &format!("成功导入 ASR 模型: {}", name),
-                                            "保存 ASR 模型配置失败",
-                                        );
+                                            success_msg: &format!("成功导入 ASR 模型: {}", name),
+                                            fail_prefix: "保存 ASR 模型配置失败",
+                                        });
                                     }
                                     None => {
                                         w.set_global_status_is_error(true);
@@ -152,16 +152,43 @@ fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Arc<Mutex<Ap
     );
 }
 
-/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改（对话框异步弹出并在后台线程异步复制）
-fn handle_import_onnx_model<F>(
-    win: &SettingsWindow,
-    current_cfg_cell: &Arc<Mutex<AppConfig>>,
+/// 单个 ONNX 神经网络模型文件导入选项
+struct OnnxModelImportOptions<'a, F> {
+    win: &'a SettingsWindow,
+    current_cfg_cell: &'a Arc<Mutex<AppConfig>>,
     category: ModelSubdirectory,
     title: &'static str,
     apply_fn: F,
-) where
+}
+
+/// 模型导入后台任务上下文（保存前台弱引用与共享配置单元）
+struct ModelImportContext {
+    win_weak: slint::Weak<SettingsWindow>,
+    cfg_cell: Arc<Mutex<AppConfig>>,
+    category: ModelSubdirectory,
+}
+
+/// 导入模型配置应用上下文
+struct ModelApplyContext<'a, F> {
+    win: &'a SettingsWindow,
+    cfg_cell: &'a Arc<Mutex<AppConfig>>,
+    category: ModelSubdirectory,
+    apply_fn: F,
+}
+
+/// 执行单个 ONNX 神经网络模型文件导入并应用配置修改（对话框异步弹出并在后台线程异步复制）
+fn handle_import_onnx_model<F>(options: OnnxModelImportOptions<'_, F>)
+where
     F: FnMut(&mut AppConfig, &str) + Send + 'static,
 {
+    let OnnxModelImportOptions {
+        win,
+        current_cfg_cell,
+        category,
+        title,
+        apply_fn,
+    } = options;
+
     win.set_global_status_is_error(false);
     win.set_global_status(SharedString::from("正在等待选择模型文件..."));
 
@@ -193,10 +220,12 @@ fn handle_import_onnx_model<F>(
                     .name(format!("{}-model-importer", category.as_str()))
                     .spawn(move || {
                         run_model_import_thread(
-                            category,
+                            ModelImportContext {
+                                win_weak: win_weak_inner,
+                                cfg_cell: cfg_cell_inner,
+                                category,
+                            },
                             src_path,
-                            win_weak_inner,
-                            cfg_cell_inner,
                             apply_fn,
                         );
                     })
@@ -214,70 +243,69 @@ fn handle_import_onnx_model<F>(
 }
 
 /// 成功导入模型后原子更新配置与主界面状态
-fn apply_imported_model_to_config_and_ui(
-    w: &SettingsWindow,
-    cfg_cell: &Arc<Mutex<AppConfig>>,
-    category: ModelSubdirectory,
+fn apply_imported_model_to_config_and_ui<F>(
+    mut ctx: ModelApplyContext<'_, F>,
     imported_path: PathBuf,
-    mut apply_fn: impl FnMut(&mut AppConfig, &str),
-) {
+) where
+    F: FnMut(&mut AppConfig, &str),
+{
     let name = imported_path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let mut cfg = cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
-    update_config_from_window(w, &mut cfg);
-    apply_fn(&mut cfg, &imported_path.to_string_lossy());
-    save_config_and_notify_status(
-        w,
-        cfg_cell,
+    let mut cfg = ctx.cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
+    update_config_from_window(ctx.win, &mut cfg);
+    (ctx.apply_fn)(&mut cfg, &imported_path.to_string_lossy());
+    save_config_and_notify_status(SaveConfigParams {
+        win: ctx.win,
+        current_cfg_cell: ctx.cfg_cell,
         cfg,
-        &format!(
+        success_msg: &format!(
             "成功导入 {} 模型: {}",
-            category.as_str().to_uppercase(),
+            ctx.category.as_str().to_uppercase(),
             name
         ),
-        &format!("保存 {} 模型配置失败", category.as_str().to_uppercase()),
-    );
+        fail_prefix: &format!("保存 {} 模型配置失败", ctx.category.as_str().to_uppercase()),
+    });
 }
 
 /// 在 Slint 主线程中处理模型导入结果事件
-fn handle_imported_model_event(
-    w: &SettingsWindow,
-    cfg_cell: &Arc<Mutex<AppConfig>>,
-    category: ModelSubdirectory,
-    imported_opt: Option<PathBuf>,
-    apply_fn: impl FnMut(&mut AppConfig, &str),
-) {
+fn handle_imported_model_event<F>(ctx: ModelApplyContext<'_, F>, imported_opt: Option<PathBuf>)
+where
+    F: FnMut(&mut AppConfig, &str),
+{
     match imported_opt {
         Some(imported_path) => {
-            apply_imported_model_to_config_and_ui(w, cfg_cell, category, imported_path, apply_fn);
+            apply_imported_model_to_config_and_ui(ctx, imported_path);
         }
         None => {
-            w.set_global_status_is_error(true);
-            w.set_global_status(SharedString::from(format!(
+            ctx.win.set_global_status_is_error(true);
+            ctx.win.set_global_status(SharedString::from(format!(
                 "导入 {} 神经网络模型失败，请检查文件权限",
-                category.as_str().to_uppercase()
+                ctx.category.as_str().to_uppercase()
             )));
         }
     }
 }
 
 /// 后台线程执行具体的模型文件复制并通知前台
-fn run_model_import_thread<F>(
-    category: ModelSubdirectory,
-    src_path: PathBuf,
-    win_weak: slint::Weak<SettingsWindow>,
-    cfg_cell: Arc<Mutex<AppConfig>>,
-    apply_fn: F,
-) where
+fn run_model_import_thread<F>(ctx: ModelImportContext, src_path: PathBuf, apply_fn: F)
+where
     F: FnMut(&mut AppConfig, &str) + Send + 'static,
 {
-    let imported_opt = import_onnx_model_from_file(category, &src_path);
+    let imported_opt = import_onnx_model_from_file(ctx.category, &src_path);
     let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = win_weak.upgrade() {
-            handle_imported_model_event(&w, &cfg_cell, category, imported_opt, apply_fn);
+        if let Some(w) = ctx.win_weak.upgrade() {
+            handle_imported_model_event(
+                ModelApplyContext {
+                    win: &w,
+                    cfg_cell: &ctx.cfg_cell,
+                    category: ctx.category,
+                    apply_fn,
+                },
+                imported_opt,
+            );
         }
     });
 }

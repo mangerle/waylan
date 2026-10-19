@@ -22,14 +22,24 @@ pub fn register_voice_callbacks(window: &SettingsWindow, loaded_config: Arc<Mute
     cloud_profiles::register_cloud_profile_callbacks(window, loaded_config);
 }
 
+/// 保存配置并更新主窗口全局状态栏提示的参数对象
+pub(crate) struct SaveConfigParams<'a> {
+    pub win: &'a SettingsWindow,
+    pub current_cfg_cell: &'a Arc<Mutex<AppConfig>>,
+    pub cfg: AppConfig,
+    pub success_msg: &'a str,
+    pub fail_prefix: &'a str,
+}
+
 /// 保存配置并更新主窗口全局状态栏提示（跨子模块复用）
-pub(crate) fn save_config_and_notify_status(
-    win: &SettingsWindow,
-    current_cfg_cell: &Arc<Mutex<AppConfig>>,
-    cfg: AppConfig,
-    success_msg: &str,
-    fail_prefix: &str,
-) {
+pub(crate) fn save_config_and_notify_status(params: SaveConfigParams<'_>) {
+    let SaveConfigParams {
+        win,
+        current_cfg_cell,
+        cfg,
+        success_msg,
+        fail_prefix,
+    } = params;
     match cfg.save_default() {
         Ok(()) => {
             if let Ok(mut g) = current_cfg_cell.lock() {

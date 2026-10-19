@@ -13,63 +13,44 @@ use crate::syllables::find_syllables_by_prefix;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 
+/// 维特比尾部拼音与声母扩展上下文参数对象
+pub(super) struct TailExpansionContext<'a> {
+    pub syllables: &'a [String],
+    pub remaining: &'a str,
+    pub table: &'a LexiconTable,
+    pub has_bigram: bool,
+    pub prev_context: Option<&'a str>,
+}
+
 /// 候选分支扩展项 (回溯步索引, 束索引, 扩展词文本, 累计得分)
 type ExtensionBranch = (usize, usize, String, i64);
 
 /// 对末尾残存拼音与声母链进行结合扩展与整句回溯生成
 pub(super) fn expand_remaining_tail(
-    syllables: &[String],
-    remaining: &str,
-    table: &LexiconTable,
-    has_bigram: bool,
-    prev_context: Option<&str>,
+    ctx: &TailExpansionContext<'_>,
     dp: &[Vec<ViterbiBeamNode>],
 ) -> Option<AlgoCandidate> {
     let mut ext_candidates: Vec<ExtensionBranch> = Vec::new();
 
     // 1. 回溯提取尾部声母链 initial_chain
-    let (initial_chain, split_idx) = extract_initial_chain(syllables, remaining);
+    let (initial_chain, split_idx) = extract_initial_chain(ctx.syllables, ctx.remaining);
     let k = initial_chain.len();
 
     if k >= 2 {
         // 策略 A1：多声母连续简拼链绑定
-        expand_acronym_chain(
-            &initial_chain,
-            split_idx,
-            table,
-            prev_context,
-            dp,
-            &mut ext_candidates,
-        );
+        expand_acronym_chain(ctx, &initial_chain, split_idx, dp, &mut ext_candidates);
     } else if split_idx >= 1 && !dp[split_idx - 1].is_empty() {
         // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词
-        expand_compound_with_prefix(
-            syllables,
-            remaining,
-            split_idx,
-            table,
-            has_bigram,
-            prev_context,
-            dp,
-            &mut ext_candidates,
-        );
+        expand_compound_with_prefix(ctx, split_idx, dp, &mut ext_candidates);
     }
 
     // 策略 B：降级回退（仅当策略 A1/A2 均无法组合成词时，才允许单字母枚举为高频单字）
-    let n = syllables.len();
+    let n = ctx.syllables.len();
     if ext_candidates.is_empty() && !dp[n].is_empty() {
-        expand_fallback_initial(
-            remaining,
-            n,
-            table,
-            has_bigram,
-            prev_context,
-            dp,
-            &mut ext_candidates,
-        );
+        expand_fallback_initial(ctx, n, dp, &mut ext_candidates);
     }
 
-    assemble_best_candidate(ext_candidates, dp, syllables, remaining)
+    assemble_best_candidate(ext_candidates, dp, ctx.syllables, ctx.remaining)
 }
 
 /// 从音节切分末尾逆向收集连续声母链
@@ -90,10 +71,9 @@ fn extract_initial_chain(syllables: &[String], remaining: &str) -> (Vec<String>,
 
 /// 策略 A1：多声母连续简拼链绑定与转移计算
 fn expand_acronym_chain(
+    ctx: &TailExpansionContext<'_>,
     initial_chain: &[String],
     split_idx: usize,
-    table: &LexiconTable,
-    prev_context: Option<&str>,
     dp: &[Vec<ViterbiBeamNode>],
     out: &mut Vec<ExtensionBranch>,
 ) {
@@ -102,13 +82,13 @@ fn expand_acronym_chain(
     }
 
     let acronym_key = initial_chain.concat();
-    let acronym_cands = table.lookup_acronym(&acronym_key);
+    let acronym_cands = ctx.table.lookup_acronym(&acronym_key);
     for cand in acronym_cands.iter().take(3) {
         let freq_score = unigram_log_score(cand.score);
         let curr_char_len = cand.text.chars().count() as i64;
         for (prev_beam_idx, prev) in dp[split_idx].iter().enumerate() {
             let prev_word = if split_idx == 0 {
-                prev_context.unwrap_or("")
+                ctx.prev_context.unwrap_or("")
             } else {
                 &prev.word
             };
@@ -116,7 +96,7 @@ fn expand_acronym_chain(
                 (prev_word, prev.last_word_id),
                 (&cand.text, cand.word_id, curr_char_len),
                 freq_score,
-                table,
+                ctx.table,
             );
             out.push((
                 split_idx,
@@ -129,33 +109,28 @@ fn expand_acronym_chain(
 }
 
 /// 策略 A2：单声母未完成态与前序音节双字词组合
-#[allow(clippy::too_many_arguments)]
 fn expand_compound_with_prefix(
-    syllables: &[String],
-    remaining: &str,
+    ctx: &TailExpansionContext<'_>,
     split_idx: usize,
-    table: &LexiconTable,
-    has_bigram: bool,
-    prev_context: Option<&str>,
     dp: &[Vec<ViterbiBeamNode>],
     out: &mut Vec<ExtensionBranch>,
 ) {
-    let last_syl = &syllables[split_idx - 1];
+    let last_syl = &ctx.syllables[split_idx - 1];
     let prev_step = split_idx - 1;
     let mut key_buf = String::with_capacity(16);
 
-    for &syl in find_syllables_by_prefix(remaining) {
+    for &syl in find_syllables_by_prefix(ctx.remaining) {
         key_buf.clear();
         key_buf.push_str(last_syl);
         key_buf.push('\'');
         key_buf.push_str(syl);
 
-        if let Some(entries) = table.get_top_raw_entries(&key_buf, 2) {
+        if let Some(entries) = ctx.table.get_top_raw_entries(&key_buf, 2) {
             for (text, raw_score, word_id_opt) in entries.iter().take(2) {
                 let freq_score = unigram_log_score(*raw_score);
                 let curr_word_id = word_id_opt.or_else(|| {
-                    if has_bigram {
-                        table.get_word_id(text)
+                    if ctx.has_bigram {
+                        ctx.table.get_word_id(text)
                     } else {
                         None
                     }
@@ -164,7 +139,7 @@ fn expand_compound_with_prefix(
 
                 for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
                     let prev_word = if prev_step == 0 {
-                        prev_context.unwrap_or("")
+                        ctx.prev_context.unwrap_or("")
                     } else {
                         &prev.word
                     };
@@ -172,7 +147,7 @@ fn expand_compound_with_prefix(
                         (prev_word, prev.last_word_id),
                         (text, curr_word_id, curr_char_len),
                         freq_score,
-                        table,
+                        ctx.table,
                     );
                     out.push((
                         prev_step,
@@ -188,23 +163,20 @@ fn expand_compound_with_prefix(
 
 /// 策略 B：声母降级回退至高频单字
 fn expand_fallback_initial(
-    remaining: &str,
+    ctx: &TailExpansionContext<'_>,
     n: usize,
-    table: &LexiconTable,
-    has_bigram: bool,
-    prev_context: Option<&str>,
     dp: &[Vec<ViterbiBeamNode>],
     out: &mut Vec<ExtensionBranch>,
 ) {
-    let Some(entries) = table.get_initial_raw_entries(remaining) else {
+    let Some(entries) = ctx.table.get_initial_raw_entries(ctx.remaining) else {
         return;
     };
 
     for (text, raw_score, word_id_opt) in entries.iter().take(3) {
         let freq_score = unigram_log_score(*raw_score);
         let curr_word_id = word_id_opt.or_else(|| {
-            if has_bigram {
-                table.get_word_id(text)
+            if ctx.has_bigram {
+                ctx.table.get_word_id(text)
             } else {
                 None
             }
@@ -213,7 +185,7 @@ fn expand_fallback_initial(
 
         for (prev_beam_idx, prev) in dp[n].iter().enumerate() {
             let prev_word = if n == 0 {
-                prev_context.unwrap_or("")
+                ctx.prev_context.unwrap_or("")
             } else {
                 &prev.word
             };
@@ -221,7 +193,7 @@ fn expand_fallback_initial(
                 (prev_word, prev.last_word_id),
                 (text, curr_word_id, curr_char_len),
                 freq_score,
-                table,
+                ctx.table,
             );
             out.push((
                 n,

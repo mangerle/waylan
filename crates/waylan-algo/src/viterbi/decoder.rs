@@ -1,9 +1,17 @@
 //! 维特比整句动态规划解码器 (Viterbi Beam Search Decoder)
 
 use super::language_model::BigramLanguageModel;
-use super::tail_expansion::expand_remaining_tail;
+use super::tail_expansion::{expand_remaining_tail, TailExpansionContext};
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
+
+/// 词格点求解推进上下文参数对象
+pub(super) struct LatticeSolveParams<'a> {
+    pub(super) syllables: &'a [String],
+    pub(super) table: &'a LexiconTable,
+    pub(super) has_bigram: bool,
+    pub(super) ctx_str: &'a str,
+}
 
 /// 束搜索动态规划格点状态（引入反向指针拓扑与词 ID 缓存，彻底消除中间路径字符串克隆与重复查表）
 #[derive(Debug, Clone)]
@@ -114,13 +122,28 @@ impl ViterbiDecoder {
         });
 
         // 沿音节序列向右推进求解 Viterbi 最优路径
-        Self::solve_syllable_lattice(syllables, table, has_bigram, ctx_str, &mut dp);
+        Self::solve_syllable_lattice(
+            &LatticeSolveParams {
+                syllables,
+                table,
+                has_bigram,
+                ctx_str,
+            },
+            &mut dp,
+        );
 
         // 末尾残缺音节与声母扩展（处理未完成键入态）
         if !remaining.is_empty() {
-            if let Some(cand) =
-                expand_remaining_tail(syllables, remaining, table, has_bigram, prev_context, &dp)
-            {
+            if let Some(cand) = expand_remaining_tail(
+                &TailExpansionContext {
+                    syllables,
+                    remaining,
+                    table,
+                    has_bigram,
+                    prev_context,
+                },
+                &dp,
+            ) {
                 return Some(cand);
             }
         }
@@ -143,13 +166,13 @@ impl ViterbiDecoder {
     }
 
     /// 遍历音节切分列表并在词格点拓扑上推进束搜索动态规划
-    fn solve_syllable_lattice(
-        syllables: &[String],
-        table: &LexiconTable,
-        has_bigram: bool,
-        ctx_str: &str,
-        dp: &mut [Vec<ViterbiBeamNode>],
-    ) {
+    fn solve_syllable_lattice(params: &LatticeSolveParams<'_>, dp: &mut [Vec<ViterbiBeamNode>]) {
+        let LatticeSolveParams {
+            syllables,
+            table,
+            has_bigram,
+            ctx_str,
+        } = *params;
         let n = syllables.len();
         let beam_width = Self::dynamic_beam_width(n);
         let raw_limit = if n > 4 { 6 } else { 4 };
