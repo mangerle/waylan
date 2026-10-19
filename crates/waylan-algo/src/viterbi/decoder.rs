@@ -165,6 +165,87 @@ impl ViterbiDecoder {
         )
     }
 
+    /// 查询当前音节切片在词典中的候选条目（支持单字声母兜底）
+    fn lookup_lattice_entries(
+        table: &LexiconTable,
+        key: &str,
+        span: usize,
+        raw_limit: usize,
+    ) -> Option<Vec<(String, u32, Option<u32>)>> {
+        match table.get_top_raw_entries(key, raw_limit) {
+            Some(entries) if !entries.is_empty() => Some(entries),
+            _ => {
+                if span == 1 {
+                    table.get_initial_raw_entries(key)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// 针对单个构词条目计算从前驱束集合的最佳转移对数得分并入队目标束
+    fn evaluate_entry_transition(
+        prev_beam: &[ViterbiBeamNode],
+        target_beam: &mut Vec<ViterbiBeamNode>,
+        entry: &(String, u32, Option<u32>),
+        start_idx: usize,
+        ctx_str: &str,
+        table: &LexiconTable,
+        has_bigram: bool,
+    ) {
+        let (text, raw_score, word_id_opt) = entry;
+        let freq_score = unigram_log_score(*raw_score);
+        let curr_word_id = word_id_opt.or_else(|| {
+            if has_bigram {
+                table.get_word_id(text)
+            } else {
+                None
+            }
+        });
+        let curr_char_len = text.chars().count() as i64;
+
+        let mut best_prev_idx = 0usize;
+        let mut best_total = i64::MIN;
+
+        for (prev_beam_idx, prev_node) in prev_beam.iter().enumerate() {
+            let prev_word = if start_idx == 0 {
+                ctx_str
+            } else {
+                prev_node.word.as_str()
+            };
+            let trans_score = BigramLanguageModel::transition_score_cached(
+                (prev_word, prev_node.last_word_id),
+                (text, curr_word_id, curr_char_len),
+                freq_score,
+                table,
+            );
+            let candidate_total = prev_node.total_score.saturating_add(trans_score);
+            if candidate_total > best_total {
+                best_total = candidate_total;
+                best_prev_idx = prev_beam_idx;
+            }
+        }
+
+        if best_total > i64::MIN {
+            if let Some(existing) = target_beam.iter_mut().find(|node| node.word == *text) {
+                if best_total > existing.total_score {
+                    existing.prev_step = start_idx;
+                    existing.prev_beam_idx = best_prev_idx;
+                    existing.total_score = best_total;
+                }
+            } else {
+                target_beam.push(ViterbiBeamNode {
+                    word: text.clone(),
+                    last_word_id: curr_word_id,
+                    prev_step: start_idx,
+                    prev_beam_idx: best_prev_idx,
+                    total_score: best_total,
+                });
+            }
+        }
+    }
+
     /// 遍历音节切分列表并在词格点拓扑上推进束搜索动态规划
     fn solve_syllable_lattice(params: &LatticeSolveParams<'_>, dp: &mut [Vec<ViterbiBeamNode>]) {
         let LatticeSolveParams {
@@ -204,77 +285,25 @@ impl ViterbiDecoder {
                     &key_buf
                 };
 
-                let raw_entries = match table.get_top_raw_entries(key, raw_limit) {
-                    Some(entries) if !entries.is_empty() => entries,
-                    _ => {
-                        if span == 1 {
-                            if let Some(entries) = table.get_initial_raw_entries(key) {
-                                entries
-                            } else {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
+                let Some(raw_entries) = Self::lookup_lattice_entries(table, key, span, raw_limit)
+                else {
+                    continue;
                 };
 
                 let (left_dp, right_dp) = dp.split_at_mut(end_idx);
                 let prev_beam = &left_dp[start_idx];
                 let target_beam = &mut right_dp[0];
 
-                for (text, raw_score, word_id_opt) in raw_entries.iter().take(raw_limit) {
-                    let freq_score = unigram_log_score(*raw_score);
-                    let curr_word_id = word_id_opt.or_else(|| {
-                        if has_bigram {
-                            table.get_word_id(text)
-                        } else {
-                            None
-                        }
-                    });
-                    let curr_char_len = text.chars().count() as i64;
-
-                    let mut best_prev_idx = 0usize;
-                    let mut best_total = i64::MIN;
-
-                    for (prev_beam_idx, prev_node) in prev_beam.iter().enumerate() {
-                        let prev_word = if start_idx == 0 {
-                            ctx_str
-                        } else {
-                            prev_node.word.as_str()
-                        };
-                        let trans_score = BigramLanguageModel::transition_score_cached(
-                            (prev_word, prev_node.last_word_id),
-                            (text, curr_word_id, curr_char_len),
-                            freq_score,
-                            table,
-                        );
-                        let candidate_total = prev_node.total_score.saturating_add(trans_score);
-                        if candidate_total > best_total {
-                            best_total = candidate_total;
-                            best_prev_idx = prev_beam_idx;
-                        }
-                    }
-
-                    if best_total > i64::MIN {
-                        if let Some(existing) =
-                            target_beam.iter_mut().find(|node| node.word == *text)
-                        {
-                            if best_total > existing.total_score {
-                                existing.prev_step = start_idx;
-                                existing.prev_beam_idx = best_prev_idx;
-                                existing.total_score = best_total;
-                            }
-                        } else {
-                            target_beam.push(ViterbiBeamNode {
-                                word: text.clone(),
-                                last_word_id: curr_word_id,
-                                prev_step: start_idx,
-                                prev_beam_idx: best_prev_idx,
-                                total_score: best_total,
-                            });
-                        }
-                    }
+                for entry in raw_entries.iter().take(raw_limit) {
+                    Self::evaluate_entry_transition(
+                        prev_beam,
+                        target_beam,
+                        entry,
+                        start_idx,
+                        ctx_str,
+                        table,
+                        has_bigram,
+                    );
                 }
 
                 // 束搜索剪枝：保留得分最高的 Top-K 个不同末端词状态（根据序列长度自适应确定 K）
