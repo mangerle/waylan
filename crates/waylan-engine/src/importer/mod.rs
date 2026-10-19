@@ -11,6 +11,7 @@
 pub mod parser;
 pub mod service;
 
+pub use crate::error::DictImportError;
 pub use parser::DictImporter;
 pub use service::{AuxImportReport, DictImportReport, DictImportService};
 pub use waylan_algo::types::ImportedDictEntry;

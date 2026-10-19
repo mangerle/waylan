@@ -4,112 +4,19 @@
 //! - **实现初衷**：为设置界面提供用户外部拼音词库、英文词库及特殊符号表的增量导入入口。
 //! - **核心优势**：
 //!   1. 彻底将词库校验、解析与合入逻辑下沉委托至 `waylan_engine::importer::DictImportService`；
-//!   2. 本模块仅保留 UI 交互所需的状态报告字符串拼装与界面级错误映射；
+//!   2. 直接对接并复用 `waylan-engine` 导出的内聚领域强类型错误 `DictImportError`，消除跨层冗余错误定义与手工映射代码；
 //!   3. 零技术债与逻辑复制，确保 CLI 与 GUI 导入行为 100% 严格一致；
 //!   4. 前端调用点已通过 `tasks.rs` 在独立后台工作线程（如 `pinyin-importer`）中异步执行，
 //!      配合 `TaskRunningGuard` 杜绝重入，彻底避免百 MB 大词库解析阻塞 Slint GUI 事件循环。
 //! - **代价与局限**：
-//!   错误契约需跨 Crate 映射为界面友好的强类型 `ImportError`。
+//!   模块依赖 `waylan-engine` 提供的错误模型契约。
 
 use std::path::Path;
-use thiserror::Error;
-use waylan_algo::error::AlgoError;
 use waylan_algo::AuxiliaryDict;
 use waylan_core::config::AppConfig;
 pub use waylan_core::MAX_IMPORT_FILE_BYTES;
+pub use waylan_engine::importer::DictImportError as ImportError;
 use waylan_engine::importer::DictImportService;
-
-/// 外部词库与字典数据导入错误枚举
-#[derive(Debug, Error)]
-pub enum ImportError {
-    /// 词库文件不存在或路径无效
-    #[error("指定的词库文件不存在或路径无效: {path}")]
-    FileNotFound {
-        /// 目标文件路径
-        path: String,
-    },
-
-    /// 词库文件体积超出安全上限
-    #[error(
-        "词库文件体积超过安全上限（{limit_bytes} 字节）: {path}（当前体积: {actual_bytes} 字节）"
-    )]
-    FileTooLarge {
-        /// 目标文件路径
-        path: String,
-        /// 允许的最大字节上限
-        limit_bytes: u64,
-        /// 实际检测到的文件字节数
-        actual_bytes: u64,
-    },
-
-    /// 文件读取或写入 I/O 异常
-    #[error("词库文件 I/O 操作失败，路径: {path}，原因: {source}")]
-    IoError {
-        /// 目标文件路径
-        path: String,
-        /// 底层 I/O 错误
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// 词库解析失败
-    #[error("解析词库文件失败，路径: {path}，原因: {message}")]
-    ParseError {
-        /// 目标文件路径
-        path: String,
-        /// 解析失败原因描述
-        message: String,
-    },
-
-    /// 持久化保存失败
-    #[error("保存用户词库失败，路径: {path}，原因: {message}")]
-    SaveError {
-        /// 目标文件路径
-        path: String,
-        /// 保存失败原因描述
-        message: String,
-    },
-}
-
-/// 将底层算法库领域错误映射为图形界面使用的导入错误
-fn map_algo_error(err: AlgoError, fallback_path: &str) -> ImportError {
-    match err {
-        AlgoError::FileNotFound { path } => ImportError::FileNotFound {
-            path: path.to_string_lossy().to_string(),
-        },
-        AlgoError::FileTooLarge {
-            path,
-            limit_bytes,
-            actual_bytes,
-        } => ImportError::FileTooLarge {
-            path: path.to_string_lossy().to_string(),
-            limit_bytes,
-            actual_bytes,
-        },
-        AlgoError::DictionaryIo { path, source } => ImportError::IoError {
-            path: path.to_string_lossy().to_string(),
-            source,
-        },
-        AlgoError::UserDictPersistFailed { path, source } => ImportError::SaveError {
-            path: path.to_string_lossy().to_string(),
-            message: source.to_string(),
-        },
-        AlgoError::UnsupportedDictFormat { path, format } => ImportError::ParseError {
-            path: path.to_string_lossy().to_string(),
-            message: format!("不支持的词库文件格式: {format}"),
-        },
-        AlgoError::DictParseFailed { reason } | AlgoError::DeserializeFailed { reason, .. } => {
-            ImportError::ParseError {
-                path: fallback_path.to_string(),
-                message: reason,
-            }
-        }
-        other => ImportError::ParseError {
-            path: fallback_path.to_string(),
-            message: other.to_string(),
-        },
-    }
-}
 
 /// 解析并合入外部拼音词库
 ///
@@ -118,8 +25,7 @@ fn map_algo_error(err: AlgoError, fallback_path: &str) -> ImportError {
 pub fn import_pinyin_dict_file(path_str: &str) -> Result<String, ImportError> {
     let path = Path::new(path_str.trim());
     let user_dict_path = AppConfig::user_dict_path();
-    let report = DictImportService::import_pinyin_dict(path, &user_dict_path)
-        .map_err(|e| map_algo_error(e, path_str))?;
+    let report = DictImportService::import_pinyin_dict(path, &user_dict_path)?;
 
     Ok(format!(
         "成功合入 {} 条词目，当前自适应词库总词量: {} 条",
@@ -137,8 +43,7 @@ pub fn import_english_dict_file(
 ) -> Result<(String, usize), ImportError> {
     let path = Path::new(path_str.trim());
     let aux_path = AppConfig::user_aux_dict_path();
-    let report = DictImportService::import_english_dict(path, aux, Some(&aux_path))
-        .map_err(|e| map_algo_error(e, path_str))?;
+    let report = DictImportService::import_english_dict(path, aux, Some(&aux_path))?;
 
     Ok((
         format!(
@@ -159,8 +64,7 @@ pub fn import_symbols_dict_file(
 ) -> Result<(String, usize), ImportError> {
     let path = Path::new(path_str.trim());
     let aux_path = AppConfig::user_aux_dict_path();
-    let report = DictImportService::import_symbols_dict(path, aux, Some(&aux_path))
-        .map_err(|e| map_algo_error(e, path_str))?;
+    let report = DictImportService::import_symbols_dict(path, aux, Some(&aux_path))?;
 
     Ok((
         format!(
@@ -220,19 +124,14 @@ mod tests {
     }
 
     #[test]
-    fn test_map_algo_error_unsupported_format() {
-        use std::path::PathBuf;
-        let err = AlgoError::UnsupportedDictFormat {
-            path: PathBuf::from("foo.unknown"),
-            format: "unknown".to_string(),
-        };
-        let mapped = map_algo_error(err, "foo.unknown");
-        match mapped {
-            ImportError::ParseError { message, path } => {
-                assert!(message.contains("不支持的词库文件格式: unknown"));
-                assert_eq!(path, "foo.unknown");
-            }
-            other => panic!("预期为 ParseError，实际收到: {:?}", other),
-        }
+    fn test_import_unsupported_format() {
+        let temp_doc = NamedTempFile::new().unwrap();
+        let doc_path = temp_doc.path().with_extension("unsupported_xyz");
+        fs::write(&doc_path, b"test").unwrap();
+
+        let res = import_pinyin_dict_file(&doc_path.to_string_lossy());
+        assert!(matches!(res, Err(ImportError::UnsupportedFormat { .. })));
+
+        let _ = fs::remove_file(doc_path);
     }
 }

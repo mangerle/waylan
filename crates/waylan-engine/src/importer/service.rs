@@ -16,11 +16,11 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use waylan_algo::custom_phrase::AuxiliaryDict;
-use waylan_algo::error::AlgoError;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_core::MAX_IMPORT_FILE_BYTES;
 
 use super::parser::DictImporter;
+use crate::error::DictImportError;
 
 /// 拼音词典导入结果报告
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,18 +45,18 @@ pub struct DictImportService;
 
 impl DictImportService {
     /// 校验源词库文件是否存在且未超过 64MB 体积安全上限
-    fn validate_source_file(path: &Path) -> Result<(), AlgoError> {
+    fn validate_source_file(path: &Path) -> Result<(), DictImportError> {
         if !path.is_file() {
-            return Err(AlgoError::FileNotFound {
+            return Err(DictImportError::FileNotFound {
                 path: path.to_path_buf(),
             });
         }
-        let meta = fs::metadata(path).map_err(|e| AlgoError::DictionaryIo {
+        let meta = fs::metadata(path).map_err(|e| DictImportError::Io {
             path: path.to_path_buf(),
             source: e,
         })?;
         if meta.len() > MAX_IMPORT_FILE_BYTES {
-            return Err(AlgoError::FileTooLarge {
+            return Err(DictImportError::FileTooLarge {
                 path: path.to_path_buf(),
                 limit_bytes: MAX_IMPORT_FILE_BYTES,
                 actual_bytes: meta.len(),
@@ -68,11 +68,11 @@ impl DictImportService {
     /// 解析外部拼音词库文件并增量合入用户自适应模型 WAL
     ///
     /// # Errors
-    /// 当文件不存在、体积超出 64MB、格式无法解析或 WAL 写入失败时返回 [`AlgoError`]。
+    /// 当文件不存在、体积超出 64MB、格式无法解析或 WAL 写入失败时返回 [`DictImportError`]。
     pub fn import_pinyin_dict<P: AsRef<Path>, Q: AsRef<Path>>(
         source_path: P,
         user_dict_path: Q,
-    ) -> Result<DictImportReport, AlgoError> {
+    ) -> Result<DictImportReport, DictImportError> {
         let src = source_path.as_ref();
         Self::validate_source_file(src)?;
 
@@ -90,7 +90,12 @@ impl DictImportService {
             user_model.record_commit(&entry.text, &entry.pinyin, now);
         }
 
-        user_model.compact_wal(dst)?;
+        user_model
+            .compact_wal(dst)
+            .map_err(|e| DictImportError::SaveFailed {
+                path: dst.to_path_buf(),
+                reason: e.to_string(),
+            })?;
 
         Ok(DictImportReport {
             imported_count,
@@ -101,16 +106,16 @@ impl DictImportService {
     /// 解析外部英文词表并去重合入辅助词库
     ///
     /// # Errors
-    /// 当文件不存在、体积超出上限或保存失败时返回 [`AlgoError`]。
+    /// 当文件不存在、体积超出上限或保存失败时返回 [`DictImportError`]。
     pub fn import_english_dict<P: AsRef<Path>>(
         source_path: P,
         aux: &mut AuxiliaryDict,
         aux_save_path: Option<&Path>,
-    ) -> Result<AuxImportReport, AlgoError> {
+    ) -> Result<AuxImportReport, DictImportError> {
         let src = source_path.as_ref();
         Self::validate_source_file(src)?;
 
-        let content = fs::read_to_string(src).map_err(|e| AlgoError::DictionaryIo {
+        let content = fs::read_to_string(src).map_err(|e| DictImportError::Io {
             path: src.to_path_buf(),
             source: e,
         })?;
@@ -149,7 +154,11 @@ impl DictImportService {
         }
 
         if let Some(save_path) = aux_save_path {
-            aux.save_to_file(save_path)?;
+            aux.save_to_file(save_path)
+                .map_err(|e| DictImportError::SaveFailed {
+                    path: save_path.to_path_buf(),
+                    reason: e.to_string(),
+                })?;
         }
 
         Ok(AuxImportReport {
@@ -161,16 +170,16 @@ impl DictImportService {
     /// 解析外部符号映射表并去重合入辅助词库
     ///
     /// # Errors
-    /// 当文件不存在、体积超出上限或保存失败时返回 [`AlgoError`]。
+    /// 当文件不存在、体积超出上限或保存失败时返回 [`DictImportError`]。
     pub fn import_symbols_dict<P: AsRef<Path>>(
         source_path: P,
         aux: &mut AuxiliaryDict,
         aux_save_path: Option<&Path>,
-    ) -> Result<AuxImportReport, AlgoError> {
+    ) -> Result<AuxImportReport, DictImportError> {
         let src = source_path.as_ref();
         Self::validate_source_file(src)?;
 
-        let content = fs::read_to_string(src).map_err(|e| AlgoError::DictionaryIo {
+        let content = fs::read_to_string(src).map_err(|e| DictImportError::Io {
             path: src.to_path_buf(),
             source: e,
         })?;
@@ -205,7 +214,11 @@ impl DictImportService {
         }
 
         if let Some(save_path) = aux_save_path {
-            aux.save_to_file(save_path)?;
+            aux.save_to_file(save_path)
+                .map_err(|e| DictImportError::SaveFailed {
+                    path: save_path.to_path_buf(),
+                    reason: e.to_string(),
+                })?;
         }
 
         Ok(AuxImportReport {
@@ -224,16 +237,16 @@ mod tests {
     fn test_import_nonexistent_file() {
         let res =
             DictImportService::import_pinyin_dict("/nonexistent/path/pinyin.txt", "/tmp/wal.bin");
-        assert!(matches!(res, Err(AlgoError::FileNotFound { .. })));
+        assert!(matches!(res, Err(DictImportError::FileNotFound { .. })));
 
         let mut aux = AuxiliaryDict::default();
         let res_en =
             DictImportService::import_english_dict("/nonexistent/path/en.txt", &mut aux, None);
-        assert!(matches!(res_en, Err(AlgoError::FileNotFound { .. })));
+        assert!(matches!(res_en, Err(DictImportError::FileNotFound { .. })));
 
         let res_sym =
             DictImportService::import_symbols_dict("/nonexistent/path/sym.txt", &mut aux, None);
-        assert!(matches!(res_sym, Err(AlgoError::FileNotFound { .. })));
+        assert!(matches!(res_sym, Err(DictImportError::FileNotFound { .. })));
     }
 
     #[test]

@@ -13,10 +13,11 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use waylan_algo::error::AlgoError;
 use waylan_algo::syllables::normalize_pinyin_tones;
 use waylan_algo::types::ImportedDictEntry;
 use waylan_core::MAX_IMPORT_FILE_BYTES;
+
+use crate::error::DictImportError;
 
 /// 搜狗细胞词库标准文件头前 4 字节魔数
 const SCEL_HEADER_MAGIC: [u8; 4] = [0x40, 0x15, 0x00, 0x00];
@@ -30,8 +31,8 @@ impl DictImporter {
     /// 自动根据文件后缀解析导入词库文件
     ///
     /// # Errors
-    /// 当文件不存在、读取异常、超出大小上限或格式损坏时返回 [`AlgoError`]。
-    pub fn import_file(path: &Path) -> Result<Vec<ImportedDictEntry>, AlgoError> {
+    /// 当文件不存在、读取异常、超出大小上限或格式损坏时返回 [`DictImportError`]。
+    pub fn import_file(path: &Path) -> Result<Vec<ImportedDictEntry>, DictImportError> {
         let extension = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -40,38 +41,38 @@ impl DictImporter {
 
         match extension.as_str() {
             "scel" => {
-                let meta = fs::metadata(path).map_err(|e| AlgoError::DictionaryIo {
+                let meta = fs::metadata(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
                 if meta.len() > MAX_IMPORT_FILE_BYTES {
-                    return Err(AlgoError::FileTooLarge {
+                    return Err(DictImportError::FileTooLarge {
                         path: path.to_path_buf(),
                         limit_bytes: MAX_IMPORT_FILE_BYTES,
                         actual_bytes: meta.len(),
                     });
                 }
-                let data = fs::read(path).map_err(|e| AlgoError::DictionaryIo {
+                let data = fs::read(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
                 Self::parse_sogou_scel(&data)
             }
             "yaml" | "yml" => {
-                let content = fs::read_to_string(path).map_err(|e| AlgoError::DictionaryIo {
+                let content = fs::read_to_string(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
                 Self::parse_rime_yaml(&content)
             }
             "txt" => {
-                let content = fs::read_to_string(path).map_err(|e| AlgoError::DictionaryIo {
+                let content = fs::read_to_string(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
                 Self::parse_plain_text(&content)
             }
-            _ => Err(AlgoError::UnsupportedDictFormat {
+            _ => Err(DictImportError::UnsupportedFormat {
                 path: path.to_path_buf(),
                 format: extension,
             }),
@@ -79,7 +80,7 @@ impl DictImporter {
     }
 
     /// 解析 Rime 词典 YAML 格式（兼容标准 `...` 表头分隔与无 `...` 标记的纯 TSV 词表）
-    pub fn parse_rime_yaml(content: &str) -> Result<Vec<ImportedDictEntry>, AlgoError> {
+    pub fn parse_rime_yaml(content: &str) -> Result<Vec<ImportedDictEntry>, DictImportError> {
         let mut entries = Vec::new();
         let has_header_sep = content.lines().any(|l| l.trim() == "...");
         let mut past_header = !has_header_sep;
@@ -124,7 +125,7 @@ impl DictImporter {
     }
 
     /// 解析纯文本格式（词条 拼音 [权重] 或 词条\t拼音）
-    pub fn parse_plain_text(content: &str) -> Result<Vec<ImportedDictEntry>, AlgoError> {
+    pub fn parse_plain_text(content: &str) -> Result<Vec<ImportedDictEntry>, DictImportError> {
         let mut entries = Vec::new();
         for line in content.lines() {
             let line = line.trim();
@@ -160,13 +161,13 @@ impl DictImporter {
     }
 
     /// 解析搜狗细胞词库二进制格式 (.scel)
-    pub fn parse_sogou_scel(data: &[u8]) -> Result<Vec<ImportedDictEntry>, AlgoError> {
+    pub fn parse_sogou_scel(data: &[u8]) -> Result<Vec<ImportedDictEntry>, DictImportError> {
         let pinyin_table_offset = 0x1540;
         let words_offset = 0x2628;
 
         // 校验基本文件长度与最大体积上限
         if data.len() < words_offset || data.len() > MAX_IMPORT_FILE_BYTES as usize {
-            return Err(AlgoError::DictParseFailed {
+            return Err(DictImportError::ParseFailed {
                 reason: "无效或损坏的搜狗细胞词库文件 (体积不在合法范围内)".to_string(),
             });
         }
@@ -175,7 +176,7 @@ impl DictImporter {
         if data[0..4] != SCEL_HEADER_MAGIC
             && data[pinyin_table_offset..pinyin_table_offset + 4] != SCEL_PY_MAGIC
         {
-            return Err(AlgoError::DictParseFailed {
+            return Err(DictImportError::ParseFailed {
                 reason: "搜狗细胞词库魔数头校验失败".to_string(),
             });
         }
@@ -277,7 +278,7 @@ impl DictImporter {
     }
 
     /// 从数据切片中提取搜狗拼音索引表
-    fn read_scel_pinyin_table(slice: &[u8]) -> Result<HashMap<usize, String>, AlgoError> {
+    fn read_scel_pinyin_table(slice: &[u8]) -> Result<HashMap<usize, String>, DictImportError> {
         let mut map = HashMap::new();
         // 若包含标准 4 字节头部魔数 [0x9D, 0x01, 0x00, 0x00]，跳过头部
         let mut cursor: usize = if slice.len() >= 4 && slice[0..4] == SCEL_PY_MAGIC {

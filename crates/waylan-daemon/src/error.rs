@@ -7,6 +7,7 @@
 
 use thiserror::Error;
 use waylan_algo::error::AlgoError;
+use waylan_engine::importer::DictImportError;
 use waylan_ibus::IbusError;
 use waylan_wayland::WaylandRunnerError;
 
@@ -24,6 +25,10 @@ pub enum DaemonError {
     /// 算法词库与配置资源错误
     #[error("词库资源错误: {0}")]
     Algo(#[from] AlgoError),
+
+    /// 外部词库解析与导入错误
+    #[error("词库导入错误: {0}")]
+    DictImport(#[from] DictImportError),
 
     /// 自检或状态校验失败
     #[error("自检校验失败: {0}")]

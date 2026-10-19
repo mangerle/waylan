@@ -6,6 +6,7 @@
 //! - **核心优势**：依赖倒置原则（DIP）；算法层仅保留纯粹数学与拼音计算，协议端退化为纯净的前端显示管道。
 //! - **代价与局限**：新增单独的 crate 作为中枢交互调度层。
 
+pub mod error;
 pub mod factory;
 pub mod frontend;
 pub mod importer;
@@ -13,6 +14,7 @@ pub mod input;
 pub mod runtime;
 pub mod session;
 
+pub use error::DictImportError;
 pub use importer::{AuxImportReport, DictImportReport, DictImportService, DictImporter};
 
 pub use input::{PunctuationOptions, PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};

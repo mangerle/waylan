@@ -10,20 +10,6 @@ use thiserror::Error;
 /// - **代价与局限**：跨模块传递时需显式进行错误变体转换，较通用动态错误稍增类型声明成本。
 #[derive(Debug, Error)]
 pub enum AlgoError {
-    /// 词库文件不存在或路径无效
-    #[error("指定的词库文件不存在或路径无效: {path}")]
-    FileNotFound { path: PathBuf },
-
-    /// 词库文件体积超出安全上限
-    #[error(
-        "词库文件体积超过安全上限（{limit_bytes} 字节）: {path}（当前体积: {actual_bytes} 字节）"
-    )]
-    FileTooLarge {
-        path: PathBuf,
-        limit_bytes: u64,
-        actual_bytes: u64,
-    },
-
     /// 词库文件访问或 I/O 错误
     #[error("词库文件访问失败，路径: {path}，原因: {source}")]
     DictionaryIo {
@@ -54,14 +40,6 @@ pub enum AlgoError {
         current_len: usize,
         target_pos: usize,
     },
-
-    /// 不支持的第三方词库文件格式
-    #[error("不支持的词库文件格式，路径: {path}，格式: {format}")]
-    UnsupportedDictFormat { path: PathBuf, format: String },
-
-    /// 词库解析格式损坏或内容非法
-    #[error("解析第三方词库失败，详情: {reason}")]
-    DictParseFailed { reason: String },
 }
 
 impl AlgoError {
@@ -87,21 +65,13 @@ mod tests {
         assert!(err.to_string().contains("除数不能为零"));
         assert!(err.to_string().contains("1/0"));
 
-        let format_err = AlgoError::UnsupportedDictFormat {
-            path: PathBuf::from("test.doc"),
-            format: "doc".to_string(),
-        };
-        assert!(format_err.to_string().contains("不支持的词库文件格式"));
-
-        let parse_err = AlgoError::DictParseFailed {
-            reason: "数据长度不符合头结构".to_string(),
-        };
-        assert!(parse_err.to_string().contains("数据长度不符合头结构"));
-
         let cursor_err = AlgoError::InvalidCursorPosition {
             current_len: 5,
             target_pos: 10,
         };
         assert!(cursor_err.to_string().contains("状态机操作越界"));
+
+        let de_err = AlgoError::deserialize_failed("dict.bin", "校验和损坏");
+        assert!(de_err.to_string().contains("校验和损坏"));
     }
 }
