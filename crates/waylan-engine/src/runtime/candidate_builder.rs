@@ -42,59 +42,54 @@ impl CandidateBoxBuildOptions {
     }
 }
 
-/// 统合构建通用候选框渲染状态模型
-pub fn build_common_candidate_box_state(
-    engine: &AlgoEngine,
-    opts: CandidateBoxBuildOptions,
-) -> CandidateBoxState {
-    let CandidateBoxBuildOptions {
-        mode,
-        is_active,
-        page_index,
-        selected_index,
-        page_size,
-        expansion: expansion_in,
-        inline_preedit,
-        voice_state,
-    } = opts;
-
-    // 若当前处于语音输入状态，优先呈现语音识别流式预览与动态波形（与 IBus 视觉契约 100% 对齐）
-    if let Some(ref voice_box) = voice_state {
-        if voice_box.is_listening {
-            let candidates = if let Some(ref voice_text) = voice_box.display_text {
-                vec![Candidate::new(
-                    voice_text.clone(),
-                    voice_box.waveform.clone(),
-                    1000,
-                )]
-            } else {
-                Vec::new()
-            };
-
-            return CandidateBoxState {
-                visible: is_active,
-                preedit: voice_box.partial_text.clone(),
-                candidates,
-                selected_index: 0,
-                expansion: CandidateExpansion::None,
-                mode_badge: String::new(),
-                grid_candidates: Vec::new(),
-                voice: Some(voice_box.clone()),
-            };
-        }
+/// 提取语音输入态候选框渲染状态（与 IBus 视觉契约 100% 对齐）
+fn build_voice_candidate_box(
+    voice_box: &VoiceBoxState,
+    is_active: bool,
+) -> Option<CandidateBoxState> {
+    if !voice_box.is_listening {
+        return None;
     }
-
-    let all = engine.candidates();
-    let size = page_size.max(1);
-    let start = page_index.saturating_mul(size);
-    let candidates = if start < all.len() {
-        let end = (start + size).min(all.len());
-        all[start..end].to_vec()
+    let candidates = if let Some(ref voice_text) = voice_box.display_text {
+        vec![Candidate::new(
+            voice_text.clone(),
+            voice_box.waveform.clone(),
+            1000,
+        )]
     } else {
         Vec::new()
     };
 
-    let (expansion, grid_candidates) = match expansion_in {
+    Some(CandidateBoxState {
+        visible: is_active,
+        preedit: voice_box.partial_text.clone(),
+        candidates,
+        selected_index: 0,
+        expansion: CandidateExpansion::None,
+        mode_badge: String::new(),
+        grid_candidates: Vec::new(),
+        voice: Some(voice_box.clone()),
+    })
+}
+
+/// 裁剪当前页候选词切片
+fn slice_page_candidates(all: &[Candidate], page_index: usize, page_size: usize) -> Vec<Candidate> {
+    let size = page_size.max(1);
+    let start = page_index.saturating_mul(size);
+    if start < all.len() {
+        let end = (start + size).min(all.len());
+        all[start..end].to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+/// 提取展开态状态与网格候选词切片
+fn resolve_expansion_and_grid(
+    all: &[Candidate],
+    expansion: CandidateExpansion,
+) -> (CandidateExpansion, Vec<Candidate>) {
+    match expansion {
         CandidateExpansion::Grid { selected_index } => {
             let take_count = all.len().min(30);
             let grid = all[..take_count].to_vec();
@@ -102,10 +97,17 @@ pub fn build_common_candidate_box_state(
         }
         card @ CandidateExpansion::Card { .. } => (card, Vec::new()),
         CandidateExpansion::None => (CandidateExpansion::None, Vec::new()),
-    };
+    }
+}
 
+/// 解析预编辑字符串与中英模式徽标
+fn resolve_preedit_and_badge(
+    engine: &AlgoEngine,
+    mode: InputMode,
+    inline_preedit: bool,
+) -> (String, String) {
     let is_dynamic_v_mode = engine.raw_input().starts_with('v');
-    let (preedit, mode_badge) = if inline_preedit {
+    if inline_preedit {
         if is_dynamic_v_mode {
             (engine.raw_input().to_string(), "V模式".to_string())
         } else {
@@ -122,12 +124,39 @@ pub fn build_common_candidate_box_state(
             InputMode::VMode => "V".to_string(),
         };
         (engine.formatted_preedit(), badge)
-    };
+    }
+}
 
-    let final_selected_index = if let CandidateExpansion::Grid { selected_index } = expansion {
-        selected_index
-    } else {
-        selected_index
+/// 统合构建通用候选框渲染状态模型
+pub fn build_common_candidate_box_state(
+    engine: &AlgoEngine,
+    opts: CandidateBoxBuildOptions,
+) -> CandidateBoxState {
+    let CandidateBoxBuildOptions {
+        mode,
+        is_active,
+        page_index,
+        selected_index,
+        page_size,
+        expansion: expansion_in,
+        inline_preedit,
+        voice_state,
+    } = opts;
+
+    if let Some(ref voice_box) = voice_state {
+        if let Some(state) = build_voice_candidate_box(voice_box, is_active) {
+            return state;
+        }
+    }
+
+    let all = engine.candidates();
+    let candidates = slice_page_candidates(all, page_index, page_size);
+    let (expansion, grid_candidates) = resolve_expansion_and_grid(all, expansion_in);
+    let (preedit, mode_badge) = resolve_preedit_and_badge(engine, mode, inline_preedit);
+
+    let final_selected_index = match expansion {
+        CandidateExpansion::Grid { selected_index } => selected_index,
+        _ => selected_index,
     };
 
     CandidateBoxState {

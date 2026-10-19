@@ -268,42 +268,37 @@ impl AlgoEngine {
         }
     }
 
-    /// 提取前 3 音节与前 2 音节高频成词并混排注入到全长成词之后
-    fn inject_prefix_segment_candidates(
+    /// 提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
+    fn extract_prefix_3_candidate(
         &self,
         best_path: &SegmentPath,
-        candidates: &mut Vec<AlgoCandidate>,
-    ) {
-        let total_syls =
-            best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
-        if total_syls < 3 || best_path.syllables.len() < 2 {
-            return;
+        total_syls: usize,
+    ) -> Option<AlgoCandidate> {
+        if total_syls < 4 || best_path.syllables.len() < 3 {
+            return None;
         }
+        let key_3 = best_path.syllables[..3].join("'");
+        let mut m = self
+            .resources
+            .table
+            .lookup_top_k(&key_3, 1)
+            .into_iter()
+            .next()?;
+        if m.pinyin == key_3 {
+            m.consumed_len = Some(Self::calculate_consumed_len(
+                self.composition.as_str(),
+                &key_3,
+                &best_path.syllables,
+            ));
+            Some(self.format_prefix_candidate(m))
+        } else {
+            None
+        }
+    }
 
+    /// 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，回退查简拼召回 Top-2）
+    fn extract_prefix_2_candidates(&self, best_path: &SegmentPath) -> Vec<AlgoCandidate> {
         let mut prefix_items = Vec::new();
-
-        // 若总音节 >= 4 且已完成音节 >= 3，优先提取前 3 音节全拼高频词（如 wo'men'de -> 我们的）
-        if total_syls >= 4 && best_path.syllables.len() >= 3 {
-            let key_3 = best_path.syllables[..3].join("'");
-            if let Some(mut m) = self
-                .resources
-                .table
-                .lookup_top_k(&key_3, 1)
-                .into_iter()
-                .next()
-            {
-                if m.pinyin == key_3 {
-                    m.consumed_len = Some(Self::calculate_consumed_len(
-                        self.composition.as_str(),
-                        &key_3,
-                        &best_path.syllables,
-                    ));
-                    prefix_items.push(self.format_prefix_candidate(m));
-                }
-            }
-        }
-
-        // 提取前 2 音节高频词（优先全拼如 wo'men -> 我们；若为声母简拼如 r'g，回退查简拼召回 Top-2 二字高频词）
         let key_2 = best_path.syllables[..2].join("'");
         let mut found_exact_2 = false;
         if let Some(mut m) = self
@@ -334,11 +329,15 @@ impl AlgoEngine {
                 prefix_items.push(self.format_prefix_candidate(cand));
             }
         }
+        prefix_items
+    }
 
-        if prefix_items.is_empty() {
-            return;
-        }
-
+    /// 将前缀候选词混排注入到全长候选词之后并执行文本去重
+    fn blend_prefix_candidates(
+        candidates: &mut Vec<AlgoCandidate>,
+        prefix_items: Vec<AlgoCandidate>,
+        total_syls: usize,
+    ) {
         let full_len_count = candidates
             .iter()
             .take_while(|c| {
@@ -363,6 +362,29 @@ impl AlgoEngine {
         injected.retain(|_| keep_iter.next().unwrap_or(false));
 
         *candidates = injected;
+    }
+
+    /// 提取前 3 音节与前 2 音节高频成词并混排注入到全长成词之后
+    fn inject_prefix_segment_candidates(
+        &self,
+        best_path: &SegmentPath,
+        candidates: &mut Vec<AlgoCandidate>,
+    ) {
+        let total_syls =
+            best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
+        if total_syls < 3 || best_path.syllables.len() < 2 {
+            return;
+        }
+
+        let mut prefix_items = Vec::new();
+        if let Some(cand_3) = self.extract_prefix_3_candidate(best_path, total_syls) {
+            prefix_items.push(cand_3);
+        }
+        prefix_items.extend(self.extract_prefix_2_candidates(best_path));
+
+        if !prefix_items.is_empty() {
+            Self::blend_prefix_candidates(candidates, prefix_items, total_syls);
+        }
     }
 
     /// 归一化前缀分段候选词的简繁文本、拼音注释与层级标签
