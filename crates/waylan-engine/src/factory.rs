@@ -133,25 +133,25 @@ pub fn create_engine_with_table(table: LexiconTable, cfg: &AppConfig) -> AlgoEng
     let mut engine = AlgoEngine::new(table, algo_config);
 
     let phrase_path = CustomPhraseManager::default_path();
-    engine.resources.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
+    engine.resources_mut().custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
     let user_dict = AppConfig::user_dict_path();
     engine.set_user_dict_path(&user_dict);
     if user_dict.exists() {
         info!(
             "[字库引擎] 成功载入用户自适应个性化历史词库: {:?} (词条数: {})",
             user_dict,
-            engine.adaptive.model.total_entries()
+            engine.user_adaptive_total_entries()
         );
     }
 
     let (english_suggester, symbol_suggester) = load_auxiliary_managers();
-    engine.resources.english_suggester = english_suggester;
-    engine.resources.symbol_suggester = symbol_suggester;
+    engine.resources_mut().english_suggester = english_suggester;
+    engine.resources_mut().symbol_suggester = symbol_suggester;
 
     info!(
         "[简繁词库] 全局简繁转换两级词库就绪 (单字映射: {} 个, 消歧短语: {} 组)",
-        engine.resources.opencc_dict.chars.len(),
-        engine.resources.opencc_dict.phrases_len()
+        engine.resources().opencc_dict.chars.len(),
+        engine.resources().opencc_dict.phrases_len()
     );
 
     engine
@@ -169,7 +169,7 @@ pub fn reload_engine_resources(engine: &mut AlgoEngine, cfg: &AppConfig) {
 
     // 1. 重新载入自定义短语
     let phrase_path = CustomPhraseManager::default_path();
-    engine.resources.custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
+    engine.resources_mut().custom_phrases = CustomPhraseManager::load_or_init(&phrase_path);
 
     // 2. 重新检测并同步用户自适应词库
     let user_dict_path = AppConfig::user_dict_path();
@@ -177,7 +177,7 @@ pub fn reload_engine_resources(engine: &mut AlgoEngine, cfg: &AppConfig) {
         if let Ok(m) = fs::metadata(&user_dict_path) {
             if m.len() == 0 {
                 info!("[热重载] 检测到用户词库文件为空，重置内存用户自适应模型");
-                engine.adaptive.model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+                engine.reset_user_adaptive_model();
                 engine.set_user_dict_path(&user_dict_path);
             } else if !engine.is_same_wal_file(&user_dict_path) {
                 engine.set_user_dict_path(&user_dict_path);
@@ -185,14 +185,14 @@ pub fn reload_engine_resources(engine: &mut AlgoEngine, cfg: &AppConfig) {
         }
     } else {
         info!("[热重载] 检测到用户词库文件已被删除或清空，重置内存用户自适应模型");
-        engine.adaptive.model = waylan_algo::user_adaptive::UserAdaptiveModel::new();
+        engine.reset_user_adaptive_model();
         engine.set_user_dict_path(&user_dict_path);
     }
 
     // 3. 重新载入英文与符号表情辅助词库管理器
     let (english_suggester, symbol_suggester) = load_auxiliary_managers();
-    engine.resources.english_suggester = english_suggester;
-    engine.resources.symbol_suggester = symbol_suggester;
+    engine.resources_mut().english_suggester = english_suggester;
+    engine.resources_mut().symbol_suggester = symbol_suggester;
 }
 
 #[cfg(test)]
@@ -204,7 +204,7 @@ mod tests {
         let table = LexiconTable::with_sample_data();
         let cfg = AppConfig::default();
         let engine = create_engine_with_table(table, &cfg);
-        assert!(!engine.resources.table.is_empty());
+        assert!(!engine.table().is_empty());
     }
 
     #[test]

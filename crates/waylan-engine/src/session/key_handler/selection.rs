@@ -104,8 +104,7 @@ pub(crate) fn handle_action_keys(
     }
     if key == KEY_ESC {
         if engine.is_expanded() {
-            engine.viewport.is_expanded = false;
-            engine.viewport.expanded_selected_index = 0;
+            engine.collapse_expanded();
             return Some(ImeOutputAction::Handled { update_ui: true });
         }
         engine.reset();

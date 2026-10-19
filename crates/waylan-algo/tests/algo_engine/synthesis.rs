@@ -35,14 +35,14 @@ fn test_pangu_spacing_helper_rules() {
 fn test_engine_auto_pangu_spacing_integration() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 注入目标词条与英文短语（带音节分词符）
-    engine.resources.table.insert("ping'guo", "苹果", 10_000);
-    engine.resources.table.insert("ge", "个", 10_000);
+    engine.table_mut().insert("ping'guo", "苹果", 10_000);
+    engine.table_mut().insert("ge", "个", 10_000);
     engine
-        .resources
+        .resources_mut()
         .custom_phrases
         .add_entry("rust".to_string(), "Rust".to_string());
     engine
-        .resources
+        .resources_mut()
         .custom_phrases
         .add_entry("100".to_string(), "100".to_string());
 
@@ -125,14 +125,13 @@ fn test_engine_best_path_only_no_garbage_sentence() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 注入词条
     engine
-        .resources
-        .table
+        .table_mut()
         .insert("wo'men'de'shi'jie", "我们的世界", 50_000);
-    engine.resources.table.insert("wo'men", "我们", 20_000);
-    engine.resources.table.insert("shi'jie", "世界", 20_000);
-    engine.resources.table.insert("de", "的", 30_000);
-    engine.resources.table.insert("me", "么", 10_000);
-    engine.resources.table.insert("n", "嗯", 5_000);
+    engine.table_mut().insert("wo'men", "我们", 20_000);
+    engine.table_mut().insert("shi'jie", "世界", 20_000);
+    engine.table_mut().insert("de", "的", 30_000);
+    engine.table_mut().insert("me", "么", 10_000);
+    engine.table_mut().insert("n", "嗯", 5_000);
 
     for ch in "womendeshijie".chars() {
         engine.push_char(ch);
@@ -151,15 +150,11 @@ fn test_engine_prefix_segment_candidate_injection_and_cascade() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 注入全词与前缀词
     engine
-        .resources
-        .table
+        .table_mut()
         .insert("wo'men'de'shi'jie", "我们的世界", 50_000);
-    engine.resources.table.insert("wo'men'de", "我们的", 35_000);
-    engine.resources.table.insert("wo'men", "我们", 40_000);
-    engine
-        .resources
-        .table
-        .insert("de'shi'jie", "的世界", 40_000);
+    engine.table_mut().insert("wo'men'de", "我们的", 35_000);
+    engine.table_mut().insert("wo'men", "我们", 40_000);
+    engine.table_mut().insert("de'shi'jie", "的世界", 40_000);
 
     for ch in "womendeshijie".chars() {
         engine.push_char(ch);
@@ -205,8 +200,8 @@ fn test_engine_prefix_segment_candidate_injection_and_cascade() {
 fn test_engine_phrase_prefix_synthesis_womendeshij() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 注入目标词条：“时间”和“的”
-    engine.resources.table.insert("shi'jian", "时间", 50_000);
-    engine.resources.table.insert("de", "的", 80_000);
+    engine.table_mut().insert("shi'jian", "时间", 50_000);
+    engine.table_mut().insert("de", "的", 80_000);
 
     // 模拟用户键入 womendeshij
     for ch in "womendeshij".chars() {
@@ -229,13 +224,10 @@ fn test_engine_phrase_prefix_synthesis_womendeshij() {
 fn test_engine_mixed_full_pinyin_and_tail_acronym_synthesis() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 注入目标词条与简拼
-    engine.resources.table.insert("gong'tong", "共同", 50_000);
-    engine.resources.table.insert("de", "的", 80_000);
-    engine.resources.table.insert("gan'jue", "感觉", 60_000);
-    engine
-        .resources
-        .table
-        .insert("guo'wu'yuan", "国务院", 55_000);
+    engine.table_mut().insert("gong'tong", "共同", 50_000);
+    engine.table_mut().insert("de", "的", 80_000);
+    engine.table_mut().insert("gan'jue", "感觉", 60_000);
+    engine.table_mut().insert("guo'wu'yuan", "国务院", 55_000);
 
     // 1. 验证 k = 2（双声母）：womengongtongdegj -> 我们共同的感觉
     for ch in "womengongtongdegj".chars() {
@@ -265,21 +257,18 @@ fn test_engine_mixed_full_pinyin_and_tail_acronym_synthesis() {
 fn test_engine_rgzn_multi_acronyms_and_prefix_injection() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     engine
-        .resources
-        .table
+        .table_mut()
         .insert("ren'gong'zhi'neng", "人工智能", 31_607);
     engine
-        .resources
-        .table
+        .table_mut()
         .insert("ren'guo'zhong'nian", "人过中年", 504);
     engine
-        .resources
-        .table
+        .table_mut()
         .insert("ruo'guan'zhi'nian", "弱冠之年", 78);
-    engine.resources.table.insert("ru'guo", "如果", 25_000);
-    engine.resources.table.insert("ru'gu", "入股", 12_000);
-    engine.resources.table.insert("zhi'neng", "智能", 20_000);
-    engine.resources.table.insert("ren", "人", 18_000);
+    engine.table_mut().insert("ru'guo", "如果", 25_000);
+    engine.table_mut().insert("ru'gu", "入股", 12_000);
+    engine.table_mut().insert("zhi'neng", "智能", 20_000);
+    engine.table_mut().insert("ren", "人", 18_000);
 
     for ch in "rgzn".chars() {
         engine.push_char(ch);

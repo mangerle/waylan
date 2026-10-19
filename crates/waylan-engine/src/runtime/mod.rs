@@ -81,6 +81,48 @@ impl ImeRuntime {
         Self::new(ImeCoreSession::new(engine))
     }
 
+    /// 挂载与外部共享的输入状态标志
+    pub fn with_shared_flags(mut self, flags: SharedInputFlags) -> Self {
+        self.shared_flags = Some(flags);
+        self
+    }
+
+    /// 挂载中英文切换托盘通知发送通道
+    pub fn with_mode_notify_tx(mut self, tx: SyncSender<()>) -> Self {
+        self.mode_notify_tx = Some(tx);
+        self
+    }
+
+    /// 挂载配置重载请求标志
+    pub fn with_reload_requested(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.reload_requested = Some(flag);
+        self
+    }
+
+    /// 获取核心会话不可变引用
+    #[inline]
+    pub fn core(&self) -> &ImeCoreSession {
+        &self.core
+    }
+
+    /// 获取核心会话可变引用
+    #[inline]
+    pub fn core_mut(&mut self) -> &mut ImeCoreSession {
+        &mut self.core
+    }
+
+    /// 获取语音管理器不可变引用
+    #[inline]
+    pub fn voice_manager(&self) -> Option<&VoiceInteractionManager> {
+        self.voice_manager.as_ref()
+    }
+
+    /// 获取语音管理器可变引用
+    #[inline]
+    pub fn voice_manager_mut(&mut self) -> Option<&mut VoiceInteractionManager> {
+        self.voice_manager.as_mut()
+    }
+
     /// 查询当前是否处于语音激活状态（录音中、等待转录结算中或有展示浮条）
     #[inline]
     pub fn is_voice_active(&self) -> bool {

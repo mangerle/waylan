@@ -114,7 +114,7 @@ fn test_engine_acronym_matching() {
 fn test_engine_custom_phrase_and_english_and_symbol() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     engine
-        .resources
+        .resources_mut()
         .custom_phrases
         .add_entry("mymail".to_string(), "user@waylan.org".to_string());
 

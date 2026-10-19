@@ -7,8 +7,8 @@ use waylan_algo::AlgoEngine;
 fn test_engine_commit_context_association() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 插入具有同音竞争的词条："shi'jian" => "事件"（静态分 14,000）与 "时间"（静态分 10,000）
-    engine.resources.table.insert("shi'jian", "事件", 14_000);
-    engine.resources.table.insert("shi'jian", "时间", 10_000);
+    engine.table_mut().insert("shi'jian", "事件", 14_000);
+    engine.table_mut().insert("shi'jian", "时间", 10_000);
 
     // 1. 在无上屏历史上下文时，输入 shijian 优先命中静态分更高的“事件”
     for ch in "shijian".chars() {
@@ -85,7 +85,7 @@ fn test_engine_spatial_typo_tolerance_nihso() {
 fn test_engine_typo_adjacent_transpose_cehng() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     // 词库准备目标词条："cheng" => "成"
-    engine.resources.table.insert("cheng", "成", 10_000);
+    engine.table_mut().insert("cheng", "成", 10_000);
 
     // 模拟用户键入 cehng（eh 为相邻字母颠倒误敲，原本意图为 cheng）
     for ch in "cehng".chars() {
@@ -101,13 +101,13 @@ fn test_engine_typo_adjacent_transpose_cehng() {
 #[test]
 fn test_engine_typo_transpose_yingxaing_top_ranked() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    engine.resources.table.insert("ying'xiang", "影响", 50_000);
-    engine.resources.table.insert("ying'xiang", "影像", 40_000);
-    engine.resources.table.insert("ying", "应", 30_000);
-    engine.resources.table.insert("xian", "先", 30_000);
-    engine.resources.table.insert("ai", "爱", 30_000);
-    engine.resources.table.insert("neng'gou", "能够", 35_000);
-    engine.resources.table.insert("na'ge", "那个", 34_000);
+    engine.table_mut().insert("ying'xiang", "影响", 50_000);
+    engine.table_mut().insert("ying'xiang", "影像", 40_000);
+    engine.table_mut().insert("ying", "应", 30_000);
+    engine.table_mut().insert("xian", "先", 30_000);
+    engine.table_mut().insert("ai", "爱", 30_000);
+    engine.table_mut().insert("neng'gou", "能够", 35_000);
+    engine.table_mut().insert("na'ge", "那个", 34_000);
 
     for ch in "yingxaing".chars() {
         engine.push_char(ch);
@@ -128,8 +128,8 @@ fn test_engine_typo_transpose_yingxaing_top_ranked() {
 #[test]
 fn test_engine_typo_guard_suppression_on_valid_prefix() {
     let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    engine.resources.table.insert("shi'jian", "时间", 50_000);
-    engine.resources.table.insert("de", "的", 80_000);
+    engine.table_mut().insert("shi'jian", "时间", 50_000);
+    engine.table_mut().insert("de", "的", 80_000);
 
     for ch in "womendeshij".chars() {
         engine.push_char(ch);

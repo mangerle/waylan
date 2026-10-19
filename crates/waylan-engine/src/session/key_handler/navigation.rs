@@ -22,8 +22,8 @@ pub(crate) fn handle_smart_navigation_key(
             if is_cursor_at_end {
                 let cand_len = engine.candidates().len();
                 if cand_len > 0 {
-                    if engine.viewport.selected_index + 1 < cand_len {
-                        engine.viewport.selected_index += 1;
+                    if engine.selected_index() + 1 < cand_len {
+                        engine.set_selected_index(engine.selected_index() + 1);
                     } else if engine.can_next_page() {
                         engine.next_page();
                     }
@@ -35,11 +35,11 @@ pub(crate) fn handle_smart_navigation_key(
         }
         KEY_LEFT => {
             if is_cursor_at_end {
-                if engine.viewport.selected_index > 0 {
-                    engine.viewport.selected_index -= 1;
+                if engine.selected_index() > 0 {
+                    engine.set_selected_index(engine.selected_index() - 1);
                 } else if engine.can_prev_page() {
                     engine.prev_page();
-                    engine.viewport.selected_index = engine.candidates().len().saturating_sub(1);
+                    engine.set_selected_index(engine.candidates().len().saturating_sub(1));
                 } else {
                     engine.move_cursor_left();
                 }

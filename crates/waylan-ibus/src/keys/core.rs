@@ -5,6 +5,8 @@
 //! - **核心优势**：纯内存数据结构，加锁保护仅限于单次按键决策的微秒级临界区内。
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
+use std::sync::mpsc::SyncSender;
+use waylan_core::state::SharedInputFlags;
 use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
 use waylan_engine::{AlgoEngine, ImeCoreSession, ImeRuntime};
 
@@ -26,15 +28,15 @@ pub struct IbusKeyOutcome {
 /// 微澜 IBus 会话内部核心状态机（受互斥锁保护，组合底层 ImeRuntime 并扩展协议特定状态）
 pub struct IbusSessionCore {
     /// 统一输入法交互运行时 (IME Runtime)
-    pub runtime: ImeRuntime,
-    pub phys_mods: u8,
-    pub is_password_context: bool,
-    pub is_screen_locked: bool,
-    pub surrounding_text: Option<(String, u32, u32)>,
-    pub candidate_index_style: CandidateIndexStyle,
-    pub candidate_orientation: CandidateOrientation,
+    pub(crate) runtime: ImeRuntime,
+    pub(crate) phys_mods: u8,
+    pub(crate) is_password_context: bool,
+    pub(crate) is_screen_locked: bool,
+    pub(crate) surrounding_text: Option<(String, u32, u32)>,
+    pub(crate) candidate_index_style: CandidateIndexStyle,
+    pub(crate) candidate_orientation: CandidateOrientation,
     /// 当前拥有焦点的活跃 IBus 引擎对象路径
-    pub active_engine_path: Option<String>,
+    pub(crate) active_engine_path: Option<String>,
 }
 
 impl IbusSessionCore {
@@ -60,6 +62,46 @@ impl IbusSessionCore {
     /// 获取可变核心会话状态引用
     pub fn core_mut(&mut self) -> &mut ImeCoreSession {
         &mut self.runtime.core
+    }
+
+    /// 获取统一输入法运行时不可变引用
+    #[inline]
+    pub fn runtime(&self) -> &ImeRuntime {
+        &self.runtime
+    }
+
+    /// 获取统一输入法运行时可变引用
+    #[inline]
+    pub fn runtime_mut(&mut self) -> &mut ImeRuntime {
+        &mut self.runtime
+    }
+
+    /// 设置候选序号样式
+    #[inline]
+    pub fn set_candidate_index_style(&mut self, style: CandidateIndexStyle) {
+        self.candidate_index_style = style;
+    }
+
+    /// 设置候选框排列方向
+    #[inline]
+    pub fn set_candidate_orientation(&mut self, orientation: CandidateOrientation) {
+        self.candidate_orientation = orientation;
+    }
+
+    /// 查询是否已挂载系统托盘状态容器
+    #[inline]
+    pub fn has_tray(&self) -> bool {
+        self.runtime.shared_flags.is_some()
+    }
+
+    /// 关联挂载系统托盘状态与图标刷新通道
+    pub fn attach_tray(
+        &mut self,
+        shared_flags: SharedInputFlags,
+        mode_notify_tx: Option<SyncSender<()>>,
+    ) {
+        self.runtime.shared_flags = Some(shared_flags);
+        self.runtime.mode_notify_tx = mode_notify_tx;
     }
 
     /// 查询当前是否处于 CapsLock 大写锁定状态

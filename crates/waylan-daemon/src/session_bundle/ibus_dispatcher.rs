@@ -61,7 +61,7 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn reload(&self, core: &mut IbusSessionCore) -> bool {
         let new_cfg = AppConfig::load_or_create();
         let hide_ext = new_cfg.desktop.exclusive_input_source;
-        let current_has_tray = core.runtime.shared_flags.is_some();
+        let current_has_tray = core.has_tray();
         let is_gnome = env::var("XDG_CURRENT_DESKTOP")
             .map(|d| d.to_uppercase().contains("GNOME"))
             .unwrap_or(false);
@@ -95,9 +95,9 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
 
 /// 将统一配置包映射并应用到 IBus 核心会话中
 fn apply_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
-    core.candidate_index_style = cfg.ui.candidate_index_style;
-    core.candidate_orientation = cfg.ui.candidate_orientation;
-    core.runtime.reload_config(cfg);
+    core.set_candidate_index_style(cfg.ui.candidate_index_style);
+    core.set_candidate_orientation(cfg.ui.candidate_orientation);
+    core.runtime_mut().reload_config(cfg);
 }
 
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
@@ -113,9 +113,11 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
 
     let mut session_core = IbusSessionCore::new(opts.engine);
     if let Some(tray) = opts.tray {
-        session_core.runtime.shared_flags = Some(tray.shared_flags().clone());
+        session_core.attach_tray(
+            tray.shared_flags().clone(),
+            opts.tray.as_ref().map(|t| t.icon_notifier()),
+        );
     }
-    session_core.runtime.mode_notify_tx = opts.tray.as_ref().map(|t| t.icon_notifier());
     let initial_cfg = AppConfig::load_or_create();
     apply_config_to_ibus_core(&initial_cfg, &mut session_core);
 

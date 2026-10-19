@@ -39,13 +39,13 @@ use crate::types::{AlgoCandidate, AlgoConfig, ImportedDictEntry};
 #[derive(Debug, Default)]
 pub struct AlgoEngine {
     /// 静态系统词典与语言学规则资源包
-    pub resources: LexiconResources,
+    pub(crate) resources: LexiconResources,
     /// 候选词展示视口与分页交互状态机
-    pub viewport: CandidateViewport,
+    pub(crate) viewport: CandidateViewport,
     /// 用户自适应词频学习与预写日志持久化子系统
-    pub adaptive: UserAdaptiveState,
+    pub(crate) adaptive: UserAdaptiveState,
     /// 增量击键编辑缓冲区与预编辑切分状态机
-    pub composition: CompositionBuffer,
+    pub(crate) composition: CompositionBuffer,
     /// 全局算法配置
     pub config: AlgoConfig,
     /// 候选词收集复用工作区缓冲（预分配容量，避免高频击键时数十次 Vec 分配与重新扩容）
@@ -208,6 +208,13 @@ impl AlgoEngine {
         self.viewport.expanded_selected_index
     }
 
+    /// 折叠并关闭二级卡片展开态
+    #[inline]
+    pub fn collapse_expanded(&mut self) {
+        self.viewport.is_expanded = false;
+        self.viewport.expanded_selected_index = 0;
+    }
+
     /// 将拼音编辑光标重置回末尾并刷新候选列表（恢复选词模式）
     pub fn move_cursor_to_end(&mut self) -> &[AlgoCandidate] {
         if self.composition.move_to_end() {
@@ -231,6 +238,25 @@ impl AlgoEngine {
     /// 在当前页候选词中向前（向上/向左）循环移动高亮选中项
     pub fn prev_candidate(&mut self) {
         self.viewport.prev_candidate();
+    }
+
+    /// 设置当前展示页内的高亮候选词索引（自动边界保护）
+    #[inline]
+    pub fn set_selected_index(&mut self, index: usize) {
+        let max_idx = self.viewport.current_candidates.len().saturating_sub(1);
+        self.viewport.selected_index = index.min(max_idx);
+    }
+
+    /// 获取用户自适应模型中已记录的历史词条总数
+    #[inline]
+    pub fn user_adaptive_total_entries(&self) -> usize {
+        self.adaptive.model.total_entries()
+    }
+
+    /// 重置用户自适应学习模型
+    #[inline]
+    pub fn reset_user_adaptive_model(&mut self) {
+        self.adaptive.model = crate::user_adaptive::UserAdaptiveModel::new();
     }
 
     /// 批量导入外部词库条目到用户自适应模型
@@ -333,6 +359,18 @@ impl AlgoEngine {
     #[inline]
     pub fn table_mut(&mut self) -> &mut LexiconTable {
         &mut self.resources.table
+    }
+
+    /// 获取静态词典与规则资源包不可变引用
+    #[inline]
+    pub fn resources(&self) -> &LexiconResources {
+        &self.resources
+    }
+
+    /// 获取静态词典与规则资源包可变引用
+    #[inline]
+    pub fn resources_mut(&mut self) -> &mut LexiconResources {
+        &mut self.resources
     }
 
     /// 获取当前光标位置
