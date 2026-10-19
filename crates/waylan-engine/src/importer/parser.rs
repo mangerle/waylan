@@ -160,26 +160,126 @@ impl DictImporter {
         Ok(entries)
     }
 
-    /// 解析搜狗细胞词库二进制格式 (.scel)
-    pub fn parse_sogou_scel(data: &[u8]) -> Result<Vec<ImportedDictEntry>, DictImportError> {
-        let pinyin_table_offset = 0x1540;
-        let words_offset = 0x2628;
-
-        // 校验基本文件长度与最大体积上限
+    /// 校验搜狗细胞词库基本长度与魔数头
+    fn validate_scel_header(
+        data: &[u8],
+        pinyin_offset: usize,
+        words_offset: usize,
+    ) -> Result<(), DictImportError> {
         if data.len() < words_offset || data.len() > MAX_IMPORT_FILE_BYTES as usize {
             return Err(DictImportError::ParseFailed {
                 reason: "无效或损坏的搜狗细胞词库文件 (体积不在合法范围内)".to_string(),
             });
         }
 
-        // 校验 SCEL 文件头魔数或拼音表区魔数标识
         if data[0..4] != SCEL_HEADER_MAGIC
-            && data[pinyin_table_offset..pinyin_table_offset + 4] != SCEL_PY_MAGIC
+            && data[pinyin_offset..pinyin_offset + 4] != SCEL_PY_MAGIC
         {
             return Err(DictImportError::ParseFailed {
                 reason: "搜狗细胞词库魔数头校验失败".to_string(),
             });
         }
+        Ok(())
+    }
+
+    /// 解析单个词条组的拼音序列，返回 (同音词数, 组合拼音)
+    fn parse_scel_pinyin_group(
+        data: &[u8],
+        cursor: &mut usize,
+        pinyin_table: &HashMap<usize, String>,
+    ) -> Option<(usize, String)> {
+        if cursor.saturating_add(4) > data.len() {
+            return None;
+        }
+        let same_pinyin_count = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
+        *cursor = cursor.saturating_add(2);
+
+        let py_indices_byte_len = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
+        *cursor = cursor.saturating_add(2);
+
+        if same_pinyin_count == 0
+            || py_indices_byte_len == 0
+            || cursor.saturating_add(py_indices_byte_len) > data.len()
+        {
+            return None;
+        }
+
+        let mut py_list = Vec::with_capacity(py_indices_byte_len / 2);
+        for i in (0..py_indices_byte_len).step_by(2) {
+            let idx_pos = cursor.saturating_add(i);
+            if idx_pos.saturating_add(2) <= data.len() {
+                let idx = u16::from_le_bytes([data[idx_pos], data[idx_pos + 1]]) as usize;
+                if let Some(py_str) = pinyin_table.get(&idx) {
+                    if !py_str.is_empty() {
+                        py_list.push(py_str.as_str());
+                    }
+                }
+            }
+        }
+        *cursor = cursor.saturating_add(py_indices_byte_len);
+
+        Some((same_pinyin_count, py_list.join("'")))
+    }
+
+    /// 解析指定同音词集合并追加到词条结果列表，若数据截断返回 false
+    fn parse_scel_words_for_pinyin(
+        data: &[u8],
+        cursor: &mut usize,
+        same_pinyin_count: usize,
+        full_pinyin: &str,
+        entries: &mut Vec<ImportedDictEntry>,
+    ) -> bool {
+        for _ in 0..same_pinyin_count {
+            if cursor.saturating_add(2) > data.len() {
+                return false;
+            }
+            let word_byte_len = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
+            *cursor = cursor.saturating_add(2);
+
+            let word_end = cursor.saturating_add(word_byte_len);
+            if word_end > data.len() {
+                return false;
+            }
+
+            let word_bytes = &data[*cursor..word_end];
+            let u16_chars: Vec<u16> = word_bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
+                .collect();
+            let word_text = String::from_utf16_lossy(&u16_chars);
+            *cursor = word_end;
+
+            // 跳过扩展信息（通常包含权重、词频说明，占 12 字节左右），防御畸形 ext_len 越界
+            if cursor.saturating_add(2) > data.len() {
+                return false;
+            }
+            let ext_len = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
+            let next_cursor = cursor.saturating_add(2).saturating_add(ext_len);
+            if next_cursor > data.len() {
+                return false;
+            }
+            *cursor = next_cursor;
+
+            if !word_text.is_empty() && !full_pinyin.is_empty() {
+                entries.push(ImportedDictEntry {
+                    text: word_text,
+                    pinyin: full_pinyin.to_string(),
+                    weight: 200,
+                });
+            }
+        }
+        true
+    }
+
+    /// 解析搜狗细胞词库二进制格式 (.scel)
+    pub fn parse_sogou_scel(data: &[u8]) -> Result<Vec<ImportedDictEntry>, DictImportError> {
+        let pinyin_table_offset = 0x1540;
+        let words_offset = 0x2628;
+
+        Self::validate_scel_header(data, pinyin_table_offset, words_offset)?;
 
         // 1. 解析拼音映射表（限定在 [0x1540..0x2628] 区域内，防止越界读取词条区）
         let pinyin_table = Self::read_scel_pinyin_table(&data[pinyin_table_offset..words_offset])?;
@@ -188,88 +288,16 @@ impl DictImporter {
         let mut entries = Vec::new();
         let mut cursor = words_offset;
 
-        while cursor.saturating_add(4) <= data.len() {
-            // 同音词数量
-            let same_pinyin_count = u16::from_le_bytes([data[cursor], data[cursor + 1]]) as usize;
-            cursor = cursor.saturating_add(2);
-
-            // 拼音索引序列长度（字节数，每个索引占 2 字节）
-            let py_indices_byte_len = u16::from_le_bytes([data[cursor], data[cursor + 1]]) as usize;
-            cursor = cursor.saturating_add(2);
-
-            if same_pinyin_count == 0
-                || py_indices_byte_len == 0
-                || cursor.saturating_add(py_indices_byte_len) > data.len()
-            {
-                break;
-            }
-
-            let mut py_list = Vec::with_capacity(py_indices_byte_len / 2);
-            for i in (0..py_indices_byte_len).step_by(2) {
-                let idx_pos = cursor.saturating_add(i);
-                if idx_pos.saturating_add(2) <= data.len() {
-                    let idx = u16::from_le_bytes([data[idx_pos], data[idx_pos + 1]]) as usize;
-                    if let Some(py_str) = pinyin_table.get(&idx) {
-                        if !py_str.is_empty() {
-                            py_list.push(py_str.as_str());
-                        }
-                    }
-                }
-            }
-            cursor = cursor.saturating_add(py_indices_byte_len);
-
-            let full_pinyin = py_list.join("'");
-
-            // 读取紧跟其后的同音词列表
-            let mut corrupted = false;
-            for _ in 0..same_pinyin_count {
-                if cursor.saturating_add(2) > data.len() {
-                    corrupted = true;
-                    break;
-                }
-                let word_byte_len = u16::from_le_bytes([data[cursor], data[cursor + 1]]) as usize;
-                cursor = cursor.saturating_add(2);
-
-                let word_end = cursor.saturating_add(word_byte_len);
-                if word_end > data.len() {
-                    corrupted = true;
-                    break;
-                }
-
-                let word_bytes = &data[cursor..word_end];
-                let u16_chars: Vec<u16> = word_bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .copied()
-                    .map(u16::from_le_bytes)
-                    .collect();
-                let word_text = String::from_utf16_lossy(&u16_chars);
-                cursor = word_end;
-
-                // 跳过扩展信息（通常包含权重、词频说明，占 12 字节左右），严格防御畸形 ext_len 越界
-                if cursor.saturating_add(2) > data.len() {
-                    corrupted = true;
-                    break;
-                }
-                let ext_len = u16::from_le_bytes([data[cursor], data[cursor + 1]]) as usize;
-                let next_cursor = cursor.saturating_add(2).saturating_add(ext_len);
-                if next_cursor > data.len() {
-                    corrupted = true;
-                    break;
-                }
-                cursor = next_cursor;
-
-                if !word_text.is_empty() && !full_pinyin.is_empty() {
-                    entries.push(ImportedDictEntry {
-                        text: word_text,
-                        pinyin: full_pinyin.clone(),
-                        weight: 200,
-                    });
-                }
-            }
-
-            if corrupted {
+        while let Some((same_pinyin_count, full_pinyin)) =
+            Self::parse_scel_pinyin_group(data, &mut cursor, &pinyin_table)
+        {
+            if !Self::parse_scel_words_for_pinyin(
+                data,
+                &mut cursor,
+                same_pinyin_count,
+                &full_pinyin,
+                &mut entries,
+            ) {
                 break;
             }
         }
