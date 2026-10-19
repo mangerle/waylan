@@ -4,7 +4,6 @@
 //! - **实现初衷**：将预编辑文本更新、候选词表刷新、按键上屏与标点光标补偿等 D-Bus 异步信号发送逻辑从接口定义中解耦。
 //! - **核心优势**：在释放核心 Mutex 锁后进行纯异步信号发射，杜绝死锁与事件循环阻塞。
 
-use std::sync::atomic::Ordering;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
 
@@ -89,10 +88,9 @@ impl IbusEngineService {
 
     /// 重置会话并向 `ibus-daemon` 发送隐藏预编辑与候选面板信号
     pub(crate) async fn reset_and_hide_ui(&self, ctxt: &SignalContext<'_>) {
-        self.is_password.store(false, Ordering::Release);
+        self.clear_password_state();
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            guard.is_password_context = false;
             guard.reset_context();
             UiSnapshot::capture(&guard)
         };

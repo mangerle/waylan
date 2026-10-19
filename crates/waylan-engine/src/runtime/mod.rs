@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use waylan_algo::AlgoEngine;
 use waylan_core::input::MOD_CAPS;
-use waylan_core::state::SharedInputFlags;
+use waylan_core::state::{InputStateSnapshot, SharedInputFlags};
 use waylan_core::{CandidateBoxState, InputMode, ParsedShortcut, VoiceConfig};
 #[cfg(feature = "voice")]
 use waylan_voice::{VoiceInteractionManager, VoiceKeyAction};
@@ -27,7 +27,6 @@ pub use voice_stub::{VoiceInteractionManager, VoiceKeyAction};
 use crate::frontend::InputMethodFrontend;
 use crate::session::{
     extract_surrounding_prefix, ImeCoreSession, ImeOutputAction, KeyProcessContext,
-    ShortcutToggleAction,
 };
 
 pub mod candidate_builder;
@@ -171,7 +170,93 @@ impl ImeRuntime {
         }
     }
 
-    /// 同步 CapsLock 大写锁定状态至共享标志并唤醒托盘刷新
+    /// 从底层权威核心状态提取当前完整的不可变输入状态快照
+    #[inline]
+    pub fn state_snapshot(&self) -> InputStateSnapshot {
+        InputStateSnapshot {
+            is_chinese: matches!(self.core.mode, InputMode::Chinese | InputMode::VMode),
+            is_caps_locked: self.core.is_caps_locked(),
+            traditional_chinese: self.core.engine.config.traditional_chinese,
+            full_width_punct: self.core.punctuation_processor.is_full_width_punct(),
+            full_width_char: self.core.full_width_char,
+        }
+    }
+
+    /// 向外部共享标志容器与系统托盘单向广播最新状态快照（单一真实源广播出口）
+    pub fn broadcast_state_snapshot(&self) {
+        let snap = self.state_snapshot();
+        if let Some(ref flags) = self.shared_flags {
+            flags.update_from_snapshot(&snap);
+        }
+        if let Some(ref tx) = self.mode_notify_tx {
+            let _ = tx.try_send(());
+        }
+    }
+
+    /// 设置输入语言模式并单向广播状态快照
+    pub fn set_input_mode(&mut self, mode: InputMode) {
+        if self.core.mode != mode {
+            self.core.mode = mode;
+            self.broadcast_state_snapshot();
+        }
+    }
+
+    /// 切换中英文模式并单向广播状态快照
+    pub fn toggle_input_mode(&mut self) -> InputMode {
+        let next = match self.core.mode {
+            InputMode::Chinese | InputMode::VMode => InputMode::English,
+            InputMode::English => InputMode::Chinese,
+        };
+        self.set_input_mode(next);
+        next
+    }
+
+    /// 设置简繁输出模式并单向广播状态快照
+    pub fn set_traditional(&mut self, val: bool) {
+        if self.core.engine.config.traditional_chinese != val {
+            self.core.engine.config.traditional_chinese = val;
+            self.broadcast_state_snapshot();
+        }
+    }
+
+    /// 切换简繁输出模式并单向广播状态快照
+    pub fn toggle_traditional(&mut self) -> bool {
+        let next = !self.core.engine.config.traditional_chinese;
+        self.set_traditional(next);
+        next
+    }
+
+    /// 设置标点全半角并单向广播状态快照
+    pub fn set_full_width_punct(&mut self, val: bool) {
+        if self.core.punctuation_processor.is_full_width_punct() != val {
+            self.core.punctuation_processor.set_full_width_punct(val);
+            self.broadcast_state_snapshot();
+        }
+    }
+
+    /// 切换标点全半角并单向广播状态快照
+    pub fn toggle_full_width_punct(&mut self) -> bool {
+        let next = !self.core.punctuation_processor.is_full_width_punct();
+        self.set_full_width_punct(next);
+        next
+    }
+
+    /// 设置字符全半角并单向广播状态快照
+    pub fn set_full_width_char(&mut self, val: bool) {
+        if self.core.full_width_char != val {
+            self.core.full_width_char = val;
+            self.broadcast_state_snapshot();
+        }
+    }
+
+    /// 切换字符全半角并单向广播状态快照
+    pub fn toggle_full_width_char(&mut self) -> bool {
+        let next = !self.core.full_width_char;
+        self.set_full_width_char(next);
+        next
+    }
+
+    /// 同步 CapsLock 大写锁定状态至核心状态机并向外部单向广播快照
     pub fn update_caps_lock_state(&mut self, is_locked: bool) {
         if self.core.is_caps_locked() != is_locked {
             if is_locked {
@@ -179,12 +264,7 @@ impl ImeRuntime {
             } else {
                 self.core.modifiers.locked &= !MOD_CAPS;
             }
-            if let Some(ref flags) = self.shared_flags {
-                flags.set_caps_locked(is_locked);
-            }
-            if let Some(ref tx) = self.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
+            self.broadcast_state_snapshot();
         }
     }
 
@@ -196,7 +276,11 @@ impl ImeRuntime {
 
             // 1. 同步 CapsLock 大写锁定状态
             if self.core.is_caps_locked() != snap.is_caps_locked {
-                self.update_caps_lock_state(snap.is_caps_locked);
+                if snap.is_caps_locked {
+                    self.core.modifiers.locked |= MOD_CAPS;
+                } else {
+                    self.core.modifiers.locked &= !MOD_CAPS;
+                }
             }
 
             // 2. 同步中英文输入语言模式
@@ -347,17 +431,8 @@ impl ImeRuntime {
                 frontend.update_preedit("", 0);
                 (true, None)
             }
-            ImeOutputAction::ShortcutToggled(toggle) => {
-                if let Some(ref flags) = self.shared_flags {
-                    match toggle {
-                        ShortcutToggleAction::Traditional(v) => flags.set_traditional(v),
-                        ShortcutToggleAction::FullWidthChar(v) => flags.set_full_width_char(v),
-                        ShortcutToggleAction::FullWidthPunct(v) => flags.set_full_width_punct(v),
-                    }
-                }
-                if let Some(ref tx) = self.mode_notify_tx {
-                    let _ = tx.try_send(());
-                }
+            ImeOutputAction::ShortcutToggled(_toggle) => {
+                self.broadcast_state_snapshot();
                 (true, None)
             }
             ImeOutputAction::ModeChanged {
@@ -365,12 +440,7 @@ impl ImeRuntime {
                 committed,
                 was_consumed,
             } => {
-                if let Some(ref flags) = self.shared_flags {
-                    flags.set_chinese(new_mode == InputMode::Chinese);
-                }
-                if let Some(ref tx) = self.mode_notify_tx {
-                    let _ = tx.try_send(());
-                }
+                self.broadcast_state_snapshot();
                 frontend.sync_input_mode(new_mode);
                 if let Some(ref text) = committed {
                     frontend.commit_text(text);
@@ -501,5 +571,54 @@ mod tests {
         let mode_changed = runtime.sync_shared_mode();
         assert_eq!(mode_changed, Some(InputMode::Chinese));
         assert!(!runtime.core.engine.config.traditional_chinese);
+    }
+
+    #[test]
+    fn test_ime_runtime_single_source_of_truth() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let flags = SharedInputFlags::new(true, false, true, false);
+        let mut runtime = ImeRuntime::default()
+            .with_shared_flags(flags.clone())
+            .with_mode_notify_tx(tx);
+
+        // 验证初始状态一致性
+        let snap = runtime.state_snapshot();
+        assert!(snap.is_chinese);
+        assert!(!snap.is_caps_locked);
+        assert_eq!(flags.snapshot(), snap);
+
+        // 切换中英文模式并广播
+        let mode = runtime.toggle_input_mode();
+        assert_eq!(mode, InputMode::English);
+        assert!(!flags.is_chinese());
+        assert_eq!(runtime.state_snapshot(), flags.snapshot());
+        assert!(rx.try_recv().is_ok());
+
+        // 切换简繁
+        let trad = runtime.toggle_traditional();
+        assert!(trad);
+        assert!(flags.is_traditional());
+        assert_eq!(runtime.state_snapshot(), flags.snapshot());
+        assert!(rx.try_recv().is_ok());
+
+        // 切换标点全半角
+        let punct = runtime.toggle_full_width_punct();
+        assert!(!punct);
+        assert!(!flags.is_full_width_punct());
+        assert_eq!(runtime.state_snapshot(), flags.snapshot());
+        assert!(rx.try_recv().is_ok());
+
+        // 切换字符全半角
+        let char_full = runtime.toggle_full_width_char();
+        assert!(char_full);
+        assert!(flags.is_full_width_char());
+        assert_eq!(runtime.state_snapshot(), flags.snapshot());
+        assert!(rx.try_recv().is_ok());
+
+        // 更新 CapsLock 大写锁定
+        runtime.update_caps_lock_state(true);
+        assert!(flags.is_caps_locked());
+        assert_eq!(runtime.state_snapshot(), flags.snapshot());
+        assert!(rx.try_recv().is_ok());
     }
 }

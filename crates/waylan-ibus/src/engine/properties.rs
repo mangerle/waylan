@@ -7,7 +7,6 @@
 
 use log::info;
 use std::sync::atomic::Ordering;
-use waylan_core::InputMode;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
 
@@ -24,17 +23,7 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = match guard.runtime.core.mode {
-                InputMode::Chinese | InputMode::VMode => InputMode::English,
-                InputMode::English => InputMode::Chinese,
-            };
-            guard.runtime.core.mode = next;
-            if let Some(ref flags) = guard.runtime.shared_flags {
-                flags.set_chinese(matches!(next, InputMode::Chinese));
-            }
-            if let Some(ref tx) = guard.runtime.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
+            let next = guard.runtime.toggle_input_mode();
             (next, guard.is_caps_locked())
         };
         if !self.suppress_properties {
@@ -50,14 +39,7 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = !guard.runtime.core.engine.config.traditional_chinese;
-            guard.runtime.core.engine.config.traditional_chinese = next;
-            if let Some(ref flags) = guard.runtime.shared_flags {
-                flags.set_traditional(next);
-            }
-            if let Some(ref tx) = guard.runtime.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
+            let next = guard.runtime.toggle_traditional();
             info!(
                 "[微澜 IBus] 原生状态栏切换简繁模式为: {}",
                 if next { "繁体" } else { "简体" }
@@ -75,22 +57,7 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = !guard
-                .runtime
-                .core
-                .punctuation_processor
-                .is_full_width_punct();
-            guard
-                .runtime
-                .core
-                .punctuation_processor
-                .set_full_width_punct(next);
-            if let Some(ref flags) = guard.runtime.shared_flags {
-                flags.set_full_width_punct(next);
-            }
-            if let Some(ref tx) = guard.runtime.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
+            let next = guard.runtime.toggle_full_width_punct();
             info!(
                 "[微澜 IBus] 原生状态栏切换标点模式为: {}",
                 if next {
@@ -112,20 +79,7 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let current = guard
-                .runtime
-                .shared_flags
-                .as_ref()
-                .map(|f| f.is_full_width_char())
-                .unwrap_or(guard.runtime.core.full_width_char);
-            let next = !current;
-            guard.runtime.core.full_width_char = next;
-            if let Some(ref flags) = guard.runtime.shared_flags {
-                flags.set_full_width_char(next);
-            }
-            if let Some(ref tx) = guard.runtime.mode_notify_tx {
-                let _ = tx.try_send(());
-            }
+            let next = guard.runtime.toggle_full_width_char();
             info!(
                 "[微澜 IBus] 原生状态栏切换字符模式为: {}",
                 if next {

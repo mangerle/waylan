@@ -179,6 +179,27 @@ impl SharedInputFlags {
         self.set_bit(FLAG_FULL_WIDTH_CHAR, val);
     }
 
+    /// 从完整输入状态快照原子更新所有标志位（单次原子存储，杜绝状态撕裂与手工双写）
+    pub fn update_from_snapshot(&self, snap: &InputStateSnapshot) {
+        let mut bits = 0u8;
+        if snap.is_chinese {
+            bits |= FLAG_CHINESE;
+        }
+        if snap.is_caps_locked {
+            bits |= FLAG_CAPS_LOCKED;
+        }
+        if snap.traditional_chinese {
+            bits |= FLAG_TRADITIONAL;
+        }
+        if snap.full_width_punct {
+            bits |= FLAG_FULL_WIDTH_PUNCT;
+        }
+        if snap.full_width_char {
+            bits |= FLAG_FULL_WIDTH_CHAR;
+        }
+        self.flags.store(bits, Ordering::Release);
+    }
+
     /// 获取底层单原子位图引用句柄
     pub fn raw_flag(&self) -> Arc<AtomicU8> {
         Arc::clone(&self.flags)
@@ -212,5 +233,16 @@ mod tests {
         assert!(!snap3.is_caps_locked);
         assert!(flags.is_chinese());
         assert!(!flags.is_caps_locked());
+
+        // 验证从完整快照原子全量更新
+        let custom_snap = InputStateSnapshot {
+            is_chinese: false,
+            is_caps_locked: true,
+            traditional_chinese: true,
+            full_width_punct: false,
+            full_width_char: true,
+        };
+        flags.update_from_snapshot(&custom_snap);
+        assert_eq!(flags.snapshot(), custom_snap);
     }
 }

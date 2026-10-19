@@ -92,16 +92,26 @@ impl IbusEngineService {
     /// 取消手写输入事件（保持空实现以兼容协议）
     fn cancel_hand_writing(&self, _n_strokes: u32) {}
 
-    /// 设置客户端支持的输入法能力位掩码（同步更新密码框感知标记并清除非密码态残留）
-    pub(crate) fn set_capabilities(&self, caps: u32) {
-        const IBUS_CAP_PASSWORD: u32 = 1 << 4;
-        let is_pwd = (caps & IBUS_CAP_PASSWORD) != 0;
+    /// 更新当前引擎实例与核心会话的密码框感知标记（统一单一维护入口，清除非密码态残留）
+    pub(crate) fn update_password_state(&self, is_pwd: bool) {
         self.is_password.store(is_pwd, Ordering::Release);
         let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_password_context = is_pwd;
         if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
             guard.reset_context();
         }
+    }
+
+    /// 清除密码输入感知标记
+    pub(crate) fn clear_password_state(&self) {
+        self.is_password.store(false, Ordering::Release);
+    }
+
+    /// 设置客户端支持的输入法能力位掩码（同步更新密码框感知标记并清除非密码态残留）
+    pub(crate) fn set_capabilities(&self, caps: u32) {
+        const IBUS_CAP_PASSWORD: u32 = 1 << 4;
+        let is_pwd = (caps & IBUS_CAP_PASSWORD) != 0;
+        self.update_password_state(is_pwd);
     }
 
     /// 响应 GNOME / IBus 原生状态栏菜单项激活事件
@@ -343,12 +353,7 @@ impl IbusEngineService {
     pub(crate) fn set_content_type(&self, content_type: (u32, u32)) {
         let (purpose, _hints) = content_type;
         let is_pwd = purpose == IBUS_INPUT_PURPOSE_PASSWORD || purpose == IBUS_INPUT_PURPOSE_PIN;
-        self.is_password.store(is_pwd, Ordering::Release);
-        let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-        guard.is_password_context = is_pwd;
-        if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
-            guard.reset_context();
-        }
+        self.update_password_state(is_pwd);
     }
 
     /// 声明是否启用带焦点路径标识的 `FocusInId` / `FocusOutId`

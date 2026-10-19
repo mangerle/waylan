@@ -186,12 +186,7 @@ fn handle_grab_modifiers(
     }
     let curr_caps = state.runtime.core.is_caps_locked();
     if prev_caps != curr_caps {
-        if let Some(ref flags) = state.runtime.shared_flags {
-            flags.set_caps_locked(curr_caps);
-        }
-        if let Some(ref notify_tx) = state.runtime.mode_notify_tx {
-            let _ = notify_tx.try_send(());
-        }
+        state.runtime.update_caps_lock_state(curr_caps);
         debug!(
             "[Wayland v2] CapsLock 大写锁定状态变更: {}",
             if curr_caps {
