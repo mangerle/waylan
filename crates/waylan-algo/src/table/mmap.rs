@@ -288,26 +288,45 @@ impl CompactMmapLexicon {
     /// 简拼缩写检索
     pub fn lookup_acronym(&self, key: &str) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
-        let prefixed = format!("'{}", key);
-        let key_idx = reader.exact_match(&prefixed)? as usize;
+        let key_idx = match_with_prefix(&reader, b"'", key)?;
         self.get_candidates_by_key_idx(key_idx, Some(1), None)
     }
 
     /// 简拼缩写按需截取 Top-K 检索
     pub fn lookup_acronym_top_k(&self, key: &str, k: usize) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
-        let prefixed = format!("'{}", key);
-        let key_idx = reader.exact_match(&prefixed)? as usize;
+        let key_idx = match_with_prefix(&reader, b"'", key)?;
         self.get_candidates_by_key_idx(key_idx, Some(1), Some(k))
     }
 
     /// 声母高频单字检索
     pub fn lookup_initial(&self, initial: &str) -> Option<Vec<(String, u32, u32)>> {
         let reader = self.get_dat_reader();
-        let prefixed = format!("''{}", initial);
-        let key_idx = reader.exact_match(&prefixed)? as usize;
+        let key_idx = match_with_prefix(&reader, b"''", initial)?;
         self.get_candidates_by_key_idx(key_idx, Some(2), None)
     }
+}
+
+/// 在栈上为拼音键拼接前缀并在 DAT 中执行精确匹配（彻底消除高频击键时 `format!` 的临时堆字符串分配）
+#[inline]
+fn match_with_prefix(reader: &DatReader<'_>, prefix: &[u8], key: &str) -> Option<usize> {
+    let key_bytes = key.as_bytes();
+    let total_len = prefix.len().saturating_add(key_bytes.len());
+    if total_len <= 64 {
+        let mut buf = [0u8; 64];
+        buf[..prefix.len()].copy_from_slice(prefix);
+        buf[prefix.len()..total_len].copy_from_slice(key_bytes);
+        if let Ok(prefixed_str) = std::str::from_utf8(&buf[..total_len]) {
+            return reader.exact_match(prefixed_str).map(|idx| idx as usize);
+        }
+    }
+    // 降级兜底路径：超长输入（> 64 字节罕见极端情况）
+    let mut s = String::with_capacity(total_len);
+    if let Ok(prefix_str) = std::str::from_utf8(prefix) {
+        s.push_str(prefix_str);
+    }
+    s.push_str(key);
+    reader.exact_match(&s).map(|idx| idx as usize)
 }
 
 /// 将 32 位原始词频单调映射为 16 位紧凑存储分：

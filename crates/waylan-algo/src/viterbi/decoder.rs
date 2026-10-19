@@ -159,6 +159,9 @@ impl ViterbiDecoder {
         let beam_width = Self::dynamic_beam_width(n);
         let raw_limit = if n > 4 { 6 } else { 4 };
 
+        // 预分配复用 key 拼接缓冲区，消除 span > 1 时的临时 String 分配
+        let mut key_buf = String::with_capacity(32);
+
         for start_idx in 0..n {
             if dp[start_idx].is_empty() {
                 continue;
@@ -169,13 +172,25 @@ impl ViterbiDecoder {
             for span in 1..=max_span {
                 let end_idx = start_idx + span;
                 let sub_syls = &syllables[start_idx..end_idx];
-                let key = sub_syls.join("'");
 
-                let raw_entries = match table.get_top_raw_entries(&key, raw_limit) {
+                let key: &str = if span == 1 {
+                    sub_syls[0].as_str()
+                } else {
+                    key_buf.clear();
+                    for (i, syl) in sub_syls.iter().enumerate() {
+                        if i > 0 {
+                            key_buf.push('\'');
+                        }
+                        key_buf.push_str(syl);
+                    }
+                    &key_buf
+                };
+
+                let raw_entries = match table.get_top_raw_entries(key, raw_limit) {
                     Some(entries) if !entries.is_empty() => entries,
                     _ => {
                         if span == 1 {
-                            if let Some(entries) = table.get_initial_raw_entries(&key) {
+                            if let Some(entries) = table.get_initial_raw_entries(key) {
                                 entries
                             } else {
                                 continue;
@@ -311,9 +326,13 @@ impl ViterbiDecoder {
             // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词
             let last_syl = &syllables[split_idx - 1];
             let prev_step = split_idx - 1;
+            let mut key_buf = String::with_capacity(16);
             for &syl in find_syllables_by_prefix(remaining) {
-                let key = format!("{}'{}", last_syl, syl);
-                if let Some(entries) = table.get_top_raw_entries(&key, 2) {
+                key_buf.clear();
+                key_buf.push_str(last_syl);
+                key_buf.push('\'');
+                key_buf.push_str(syl);
+                if let Some(entries) = table.get_top_raw_entries(&key_buf, 2) {
                     for (text, raw_score, word_id_opt) in entries.iter().take(2) {
                         let freq_score = Self::unigram_log_score(*raw_score);
                         let curr_word_id = word_id_opt.or_else(|| {
