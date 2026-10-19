@@ -195,6 +195,18 @@ pub fn reload_engine_resources(engine: &mut AlgoEngine, cfg: &AppConfig) {
     engine.resources_mut().symbol_suggester = symbol_suggester;
 }
 
+/// 执行默认的算法引擎词库与自定义短语热重载（从磁盘重新加载最新 AppConfig 并应用）
+pub fn apply_default_engine_reload(engine: &mut AlgoEngine) {
+    let cfg = AppConfig::load_or_create();
+    reload_engine_resources(engine, &cfg);
+}
+
+/// 执行默认的输入法运行时完整配置与词库热重载（从磁盘重新加载最新 AppConfig 并应用）
+pub fn apply_default_runtime_reload(runtime: &mut crate::runtime::ImeRuntime) {
+    let cfg = AppConfig::load_or_create();
+    runtime.reload_config(&cfg);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +229,18 @@ mod tests {
         cfg.ui.page_size = 9;
         reload_engine_resources(&mut engine, &cfg);
         assert_eq!(engine.config.page_size, 9);
+    }
+
+    #[test]
+    fn test_apply_default_engine_and_runtime_reload() {
+        let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        apply_default_engine_reload(&mut engine);
+        assert_eq!(engine.raw_input(), "");
+
+        let mut runtime = crate::runtime::ImeRuntime::with_engine(AlgoEngine::with_sample_data(
+            AlgoConfig::default(),
+        ));
+        apply_default_runtime_reload(&mut runtime);
+        assert_eq!(runtime.core.engine.raw_input(), "");
     }
 }

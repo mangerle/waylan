@@ -7,7 +7,6 @@ pub mod session_common;
 pub mod session_v1;
 pub mod session_v2;
 pub mod surface;
-pub mod watcher;
 
 pub use error::WaylandRunnerError;
 pub use runner::*;
