@@ -90,7 +90,7 @@ impl IbusEngineService {
     pub(crate) async fn reset_and_hide_ui(&self, ctxt: &SignalContext<'_>) {
         self.clear_password_state();
         let snap = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             guard.reset_context();
             UiSnapshot::capture(&guard)
         };

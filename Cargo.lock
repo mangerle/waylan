@@ -6131,6 +6131,7 @@ dependencies = [
  "chrono",
  "log",
  "memmap2",
+ "parking_lot",
  "rustix 0.38.44",
  "serde",
  "tempfile",
@@ -6171,6 +6172,7 @@ dependencies = [
  "chrono",
  "fern",
  "log",
+ "parking_lot",
  "rustix 0.38.44",
  "serde",
  "signal-hook",
@@ -6205,6 +6207,7 @@ name = "waylan-ibus"
 version = "1.3.1"
 dependencies = [
  "log",
+ "parking_lot",
  "rustix 0.38.44",
  "serde",
  "thiserror 1.0.69",
@@ -6221,6 +6224,7 @@ dependencies = [
  "chrono",
  "fern",
  "log",
+ "parking_lot",
  "serde",
  "slint",
  "slint-build",

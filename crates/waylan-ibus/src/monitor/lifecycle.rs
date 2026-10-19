@@ -6,9 +6,10 @@
 //! - **核心优势**：双重探活与防抖节流，既保证开机与解锁后 100% 自愈切回微澜，又避免总线 RPC 洪泛。
 //! - **代价与局限**：依赖 GNOME gsettings 外部命令与 session D-Bus 接口。
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use log::{debug, info};
+use parking_lot::Mutex;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
@@ -62,13 +63,15 @@ pub(crate) fn handle_screen_saver_transition(
     }
     if current_screen_locked {
         info!("[微澜 IBus] 检测到系统进入锁屏状态，进入硬件按键直通与密码保护模式。");
-        if let Ok(mut guard) = shared_core.lock() {
+        {
+            let mut guard = shared_core.lock();
             guard.is_screen_locked = true;
             guard.reset_context();
         }
     } else {
         info!("[微澜 IBus] 检测到系统屏幕已解锁，正在自动校准并切回微澜输入法。");
-        if let Ok(mut guard) = shared_core.lock() {
+        {
+            let mut guard = shared_core.lock();
             guard.is_screen_locked = false;
             guard.is_password_context = false;
         }

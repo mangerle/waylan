@@ -8,8 +8,9 @@
 pub mod cloud_profiles;
 pub mod model_import;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use slint::SharedString;
 use waylan_core::config::AppConfig;
 
@@ -42,9 +43,7 @@ pub(crate) fn save_config_and_notify_status(params: SaveConfigParams<'_>) {
     } = params;
     match cfg.save_default() {
         Ok(()) => {
-            if let Ok(mut g) = current_cfg_cell.lock() {
-                *g = cfg.clone();
-            }
+            *current_cfg_cell.lock() = cfg.clone();
             sync_config_to_window(win, &cfg);
             win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from(success_msg));

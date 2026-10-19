@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::warn;
+use parking_lot::Mutex;
 use rustix::fs::{flock, FlockOperation};
 
 use crate::error::AlgoError;
@@ -33,7 +34,7 @@ pub use replay::load_or_replay;
 #[derive(Debug)]
 pub struct UserAdaptiveWal {
     /// 常驻保持的 WAL 日志追加写入文件句柄（消除每次选词时的重复 open/stat/close 系统调用）
-    wal_file: std::sync::Mutex<Option<(PathBuf, File)>>,
+    wal_file: Mutex<Option<(PathBuf, File)>>,
     /// 运行期向 WAL 追加记录的计数器（用于触发周期性自动压缩）
     wal_append_counter: usize,
     /// 触发自动压缩的追加条数阈值（默认为 1000 条）
@@ -55,7 +56,7 @@ impl UserAdaptiveWal {
     /// 创建新的 WAL 持久化管理器
     pub fn new() -> Self {
         Self {
-            wal_file: std::sync::Mutex::new(None),
+            wal_file: Mutex::new(None),
             wal_append_counter: 0,
             compact_threshold: Self::DEFAULT_COMPACT_THRESHOLD,
             last_compact_ms: Arc::new(AtomicU64::new(0)),
@@ -106,9 +107,7 @@ impl UserAdaptiveWal {
 
     /// 判断磁盘上的 WAL 文件是否与当前管理器持有的常驻追加句柄指向同一底层文件（相同 inode 且长度一致）
     pub fn is_same_wal_file(&self, path: &Path) -> bool {
-        let Ok(guard) = self.wal_file.lock() else {
-            return false;
-        };
+        let guard = self.wal_file.lock();
         let Some((ref opened_path, ref opened_file)) = *guard else {
             return false;
         };
@@ -166,10 +165,7 @@ impl UserAdaptiveWal {
         model: &mut UserAdaptiveModel,
         path_ref: &Path,
     ) -> Result<(), AlgoError> {
-        let mut guard = self
-            .wal_file
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self.wal_file.lock();
 
         if !Self::check_need_reopen(guard.as_ref(), path_ref) {
             return Ok(());
@@ -194,10 +190,7 @@ impl UserAdaptiveWal {
                             model.merge(&old_model);
                         }
                         self.compact(model, path_ref)?;
-                        guard = self
-                            .wal_file
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        guard = self.wal_file.lock();
                     }
                 }
             }
@@ -304,10 +297,7 @@ impl UserAdaptiveWal {
 
         self.ensure_wal_file_opened(model, path_ref)?;
 
-        let mut guard = self
-            .wal_file
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self.wal_file.lock();
 
         if let Some((_, ref mut file)) = *guard {
             Self::write_wal_frame_with_lock(file, &frame_buf, path_ref)?;
@@ -352,9 +342,7 @@ impl UserAdaptiveWal {
     ) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
         // 压缩前主动释放常驻写入句柄，避免占用文件妨碍原子 rename
-        if let Ok(mut guard) = self.wal_file.lock() {
-            *guard = None;
-        }
+        *self.wal_file.lock() = None;
 
         compactor::compact_model_with_callback(model, path_ref, || {
             self.mark_internal_compact();

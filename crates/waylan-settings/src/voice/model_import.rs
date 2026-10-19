@@ -6,8 +6,9 @@
 //! - **代价与局限**：模型文件复制需要目标磁盘具有足够的剩余空间。
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_voice::{import_onnx_model_from_file, ModelSubdirectory, VadModelType};
@@ -114,10 +115,7 @@ fn handle_import_asr_model(win: &SettingsWindow, current_cfg_cell: &Arc<Mutex<Ap
                                             .unwrap_or_default()
                                             .to_string_lossy()
                                             .to_string();
-                                        let mut cfg = cfg_cell_inner
-                                            .lock()
-                                            .map(|g| g.clone())
-                                            .unwrap_or_default();
+                                        let mut cfg = cfg_cell_inner.lock().clone();
                                         update_config_from_window(&w, &mut cfg);
                                         cfg.voice.offline.model_dir =
                                             Some(imported_path.to_string_lossy().to_string());
@@ -254,7 +252,7 @@ fn apply_imported_model_to_config_and_ui<F>(
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let mut cfg = ctx.cfg_cell.lock().map(|g| g.clone()).unwrap_or_default();
+    let mut cfg = ctx.cfg_cell.lock().clone();
     update_config_from_window(ctx.win, &mut cfg);
     (ctx.apply_fn)(&mut cfg, &imported_path.to_string_lossy());
     save_config_and_notify_status(SaveConfigParams {

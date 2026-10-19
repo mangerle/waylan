@@ -20,9 +20,7 @@ impl IbusEngineService {
     /// 响应状态栏点击切换中英文输入模式
     pub(crate) async fn on_prop_input_mode(&self, ctxt: &SignalContext<'_>) {
         let (new_mode, is_caps) = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock();
             let next = guard.runtime.toggle_input_mode();
             (next, guard.is_caps_locked())
         };
@@ -36,9 +34,7 @@ impl IbusEngineService {
     /// 响应状态栏点击切换简繁模式
     pub(crate) async fn on_prop_traditional_chinese(&self, ctxt: &SignalContext<'_>) {
         let is_trad = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock();
             let next = guard.runtime.toggle_traditional();
             info!(
                 "[微澜 IBus] 原生状态栏切换简繁模式为: {}",
@@ -54,9 +50,7 @@ impl IbusEngineService {
     /// 响应状态栏点击切换标点全半角模式
     pub(crate) async fn on_prop_full_width_punct(&self, ctxt: &SignalContext<'_>) {
         let is_full = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock();
             let next = guard.runtime.toggle_full_width_punct();
             info!(
                 "[微澜 IBus] 原生状态栏切换标点模式为: {}",
@@ -76,9 +70,7 @@ impl IbusEngineService {
     /// 响应状态栏点击切换字符全半角模式
     pub(crate) async fn on_prop_full_width_char(&self, ctxt: &SignalContext<'_>) {
         let is_full = {
-            let Ok(mut guard) = self.core.lock() else {
-                return;
-            };
+            let mut guard = self.core.lock();
             let next = guard.runtime.toggle_full_width_char();
             info!(
                 "[微澜 IBus] 原生状态栏切换字符模式为: {}",

@@ -17,8 +17,9 @@ pub use voice as voice_handlers;
 
 pub use importer::ImportError;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 

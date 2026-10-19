@@ -8,7 +8,9 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use waylan_algo::custom_phrase::CustomPhraseManager;

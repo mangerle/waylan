@@ -28,6 +28,7 @@ zbus.workspace = true
 signal-hook.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
+parking_lot.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

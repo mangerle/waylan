@@ -6,8 +6,9 @@
 //! - **代价与局限**：后台任务需跨线程向 Slint UI 线程派发 `invoke_from_event_loop` 进行界面状态刷新。
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use slint::SharedString;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_algo::AuxiliaryDict;
@@ -83,7 +84,7 @@ pub(crate) fn spawn_english_import_task(
         .spawn(move || {
             let _guard = TaskRunningGuard(guard_flag);
             let result = {
-                let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
+                let mut aux = aux_lock.lock();
                 import_english_dict_file(&path_str, &mut aux)
             };
             let _ = slint::invoke_from_event_loop(move || {
@@ -125,7 +126,7 @@ pub(crate) fn spawn_symbols_import_task(
         .spawn(move || {
             let _guard = TaskRunningGuard(guard_flag);
             let result = {
-                let mut aux = aux_lock.lock().unwrap_or_else(|p| p.into_inner());
+                let mut aux = aux_lock.lock();
                 import_symbols_dict_file(&path_str, &mut aux)
             };
             let _ = slint::invoke_from_event_loop(move || {

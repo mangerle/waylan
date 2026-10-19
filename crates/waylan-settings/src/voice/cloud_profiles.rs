@@ -8,8 +8,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_voice::{CloudAsrConfig, CloudProfile, CloudProviderType, VoiceEngineType};
@@ -49,10 +50,7 @@ pub(crate) fn register_cloud_profile_callbacks(
     window.on_start_edit_cloud_profile(move |idx| {
         if let Some(win) = window_weak.upgrade() {
             let index = idx as usize;
-            let cfg = current_cfg_cell
-                .lock()
-                .map(|g| g.clone())
-                .unwrap_or_default();
+            let cfg = current_cfg_cell.lock().clone();
             if let Some(p) = cfg.voice.cloud_profiles.get(index) {
                 *editing_id_edit.borrow_mut() = Some(p.id.clone());
                 win.set_edit_cloud_name(SharedString::from(&p.name));
@@ -147,10 +145,7 @@ fn handle_save_cloud_profile(
         Some(key_str.to_string())
     };
 
-    let mut cfg = current_cfg_cell
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let mut cfg = current_cfg_cell.lock().clone();
     update_config_from_window(win, &mut cfg);
     let target_id = editing_id_save.borrow_mut().take();
     if let Some(ref tid) = target_id {
@@ -180,9 +175,7 @@ fn handle_save_cloud_profile(
     match cfg.save_default() {
         Ok(()) => {
             win.set_is_editing_cloud(false);
-            if let Ok(mut g) = current_cfg_cell.lock() {
-                *g = cfg.clone();
-            }
+            *current_cfg_cell.lock() = cfg.clone();
             sync_config_to_window(win, &cfg);
             win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from(format!(
@@ -204,10 +197,7 @@ fn handle_delete_cloud_profile(
     editing_id: &Rc<RefCell<Option<String>>>,
     index: usize,
 ) {
-    let mut cfg = current_cfg_cell
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let mut cfg = current_cfg_cell.lock().clone();
     update_config_from_window(win, &mut cfg);
     if index < cfg.voice.cloud_profiles.len() {
         let removed = cfg.voice.cloud_profiles.remove(index);
@@ -219,9 +209,7 @@ fn handle_delete_cloud_profile(
         win.set_is_editing_cloud(false);
         match cfg.save_default() {
             Ok(()) => {
-                if let Ok(mut g) = current_cfg_cell.lock() {
-                    *g = cfg.clone();
-                }
+                *current_cfg_cell.lock() = cfg.clone();
                 sync_config_to_window(win, &cfg);
                 win.set_global_status_is_error(false);
                 win.set_global_status(SharedString::from(format!(
@@ -255,10 +243,7 @@ fn handle_test_cloud_profile(
         return;
     }
     let index = idx as usize;
-    let cfg = current_cfg_cell
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let cfg = current_cfg_cell.lock().clone();
     if let Some(p) = cfg.voice.cloud_profiles.get(index) {
         let profile_name = p.name.clone();
         let test_config = CloudAsrConfig {

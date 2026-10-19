@@ -14,3 +14,4 @@ log.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 rustix.workspace = true
+parking_lot.workspace = true

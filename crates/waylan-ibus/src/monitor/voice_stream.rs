@@ -5,9 +5,10 @@
 //! - **核心优势**：非侵入式 D-Bus 信号广播，利用 IBus 标准接口展现语音胶囊悬浮窗与流式预编辑。
 //! - **代价与局限**：高频流式推送依赖每 60ms 轮询窗口发射 D-Bus 信号。
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use log::info;
+use parking_lot::Mutex;
 use waylan_core::CandidateIndexStyle;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
@@ -23,16 +24,13 @@ use super::super::types::{
 pub(crate) fn query_voice_active_and_path(
     shared_core: &Arc<Mutex<IbusSessionCore>>,
 ) -> (bool, String) {
-    if let Ok(guard) = shared_core.lock() {
-        let active = guard.is_voice_active();
-        let path = guard
-            .active_engine_path
-            .clone()
-            .unwrap_or_else(|| WAYLAN_ENGINE_OBJECT_PATH.to_string());
-        (active, path)
-    } else {
-        (false, WAYLAN_ENGINE_OBJECT_PATH.to_string())
-    }
+    let guard = shared_core.lock();
+    let active = guard.is_voice_active();
+    let path = guard
+        .active_engine_path
+        .clone()
+        .unwrap_or_else(|| WAYLAN_ENGINE_OBJECT_PATH.to_string());
+    (active, path)
 }
 
 /// 发送语音波形候选框与实时预编辑文本更新
@@ -135,13 +133,11 @@ pub(crate) fn handle_voice_stream_cycle(
     last_voice_active: &mut bool,
 ) {
     if is_voice_active {
-        let (voice_snap, voice_commit) = match shared_core.lock() {
-            Ok(mut guard) => {
-                let commit = guard.poll_voice_events();
-                let snap = UiSnapshot::capture(&guard);
-                (snap, commit)
-            }
-            Err(_) => return,
+        let (voice_snap, voice_commit) = {
+            let mut guard = shared_core.lock();
+            let commit = guard.poll_voice_events();
+            let snap = UiSnapshot::capture(&guard);
+            (snap, commit)
         };
         emit_voice_stream_update(conn, target_engine_path, &voice_snap);
         if let Some(ref commit_text) = voice_commit {

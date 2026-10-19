@@ -17,8 +17,9 @@ pub use desktop::{
 pub use dict::{populate_lexicon_statistics, LexiconStatsBundle};
 pub(crate) use tasks::TaskRunningGuard;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 
@@ -52,17 +53,12 @@ pub fn register_settings_callbacks(window: &SettingsWindow, context: SettingsCal
     let current_cfg_cell = loaded_config;
     window.on_save_settings(move || {
         if let Some(win) = window_weak.upgrade() {
-            let mut base_cfg = current_cfg_cell
-                .lock()
-                .map(|g| g.clone())
-                .unwrap_or_default();
+            let mut base_cfg = current_cfg_cell.lock().clone();
             update_config_from_window(&win, &mut base_cfg);
             match base_cfg.save_default() {
                 Ok(()) => {
                     let hide_ext = base_cfg.desktop.exclusive_input_source;
-                    if let Ok(mut g) = current_cfg_cell.lock() {
-                        *g = base_cfg;
-                    }
+                    *current_cfg_cell.lock() = base_cfg;
                     sync_gnome_indicator_mode(hide_ext);
                     win.set_global_status_is_error(false);
                     win.set_global_status(SharedString::from("配置已成功保存并同步！"));

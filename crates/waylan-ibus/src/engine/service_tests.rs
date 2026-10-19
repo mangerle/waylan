@@ -1,8 +1,9 @@
 //! IBus Engine 服务密码框生命周期与能力感知单元测试
 
 use super::*;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use waylan_engine::{AlgoConfig, AlgoEngine};
 
 use crate::keys::IbusSessionCore;
@@ -27,22 +28,22 @@ fn test_password_capabilities_and_reset_lifecycle() {
     const IBUS_CAP_PASSWORD: u32 = 1 << 4;
     service.set_capabilities(IBUS_CAP_PASSWORD);
     assert!(is_password.load(Ordering::Acquire));
-    assert!(core.lock().unwrap().is_password_context);
+    assert!(core.lock().is_password_context);
 
     // 2. 模拟切回普通窗口，设置非密码能力位（必须成功复位）
     service.set_capabilities(0);
     assert!(!is_password.load(Ordering::Acquire));
-    assert!(!core.lock().unwrap().is_password_context);
+    assert!(!core.lock().is_password_context);
 
     // 3. 再次通过 set_content_type 进入密码框
     service.set_content_type((IBUS_INPUT_PURPOSE_PASSWORD, 0));
     assert!(is_password.load(Ordering::Acquire));
-    assert!(core.lock().unwrap().is_password_context);
+    assert!(core.lock().is_password_context);
 
     // 4. 普通内容类型复位
     service.set_content_type((0, 0));
     assert!(!is_password.load(Ordering::Acquire));
-    assert!(!core.lock().unwrap().is_password_context);
+    assert!(!core.lock().is_password_context);
 }
 
 #[test]
@@ -63,14 +64,14 @@ fn test_screen_locked_recovery_on_plain_context() {
 
     // 1. 模拟系统此前记录为锁屏直通状态
     {
-        let mut guard = core.lock().unwrap();
+        let mut guard = core.lock();
         guard.is_screen_locked = true;
         guard.is_password_context = false;
     }
 
     // 2. 验证获焦自愈检测器正确解除普通窗口的锁屏残留保护
     {
-        let mut guard = core.lock().unwrap();
+        let mut guard = core.lock();
         let healed = service.lock_healer.heal_on_focus(
             guard.is_password_context,
             &mut guard.is_screen_locked,
@@ -80,5 +81,5 @@ fn test_screen_locked_recovery_on_plain_context() {
     }
 
     // 3. 验证锁屏直通保护已正确解除
-    assert!(!core.lock().unwrap().is_screen_locked);
+    assert!(!core.lock().is_screen_locked);
 }

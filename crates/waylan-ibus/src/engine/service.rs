@@ -5,8 +5,9 @@
 //! - **核心优势**：纯内存瞬时加锁变更状态并提取不可变快照，所有信号发送在释放互斥锁后异步执行。
 //! - **代价与局限**：必须严格遵循 IBus D-Bus 信号契约。
 
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_sys::LoopWakeup;
 use zbus::interface;
@@ -49,7 +50,7 @@ impl IbusEngineService {
         state: u32,
     ) -> bool {
         let (outcome, snap, is_caps_locked) = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             guard.active_engine_path = Some(ctxt.path().to_string());
             if self.is_password.load(Ordering::Acquire) {
                 guard.is_password_context = true;
@@ -95,7 +96,7 @@ impl IbusEngineService {
     /// 更新当前引擎实例与核心会话的密码框感知标记（统一单一维护入口，清除非密码态残留）
     pub(crate) fn update_password_state(&self, is_pwd: bool) {
         self.is_password.store(is_pwd, Ordering::Release);
-        let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.core.lock();
         guard.is_password_context = is_pwd;
         if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
             guard.reset_context();
@@ -154,7 +155,7 @@ impl IbusEngineService {
         _state: u32,
     ) {
         let (outcome, snap, is_caps_locked) = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -203,7 +204,7 @@ impl IbusEngineService {
     /// 焦点进入输入上下文
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let (mode, is_caps, trad, punct, char_full, snap) = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             guard.active_engine_path = Some(ctxt.path().to_string());
             // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
             // 既杜绝旧普通窗口残留密码标记，又防止因先触发 SetContentType 后触发 FocusIn 导致密码标记被误冲刷
@@ -280,7 +281,7 @@ impl IbusEngineService {
     /// 响应候选框上一页按钮事件
     async fn page_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             if !guard.runtime.core.is_card_expanded() {
                 let _ = guard.runtime.core.prev_page();
             }
@@ -292,7 +293,7 @@ impl IbusEngineService {
     /// 响应候选框下一页按钮事件
     async fn page_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             if !guard.runtime.core.is_card_expanded() {
                 let _ = guard.runtime.core.next_page();
             }
@@ -304,7 +305,7 @@ impl IbusEngineService {
     /// 响应候选框光标上移事件
     async fn cursor_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             if guard.runtime.core.is_card_expanded() {
                 guard.runtime.core.prev_card_item();
             } else {
@@ -318,7 +319,7 @@ impl IbusEngineService {
     /// 响应候选框光标下移事件
     async fn cursor_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             if guard.runtime.core.is_card_expanded() {
                 guard.runtime.core.next_card_item();
             } else {
@@ -332,7 +333,7 @@ impl IbusEngineService {
     /// 接收客户端同步的光标周围文本
     fn set_surrounding_text(&self, text: Value<'_>, cursor_pos: u32, anchor_pos: u32) {
         if let Some(parsed) = extract_text_from_ibus_variant(&text) {
-            let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.core.lock();
             guard.surrounding_text = Some((parsed, cursor_pos, anchor_pos));
         }
     }

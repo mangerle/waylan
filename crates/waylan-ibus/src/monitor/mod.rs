@@ -8,11 +8,12 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use log::{debug, info};
+use parking_lot::Mutex;
 use rustix::event::{poll, PollFd, PollFlags};
 use waylan_sys::fs_watcher::{check_reload_requested_or_files_changed, InotifyWatcher};
 use waylan_sys::LoopWakeup;
@@ -55,7 +56,7 @@ fn handle_config_reload_event(
 
     if let Some(ref reloader) = params.config_reloader {
         let should_restart = {
-            let mut guard = shared_core.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = shared_core.lock();
             reloader.reload(&mut guard)
         };
         // 核心互斥锁 guard 已经彻底析构释放，在临界区外安全执行外部命令或 I/O，绝不阻塞打字按键
@@ -73,10 +74,10 @@ fn handle_config_reload_event(
 
 /// 同步托盘模式切换并发射 IBus 引擎 UpdateProperty 信号
 fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSessionCore>>) {
-    let mode_changed = shared_core
-        .lock()
-        .ok()
-        .and_then(|mut g| g.sync_shared_mode().map(|m| (m, g.is_caps_locked())));
+    let mode_changed = {
+        let mut g = shared_core.lock();
+        g.sync_shared_mode().map(|m| (m, g.is_caps_locked()))
+    };
     if let Some((new_mode, is_caps)) = mode_changed {
         if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
             let _ = conn.emit_signal(
@@ -106,9 +107,7 @@ pub(crate) fn run_ibus_monitor_loop(
         .unwrap_or(false);
 
     if initial_screen_locked {
-        if let Ok(mut guard) = shared_core.lock() {
-            guard.is_screen_locked = true;
-        }
+        shared_core.lock().is_screen_locked = true;
         info!("[微澜 IBus] 启动时检测到系统处于锁屏状态，已进入密码直通保护模式。");
     }
 

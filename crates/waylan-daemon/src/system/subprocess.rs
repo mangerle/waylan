@@ -14,9 +14,11 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+use parking_lot::Mutex;
 
 /// 构建微澜偏好设置中心外部进程命令实例并注入关键会话环境变量
 pub fn build_settings_command() -> Command {
@@ -65,50 +67,48 @@ impl SubprocessManager {
             while !shutdown_clone.load(Ordering::Acquire) && !exit_requested.load(Ordering::Acquire)
             {
                 thread::sleep(Duration::from_millis(200));
-                if let Ok(mut lock) = children_clone.lock() {
-                    lock.retain_mut(|tracked| match tracked.child.try_wait() {
-                        Ok(Some(status)) => {
-                            log::debug!(
-                                "[进程治理] 外部子进程 [{}] 已正常退出: {:?}",
-                                tracked.name,
-                                status
-                            );
-                            if let Some(ref guard) = tracked.running_guard {
-                                guard.store(false, Ordering::Release);
-                            }
-                            false
+                let mut lock = children_clone.lock();
+                lock.retain_mut(|tracked| match tracked.child.try_wait() {
+                    Ok(Some(status)) => {
+                        log::debug!(
+                            "[进程治理] 外部子进程 [{}] 已正常退出: {:?}",
+                            tracked.name,
+                            status
+                        );
+                        if let Some(ref guard) = tracked.running_guard {
+                            guard.store(false, Ordering::Release);
                         }
-                        Ok(None) => true,
-                        Err(e) => {
-                            log::warn!(
-                                "[进程治理] 查询外部子进程 [{}] 状态失败: {}",
-                                tracked.name,
-                                e
-                            );
-                            if let Some(ref guard) = tracked.running_guard {
-                                guard.store(false, Ordering::Release);
-                            }
-                            false
+                        false
+                    }
+                    Ok(None) => true,
+                    Err(e) => {
+                        log::warn!(
+                            "[进程治理] 查询外部子进程 [{}] 状态失败: {}",
+                            tracked.name,
+                            e
+                        );
+                        if let Some(ref guard) = tracked.running_guard {
+                            guard.store(false, Ordering::Release);
                         }
-                    });
-                }
+                        false
+                    }
+                });
             }
 
             // 收到退出信号后，主动清理所有存活子进程并收割状态
-            if let Ok(mut lock) = children_clone.lock() {
-                for tracked in lock.iter_mut() {
-                    info!(
-                        "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
-                        tracked.name
-                    );
-                    let _ = tracked.child.kill();
-                    let _ = tracked.child.wait();
-                    if let Some(ref guard) = tracked.running_guard {
-                        guard.store(false, Ordering::Release);
-                    }
+            let mut lock = children_clone.lock();
+            for tracked in lock.iter_mut() {
+                info!(
+                    "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
+                    tracked.name
+                );
+                let _ = tracked.child.kill();
+                let _ = tracked.child.wait();
+                if let Some(ref guard) = tracked.running_guard {
+                    guard.store(false, Ordering::Release);
                 }
-                lock.clear();
             }
+            lock.clear();
         });
 
         Self {
@@ -120,13 +120,12 @@ impl SubprocessManager {
 
     /// 注册纳管新启动的外部子进程
     pub fn track(&self, child: Child, running_guard: Option<Arc<AtomicBool>>, name: &'static str) {
-        if let Ok(mut lock) = self.children.lock() {
-            lock.push(TrackedChild {
-                child,
-                running_guard,
-                name,
-            });
-        }
+        let mut lock = self.children.lock();
+        lock.push(TrackedChild {
+            child,
+            running_guard,
+            name,
+        });
     }
 
     /// 唤起偏好设置图形界面进程

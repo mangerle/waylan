@@ -6,9 +6,10 @@
 //! - **核心优势**：清晰的启动阶段参数装配（`assemble_ibus_services`）与确定的退场清理（`cleanup_ibus_session`）。
 //! - **代价与局限**：强依赖宿主机上正常运行的 ibus-daemon 服务。
 
+use parking_lot::Mutex;
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicU32};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use log::{debug, info};
 use waylan_sys::fs_watcher::{
@@ -101,12 +102,11 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
 
 /// 会话退出时平滑落盘保存用户自学习词库
 fn cleanup_ibus_session(shared_core: &Arc<Mutex<IbusSessionCore>>) {
-    if let Ok(mut guard) = shared_core.lock() {
-        if let Err(e) = guard.runtime.core.engine.persist_user_dict() {
-            log::error!("[微澜 IBus 错误] 用户自学习词库落盘失败: {}", e);
-        } else {
-            info!("[微澜 IBus] 已安全完成用户自适应历史词库落盘。");
-        }
+    let mut guard = shared_core.lock();
+    if let Err(e) = guard.runtime.core.engine.persist_user_dict() {
+        log::error!("[微澜 IBus 错误] 用户自学习词库落盘失败: {}", e);
+    } else {
+        info!("[微澜 IBus] 已安全完成用户自适应历史词库落盘。");
     }
 }
 
@@ -139,9 +139,7 @@ fn build_ibus_connection(
         .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine_srv)?
         .build()?;
 
-    if let Ok(mut slot) = factory_conn_slot.lock() {
-        *slot = Some(conn.clone());
-    }
+    *factory_conn_slot.lock() = Some(conn.clone());
 
     Ok(conn)
 }
