@@ -15,7 +15,6 @@ use zbus::interface;
 use zbus::zvariant::OwnedObjectPath;
 
 use super::super::keys::IbusSessionCore;
-use super::super::screensaver::ScreenLockHealer;
 use super::service::IbusEngineService;
 
 /// `org.freedesktop.IBus.Factory` 接口实现
@@ -44,7 +43,7 @@ impl IbusFactoryService {
         let conn_registered = if let Some(conn) = self.conn_slot.get() {
             let mut srv = self.engine_template.clone();
             srv.is_password = Arc::new(AtomicBool::new(false));
-            srv.lock_healer = Arc::new(ScreenLockHealer::default());
+            srv.lock_healer = Arc::clone(&self.engine_template.lock_healer);
             let gen = IbusGenericService {
                 core: Arc::clone(&self.core),
             };

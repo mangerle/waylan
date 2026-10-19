@@ -44,6 +44,18 @@ fn assemble_ibus_services(
 ) {
     let loop_wakeup = opts.coordinator.loop_wakeup().cloned();
     let shared_core = Arc::new(Mutex::new(opts.session_core));
+
+    let initial_screen_locked = Connection::session()
+        .ok()
+        .as_ref()
+        .map(super::screensaver::query_initial_screen_saver_active)
+        .unwrap_or(false);
+    let screen_locked_flag = Arc::new(AtomicBool::new(initial_screen_locked));
+
+    let lock_healer = Arc::new(ScreenLockHealer::new(
+        super::screensaver::SystemScreenSaverQuery::with_flag(Arc::clone(&screen_locked_flag)),
+    ));
+
     let engine_srv = IbusEngineService {
         core: Arc::clone(&shared_core),
         reload_requested: opts.reload_requested.clone(),
@@ -52,7 +64,7 @@ fn assemble_ibus_services(
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: opts.suppress_properties,
         is_password: Arc::new(AtomicBool::new(false)),
-        lock_healer: Arc::new(ScreenLockHealer::default()),
+        lock_healer,
     };
 
     let monitor_params = IbusMonitorParams {
@@ -61,6 +73,7 @@ fn assemble_ibus_services(
         reload_requested: opts.reload_requested,
         coordinator: opts.coordinator,
         config_reloader: opts.config_reloader,
+        screen_locked_flag,
     };
 
     (

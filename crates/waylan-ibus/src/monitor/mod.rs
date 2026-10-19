@@ -22,7 +22,9 @@ use zbus::zvariant::Value;
 
 use super::engine::WAYLAN_ENGINE_OBJECT_PATH;
 use super::keys::IbusSessionCore;
-use super::screensaver::{query_initial_screen_saver_active, spawn_screen_saver_listener};
+use super::screensaver::{
+    query_initial_screen_saver_active, spawn_screen_saver_listener_with_flag,
+};
 use super::types::build_input_mode_property;
 use crate::{IbusConfigReloader, IbusShutdownCoordinator};
 
@@ -33,6 +35,7 @@ pub(crate) struct IbusMonitorParams {
     pub(crate) reload_requested: Option<Arc<AtomicBool>>,
     pub(crate) coordinator: IbusShutdownCoordinator,
     pub(crate) config_reloader: Option<Arc<dyn IbusConfigReloader>>,
+    pub(crate) screen_locked_flag: Arc<AtomicBool>,
 }
 
 mod lifecycle;
@@ -144,19 +147,18 @@ pub(crate) fn run_ibus_monitor_loop(
     mut params: IbusMonitorParams,
 ) {
     let mut startup_healing_rounds: u32 = 3;
-    let initial_screen_locked = Connection::session()
-        .ok()
-        .as_ref()
-        .map(query_initial_screen_saver_active)
-        .unwrap_or(false);
+    let initial_screen_locked = params.screen_locked_flag.load(Ordering::Acquire);
 
     if initial_screen_locked {
         shared_core.lock().is_screen_locked = true;
         info!("[微澜 IBus] 启动时检测到系统处于锁屏状态，已进入密码直通保护模式。");
     }
 
-    let (screen_locked_flag, mut listener_handle) =
-        spawn_screen_saver_listener(initial_screen_locked, params.coordinator.clone());
+    let screen_locked_flag = Arc::clone(&params.screen_locked_flag);
+    let mut listener_handle = spawn_screen_saver_listener_with_flag(
+        Arc::clone(&screen_locked_flag),
+        params.coordinator.clone(),
+    );
     let mut last_screen_locked = initial_screen_locked;
     let mut last_voice_active = false;
     let mut last_lock_probe_instant = Instant::now();

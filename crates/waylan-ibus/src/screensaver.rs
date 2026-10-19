@@ -61,13 +61,28 @@ pub(crate) trait ScreenLockQuery: Send + Sync {
     fn is_screen_locked(&self) -> bool;
 }
 
-/// 系统默认锁屏状态查询实现（通过 D-Bus 会话总线探测）
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SystemScreenSaverQuery;
+/// 系统默认锁屏状态查询实现（优先基于被动信号原子标志探测，消除按键路径上的同步 D-Bus 建连阻塞）
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SystemScreenSaverQuery {
+    screen_locked_flag: Option<Arc<AtomicBool>>,
+}
+
+impl SystemScreenSaverQuery {
+    /// 创建绑定被动监听原子标志的系统锁屏查询器
+    pub(crate) fn with_flag(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            screen_locked_flag: Some(flag),
+        }
+    }
+}
 
 impl ScreenLockQuery for SystemScreenSaverQuery {
     fn is_screen_locked(&self) -> bool {
-        query_current_screen_saver_active()
+        if let Some(ref flag) = self.screen_locked_flag {
+            flag.load(Ordering::Acquire)
+        } else {
+            query_current_screen_saver_active()
+        }
     }
 }
 
@@ -86,7 +101,7 @@ pub(crate) struct ScreenLockHealer<Q = SystemScreenSaverQuery> {
 
 impl Default for ScreenLockHealer<SystemScreenSaverQuery> {
     fn default() -> Self {
-        Self::new(SystemScreenSaverQuery)
+        Self::new(SystemScreenSaverQuery::default())
     }
 }
 
@@ -232,16 +247,22 @@ fn handle_screen_saver_signal(msg: &Message, screen_locked: &AtomicBool) -> bool
     false
 }
 
-/// 启动后台常驻 D-Bus 锁屏信号被动监听器
-///
-/// 通过 D-Bus 信号被动订阅（MatchRule）监听桌面锁屏变迁，彻底杜绝在主循环中高频主动轮询同步 RPC。
+/// 启动后台常驻 D-Bus 锁屏信号被动监听器（供测试便捷使用）
+#[cfg(test)]
 pub(crate) fn spawn_screen_saver_listener(
     initial_locked: bool,
     coordinator: IbusShutdownCoordinator,
 ) -> (Arc<AtomicBool>, ScreenSaverListenerHandle) {
     let screen_locked = Arc::new(AtomicBool::new(initial_locked));
-    let screen_locked_clone = Arc::clone(&screen_locked);
+    let handle = spawn_screen_saver_listener_with_flag(Arc::clone(&screen_locked), coordinator);
+    (screen_locked, handle)
+}
 
+/// 基于指定原子锁屏状态标志启动后台常驻 D-Bus 锁屏信号被动监听器
+pub(crate) fn spawn_screen_saver_listener_with_flag(
+    screen_locked_clone: Arc<AtomicBool>,
+    coordinator: IbusShutdownCoordinator,
+) -> ScreenSaverListenerHandle {
     let handle = ThreadBuilder::new()
         .name("waylan-screen-saver-listener".to_string())
         .spawn(move || {
@@ -276,12 +297,9 @@ pub(crate) fn spawn_screen_saver_listener(
         })
         .ok();
 
-    (
-        screen_locked,
-        ScreenSaverListenerHandle {
-            join_handle: handle,
-        },
-    )
+    ScreenSaverListenerHandle {
+        join_handle: handle,
+    }
 }
 
 #[cfg(test)]
