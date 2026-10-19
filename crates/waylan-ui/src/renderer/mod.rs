@@ -15,7 +15,7 @@ use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, ItemMeasure,
 use measure_cache::TextMeasureCache;
 use std::path::Path;
 use tiny_skia::Pixmap;
-use waylan_core::{CandidateBoxState, CandidateViewMode};
+use waylan_core::{CandidateBoxState, CandidateBoxView};
 
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
@@ -339,21 +339,29 @@ impl CandidateBoxRenderer {
 
     /// 渲染单行胶囊候选栏及二级展开浮层卡片
     pub fn render(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
-        match state.view_mode() {
-            CandidateViewMode::Hidden => None,
-            CandidateViewMode::VoiceCapsule => {
+        match state.view() {
+            CandidateBoxView::Hidden => None,
+            CandidateBoxView::VoiceCapsule(voice) => {
                 let mut regions = Vec::with_capacity(4);
-                let pix = capsule::render_voice_capsule_bar(self, state, &mut regions);
+                let pix = capsule::render_voice_capsule_bar(self, voice, &mut regions);
                 self.hit_regions = regions;
                 pix
             }
-            CandidateViewMode::GridExpanded => {
+            CandidateBoxView::GridExpanded {
+                grid_candidates,
+                selected_index,
+            } => {
                 let mut regions = Vec::with_capacity(36);
-                let pix = grid::render_grid_expanded_panel(self, state, &mut regions);
+                let pix = grid::render_grid_expanded_panel(
+                    self,
+                    grid_candidates,
+                    selected_index,
+                    &mut regions,
+                );
                 self.hit_regions = regions;
                 pix
             }
-            CandidateViewMode::Compact | CandidateViewMode::ExpandedCard => {
+            CandidateBoxView::Compact { .. } | CandidateBoxView::ExpandedCard { .. } => {
                 let geom = self.calculate_geometry(state)?;
                 let mut pixmap = Pixmap::new(geom.canvas_w, geom.canvas_h)?;
 

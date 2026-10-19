@@ -354,7 +354,7 @@ fn draw_voice_waveform_bars(
 /// 渲染处于语音听写状态下的动态声波胶囊栏
 pub fn render_voice_capsule_bar(
     renderer: &mut CandidateBoxRenderer,
-    state: &CandidateBoxState,
+    voice: &VoiceBoxState,
     hit_regions: &mut Vec<HitRegion>,
 ) -> Option<Pixmap> {
     let s = renderer.scale.max(0.5);
@@ -363,7 +363,6 @@ pub fn render_voice_capsule_bar(
     let corner_radius: f32 = renderer.theme.corner_radius.max(2.0) * s;
     let font_size = renderer.font_size * s;
 
-    let voice = state.voice.as_ref()?;
     let voice_text = resolve_voice_text(voice);
     let ratios = parse_waveform_ratios(&voice.waveform);
 

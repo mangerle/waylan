@@ -10,7 +10,7 @@ use super::draw::{
 use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
 use super::{CandidateBoxRenderer, DrawTextOptions};
 use tiny_skia::Pixmap;
-use waylan_core::{Candidate, CandidateBoxState};
+use waylan_core::Candidate;
 
 /// 网格大面板布局常量
 const GRID_ROWS: usize = 5;
@@ -86,20 +86,16 @@ fn compute_grid_dimensions(
 /// 渲染 5 行展开大候选词网格面板
 pub fn render_grid_expanded_panel(
     renderer: &mut CandidateBoxRenderer,
-    state: &CandidateBoxState,
+    candidates: &[Candidate],
+    selected_index: usize,
     regions: &mut Vec<HitRegion>,
 ) -> Option<Pixmap> {
     let s = renderer.scale.max(0.5);
-    let candidates_source = if !state.grid_candidates.is_empty() {
-        &state.grid_candidates
-    } else {
-        &state.candidates
-    };
-    if candidates_source.is_empty() {
+    if candidates.is_empty() {
         return None;
     }
 
-    let dims = compute_grid_dimensions(renderer, candidates_source, state.selected_index, s);
+    let dims = compute_grid_dimensions(renderer, candidates, selected_index, s);
     let align = (s.round() as u32).max(1);
     let clamped_w = dims.total_width.ceil().clamp(1.0, 4096.0) as u32;
     let clamped_h = dims.total_height.ceil().clamp(1.0, 2048.0) as u32;
@@ -125,8 +121,8 @@ pub fn render_grid_expanded_panel(
         renderer,
         &mut pixmap,
         GridRenderContext {
-            state,
-            candidates: candidates_source,
+            selected_index,
+            candidates,
             dims: &dims,
             regions,
         },
@@ -138,7 +134,7 @@ pub fn render_grid_expanded_panel(
 
 /// 网格项渲染上下文参数对象
 struct GridRenderContext<'a, 'b> {
-    state: &'a CandidateBoxState,
+    selected_index: usize,
     candidates: &'a [Candidate],
     dims: &'a GridDimensions,
     regions: &'b mut Vec<HitRegion>,
@@ -169,7 +165,7 @@ fn render_grid_items(
         let item_w = ctx.dims.col_widths[col];
         let item_h = ctx.dims.row_height;
 
-        let is_selected = idx == ctx.state.selected_index;
+        let is_selected = idx == ctx.selected_index;
         if is_selected {
             draw_rounded_rect(
                 pixmap,
