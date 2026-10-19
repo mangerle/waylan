@@ -42,6 +42,9 @@ pub(crate) fn spawn_pinyin_import_task(
         .spawn(move || {
             let _guard = TaskRunningGuard(guard_flag);
             let result = import_pinyin_dict_file(&path_str);
+            if result.is_ok() {
+                AppConfig::touch_config_for_reload();
+            }
             let count = UserAdaptiveModel::load_or_replay_wal(AppConfig::user_dict_path())
                 .map(|m| m.total_entries())
                 .unwrap_or(0);
@@ -87,6 +90,9 @@ pub(crate) fn spawn_english_import_task(
                 let mut aux = aux_lock.lock();
                 import_english_dict_file(&path_str, &mut aux)
             };
+            if result.is_ok() {
+                AppConfig::touch_config_for_reload();
+            }
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = win_weak.upgrade() {
                     match result {
@@ -129,6 +135,9 @@ pub(crate) fn spawn_symbols_import_task(
                 let mut aux = aux_lock.lock();
                 import_symbols_dict_file(&path_str, &mut aux)
             };
+            if result.is_ok() {
+                AppConfig::touch_config_for_reload();
+            }
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = win_weak.upgrade() {
                     match result {

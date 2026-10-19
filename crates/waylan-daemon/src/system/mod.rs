@@ -115,12 +115,18 @@ impl ShutdownCoordinator {
 
 /// 收集被监控热重载的配置文件与词库路径及其初始状态签名
 pub fn collect_watched_paths() -> (Vec<PathBuf>, Option<waylan_sys::FileSignature>) {
-    let mut watched_paths = Vec::with_capacity(3);
+    let mut watched_paths = Vec::with_capacity(4);
     if let Some(c_path) = AppConfig::config_path() {
         watched_paths.push(c_path);
     }
     watched_paths.push(CustomPhraseManager::default_path());
     watched_paths.push(AppConfig::user_aux_dict_path());
+    for path in AppConfig::base_dict_search_paths() {
+        if path.exists() {
+            watched_paths.push(path);
+            break;
+        }
+    }
 
     let initial_sig = waylan_sys::compute_initial_signature(&watched_paths);
     (watched_paths, initial_sig)

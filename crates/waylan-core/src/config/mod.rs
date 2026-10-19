@@ -125,6 +125,28 @@ mod tests {
     }
 
     #[test]
+    fn test_touch_file_for_reload() {
+        let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
+        let temp_file = temp_dir.path().join("reload_trigger.toml");
+
+        // 目标文件不存在时，应当自动生成默认文件
+        AppConfig::touch_file_for_reload(&temp_file);
+        assert!(temp_file.exists(), "触发文件不存在时应当被自动创建");
+
+        // 目标文件已存在时，更新时间戳成功
+        let meta1 = fs::metadata(&temp_file).expect("应能读取元数据");
+        let mtime1 = meta1.modified().expect("应能获取修改时间");
+
+        // 短暂休眠后再次 touch
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        AppConfig::touch_file_for_reload(&temp_file);
+
+        let meta2 = fs::metadata(&temp_file).expect("应能读取元数据");
+        let mtime2 = meta2.modified().expect("应能获取修改时间");
+        assert!(mtime2 >= mtime1, "touch 后时间戳应当单调递增或保持最新");
+    }
+
+    #[test]
     fn test_fallback_runtime_dir_is_absolute() {
         let fallback = AppConfig::fallback_runtime_dir();
         assert!(
