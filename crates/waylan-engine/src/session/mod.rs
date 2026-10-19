@@ -305,8 +305,8 @@ impl ImeCoreSession {
         if self.full_width_punct_shortcut.as_ref().is_some_and(|s| {
             s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
         }) {
-            let next_val = !self.punctuation_processor.full_width_punct;
-            self.punctuation_processor.full_width_punct = next_val;
+            let next_val = !self.punctuation_processor.is_full_width_punct();
+            self.punctuation_processor.set_full_width_punct(next_val);
             return Some(ShortcutToggleAction::FullWidthPunct(next_val));
         }
 

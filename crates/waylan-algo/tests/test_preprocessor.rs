@@ -216,7 +216,13 @@ fn test_ctrl_toggle_and_punctuation_options() {
         Some(InputMode::English)
     );
 
-    let mut pp = PunctuationProcessor::with_options(false, false, false, false);
+    let mut pp = PunctuationProcessor::with_options(PunctuationOptions {
+        slash_to_dunhao: false,
+        backslash_to_dunhao: false,
+        protect_digits_punctuation: false,
+        auto_complete_pairs: false,
+        ..Default::default()
+    });
     assert_eq!(
         pp.process_punctuation('/'),
         Some(vec![TextAction::Commit("/".to_string())])
@@ -301,7 +307,7 @@ fn test_url_and_email_context_punctuation() {
 #[test]
 fn test_half_width_punct_mode() {
     let mut pp = PunctuationProcessor::new();
-    pp.full_width_punct = false;
+    pp.set_full_width_punct(false);
 
     // 半角模式下所有标点直接提交半角字符
     assert_eq!(

@@ -15,7 +15,7 @@ pub use conversion::*;
 pub use keymap::KeymapLayout;
 pub use modifiers::*;
 pub use page_keys::*;
-pub use punctuation::PunctuationProcessor;
+pub use punctuation::{PunctuationOptions, PunctuationProcessor};
 pub use shift_toggle::{ShiftToggleStateMachine, ToggleKeyMode};
 
 #[cfg(test)]

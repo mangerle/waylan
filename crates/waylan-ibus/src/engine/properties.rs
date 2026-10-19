@@ -75,8 +75,16 @@ impl IbusEngineService {
             let Ok(mut guard) = self.core.lock() else {
                 return;
             };
-            let next = !guard.runtime.core.punctuation_processor.full_width_punct;
-            guard.runtime.core.punctuation_processor.full_width_punct = next;
+            let next = !guard
+                .runtime
+                .core
+                .punctuation_processor
+                .is_full_width_punct();
+            guard
+                .runtime
+                .core
+                .punctuation_processor
+                .set_full_width_punct(next);
             if let Some(ref flags) = guard.runtime.shared_flags {
                 flags.set_full_width_punct(next);
             }

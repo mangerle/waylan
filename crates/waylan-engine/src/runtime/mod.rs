@@ -155,12 +155,9 @@ impl ImeRuntime {
         crate::factory::reload_engine_resources(&mut self.core.engine, cfg);
 
         self.core.shift_sm.set_toggle_key(cfg.shortcuts.switch_key);
-        self.core.punctuation_processor.slash_to_dunhao = cfg.pinyin.slash_to_dunhao;
-        self.core.punctuation_processor.backslash_to_dunhao = cfg.pinyin.backslash_to_dunhao;
-        self.core.punctuation_processor.protect_digits_punctuation =
-            cfg.pinyin.protect_digits_punctuation;
-        self.core.punctuation_processor.auto_complete_pairs = cfg.pinyin.auto_complete_pairs;
-        self.core.punctuation_processor.full_width_punct = cfg.pinyin.full_width_punct;
+        self.core
+            .punctuation_processor
+            .set_options((&cfg.pinyin).into());
         self.core.page_keys = waylan_core::input::PageKeyConfig::from(cfg.shortcuts.page_keys);
         self.core.traditional_shortcut = ParsedShortcut::parse(&cfg.shortcuts.traditional_shortcut);
         self.core.full_width_char_shortcut =
@@ -220,8 +217,10 @@ impl ImeRuntime {
             }
 
             // 4. 同步全角/半角标点
-            if self.core.punctuation_processor.full_width_punct != snap.full_width_punct {
-                self.core.punctuation_processor.full_width_punct = snap.full_width_punct;
+            if self.core.punctuation_processor.is_full_width_punct() != snap.full_width_punct {
+                self.core
+                    .punctuation_processor
+                    .set_full_width_punct(snap.full_width_punct);
             }
 
             // 5. 同步全角/半角字符
@@ -471,13 +470,13 @@ mod tests {
         // 初始状态验证：引擎默认中文全角标点，尚未同步
         assert_eq!(runtime.core.mode, InputMode::Chinese);
         assert!(!runtime.core.engine.config.traditional_chinese);
-        assert!(runtime.core.punctuation_processor.full_width_punct);
+        assert!(runtime.core.punctuation_processor.is_full_width_punct());
         assert!(!runtime.core.full_width_char);
 
         // 首次同步：将托盘的半角标点同步至运行时
         let mode_changed = runtime.sync_shared_mode();
         assert_eq!(mode_changed, None);
-        assert!(!runtime.core.punctuation_processor.full_width_punct);
+        assert!(!runtime.core.punctuation_processor.is_full_width_punct());
 
         // 外部托盘切换为繁体、全角标点、全角字符、英文
         flags.set_traditional(true);
@@ -489,7 +488,7 @@ mod tests {
         assert_eq!(mode_changed, Some(InputMode::English));
         assert_eq!(runtime.core.mode, InputMode::English);
         assert!(runtime.core.engine.config.traditional_chinese);
-        assert!(runtime.core.punctuation_processor.full_width_punct);
+        assert!(runtime.core.punctuation_processor.is_full_width_punct());
         assert!(runtime.core.full_width_char);
 
         // 再次同步，无状态变化

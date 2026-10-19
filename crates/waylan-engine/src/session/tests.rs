@@ -77,7 +77,7 @@ fn test_ime_core_session_shortcuts() {
         act_punct,
         ImeOutputAction::ShortcutToggled(ShortcutToggleAction::FullWidthPunct(false))
     );
-    assert!(!session.punctuation_processor.full_width_punct);
+    assert!(!session.punctuation_processor.is_full_width_punct());
 }
 
 #[test]

@@ -71,8 +71,14 @@ mod tests {
         runtime.reload_config(&cfg);
 
         // 验证热重载更新了配置开关，同时完整保留了引号开闭状态与最近输入上下文
-        assert!(!runtime.core.punctuation_processor.slash_to_dunhao);
-        assert!(!runtime.core.punctuation_processor.backslash_to_dunhao);
+        assert!(!runtime.core.punctuation_processor.options.slash_to_dunhao);
+        assert!(
+            !runtime
+                .core
+                .punctuation_processor
+                .options
+                .backslash_to_dunhao
+        );
         assert!(runtime.core.punctuation_processor.double_quote_open);
         assert_eq!(
             runtime.core.punctuation_processor.recent_context,

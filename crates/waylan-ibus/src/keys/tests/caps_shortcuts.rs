@@ -169,7 +169,11 @@ fn test_ibus_shared_settings_sync_and_full_width() {
 
     // 默认状态：简体、全角标点、半角字母
     assert!(!core.runtime.core.engine.config.traditional_chinese);
-    assert!(core.runtime.core.punctuation_processor.full_width_punct);
+    assert!(core
+        .runtime
+        .core
+        .punctuation_processor
+        .is_full_width_punct());
     assert!(!core.is_full_width_char());
 
     // 1. 托盘触发切换为繁体
@@ -256,7 +260,11 @@ fn test_ibus_global_shortcuts_toggle() {
     let res_punct = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
     assert!(res_punct.consumed, "标点全半角快捷键必须被消费");
     assert!(
-        !core.runtime.core.punctuation_processor.full_width_punct,
+        !core
+            .runtime
+            .core
+            .punctuation_processor
+            .is_full_width_punct(),
         "标点状态应由全角切换为半角"
     );
     assert!(!flags.is_full_width_punct());
@@ -265,7 +273,10 @@ fn test_ibus_global_shortcuts_toggle() {
     let res_punct2 = core.process_key_event(b'.' as u32, KEY_DOT, IBUS_CONTROL_MASK);
     assert!(res_punct2.consumed);
     assert!(
-        core.runtime.core.punctuation_processor.full_width_punct,
+        core.runtime
+            .core
+            .punctuation_processor
+            .is_full_width_punct(),
         "标点状态应切回全角中文标点"
     );
     assert!(flags.is_full_width_punct());

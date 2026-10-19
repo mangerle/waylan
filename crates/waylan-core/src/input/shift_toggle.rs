@@ -15,7 +15,7 @@ pub type ToggleKeyMode = SwitchKey;
 #[derive(Debug, Default)]
 pub struct ShiftToggleStateMachine {
     /// 当前配置的切换键模式（Shift 或 Ctrl）
-    pub toggle_key: ToggleKeyMode,
+    toggle_key: ToggleKeyMode,
     /// 记录切换修饰键是否处于按下状态
     modifier_pressed: bool,
     /// 记录在修饰键按下期间是否伴随敲击了其他键
@@ -39,6 +39,12 @@ impl ShiftToggleStateMachine {
             modifier_pressed: false,
             other_key_pressed: false,
         }
+    }
+
+    /// 获取当前生效的中英文切换键模式
+    #[inline]
+    pub fn toggle_key(&self) -> ToggleKeyMode {
+        self.toggle_key
     }
 
     /// 重置切换修饰键按下与组合键记忆状态（用于焦点切换或会话失焦）

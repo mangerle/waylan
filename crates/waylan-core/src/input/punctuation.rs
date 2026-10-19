@@ -7,15 +7,14 @@
 
 use crate::TextAction;
 
-/// 智能标点符号处理器
-#[derive(Debug, Clone)]
-pub struct PunctuationProcessor {
-    /// 记录上一次提交的字符是否是数字
-    last_char_was_digit: bool,
-    /// 双引号开闭状态位（false 为待输入左双引号，true 为已输入左双引号待输入右双引号）
-    pub double_quote_open: bool,
-    /// 单引号开闭状态位（false 为待输入左单引号，true 为已输入左单引号待输入右单引号）
-    pub single_quote_open: bool,
+/// 智能标点符号处理选项（参数对象）
+///
+/// # 设计原理
+/// - **实现初衷**：将散落的多个标点特性布尔开关收敛为内聚的参数对象，消除长参数构造方法与布尔盲视。
+/// - **核心优势**：支持整体原子化配置更新与快照比对，并可无缝对接 `PinyinConfig`。
+/// - **代价与局限**：调用方若仅需调整单项参数，需通过结构体更新语法或对应专属方法。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PunctuationOptions {
     /// 是否将斜杠 / 转换为中文顿号 、
     pub slash_to_dunhao: bool,
     /// 是否将反斜杠 \ 转换为中文顿号 、
@@ -26,6 +25,43 @@ pub struct PunctuationProcessor {
     pub auto_complete_pairs: bool,
     /// 是否开启全角标点映射（true 为全角中文标点，false 为半角英文标点）
     pub full_width_punct: bool,
+}
+
+impl Default for PunctuationOptions {
+    fn default() -> Self {
+        Self {
+            slash_to_dunhao: true,
+            backslash_to_dunhao: true,
+            protect_digits_punctuation: true,
+            auto_complete_pairs: true,
+            full_width_punct: true,
+        }
+    }
+}
+
+impl From<&crate::config::PinyinConfig> for PunctuationOptions {
+    fn from(cfg: &crate::config::PinyinConfig) -> Self {
+        Self {
+            slash_to_dunhao: cfg.slash_to_dunhao,
+            backslash_to_dunhao: cfg.backslash_to_dunhao,
+            protect_digits_punctuation: cfg.protect_digits_punctuation,
+            auto_complete_pairs: cfg.auto_complete_pairs,
+            full_width_punct: cfg.full_width_punct,
+        }
+    }
+}
+
+/// 智能标点符号处理器
+#[derive(Debug, Clone)]
+pub struct PunctuationProcessor {
+    /// 标点符号处理器配置选项
+    pub options: PunctuationOptions,
+    /// 记录上一次提交的字符是否是数字
+    last_char_was_digit: bool,
+    /// 双引号开闭状态位（false 为待输入左双引号，true 为已输入左双引号待输入右双引号）
+    pub double_quote_open: bool,
+    /// 单引号开闭状态位（false 为待输入左单引号，true 为已输入左单引号待输入右单引号）
+    pub single_quote_open: bool,
     /// 最近提交或输入的上下文文本缓存（用于无外部应用上下文时感知网址与邮箱模式）
     pub recent_context: String,
 }
@@ -33,14 +69,10 @@ pub struct PunctuationProcessor {
 impl Default for PunctuationProcessor {
     fn default() -> Self {
         Self {
+            options: PunctuationOptions::default(),
             last_char_was_digit: false,
             double_quote_open: false,
             single_quote_open: false,
-            slash_to_dunhao: true,
-            backslash_to_dunhao: true,
-            protect_digits_punctuation: true,
-            auto_complete_pairs: true,
-            full_width_punct: true,
             recent_context: String::with_capacity(128),
         }
     }
@@ -51,33 +83,49 @@ impl PunctuationProcessor {
         Self::default()
     }
 
-    /// 使用指定的标点特性开关构造处理器
-    pub fn with_options(
-        slash_to_dunhao: bool,
-        backslash_to_dunhao: bool,
-        protect_digits_punctuation: bool,
-        auto_complete_pairs: bool,
-    ) -> Self {
+    /// 使用指定的标点特性配置选项构造处理器
+    pub fn with_options(options: PunctuationOptions) -> Self {
         Self {
+            options,
             last_char_was_digit: false,
             double_quote_open: false,
             single_quote_open: false,
-            slash_to_dunhao,
-            backslash_to_dunhao,
-            protect_digits_punctuation,
-            auto_complete_pairs,
-            full_width_punct: true,
             recent_context: String::with_capacity(128),
         }
     }
 
-    /// 从新配置实例同步标点特性布尔开关，同时完整保留当前引号开闭状态与最近输入上下文
+    /// 获取当前标点特性配置选项的不可变引用
+    #[inline]
+    pub fn options(&self) -> &PunctuationOptions {
+        &self.options
+    }
+
+    /// 获取当前标点特性配置选项的可变引用
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut PunctuationOptions {
+        &mut self.options
+    }
+
+    /// 整体更新标点特性配置选项（完整保留当前引号开闭状态与最近输入上下文）
+    pub fn set_options(&mut self, options: PunctuationOptions) {
+        self.options = options;
+    }
+
+    /// 从另一处理器实例同步标点特性配置选项（完整保留当前引号开闭状态与最近输入上下文）
     pub fn apply_options_from(&mut self, other: &Self) {
-        self.slash_to_dunhao = other.slash_to_dunhao;
-        self.backslash_to_dunhao = other.backslash_to_dunhao;
-        self.protect_digits_punctuation = other.protect_digits_punctuation;
-        self.auto_complete_pairs = other.auto_complete_pairs;
-        self.full_width_punct = other.full_width_punct;
+        self.options = other.options;
+    }
+
+    /// 获取当前是否开启全角标点映射
+    #[inline]
+    pub fn is_full_width_punct(&self) -> bool {
+        self.options.full_width_punct
+    }
+
+    /// 设置全角标点映射开关
+    #[inline]
+    pub fn set_full_width_punct(&mut self, full_width_punct: bool) {
+        self.options.full_width_punct = full_width_punct;
     }
 
     /// 重置成对引号的开闭记忆状态
@@ -193,7 +241,7 @@ impl PunctuationProcessor {
         buffer: &str,
     ) -> Option<Vec<TextAction>> {
         // 0. 半角标点模式：直接提交原始半角英文字符，不触发中文全角映射与成对符号转换
-        if !self.full_width_punct {
+        if !self.options.full_width_punct {
             self.last_char_was_digit = false;
             return Some(vec![TextAction::Commit(ch.to_string())]);
         }
@@ -205,7 +253,7 @@ impl PunctuationProcessor {
         }
 
         // 2. 数字间/数字后符号保护（例如 12:00, 3.14, 2026/10/10，保持英文半角符号）
-        if self.protect_digits_punctuation
+        if self.options.protect_digits_punctuation
             && self.last_char_was_digit
             && (ch == ':' || ch == '.' || ch == '/')
         {
@@ -227,7 +275,7 @@ impl PunctuationProcessor {
     /// 处理括号与引号等成对符号
     fn handle_paired_punctuation(&mut self, ch: char) -> Option<Vec<TextAction>> {
         match ch {
-            '(' => Some(if self.auto_complete_pairs {
+            '(' => Some(if self.options.auto_complete_pairs {
                 vec![
                     TextAction::Commit("（）".to_string()),
                     TextAction::MoveCursor(-1),
@@ -236,7 +284,7 @@ impl PunctuationProcessor {
                 vec![TextAction::Commit("（".to_string())]
             }),
             ')' => Some(vec![TextAction::Commit("）".to_string())]),
-            '<' => Some(if self.auto_complete_pairs {
+            '<' => Some(if self.options.auto_complete_pairs {
                 vec![
                     TextAction::Commit("《》".to_string()),
                     TextAction::MoveCursor(-1),
@@ -245,7 +293,7 @@ impl PunctuationProcessor {
                 vec![TextAction::Commit("《".to_string())]
             }),
             '>' => Some(vec![TextAction::Commit("》".to_string())]),
-            '[' => Some(if self.auto_complete_pairs {
+            '[' => Some(if self.options.auto_complete_pairs {
                 vec![
                     TextAction::Commit("【】".to_string()),
                     TextAction::MoveCursor(-1),
@@ -254,7 +302,7 @@ impl PunctuationProcessor {
                 vec![TextAction::Commit("【".to_string())]
             }),
             ']' => Some(vec![TextAction::Commit("】".to_string())]),
-            '{' => Some(if self.auto_complete_pairs {
+            '{' => Some(if self.options.auto_complete_pairs {
                 vec![
                     TextAction::Commit("｛｝".to_string()),
                     TextAction::MoveCursor(-1),
@@ -264,7 +312,7 @@ impl PunctuationProcessor {
             }),
             '}' => Some(vec![TextAction::Commit("｝".to_string())]),
             '"' => {
-                if self.auto_complete_pairs {
+                if self.options.auto_complete_pairs {
                     Some(vec![
                         TextAction::Commit("“”".to_string()),
                         TextAction::MoveCursor(-1),
@@ -281,7 +329,7 @@ impl PunctuationProcessor {
                 }
             }
             '\'' => {
-                if self.auto_complete_pairs {
+                if self.options.auto_complete_pairs {
                     Some(vec![
                         TextAction::Commit("‘’".to_string()),
                         TextAction::MoveCursor(-1),
@@ -307,11 +355,15 @@ impl PunctuationProcessor {
             ',' => Some(vec![TextAction::Commit("，".to_string())]),
             '.' => Some(vec![TextAction::Commit("。".to_string())]),
             '/' => {
-                let s = if self.slash_to_dunhao { "、" } else { "/" };
+                let s = if self.options.slash_to_dunhao {
+                    "、"
+                } else {
+                    "/"
+                };
                 Some(vec![TextAction::Commit(s.to_string())])
             }
             '\\' => {
-                let s = if self.backslash_to_dunhao {
+                let s = if self.options.backslash_to_dunhao {
                     "、"
                 } else {
                     "\\"

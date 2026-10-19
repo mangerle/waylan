@@ -206,7 +206,11 @@ impl IbusEngineService {
             let _ = guard.sync_shared_mode();
             guard.sync_shared_settings();
             let trad = guard.runtime.core.engine.config.traditional_chinese;
-            let punct = guard.runtime.core.punctuation_processor.full_width_punct;
+            let punct = guard
+                .runtime
+                .core
+                .punctuation_processor
+                .is_full_width_punct();
             let char_full = guard.is_full_width_char();
             (
                 guard.runtime.core.mode,
