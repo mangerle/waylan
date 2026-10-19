@@ -195,31 +195,15 @@ impl CandidateBoxRenderer {
     }
 
     /// 计算胶囊候选栏与展开浮层的几何尺寸与画布规格
-    fn calculate_geometry<'a>(
+    /// 度量二级展开卡片几何尺寸与相对位置
+    fn measure_popup_dimensions<'a>(
         &mut self,
         state: &'a CandidateBoxState,
-    ) -> Option<CandidateBoxGeometry<'a>> {
-        let s = self.scale.max(0.5);
-        let bar_height: f32 = 38.0 * s;
-        let padding_h: f32 = self.theme.padding.max(4.0) * s;
-        let corner_radius: f32 = self.theme.corner_radius.max(2.0) * s;
-        let item_gap: f32 = 14.0 * s;
-        let font_size = self.font_size * s;
-
-        let (measured_items, total_bar_width) = measure_candidates_bar(
-            LayoutParams {
-                candidates: &state.candidates,
-                selected_index: state.selected_index,
-                preedit: &state.preedit,
-                mode_badge: &state.mode_badge,
-                s,
-                padding_h,
-                item_gap,
-                font_size,
-            },
-            |text, size| self.measure_text(text, size),
-        );
-
+        s: f32,
+        font_size: f32,
+        padding_h: f32,
+        measured_items: &[ItemMeasure<'a>],
+    ) -> (bool, &'a [String], f32, f32, f32, f32) {
         let active_cand = state.candidates.get(state.selected_index);
         let has_active_sub = state.is_expanded()
             && active_cand
@@ -257,19 +241,18 @@ impl CandidateBoxRenderer {
             .unwrap_or(padding_h);
         let popup_x = active_item_x.max(padding_h);
 
-        let raw_w = if has_active_sub {
-            total_bar_width.max(popup_x + popup_w + padding_h)
-        } else {
-            total_bar_width
-        }
-        .ceil();
-        let raw_h = if has_active_sub {
-            bar_height + 6.0 * s + popup_h
-        } else {
-            bar_height
-        }
-        .ceil();
+        (
+            has_active_sub,
+            sub_candidates,
+            popup_x,
+            popup_w,
+            popup_h,
+            row_height,
+        )
+    }
 
+    /// 校验原始宽高边界并计算对齐后的画布物理像素规格
+    fn calculate_aligned_canvas_size(raw_w: f32, raw_h: f32, s: f32) -> Option<(u32, u32)> {
         if raw_w > 4096.0 || raw_h > 2048.0 {
             log::warn!(
                 "[候选框渲染] 候选框画布尺寸超出上限并进行安全截断，原始尺寸: {}x{}，安全上限: 4096x2048",
@@ -285,8 +268,55 @@ impl CandidateBoxRenderer {
         let canvas_h = clamped_h.div_ceil(align).saturating_mul(align);
 
         if canvas_w == 0 || canvas_h == 0 {
-            return None;
+            None
+        } else {
+            Some((canvas_w, canvas_h))
         }
+    }
+
+    /// 计算胶囊候选栏与展开浮层的几何尺寸与画布规格
+    fn calculate_geometry<'a>(
+        &mut self,
+        state: &'a CandidateBoxState,
+    ) -> Option<CandidateBoxGeometry<'a>> {
+        let s = self.scale.max(0.5);
+        let bar_height: f32 = 38.0 * s;
+        let padding_h: f32 = self.theme.padding.max(4.0) * s;
+        let corner_radius: f32 = self.theme.corner_radius.max(2.0) * s;
+        let item_gap: f32 = 14.0 * s;
+        let font_size = self.font_size * s;
+
+        let (measured_items, total_bar_width) = measure_candidates_bar(
+            LayoutParams {
+                candidates: &state.candidates,
+                selected_index: state.selected_index,
+                preedit: &state.preedit,
+                mode_badge: &state.mode_badge,
+                s,
+                padding_h,
+                item_gap,
+                font_size,
+            },
+            |text, size| self.measure_text(text, size),
+        );
+
+        let (has_active_sub, sub_candidates, popup_x, popup_w, popup_h, row_height) =
+            self.measure_popup_dimensions(state, s, font_size, padding_h, &measured_items);
+
+        let raw_w = if has_active_sub {
+            total_bar_width.max(popup_x + popup_w + padding_h)
+        } else {
+            total_bar_width
+        }
+        .ceil();
+        let raw_h = if has_active_sub {
+            bar_height + 6.0 * s + popup_h
+        } else {
+            bar_height
+        }
+        .ceil();
+
+        let (canvas_w, canvas_h) = Self::calculate_aligned_canvas_size(raw_w, raw_h, s)?;
 
         Some(CandidateBoxGeometry {
             measured_items,
