@@ -8,11 +8,6 @@
 //!   3. 架构对齐：与 V2 会话的设计哲学保持一致。
 //! - **代价与局限**：深层字段访问需通过子结构体路径（如 `session.protocol.active_context`）。
 
-use std::path::PathBuf;
-use std::sync::{atomic::AtomicBool, Arc};
-
-use waylan_sys::fs_watcher::InotifyWatcher;
-use waylan_sys::LoopWakeup;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_keyboard::WlKeyboard, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -21,8 +16,6 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrL
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
 use crate::protocol_v1::input_method_v1::zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1;
 use crate::surface::CandidateSurfaceManager;
-
-use super::V1ReloadCallback;
 
 /// Wayland V1 协议原生对象句柄与事务同步上下文
 #[derive(Default)]
@@ -54,19 +47,6 @@ pub struct WaylandV1SurfaceContext {
     pub active_buffer: Option<WlBuffer>,
 }
 
-/// Wayland V1 外部环境监控与会话生命周期协调器
-#[derive(Default)]
-pub struct WaylandV1WatcherContext {
-    /// 外部注入的配置与词库热重载回调函数
-    pub reload_callback: Option<V1ReloadCallback>,
-    /// 监控外部进程修改的配置文件与词库路径列表
-    pub watched_paths: Vec<PathBuf>,
-    /// 上次记录的被监控文件最新状态签名
-    pub last_watched_mtime: Option<waylan_sys::FileSignature>,
-    /// 基于 Linux inotify 的配置文件与词库变更监控器
-    pub inotify_watcher: Option<InotifyWatcher>,
-    /// 事件循环跨线程唤醒器
-    pub loop_wakeup: Option<LoopWakeup>,
-    /// 与外部系统托盘共享的优雅退出请求标志
-    pub exit_requested: Option<Arc<AtomicBool>>,
-}
+/// Wayland V1 外部环境监控与会话生命周期协调器（统合类型别名）
+pub type WaylandV1WatcherContext =
+    crate::session_common::WaylandWatcherContext<super::WaylanV1Session>;

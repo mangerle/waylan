@@ -5,14 +5,88 @@
 //! - **核心优势**：将热重载检测、原子状态同步与修饰键掩码判定收敛为单一真相源（Single Source of Truth）。
 //! - **代价与局限**：具体文件监控与候选框装配已解耦至 `watcher` 与 `surface::state_builder` 独立模块。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 
 use waylan_core::input::{update_modifier_masks, ModifierState, MOD_CAPS};
+use waylan_core::{AppConfig, SharedInputFlags, VoiceProvider};
+use waylan_engine::ImeRuntime;
+use waylan_sys::LoopWakeup;
+use waylan_ui::CandidateBoxRenderer;
 
 pub use crate::surface::state_builder::*;
 pub use waylan_core::input::sync_mode_from_shared_flags;
 pub use waylan_engine::{apply_default_engine_reload, apply_default_runtime_reload};
 pub use waylan_sys::fs_watcher::*;
+
+/// 会话热重载回调闭包契约
+pub type SessionReloadCallback<S> = Box<dyn FnMut(&mut S) + Send>;
+
+/// Wayland 外部环境监控与会话生命周期协调器（统合 V1 与 V2 镜像结构）
+pub struct WaylandWatcherContext<S> {
+    /// 外部注入的配置与词库热重载回调函数
+    pub reload_callback: Option<SessionReloadCallback<S>>,
+    /// 监控外部进程修改的配置文件与词库路径列表
+    pub watched_paths: Vec<PathBuf>,
+    /// 上次记录的被监控文件最新状态签名
+    pub last_watched_mtime: Option<FileSignature>,
+    /// 基于 Linux inotify 的配置文件与词库变更监控器
+    pub inotify_watcher: Option<InotifyWatcher>,
+    /// 事件循环跨线程唤醒器
+    pub loop_wakeup: Option<LoopWakeup>,
+    /// 与外部系统托盘共享的优雅退出请求标志
+    pub exit_requested: Option<Arc<AtomicBool>>,
+}
+
+impl<S> Default for WaylandWatcherContext<S> {
+    fn default() -> Self {
+        Self {
+            reload_callback: None,
+            watched_paths: Vec::new(),
+            last_watched_mtime: None,
+            inotify_watcher: None,
+            loop_wakeup: None,
+            exit_requested: None,
+        }
+    }
+}
+
+/// Wayland 会话装配环境参数（用于消除 V1 与 V2 镜像赋值代码）
+pub struct SessionSetupOptions<'a> {
+    pub renderer: CandidateBoxRenderer,
+    pub cfg: &'a AppConfig,
+    pub watched_paths: Vec<PathBuf>,
+    pub initial_mtime: Option<FileSignature>,
+    pub shared_flags: Option<SharedInputFlags>,
+    pub mode_notify_tx: Option<SyncSender<()>>,
+    pub reload_requested: Option<Arc<AtomicBool>>,
+    pub exit_requested: Option<Arc<AtomicBool>>,
+    pub loop_wakeup: Option<LoopWakeup>,
+    pub voice_provider: Option<Box<dyn VoiceProvider>>,
+}
+
+/// 统一为会话上下文应用运行参数、配置与监控回调
+pub fn apply_session_setup<S: 'static>(
+    runtime: &mut ImeRuntime,
+    renderer: &mut CandidateBoxRenderer,
+    watcher: &mut WaylandWatcherContext<S>,
+    opts: SessionSetupOptions<'_>,
+    reload_cb: fn(&mut S),
+) {
+    *renderer = opts.renderer;
+    watcher.watched_paths = opts.watched_paths;
+    watcher.last_watched_mtime = opts.initial_mtime;
+    runtime.shared_flags = opts.shared_flags;
+    runtime.mode_notify_tx = opts.mode_notify_tx;
+    runtime.reload_requested = opts.reload_requested;
+    runtime.voice_manager = opts.voice_provider;
+    watcher.exit_requested = opts.exit_requested;
+    watcher.loop_wakeup = opts.loop_wakeup;
+    watcher.reload_callback = Some(Box::new(reload_cb));
+    runtime.reload_config(opts.cfg);
+}
 
 /// 构造默认的用户词库过滤回调（忽略短时间内的 WAL 内部写落盘事件）
 pub fn default_user_dict_filter() -> DirEventFilter {

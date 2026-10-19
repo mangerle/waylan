@@ -25,6 +25,7 @@ use wayland_client::Connection;
 use self::globals::{bind_session_v1_globals, bind_session_v2_globals};
 use self::poll::run_session_loop_step;
 use crate::error::WaylandRunnerError;
+use crate::session_common::{apply_session_setup, SessionSetupOptions};
 use crate::session_v1::{WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext};
 use crate::session_v2::WaylanV2Session;
 
@@ -184,20 +185,31 @@ pub struct WaylandSessionOptions<'a> {
 /// # Errors
 /// 当合成器无法连接或底层协议严重异常且无法降级时返回错误。
 pub fn run_wayland_session(opts: WaylandSessionOptions<'_>) -> Result<(), WaylandRunnerError> {
-    if opts.prefer_v2 {
+    let prefer_v2 = opts.prefer_v2;
+    let engine = opts.engine;
+    let setup_opts = SessionSetupOptions {
+        renderer: opts.renderer,
+        cfg: opts.cfg,
+        watched_paths: opts.watched_paths,
+        initial_mtime: opts.initial_mtime,
+        shared_flags: opts.shared_flags,
+        mode_notify_tx: opts.mode_notify_tx,
+        reload_requested: opts.reload_requested,
+        exit_requested: opts.exit_requested.clone(),
+        loop_wakeup: opts.loop_wakeup.clone(),
+        voice_provider: opts.voice_provider,
+    };
+
+    if prefer_v2 {
         info!("[微澜 Wayland] 启用现代 Wayland V2 协议会话。");
-        let mut session_v2 = WaylanV2Session::new(opts.engine);
-        session_v2.surface.surface_manager.renderer = opts.renderer;
-        session_v2.watcher.watched_paths = opts.watched_paths;
-        session_v2.watcher.last_watched_mtime = opts.initial_mtime;
-        session_v2.runtime.shared_flags = opts.shared_flags;
-        session_v2.runtime.mode_notify_tx = opts.mode_notify_tx;
-        session_v2.runtime.reload_requested = opts.reload_requested;
-        session_v2.runtime.voice_manager = opts.voice_provider;
-        session_v2.watcher.exit_requested = opts.exit_requested.clone();
-        session_v2.watcher.loop_wakeup = opts.loop_wakeup.clone();
-        session_v2.watcher.reload_callback = Some(Box::new(reload_wayland_session));
-        session_v2.runtime.reload_config(opts.cfg);
+        let mut session_v2 = WaylanV2Session::new(engine);
+        apply_session_setup(
+            &mut session_v2.runtime,
+            &mut session_v2.surface.surface_manager.renderer,
+            &mut session_v2.watcher,
+            setup_opts,
+            reload_wayland_session,
+        );
 
         match run_session_v2_loop_fallible(session_v2) {
             Ok(()) => Ok(()),
@@ -235,18 +247,14 @@ pub fn run_wayland_session(opts: WaylandSessionOptions<'_>) -> Result<(), Waylan
         }
     } else {
         info!("[微澜 Wayland] 启用兼容 Wayland V1 协议会话。");
-        let mut session_v1 = WaylanV1Session::with_engine(opts.engine);
-        session_v1.surface.surface_manager.renderer = opts.renderer;
-        session_v1.watcher.watched_paths = opts.watched_paths;
-        session_v1.watcher.last_watched_mtime = opts.initial_mtime;
-        session_v1.runtime.shared_flags = opts.shared_flags;
-        session_v1.runtime.mode_notify_tx = opts.mode_notify_tx;
-        session_v1.runtime.reload_requested = opts.reload_requested;
-        session_v1.runtime.voice_manager = opts.voice_provider;
-        session_v1.watcher.exit_requested = opts.exit_requested;
-        session_v1.watcher.loop_wakeup = opts.loop_wakeup;
-        session_v1.watcher.reload_callback = Some(Box::new(reload_wayland_session));
-        session_v1.runtime.reload_config(opts.cfg);
+        let mut session_v1 = WaylanV1Session::with_engine(engine);
+        apply_session_setup(
+            &mut session_v1.runtime,
+            &mut session_v1.surface.surface_manager.renderer,
+            &mut session_v1.watcher,
+            setup_opts,
+            reload_wayland_session,
+        );
         run_session_v1_loop(session_v1)
     }
 }

@@ -9,12 +9,8 @@
 //! - **代价与局限**：
 //!   深层字段访问需通过子结构体路径（如 `session.focus.is_active`）。
 
-use std::path::PathBuf;
-use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
-use waylan_sys::fs_watcher::InotifyWatcher;
-use waylan_sys::LoopWakeup;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_pointer::WlPointer, wl_shm::WlShm, wl_surface::WlSurface,
 };
@@ -24,8 +20,6 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
 use crate::surface::{CandidateSurfaceManager, CursorRect};
-
-use super::ReloadCallback;
 
 /// Wayland V2 核心输入法扩展协议句柄与事务同步上下文
 #[derive(Default)]
@@ -99,19 +93,6 @@ pub struct WaylandV2KeyboardTracker {
     pub repeat_state: Option<(u32, Instant)>,
 }
 
-/// Wayland V2 外部环境监控与会话生命周期协调器
-#[derive(Default)]
-pub struct WaylandV2WatcherContext {
-    /// 外部注入的配置与词库热重载回调函数
-    pub reload_callback: Option<ReloadCallback>,
-    /// 监控外部进程修改的配置文件与词库路径列表
-    pub watched_paths: Vec<PathBuf>,
-    /// 上次记录的被监控文件最新状态签名
-    pub last_watched_mtime: Option<waylan_sys::FileSignature>,
-    /// 基于 Linux inotify 的配置文件与词库变更监控器
-    pub inotify_watcher: Option<InotifyWatcher>,
-    /// 事件循环跨线程唤醒器
-    pub loop_wakeup: Option<LoopWakeup>,
-    /// 与外部系统托盘共享的优雅退出请求标志
-    pub exit_requested: Option<Arc<AtomicBool>>,
-}
+/// Wayland V2 外部环境监控与会话生命周期协调器（统合类型别名）
+pub type WaylandV2WatcherContext =
+    crate::session_common::WaylandWatcherContext<super::WaylanV2Session>;
