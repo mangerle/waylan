@@ -35,9 +35,8 @@ impl SpatialTypoCorrector {
         candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.score.cmp(&a.0.score)));
 
         let mut deduped = Vec::with_capacity(3);
-        let mut seen = std::collections::HashSet::with_capacity(8);
         for (cand, _) in candidates {
-            if seen.insert(cand.text.clone()) {
+            if !deduped.iter().any(|d: &AlgoCandidate| d.text == cand.text) {
                 deduped.push(cand);
                 if deduped.len() >= 3 {
                     break;

@@ -339,9 +339,6 @@ impl AlgoEngine {
             return;
         }
 
-        let mut injected = Vec::with_capacity(candidates.len() + prefix_items.len());
-        let mut seen = HashSet::with_capacity(candidates.len() + prefix_items.len());
-
         let full_len_count = candidates
             .iter()
             .take_while(|c| {
@@ -350,21 +347,20 @@ impl AlgoEngine {
             .count();
         let keep_count = full_len_count.clamp(2, 3).min(candidates.len());
 
-        for c in candidates.drain(..keep_count) {
-            if seen.insert(c.text.clone()) {
-                injected.push(c);
-            }
+        let mut injected = Vec::with_capacity(candidates.len() + prefix_items.len());
+        injected.extend(candidates.drain(..keep_count));
+        injected.extend(prefix_items);
+        injected.append(candidates);
+
+        let mut seen = HashSet::with_capacity(injected.len());
+        let mut keep = Vec::with_capacity(injected.len());
+        for item in &injected {
+            keep.push(seen.insert(item.text.as_str()));
         }
-        for pi in prefix_items {
-            if seen.insert(pi.text.clone()) {
-                injected.push(pi);
-            }
-        }
-        for c in candidates.drain(..) {
-            if seen.insert(c.text.clone()) {
-                injected.push(c);
-            }
-        }
+        drop(seen);
+
+        let mut keep_iter = keep.into_iter();
+        injected.retain(|_| keep_iter.next().unwrap_or(false));
 
         *candidates = injected;
     }
