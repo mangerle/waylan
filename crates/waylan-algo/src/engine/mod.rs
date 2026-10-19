@@ -34,11 +34,10 @@ use crate::types::{AlgoCandidate, AlgoConfig, ImportedDictEntry};
 /// - **实现初衷**：将模式分流、DAG 拼写图、词典倒排、Viterbi 解码、自适应学习与后处理流水线封装为高内聚门面，
 ///   向输入法上层提供极简的按键响应与选词接口。
 /// - **核心优势**：完全纯 Rust 实现，零 C++ 依赖；全生命周期无锁、无异步竞态；100% 内存安全与可测试。
-/// - **解构架构**：解构为高内聚的四大子系统：
+/// - **解构架构**：解构为高内聚的三大子系统：
 ///   1. [`LexiconResources`]：只读系统词典、实体保护、自定义短语及简繁字典资源；
-///   2. [`CandidateViewport`]：分页高亮、候选词视口缓存及二级卡片展开交互状态；
-///   3. [`UserAdaptiveState`]：用户个人词频模型与预写日志 (WAL) 持久化生命周期；
-///   4. [`CompositionBuffer`]：增量击键编辑缓冲区、光标跟踪、分段累积与预编辑切分缓存。
+///   2. [`UserAdaptiveState`]：用户个人词频模型与预写日志 (WAL) 持久化生命周期；
+///   3. [`CompositionBuffer`]：增量击键编辑缓冲区、光标跟踪、分段累积与预编辑切分缓存。
 #[derive(Debug, Default)]
 pub struct AlgoEngine {
     /// 静态系统词典与语言学规则资源包

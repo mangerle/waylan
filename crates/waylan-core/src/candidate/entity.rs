@@ -99,16 +99,4 @@ impl Candidate {
         self.word_id = word_id;
         self
     }
-
-    /// 恒等转换为自身（平滑兼容旧 API 消除重分配开销）
-    #[inline]
-    pub fn to_core_candidate(&self) -> Self {
-        self.clone()
-    }
-
-    /// 消费所有权恒等转换（平滑兼容旧 API 消除重分配开销）
-    #[inline]
-    pub fn into_core_candidate(self) -> Self {
-        self
-    }
 }
