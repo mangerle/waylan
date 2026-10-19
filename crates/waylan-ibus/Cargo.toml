@@ -15,3 +15,6 @@ serde.workspace = true
 thiserror.workspace = true
 rustix.workspace = true
 parking_lot.workspace = true
+
+[dev-dependencies]
+waylan-voice = { path = "../waylan-voice" }

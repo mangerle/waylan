@@ -6,6 +6,7 @@
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
 use std::sync::mpsc::SyncSender;
+use waylan_core::input::VoiceProvider;
 use waylan_core::state::SharedInputFlags;
 use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
 use waylan_engine::{AlgoEngine, ImeCoreSession, ImeRuntime};
@@ -52,6 +53,13 @@ impl IbusSessionCore {
             candidate_orientation: CandidateOrientation::default(),
             active_engine_path: None,
         }
+    }
+
+    /// 注入外部语音提供者实例（遵循依赖倒置 DIP 原则）
+    #[inline]
+    pub fn with_voice_provider(mut self, provider: Box<dyn VoiceProvider>) -> Self {
+        self.runtime.voice_manager = Some(provider);
+        self
     }
 
     /// 获取只读核心会话状态引用

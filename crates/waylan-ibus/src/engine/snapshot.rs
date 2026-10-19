@@ -104,12 +104,16 @@ impl UiSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use waylan_core::VoiceConfig;
     use waylan_engine::{AlgoConfig, AlgoEngine};
+    use waylan_voice::VoiceInteractionManager;
 
     #[test]
     fn test_ui_snapshot_voice_isolation() {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-        let mut core = IbusSessionCore::new(engine);
+        let mut core = IbusSessionCore::new(engine).with_voice_provider(Box::new(
+            VoiceInteractionManager::new(VoiceConfig::default()),
+        ));
 
         // 模拟正常输入状态
         let _ = core.process_key_event(b'n' as u32, 49, 0);

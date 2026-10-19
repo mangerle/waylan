@@ -111,14 +111,16 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
         }
     );
 
-    let mut session_core = IbusSessionCore::new(opts.engine);
+    let initial_cfg = AppConfig::load_or_create();
+    let mut session_core = IbusSessionCore::new(opts.engine).with_voice_provider(Box::new(
+        waylan_voice::VoiceInteractionManager::new(initial_cfg.voice.clone()),
+    ));
     if let Some(tray) = opts.tray {
         session_core.attach_tray(
             tray.shared_flags().clone(),
             opts.tray.as_ref().map(|t| t.icon_notifier()),
         );
     }
-    let initial_cfg = AppConfig::load_or_create();
     apply_config_to_ibus_core(&initial_cfg, &mut session_core);
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {

@@ -15,7 +15,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use log::{info, warn};
-use waylan_core::{AppConfig, SharedInputFlags, ThemeMode};
+use waylan_core::{AppConfig, SharedInputFlags, ThemeMode, VoiceProvider};
 use waylan_engine::{AlgoEngine, ImeRuntime};
 use waylan_sys::{FileSignature, LoopWakeup};
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
@@ -176,6 +176,7 @@ pub struct WaylandSessionOptions<'a> {
     pub reload_requested: Option<Arc<AtomicBool>>,
     pub exit_requested: Option<Arc<AtomicBool>>,
     pub loop_wakeup: Option<LoopWakeup>,
+    pub voice_provider: Option<Box<dyn VoiceProvider>>,
 }
 
 /// 统一启动并运行 Wayland 输入法事件循环（支持 V2 优先并在必要时自动优雅降级至 V1）
@@ -192,6 +193,7 @@ pub fn run_wayland_session(opts: WaylandSessionOptions<'_>) -> Result<(), Waylan
         session_v2.runtime.shared_flags = opts.shared_flags;
         session_v2.runtime.mode_notify_tx = opts.mode_notify_tx;
         session_v2.runtime.reload_requested = opts.reload_requested;
+        session_v2.runtime.voice_manager = opts.voice_provider;
         session_v2.watcher.exit_requested = opts.exit_requested.clone();
         session_v2.watcher.loop_wakeup = opts.loop_wakeup.clone();
         session_v2.watcher.reload_callback = Some(Box::new(reload_wayland_session));
@@ -240,6 +242,7 @@ pub fn run_wayland_session(opts: WaylandSessionOptions<'_>) -> Result<(), Waylan
         session_v1.runtime.shared_flags = opts.shared_flags;
         session_v1.runtime.mode_notify_tx = opts.mode_notify_tx;
         session_v1.runtime.reload_requested = opts.reload_requested;
+        session_v1.runtime.voice_manager = opts.voice_provider;
         session_v1.watcher.exit_requested = opts.exit_requested;
         session_v1.watcher.loop_wakeup = opts.loop_wakeup;
         session_v1.watcher.reload_callback = Some(Box::new(reload_wayland_session));

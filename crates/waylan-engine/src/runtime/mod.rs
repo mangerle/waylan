@@ -15,8 +15,6 @@ use waylan_algo::AlgoEngine;
 use waylan_core::input::VoiceProvider;
 use waylan_core::state::SharedInputFlags;
 use waylan_core::ParsedShortcut;
-#[cfg(feature = "voice")]
-use waylan_core::VoiceConfig;
 
 pub mod candidate_builder;
 pub mod key_dispatcher;
@@ -53,18 +51,11 @@ impl Default for ImeRuntime {
 }
 
 impl ImeRuntime {
-    /// 使用指定的底层核心会话创建统一交互运行时
+    /// 使用指定的底层核心会话创建统一交互运行时（默认无语音注入）
     pub fn new(core: ImeCoreSession) -> Self {
-        #[cfg(feature = "voice")]
-        let voice_manager: Option<Box<dyn VoiceProvider>> = Some(Box::new(
-            waylan_voice::VoiceInteractionManager::new(VoiceConfig::default()),
-        ));
-        #[cfg(not(feature = "voice"))]
-        let voice_manager: Option<Box<dyn VoiceProvider>> = None;
-
         Self {
             core,
-            voice_manager,
+            voice_manager: None,
             shared_flags: None,
             mode_notify_tx: None,
             reload_requested: None,

@@ -3,15 +3,31 @@ use super::super::keyval::{IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK}
 use std::thread;
 use std::time::Duration;
 use waylan_core::input::*;
-use waylan_core::VoiceEngineType;
+use waylan_core::{VoiceConfig, VoiceEngineType};
 use waylan_engine::{AlgoConfig, AlgoEngine};
+use waylan_voice::VoiceInteractionManager;
 
 const KEY_V: u32 = 47;
 
+fn create_test_core() -> IbusSessionCore {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    IbusSessionCore::new(engine).with_voice_provider(Box::new(VoiceInteractionManager::new(
+        VoiceConfig::default(),
+    )))
+}
+
 #[test]
-fn test_ibus_voice_input_disabled_by_default() {
+fn test_ibus_voice_input_unconfigured_passthrough() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
+    assert!(core.runtime.voice_manager.is_none());
+    let res = core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
+    assert!(!res.consumed);
+}
+
+#[test]
+fn test_ibus_voice_input_disabled_by_default() {
+    let mut core = create_test_core();
     // 验证默认情况下 voice_manager.config().enabled 为 false
     assert!(
         !core
@@ -50,8 +66,7 @@ fn test_ibus_voice_input_disabled_by_default() {
 
 #[test]
 fn test_ibus_voice_input_shortcut_and_cancel() {
-    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    let mut core = IbusSessionCore::new(engine);
+    let mut core = create_test_core();
     core.runtime
         .voice_manager
         .as_mut()
@@ -100,8 +115,7 @@ fn test_ibus_voice_input_shortcut_and_cancel() {
 
 #[test]
 fn test_ibus_voice_input_commit_on_enter() {
-    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    let mut core = IbusSessionCore::new(engine);
+    let mut core = create_test_core();
     core.runtime
         .voice_manager
         .as_mut()
@@ -137,8 +151,7 @@ fn test_ibus_voice_input_commit_on_enter() {
 
 #[test]
 fn test_ibus_voice_input_push_to_talk_mode() {
-    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    let mut core = IbusSessionCore::new(engine);
+    let mut core = create_test_core();
     core.runtime
         .voice_manager
         .as_mut()
@@ -215,8 +228,7 @@ fn test_ibus_voice_input_push_to_talk_mode() {
 
 #[test]
 fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
-    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    let mut core = IbusSessionCore::new(engine);
+    let mut core = create_test_core();
     core.runtime
         .voice_manager
         .as_mut()
@@ -280,8 +292,7 @@ fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
 
 #[test]
 fn test_ibus_voice_input_custom_shortcut() {
-    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-    let mut core = IbusSessionCore::new(engine);
+    let mut core = create_test_core();
     core.runtime
         .voice_manager
         .as_mut()

@@ -6199,7 +6199,6 @@ dependencies = [
  "thiserror 1.0.69",
  "waylan-algo",
  "waylan-core",
- "waylan-voice",
 ]
 
 [[package]]
@@ -6214,6 +6213,7 @@ dependencies = [
  "waylan-core",
  "waylan-engine",
  "waylan-sys",
+ "waylan-voice",
  "zbus 4.4.0",
 ]
 

@@ -35,7 +35,3 @@ pub use session::{
 pub use waylan_algo as algo;
 pub use waylan_algo::{AlgoConfig, AlgoEngine};
 pub use waylan_core::input::{VoiceKeyAction, VoiceProvider};
-#[cfg(feature = "voice")]
-pub use waylan_voice as voice;
-#[cfg(feature = "voice")]
-pub use waylan_voice::VoiceInteractionManager;

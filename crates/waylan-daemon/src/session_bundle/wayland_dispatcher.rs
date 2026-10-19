@@ -33,6 +33,10 @@ pub struct WaylandDispatchOptions<'a> {
 /// 运行 Wayland 会话并处理异常退出
 pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), DaemonError> {
     let prefer_v2 = opts.caps.has_input_method_v2 && opts.caps.has_seat;
+    let voice_provider = Some(Box::new(waylan_voice::VoiceInteractionManager::new(
+        opts.cfg.voice.clone(),
+    )) as Box<dyn waylan_core::input::VoiceProvider>);
+
     let loop_result = run_wayland_session(WaylandSessionOptions {
         engine: opts.engine,
         renderer: opts.renderer,
@@ -45,6 +49,7 @@ pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), 
         reload_requested: opts.tray.as_ref().map(|t| t.reload_flag()),
         exit_requested: Some(opts.coordinator.flag()),
         loop_wakeup: opts.coordinator.loop_wakeup(),
+        voice_provider,
     });
 
     match loop_result {
