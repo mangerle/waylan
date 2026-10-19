@@ -262,7 +262,7 @@ impl Default for PinyinConfig {
             enable_u_mode: true,
             enable_i_mode: true,
             fuzzy_pinyin: false,
-            fuzzy_rules: FuzzyPinyinRules::default(),
+            fuzzy_rules: FuzzyPinyinRules::recommended(),
             typo_rules: TypoCorrectionRules::default(),
             traditional_chinese: false,
             auto_pangu_spacing: false,

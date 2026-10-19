@@ -108,7 +108,7 @@ pub enum CandidateThemePreset {
 }
 
 /// 模糊音细分规则配置（对应模糊音设置页面 10 项开关）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct FuzzyPinyinRules {
     /// c <=> ch
@@ -119,7 +119,7 @@ pub struct FuzzyPinyinRules {
     pub s_sh: bool,
     /// an <=> ang
     pub an_ang: bool,
-    /// en <=> eng
+    /// 前后鼻音: en <=> eng
     pub en_eng: bool,
     /// in <=> ing
     pub in_ing: bool,
@@ -133,8 +133,9 @@ pub struct FuzzyPinyinRules {
     pub g_k: bool,
 }
 
-impl Default for FuzzyPinyinRules {
-    fn default() -> Self {
+impl FuzzyPinyinRules {
+    /// 推荐常用模糊音预设组合（常用平翘舌、前后鼻音、边鼻音）
+    pub fn recommended() -> Self {
         Self {
             c_ch: true,
             z_zh: true,
@@ -147,6 +148,35 @@ impl Default for FuzzyPinyinRules {
             r_l: false,
             g_k: false,
         }
+    }
+    /// 创建开启全部 10 类模糊音规则的配置
+    pub fn all_enabled() -> Self {
+        Self {
+            c_ch: true,
+            z_zh: true,
+            s_sh: true,
+            an_ang: true,
+            en_eng: true,
+            in_ing: true,
+            l_n: true,
+            f_h: true,
+            r_l: true,
+            g_k: true,
+        }
+    }
+
+    /// 检查是否存在任一激活的模糊音规则
+    pub fn has_active_rules(&self) -> bool {
+        self.c_ch
+            || self.z_zh
+            || self.s_sh
+            || self.an_ang
+            || self.en_eng
+            || self.in_ing
+            || self.l_n
+            || self.f_h
+            || self.r_l
+            || self.g_k
     }
 }
 
