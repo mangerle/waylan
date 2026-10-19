@@ -6,53 +6,32 @@
 //! - **代价与局限**：依赖宿主系统安装有 `zenity` 或 GNOME 桌面环境组件。
 
 use std::path::PathBuf;
+use std::process::Command;
+use std::time::Duration;
 
-/// 同步更新 GNOME 输入源列表与指示器隐藏扩展（后台异步派发执行，绝不阻塞 UI 线程）
+use waylan_sys::desktop::safe_sync_desktop_input_sources;
+use waylan_sys::process::run_command_with_timeout;
+
+/// 默认系统原生对话框等待超时时间（2分钟）
+const DEFAULT_DIALOG_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 同步更新 GNOME 输入源列表与指示器隐藏扩展（委托底层系统抽象统一安全执行）
 pub fn sync_gnome_indicator_mode(exclusive: bool) {
-    if !std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_uppercase().contains("GNOME"))
-        .unwrap_or(false)
-    {
-        return;
-    }
-
-    let _ = std::thread::Builder::new()
-        .name("sync-gnome-mode".to_string())
-        .spawn(move || {
-            let sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
-
-            for key in ["sources", "mru-sources"] {
-                let _ = std::process::Command::new("gsettings")
-                    .args(["set", "org.gnome.desktop.input-sources", key, sources])
-                    .output();
-            }
-            let _ = std::process::Command::new("gsettings")
-                .args(["set", "org.gnome.desktop.input-sources", "current", "0"])
-                .output();
-            let _ = std::process::Command::new("ibus")
-                .args(["engine", "waylan"])
-                .output();
-
-            let action = if exclusive { "enable" } else { "disable" };
-            let uuid = "waylan-hide-input-source@waylan.org";
-            let _ = std::process::Command::new("gnome-extensions")
-                .args([action, uuid])
-                .output();
-        });
+    safe_sync_desktop_input_sources(exclusive);
 }
 
-/// 调用系统原生对话框 (zenity) 选择外部词库文件
+/// 调用系统原生对话框 (zenity) 选择外部词库文件（具备超时保护）
 pub fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("zenity")
-        .arg("--file-selection")
+    let mut cmd = Command::new("zenity");
+    cmd.arg("--file-selection")
         .arg(format!(
             "--file-filter={} | {}",
             filter_desc, filter_patterns
         ))
         .arg("--file-filter=所有文件 (*.*) | *")
-        .arg(format!("--title={}", title))
-        .output()
-        .ok()?;
+        .arg(format!("--title={}", title));
+
+    let output = run_command_with_timeout(cmd, DEFAULT_DIALOG_TIMEOUT).ok()?;
 
     if !output.status.success() {
         return None;
@@ -71,14 +50,14 @@ pub fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -
     }
 }
 
-/// 调用系统原生对话框 (zenity) 选择外部目录（如 ASR 复合模型包目录）
+/// 调用系统原生对话框 (zenity) 选择外部目录（具备超时保护）
 pub fn pick_directory_dialog(title: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("zenity")
-        .arg("--file-selection")
+    let mut cmd = Command::new("zenity");
+    cmd.arg("--file-selection")
         .arg("--directory")
-        .arg(format!("--title={}", title))
-        .output()
-        .ok()?;
+        .arg(format!("--title={}", title));
+
+    let output = run_command_with_timeout(cmd, DEFAULT_DIALOG_TIMEOUT).ok()?;
 
     if !output.status.success() {
         return None;

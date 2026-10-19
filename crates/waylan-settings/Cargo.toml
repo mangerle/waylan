@@ -14,6 +14,7 @@ path = "src/main.rs"
 waylan-core = { path = "../waylan-core" }
 waylan-engine = { path = "../waylan-engine" }
 waylan-voice = { path = "../waylan-voice" }
+waylan-sys = { path = "../waylan-sys" }
 slint.workspace = true
 log.workspace = true
 fern.workspace = true

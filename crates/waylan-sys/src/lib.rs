@@ -10,11 +10,18 @@
 //! - **代价与局限**：当前实现聚焦于现代 Linux 内核提供的系统原语。
 
 pub mod assets;
+pub mod desktop;
 pub mod fs_watcher;
 pub mod loop_wakeup;
 pub mod process;
 
 pub use assets::{detect_default_assets_path, resolve_icon_path_or_name};
+pub use desktop::{
+    ensure_gnome_input_source_registered, install_gnome_hide_indicator_extension, is_gnome_desktop,
+    prioritize_waylan_in_gsettings_sources, safe_sync_desktop_input_sources,
+    set_gnome_extension_enabled, set_waylan_as_exclusive_input_source,
+    sync_gnome_hide_indicator_extension,
+};
 pub use fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,
     compute_initial_signature, create_timed_file_event_filter, init_session_inotify_watcher,

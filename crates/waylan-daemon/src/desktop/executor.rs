@@ -6,6 +6,5 @@
 //! - **代价与局限**：命令执行超时时子进程会被强制终止。
 
 pub use waylan_sys::process::{
-    run_command_with_timeout, safe_gsettings_get, safe_gsettings_set,
-    DEFAULT_COMMAND_TIMEOUT as DEFAULT_DESKTOP_COMMAND_TIMEOUT,
+    run_command_with_timeout, DEFAULT_COMMAND_TIMEOUT as DEFAULT_DESKTOP_COMMAND_TIMEOUT,
 };
