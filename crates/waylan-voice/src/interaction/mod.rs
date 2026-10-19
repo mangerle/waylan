@@ -110,13 +110,9 @@ impl VoiceInteractionManager {
         }
     }
 
-    /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字（完全非阻塞）
-    pub fn poll_events(&mut self) -> Option<String> {
-        let is_finalizing_before = self.is_finalizing();
-        let mut final_commit = None;
-
-        // 1. 尝试从当前活跃状态通道提取事件
-        let events = match &self.state {
+    /// 从当前会话通道非阻塞提取所有已就绪事件
+    fn drain_session_events(&self) -> Vec<VoiceEvent> {
+        match &self.state {
             VoiceSessionState::PushToTalkRecording { rx, .. }
             | VoiceSessionState::ToggleRecording { rx }
             | VoiceSessionState::Finalizing { rx, .. } => {
@@ -127,88 +123,64 @@ impl VoiceInteractionManager {
                 evts
             }
             VoiceSessionState::Idle => Vec::new(),
+        }
+    }
+
+    /// 处理波形更新事件
+    fn handle_voice_waveform_event(&mut self, waveform: String, is_finalizing_before: bool) {
+        if !is_finalizing_before && self.config.interaction.show_floating_bar {
+            self.display_text = Some("正在聆听中...".to_string());
+            self.waveform = Some(waveform);
+        } else if is_finalizing_before {
+            self.waveform = None;
+        } else {
+            self.display_text = None;
+            self.waveform = None;
+        }
+    }
+
+    /// 处理最终提交事件并进行兜底计算
+    fn handle_voice_final_commit(&mut self, text: String) -> Option<String> {
+        let trimmed = text.trim().to_string();
+        let fallback_already = match self.state {
+            VoiceSessionState::Finalizing {
+                fallback_committed, ..
+            } => fallback_committed,
+            _ => false,
         };
 
-        for event in events {
-            match event {
-                VoiceEvent::WaveformUpdated { waveform, .. } => {
-                    if !is_finalizing_before && self.config.interaction.show_floating_bar {
-                        self.display_text = Some("正在聆听中...".to_string());
-                        self.waveform = Some(waveform);
-                    } else if is_finalizing_before {
-                        self.waveform = None;
-                    } else {
-                        self.display_text = None;
-                        self.waveform = None;
-                    }
-                }
-                VoiceEvent::PartialText(text) => {
-                    if self.config.interaction.real_time_preview {
-                        self.partial_text = Some(text);
-                    } else {
-                        self.partial_text = None;
-                    }
-                }
-                VoiceEvent::SegmentCommit(text) => {
-                    let trimmed = text.trim().to_string();
-                    if !trimmed.is_empty() {
-                        final_commit = Some(trimmed);
-                        self.partial_text = None;
-                        break;
-                    }
-                }
-                VoiceEvent::FinalCommit(text) => {
-                    let trimmed = text.trim().to_string();
-                    let fallback_already = match self.state {
-                        VoiceSessionState::Finalizing {
-                            fallback_committed, ..
-                        } => fallback_committed,
-                        _ => false,
-                    };
-
-                    // 若此前停止录音时已经把保底文本上屏过，静默吸收最终事件，避免重复出字
-                    if fallback_already {
-                        debug!("[微澜语音] 收到后台最终结算，此前已保底上屏，静默同步状态");
-                        self.clear_state();
-                        break;
-                    }
-
-                    let commit_text = if !trimmed.is_empty() {
-                        trimmed
-                    } else if let Some(fallback) = self.partial_text.take() {
-                        let fb_trimmed = fallback.trim().to_string();
-                        if !fb_trimmed.is_empty() {
-                            debug!(
-                                "[微澜语音] 最终识别文本为空，启用流式预览保底上屏: \"{}\"",
-                                fb_trimmed
-                            );
-                        }
-                        fb_trimmed
-                    } else {
-                        String::new()
-                    };
-
-                    self.clear_state();
-                    if !commit_text.is_empty() {
-                        info!("[微澜语音] 成功生成文字上屏: \"{}\"", commit_text);
-                        final_commit = Some(commit_text);
-                    }
-                    break;
-                }
-                VoiceEvent::Cancelled => {
-                    debug!("[微澜语音] 语音会话已取消");
-                    self.clear_state();
-                    break;
-                }
-                VoiceEvent::Error(err) => {
-                    error!("[微澜语音] 识别发生异常: {}", err);
-                    self.clear_state();
-                    break;
-                }
-            }
+        if fallback_already {
+            debug!("[微澜语音] 收到后台最终结算，此前已保底上屏，静默同步状态");
+            self.clear_state();
+            return None;
         }
 
-        // 2. 超时防假死保底检测：若处于等待最终结算状态超过 2 秒未收到 FinalCommit 则安全降级
+        let commit_text = if !trimmed.is_empty() {
+            trimmed
+        } else if let Some(fallback) = self.partial_text.take() {
+            let fb_trimmed = fallback.trim().to_string();
+            if !fb_trimmed.is_empty() {
+                debug!(
+                    "[微澜语音] 最终识别文本为空，启用流式预览保底上屏: \"{}\"",
+                    fb_trimmed
+                );
+            }
+            fb_trimmed
+        } else {
+            String::new()
+        };
+
+        self.clear_state();
+        if !commit_text.is_empty() {
+            info!("[微澜语音] 成功生成文字上屏: \"{}\"", commit_text);
+            Some(commit_text)
+        } else {
+            None
+        }
+    }
+
+    /// 检查处于 Finalizing 状态是否超过 2 秒防假死，若超时启用流式预览兜底
+    fn check_finalizing_timeout_fallback(&mut self) -> Option<String> {
         if let VoiceSessionState::Finalizing {
             start_time,
             fallback_committed,
@@ -228,6 +200,50 @@ impl VoiceInteractionManager {
                     }
                 }
             }
+        }
+        None
+    }
+
+    /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字（完全非阻塞）
+    pub fn poll_events(&mut self) -> Option<String> {
+        let is_finalizing_before = self.is_finalizing();
+        let mut final_commit = None;
+
+        for event in self.drain_session_events() {
+            match event {
+                VoiceEvent::WaveformUpdated { waveform, .. } => {
+                    self.handle_voice_waveform_event(waveform, is_finalizing_before);
+                }
+                VoiceEvent::PartialText(text) => {
+                    self.partial_text = self.config.interaction.real_time_preview.then_some(text);
+                }
+                VoiceEvent::SegmentCommit(text) => {
+                    let trimmed = text.trim().to_string();
+                    if !trimmed.is_empty() {
+                        final_commit = Some(trimmed);
+                        self.partial_text = None;
+                        break;
+                    }
+                }
+                VoiceEvent::FinalCommit(text) => {
+                    final_commit = self.handle_voice_final_commit(text);
+                    break;
+                }
+                VoiceEvent::Cancelled => {
+                    debug!("[微澜语音] 语音会话已取消");
+                    self.clear_state();
+                    break;
+                }
+                VoiceEvent::Error(err) => {
+                    error!("[微澜语音] 识别发生异常: {}", err);
+                    self.clear_state();
+                    break;
+                }
+            }
+        }
+
+        if let Some(fallback) = self.check_finalizing_timeout_fallback() {
+            return Some(fallback);
         }
 
         final_commit
