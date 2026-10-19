@@ -16,8 +16,10 @@ use std::time::Instant;
 
 pub mod compact;
 pub mod compact_writer;
+pub mod dat_builder;
 pub use compact::CompactDictBuilder;
 pub use compact_writer::{write_compact_file, CompactWritePayload};
+pub use dat_builder::build_dat;
 
 /// 词库编译统计指标
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,5 +1,5 @@
 pub mod bigram;
-#[cfg(feature = "dict-builder")]
+#[cfg(any(feature = "dict-builder", test))]
 pub mod builder;
 pub mod composition;
 pub mod custom_phrase;
