@@ -165,7 +165,7 @@ impl ImeCoreSession {
             return Some(ImeOutputAction::PassThrough);
         }
         if self.mode == InputMode::English {
-            if self.full_width_char && !self.is_shift_active() {
+            if self.is_full_width_char() && !self.is_shift_active() {
                 if let Some(ch) = self.keymap_layout.get_char(keycode) {
                     let full = to_full_width_char(ch);
                     return Some(ImeOutputAction::Commit(full.to_string()));
@@ -199,7 +199,7 @@ impl ImeCoreSession {
         Some(match action {
             ImeOutputAction::Commit(text) => {
                 self.collapse_card();
-                let final_text = if self.full_width_char {
+                let final_text = if self.is_full_width_char() {
                     to_full_width_string(&text)
                 } else {
                     text
@@ -210,7 +210,7 @@ impl ImeCoreSession {
                 committed,
                 remaining_preedit,
             } => {
-                let final_committed = if self.full_width_char {
+                let final_committed = if self.is_full_width_char() {
                     to_full_width_string(&committed)
                 } else {
                     committed
@@ -257,7 +257,7 @@ impl ImeCoreSession {
             return None;
         }
 
-        let final_commit = if self.full_width_char {
+        let final_commit = if self.is_full_width_char() {
             to_full_width_string(&commit_str)
         } else {
             commit_str
@@ -281,7 +281,7 @@ impl ImeCoreSession {
         let digit_ch = keycode_to_ascii_digit_char(keycode)?;
         self.punctuation_processor
             .record_commit(&digit_ch.to_string());
-        if self.full_width_char {
+        if self.is_full_width_char() {
             let full = to_full_width_char(digit_ch);
             return Some(ImeOutputAction::Commit(full.to_string()));
         }

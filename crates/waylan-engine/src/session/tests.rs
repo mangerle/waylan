@@ -61,6 +61,8 @@ fn test_ime_core_session_shortcuts() {
         ImeOutputAction::ShortcutToggled(ShortcutToggleAction::Traditional(true))
     );
     assert!(session.engine.config.traditional_chinese);
+    assert!(session.is_traditional());
+    assert!(session.decoration_flags().traditional_chinese);
 
     // 再次按下反转回简体
     let act2 = session.handle_key_press(KEY_F, 1001, None);
@@ -69,6 +71,8 @@ fn test_ime_core_session_shortcuts() {
         ImeOutputAction::ShortcutToggled(ShortcutToggleAction::Traditional(false))
     );
     assert!(!session.engine.config.traditional_chinese);
+    assert!(!session.is_traditional());
+    assert!(!session.decoration_flags().traditional_chinese);
 
     // 模拟单独按住 Ctrl (无 Shift)
     session.set_modifiers(MOD_CTRL, 0);
@@ -79,17 +83,35 @@ fn test_ime_core_session_shortcuts() {
         ImeOutputAction::ShortcutToggled(ShortcutToggleAction::FullWidthPunct(false))
     );
     assert!(!session.punctuation_processor.is_full_width_punct());
+    assert!(!session.is_full_width_punct());
+    assert!(!session.decoration_flags().full_width_punct);
 }
 
 #[test]
 fn test_ime_core_session_full_width_char() {
     let mut session = make_test_session();
     session.set_full_width_char(true);
+    assert!(session.is_full_width_char());
+    assert!(session.decoration_flags().full_width_char);
     session.mode = InputMode::English;
 
     // 英文模式下键入 'a' (扫描码 30)
     let act = session.handle_key_press(30, 1000, None);
     assert_eq!(act, ImeOutputAction::Commit("ａ".to_string()));
+}
+
+#[test]
+fn test_ime_core_session_decoration_flags_batch_sync() {
+    let mut session = make_test_session();
+    let flags = InputDecorationFlags::new(true, false, true);
+    session.set_decoration_flags(flags);
+
+    assert_eq!(session.decoration_flags(), flags);
+    assert!(session.is_traditional());
+    assert!(session.engine.config.traditional_chinese);
+    assert!(!session.is_full_width_punct());
+    assert!(!session.punctuation_processor.is_full_width_punct());
+    assert!(session.is_full_width_char());
 }
 
 #[test]

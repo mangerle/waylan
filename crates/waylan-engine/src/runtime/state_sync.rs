@@ -6,6 +6,7 @@
 //!   通过封装方法保证内存一致性并向共享内存标志与通知通道单向发布快照。
 //! - **代价与局限**：跨线程同步依赖原子标志读取与非阻塞 channel 脉冲。
 
+use crate::session::InputDecorationFlags;
 use waylan_core::state::InputStateSnapshot;
 use waylan_core::InputMode;
 
@@ -135,19 +136,14 @@ impl ImeRuntime {
                 mode_changed = Some(new_mode);
             }
 
-            // 3. 同步简繁输出模式
-            if self.core.is_traditional() != snap.traditional_chinese {
-                self.core.set_traditional(snap.traditional_chinese);
-            }
-
-            // 4. 同步全角/半角标点
-            if self.core.is_full_width_punct() != snap.full_width_punct {
-                self.core.set_full_width_punct(snap.full_width_punct);
-            }
-
-            // 5. 同步全角/半角字符
-            if self.core.is_full_width_char() != snap.full_width_char {
-                self.core.set_full_width_char(snap.full_width_char);
+            // 3. 批量同步修饰扩展状态（简繁输出、全角标点、全角字符）
+            let new_decorations = InputDecorationFlags::new(
+                snap.traditional_chinese,
+                snap.full_width_punct,
+                snap.full_width_char,
+            );
+            if self.core.decoration_flags() != new_decorations {
+                self.core.set_decoration_flags(new_decorations);
             }
         }
 

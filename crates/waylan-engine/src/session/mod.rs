@@ -50,8 +50,8 @@ pub struct ImeCoreSession {
     pub full_width_char_shortcut: Option<ParsedShortcut>,
     /// 标点全角/半角切换快捷键选项
     pub full_width_punct_shortcut: Option<ParsedShortcut>,
-    /// 是否开启全角字符/字母输入
-    pub full_width_char: bool,
+    /// 输入修饰扩展状态（繁体输出、全角标点、全角字符）
+    pub decoration_flags: InputDecorationFlags,
     /// 当前候选词分页索引（0-indexed）
     pub page_index: usize,
     /// 当前页内选中的高亮候选词局部索引（0-indexed）
@@ -74,10 +74,13 @@ impl ImeCoreSession {
     /// 创建带有指定算法引擎的核心会话
     pub fn new(engine: AlgoEngine) -> Self {
         let page_size = engine.config.page_size.max(1);
+        let traditional_chinese = engine.config.traditional_chinese;
+        let punctuation_processor = PunctuationProcessor::new();
+        let full_width_punct = punctuation_processor.is_full_width_punct();
         Self {
             engine,
             shift_sm: ShiftToggleStateMachine::new(),
-            punctuation_processor: PunctuationProcessor::new(),
+            punctuation_processor,
             page_keys: PageKeyConfig::default(),
             keymap_layout: KeymapLayout::default(),
             mode: InputMode::Chinese,
@@ -86,7 +89,11 @@ impl ImeCoreSession {
             traditional_shortcut: ParsedShortcut::parse("Ctrl + Shift + F"),
             full_width_char_shortcut: ParsedShortcut::parse("Shift + Space"),
             full_width_punct_shortcut: ParsedShortcut::parse("Ctrl + ."),
-            full_width_char: false,
+            decoration_flags: InputDecorationFlags::new(
+                traditional_chinese,
+                full_width_punct,
+                false,
+            ),
             page_index: 0,
             selected_index: 0,
             page_size,
@@ -100,16 +107,30 @@ impl ImeCoreSession {
         self.engine.reset();
     }
 
+    /// 获取当前输入修饰扩展状态快照
+    #[inline]
+    pub fn decoration_flags(&self) -> InputDecorationFlags {
+        self.decoration_flags
+    }
+
+    /// 批量设置输入修饰扩展状态并同步至底层组件
+    pub fn set_decoration_flags(&mut self, flags: InputDecorationFlags) {
+        self.decoration_flags = flags;
+        self.engine.config.traditional_chinese = flags.traditional_chinese;
+        self.punctuation_processor
+            .set_full_width_punct(flags.full_width_punct);
+    }
+
     /// 查询当前是否处于全角字符模式
     #[inline]
     pub fn is_full_width_char(&self) -> bool {
-        self.full_width_char
+        self.decoration_flags.full_width_char
     }
 
     /// 设置全角字符模式
     #[inline]
     pub fn set_full_width_char(&mut self, enabled: bool) {
-        self.full_width_char = enabled;
+        self.decoration_flags.full_width_char = enabled;
     }
 
     /// 获取当前输入模式
@@ -127,24 +148,26 @@ impl ImeCoreSession {
     /// 查询当前是否开启繁体中文输出
     #[inline]
     pub fn is_traditional(&self) -> bool {
-        self.engine.config.traditional_chinese
+        self.decoration_flags.traditional_chinese
     }
 
     /// 设置繁体中文输出模式
     #[inline]
     pub fn set_traditional(&mut self, enabled: bool) {
+        self.decoration_flags.traditional_chinese = enabled;
         self.engine.config.traditional_chinese = enabled;
     }
 
     /// 查询当前是否开启全角标点
     #[inline]
     pub fn is_full_width_punct(&self) -> bool {
-        self.punctuation_processor.is_full_width_punct()
+        self.decoration_flags.full_width_punct
     }
 
     /// 设置全角标点模式
     #[inline]
     pub fn set_full_width_punct(&mut self, enabled: bool) {
+        self.decoration_flags.full_width_punct = enabled;
         self.punctuation_processor.set_full_width_punct(enabled);
     }
 
@@ -264,8 +287,8 @@ impl ImeCoreSession {
         if self.traditional_shortcut.as_ref().is_some_and(|s| {
             s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
         }) {
-            let next_val = !self.engine.config.traditional_chinese;
-            self.engine.config.traditional_chinese = next_val;
+            let next_val = !self.is_traditional();
+            self.set_traditional(next_val);
             return Some(ShortcutToggleAction::Traditional(next_val));
         }
 
@@ -273,8 +296,8 @@ impl ImeCoreSession {
         if self.full_width_char_shortcut.as_ref().is_some_and(|s| {
             s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
         }) {
-            let next_val = !self.full_width_char;
-            self.full_width_char = next_val;
+            let next_val = !self.is_full_width_char();
+            self.set_full_width_char(next_val);
             return Some(ShortcutToggleAction::FullWidthChar(next_val));
         }
 
@@ -282,8 +305,8 @@ impl ImeCoreSession {
         if self.full_width_punct_shortcut.as_ref().is_some_and(|s| {
             s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
         }) {
-            let next_val = !self.punctuation_processor.is_full_width_punct();
-            self.punctuation_processor.set_full_width_punct(next_val);
+            let next_val = !self.is_full_width_punct();
+            self.set_full_width_punct(next_val);
             return Some(ShortcutToggleAction::FullWidthPunct(next_val));
         }
 

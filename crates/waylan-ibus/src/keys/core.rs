@@ -130,7 +130,7 @@ impl IbusSessionCore {
 
     /// 判定当前是否开启了全角字符/字母模式
     pub fn is_full_width_char(&self) -> bool {
-        self.runtime.core.full_width_char
+        self.runtime.core.is_full_width_char()
     }
 
     /// 重置当前预编辑与修饰键跟踪状态（用于失焦 `FocusOut` 或 `Reset`）

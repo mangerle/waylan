@@ -7,6 +7,41 @@
 
 use waylan_core::InputMode;
 
+/// 输入修饰扩展状态载体（繁体输出、全角标点、全角字符）
+///
+/// # 设计原理
+/// - **实现初衷**：收敛分散在核心会话、标点处理器与算法配置中的模式修饰状态标志，
+///   使输入修饰扩展属性具备单一高内聚的值对象表达。
+/// - **核心优势**：消除平铺布尔值，支持单值拷贝与批量状态比较/同步；
+///   将主输入模式（`InputMode`）与次级修饰属性在类型层面明确区分。
+/// - **代价与局限**：修改修饰状态需通过本结构体或统一会话接口访问，
+///   增加了单层结构封装，但增强了状态的一致性与可追踪性。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InputDecorationFlags {
+    /// 是否输出繁体中文
+    pub traditional_chinese: bool,
+    /// 是否使用全角标点
+    pub full_width_punct: bool,
+    /// 是否使用全角字符/字母
+    pub full_width_char: bool,
+}
+
+impl InputDecorationFlags {
+    /// 构造全新的输入修饰扩展状态
+    #[inline]
+    pub const fn new(
+        traditional_chinese: bool,
+        full_width_punct: bool,
+        full_width_char: bool,
+    ) -> Self {
+        Self {
+            traditional_chinese,
+            full_width_punct,
+            full_width_char,
+        }
+    }
+}
+
 /// 全局模式与功能快捷键切换动作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutToggleAction {

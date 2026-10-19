@@ -13,7 +13,7 @@ fn test_sync_shared_mode_comprehensive() {
     assert_eq!(runtime.core.mode, InputMode::Chinese);
     assert!(!runtime.core.engine.config.traditional_chinese);
     assert!(runtime.core.punctuation_processor.is_full_width_punct());
-    assert!(!runtime.core.full_width_char);
+    assert!(!runtime.core.is_full_width_char());
 
     // 首次同步：将托盘的半角标点同步至运行时
     let mode_changed = runtime.sync_shared_mode();
@@ -31,7 +31,7 @@ fn test_sync_shared_mode_comprehensive() {
     assert_eq!(runtime.core.mode, InputMode::English);
     assert!(runtime.core.engine.config.traditional_chinese);
     assert!(runtime.core.punctuation_processor.is_full_width_punct());
-    assert!(runtime.core.full_width_char);
+    assert!(runtime.core.is_full_width_char());
 
     // 再次同步，无状态变化
     let mode_changed = runtime.sync_shared_mode();
