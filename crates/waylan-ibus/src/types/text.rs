@@ -6,8 +6,7 @@
 //! - **代价与局限**：严格依赖 IBus 1.5 规定的字段布局。
 
 use super::{empty_attachments, empty_variant_vec, IBUS_ORIENTATION_VERTICAL};
-use waylan_core::{Candidate, CandidateIndexStyle};
-use waylan_ui::format_candidate_display;
+use waylan_core::{format_candidate_display, Candidate, CandidateIndexStyle};
 use zbus::zvariant::{Error as VariantError, OwnedValue, StructureBuilder, Value};
 
 /// IBus 文本属性类型：下划线 (`IBUS_ATTR_TYPE_UNDERLINE`)

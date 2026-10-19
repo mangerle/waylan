@@ -8,8 +8,9 @@ pub mod state;
 pub mod text;
 
 pub use candidate::{
-    Candidate, CandidateBoxState, CandidateBoxView, CandidateTier, CandidateViewMode,
-    ExpandedCardState, GridState, InputMode, TextAction, VoiceBoxState,
+    format_candidate_display, Candidate, CandidateBoxState, CandidateBoxView, CandidateTier,
+    CandidateViewMode, ExpandedCardState, GridState, InputMode, TextAction, VoiceBoxState,
+    CIRCLED_NUMBERS,
 };
 pub use config::{
     format_key_combination, AppConfig, AudioFrontEndConfig, CandidateIndexStyle,
