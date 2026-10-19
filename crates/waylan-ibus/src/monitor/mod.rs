@@ -92,6 +92,50 @@ fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSess
     }
 }
 
+/// 处于锁屏保护期时的自愈探活与状态迁移处理
+fn probe_and_handle_screensaver(
+    conn: &Connection,
+    shared_core: &Arc<Mutex<IbusSessionCore>>,
+    screen_locked_flag: &AtomicBool,
+    last_screen_locked: &mut bool,
+    last_lock_probe_instant: &mut Instant,
+) -> bool {
+    let mut current_locked = screen_locked_flag.load(Ordering::Acquire);
+    if (current_locked || *last_screen_locked)
+        && last_lock_probe_instant.elapsed() >= Duration::from_secs(3)
+    {
+        *last_lock_probe_instant = Instant::now();
+        let real_locked = Connection::session()
+            .ok()
+            .as_ref()
+            .map(query_initial_screen_saver_active)
+            .unwrap_or(false);
+        if !real_locked && (current_locked || *last_screen_locked) {
+            screen_locked_flag.store(false, Ordering::Release);
+            current_locked = false;
+        }
+    }
+    handle_screen_saver_transition(conn, shared_core, current_locked, last_screen_locked);
+    current_locked
+}
+
+/// 计算当前监控循环的 poll 等待超时策略（毫秒）
+fn compute_monitor_poll_timeout(
+    is_voice_active: bool,
+    startup_healing_rounds: u32,
+    is_locked: bool,
+) -> i32 {
+    if is_voice_active {
+        60
+    } else if startup_healing_rounds > 0 {
+        100
+    } else if is_locked {
+        3000
+    } else {
+        -1
+    }
+}
+
 /// 驱动后台文件热重载与托盘状态同步的阻塞监控循环
 pub(crate) fn run_ibus_monitor_loop(
     conn: &Connection,
@@ -131,40 +175,21 @@ pub(crate) fn run_ibus_monitor_loop(
             ensure_global_engine_active(conn);
         }
 
-        let mut current_locked = screen_locked_flag.load(Ordering::Acquire);
-        // 处于锁屏保护期时的自愈探活：通过 3 秒防抖节流避免每一轮循环均发起阻塞式 D-Bus RPC，
-        // 既杜绝锁屏信号丢失导致状态机脱节，又彻底消除总线 IPC 洪泛
-        if (current_locked || last_screen_locked)
-            && last_lock_probe_instant.elapsed() >= Duration::from_secs(3)
-        {
-            last_lock_probe_instant = Instant::now();
-            let real_locked = Connection::session()
-                .ok()
-                .as_ref()
-                .map(query_initial_screen_saver_active)
-                .unwrap_or(false);
-            if !real_locked && (current_locked || last_screen_locked) {
-                screen_locked_flag.store(false, Ordering::Release);
-                current_locked = false;
-            }
-        }
-        handle_screen_saver_transition(conn, shared_core, current_locked, &mut last_screen_locked);
+        let current_locked = probe_and_handle_screensaver(
+            conn,
+            shared_core,
+            &screen_locked_flag,
+            &mut last_screen_locked,
+            &mut last_lock_probe_instant,
+        );
 
         let (is_voice_active, target_engine_path) = query_voice_active_and_path(shared_core);
-        // 监控循环超时策略分级：
-        // 1. 流式语音激活中：60ms 轮询窗口用于高平滑度波形与动态文字刷新；
-        // 2. 开机阶段：100ms 快速完成多轮全局引擎活跃自愈；
-        // 3. 锁屏异常防护中：3000ms 节流兜底自愈探活；
-        // 4. 常规空闲待命状态：-1（纯事件驱动，永久阻塞直至 inotify/eventfd 唤醒，彻底消除忙轮询）。
-        let poll_timeout_ms = if is_voice_active {
-            60
-        } else if startup_healing_rounds > 0 {
-            100
-        } else if current_locked || last_screen_locked {
-            3000
-        } else {
-            -1
-        };
+        let poll_timeout_ms = compute_monitor_poll_timeout(
+            is_voice_active,
+            startup_healing_rounds,
+            current_locked || last_screen_locked,
+        );
+
         poll_wakeup_and_inotify(
             inotify_watcher.as_ref(),
             params.coordinator.loop_wakeup(),
