@@ -8,7 +8,7 @@
 use log::{debug, warn};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use zbus::blocking::Connection;
 use zbus::fdo;
 use zbus::interface;
@@ -21,7 +21,7 @@ use super::service::IbusEngineService;
 /// `org.freedesktop.IBus.Factory` 接口实现
 pub struct IbusFactoryService {
     pub(crate) core: Arc<Mutex<IbusSessionCore>>,
-    pub(crate) conn_slot: Arc<Mutex<Option<Connection>>>,
+    pub(crate) conn_slot: Arc<OnceLock<Connection>>,
     pub(crate) engine_template: IbusEngineService,
     pub(crate) next_engine_id: Arc<AtomicU32>,
 }
@@ -41,8 +41,7 @@ impl IbusFactoryService {
         let obj_path = OwnedObjectPath::try_from(path_str.as_str())
             .map_err(|e| fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
 
-        let slot = self.conn_slot.lock();
-        let conn_registered = if let Some(ref conn) = *slot {
+        let conn_registered = if let Some(conn) = self.conn_slot.get() {
             let mut srv = self.engine_template.clone();
             srv.is_password = Arc::new(AtomicBool::new(false));
             srv.lock_healer = Arc::new(ScreenLockHealer::default());

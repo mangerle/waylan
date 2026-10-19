@@ -9,7 +9,7 @@
 use parking_lot::Mutex;
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicU32};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use log::{debug, info};
 use waylan_sys::fs_watcher::{
@@ -117,7 +117,7 @@ fn build_ibus_connection(
     engine: IbusEngineService,
 ) -> Result<Connection, IbusError> {
     let factory_next_id = Arc::new(AtomicU32::new(2));
-    let factory_conn_slot = Arc::new(Mutex::new(None::<Connection>));
+    let factory_conn_slot = Arc::new(OnceLock::new());
 
     let factory = IbusFactoryService {
         core: Arc::clone(shared_core),
@@ -139,7 +139,7 @@ fn build_ibus_connection(
         .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine_srv)?
         .build()?;
 
-    *factory_conn_slot.lock() = Some(conn.clone());
+    let _ = factory_conn_slot.set(conn.clone());
 
     Ok(conn)
 }
