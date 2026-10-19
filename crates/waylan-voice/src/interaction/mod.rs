@@ -8,14 +8,14 @@
 //! - **代价与局限**：按键分发需提供 evdev 物理键码与修饰键掩码，对协议层的按键抽象有轻量依赖。
 
 mod key_handler;
+mod provider;
 mod types;
 
 use std::sync::mpsc::sync_channel;
 use std::time::{Duration, Instant};
 
 use log::{debug, error, info, warn};
-use waylan_core::input::{ConsumedKeyTracker, VoiceProvider};
-use waylan_core::{VoiceBoxState, VoiceConfig, VoiceEngineType};
+use waylan_core::VoiceConfig;
 
 use crate::session::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 
@@ -326,122 +326,6 @@ impl VoiceInteractionManager {
     pub fn cancel(&mut self) {
         self.controller.cancel();
         self.clear_state();
-    }
-}
-
-impl VoiceProvider for VoiceInteractionManager {
-    #[inline]
-    fn is_enabled(&self) -> bool {
-        self.config.enabled
-    }
-
-    #[inline]
-    fn set_enabled(&mut self, enabled: bool) {
-        self.config.enabled = enabled;
-    }
-
-    #[inline]
-    fn config(&self) -> &VoiceConfig {
-        &self.config
-    }
-
-    #[inline]
-    fn config_mut(&mut self) -> &mut VoiceConfig {
-        &mut self.config
-    }
-
-    #[inline]
-    fn is_push_to_talk_recording(&self) -> bool {
-        self.is_push_to_talk_recording()
-    }
-
-    #[inline]
-    fn is_active(&self) -> bool {
-        self.is_active()
-    }
-
-    #[inline]
-    fn is_recording(&self) -> bool {
-        self.is_recording()
-    }
-
-    #[inline]
-    fn cancel(&mut self) {
-        self.cancel();
-    }
-
-    #[inline]
-    fn clear_state(&mut self) {
-        self.clear_state();
-    }
-
-    #[inline]
-    fn update_config(&mut self, cfg: &VoiceConfig) {
-        self.update_config(cfg.clone());
-    }
-
-    #[inline]
-    fn set_engine_type(&mut self, engine_type: VoiceEngineType) {
-        self.config.engine_type = engine_type;
-    }
-
-    #[inline]
-    fn poll_events(&mut self) -> Option<String> {
-        self.poll_events()
-    }
-
-    #[inline]
-    fn dispatch_key(
-        &mut self,
-        key: u32,
-        is_press: bool,
-        modifiers: u32,
-        consumed_keys: &mut ConsumedKeyTracker,
-    ) -> VoiceKeyAction {
-        self.dispatch_voice_key(key, is_press, modifiers, consumed_keys)
-    }
-
-    #[inline]
-    fn display_text(&self) -> Option<String> {
-        self.display_text.clone()
-    }
-
-    #[inline]
-    fn set_display_text(&mut self, text: Option<String>) {
-        self.display_text = text;
-    }
-
-    #[inline]
-    fn partial_text(&self) -> Option<String> {
-        self.partial_text.clone()
-    }
-
-    #[inline]
-    fn set_partial_text(&mut self, text: Option<String>) {
-        self.partial_text = text;
-    }
-
-    #[inline]
-    fn waveform(&self) -> Option<String> {
-        self.waveform.clone()
-    }
-
-    #[inline]
-    fn set_waveform(&mut self, waveform: Option<String>) {
-        self.waveform = waveform;
-    }
-
-    #[inline]
-    fn render_state(&self) -> Option<VoiceBoxState> {
-        if !self.is_active() {
-            return None;
-        }
-        Some(VoiceBoxState {
-            partial_text: self.partial_text.clone().unwrap_or_default(),
-            waveform: self.waveform.clone().unwrap_or_default(),
-            display_text: self.display_text.clone(),
-            is_listening: true,
-        })
     }
 }
 
