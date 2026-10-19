@@ -13,11 +13,7 @@ pub use system_env::{check_wayland_capabilities, trigger_graceful_restart_and_ex
 pub use wayland_dispatcher::{dispatch_wayland_session, WaylandDispatchOptions};
 
 #[cfg(test)]
-pub use wayland_dispatcher::{reload_wayland_v1_session, reload_wayland_v2_session};
-
-#[cfg(test)]
 mod tests {
-    use super::*;
     use waylan_algo::{AlgoConfig, AlgoEngine};
     use waylan_core::config::AppConfig;
     use waylan_core::VoiceConfig;
@@ -87,6 +83,7 @@ mod tests {
     #[test]
     fn test_apply_wayland_session_reload_updates_voice_config() {
         use waylan_core::config::AppConfig;
+        use waylan_wayland::reload_wayland_session;
         use waylan_wayland::session_v2::WaylanV2Session;
         let engine = AlgoEngine::with_sample_data(Default::default());
         let mut session = WaylanV2Session::new(engine);
@@ -98,7 +95,7 @@ mod tests {
         session.runtime.voice_manager =
             Some(waylan_voice::VoiceInteractionManager::new(initial_voice));
 
-        reload_wayland_v2_session(&mut session);
+        reload_wayland_session(&mut session);
 
         // 验证热重载后，Wayland 会话内部的 voice_manager 配置已同步为磁盘当前配置
         let disk_cfg = AppConfig::load_or_create();
@@ -116,11 +113,12 @@ mod tests {
 
     #[test]
     fn test_apply_wayland_v1_session_reload() {
+        use waylan_wayland::reload_wayland_session;
         use waylan_wayland::session_v1::WaylanV1Session;
         let engine = AlgoEngine::with_sample_data(Default::default());
         let mut session = WaylanV1Session::with_engine(engine);
 
-        reload_wayland_v1_session(&mut session);
+        reload_wayland_session(&mut session);
 
         let disk_cfg = AppConfig::load_or_create();
         assert_eq!(

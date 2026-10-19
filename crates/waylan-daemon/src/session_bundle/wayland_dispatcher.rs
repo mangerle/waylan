@@ -1,169 +1,22 @@
-//! Wayland V1/V2 协议引擎会话装配与异常降级派发器
+//! Wayland 协议引擎会话派发器
 //!
 //! # 设计原理
-//! - **实现初衷**：统一收敛 Wayland 原生协议会话装配、运行时配置注入、V2 故障自动降级至 V1，以及退出码处理。
-//! - **核心优势**：消除 `main.rs` 中大段的 Wayland 初始化与协议协商匹配代码，实现纯粹的关注点分离。
-//! - **代价与局限**：调用方需提供已初始化的渲染器与底层合成器能力探测快照。
+//! - **实现初衷**：将上层守护进程的托盘通知、配置热载与退出协调信号映射并派发至 `waylan-wayland` 统一驱动中枢。
+//! - **核心优势**：消除冗余的 V1/V2 降级胶水代码与自创 trait，全权委托 `waylan_wayland::run_wayland_session` 统一纳管。
+//! - **代价与局限**：协议级降级细节完全内聚于 `waylan-wayland` 内部。
 
 use crate::error::DaemonError;
 use std::path::PathBuf;
 use std::process;
 
-use log::{info, warn};
+use log::info;
 use waylan_algo::AlgoEngine;
-use waylan_core::config::{AppConfig, ThemeMode};
-use waylan_ui::{CandidateBoxRenderer, UiTheme};
-use waylan_wayland::session_v1::{
-    WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext,
-};
-use waylan_wayland::session_v2::WaylanV2Session;
-use waylan_wayland::{run_session_v1_loop, run_session_v2_loop_fallible, WaylandCapabilities};
+use waylan_core::config::AppConfig;
+use waylan_ui::CandidateBoxRenderer;
+use waylan_wayland::{run_wayland_session, WaylandCapabilities, WaylandSessionOptions};
 
 use crate::system::ShutdownCoordinator;
 use crate::tray::TrayService;
-
-/// 抽象具备热重载能力的 Wayland 会话接口
-pub trait ReloadableWaylandSession {
-    /// 获取候选框渲染器的可变引用
-    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer;
-    /// 获取输入法运行时的可变引用
-    fn runtime_mut(&mut self) -> &mut waylan_engine::ImeRuntime;
-    /// 触发刷新候选框悬浮表面
-    fn refresh_surface(&mut self);
-}
-
-impl ReloadableWaylandSession for WaylanV1Session {
-    #[inline]
-    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
-        &mut self.surface.surface_manager.renderer
-    }
-
-    #[inline]
-    fn runtime_mut(&mut self) -> &mut waylan_engine::ImeRuntime {
-        &mut self.runtime
-    }
-
-    #[inline]
-    fn refresh_surface(&mut self) {
-        self.refresh_candidate_surface();
-    }
-}
-
-impl ReloadableWaylandSession for WaylanV2Session {
-    #[inline]
-    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
-        &mut self.surface.surface_manager.renderer
-    }
-
-    #[inline]
-    fn runtime_mut(&mut self) -> &mut waylan_engine::ImeRuntime {
-        &mut self.runtime
-    }
-
-    #[inline]
-    fn refresh_surface(&mut self) {
-        self.refresh_candidate_surface();
-    }
-}
-
-/// 执行通用的 Wayland 会话运行配置与词库热重载
-pub fn reload_wayland_session<S: ReloadableWaylandSession>(session: &mut S) {
-    let cfg = AppConfig::load_or_create();
-    let theme = match cfg.ui.theme {
-        ThemeMode::Light => UiTheme::light(),
-        ThemeMode::Dark => UiTheme::dark(),
-    };
-    session.renderer_mut().theme = theme;
-    session.renderer_mut().font_size = cfg.ui.font_size;
-    session.runtime_mut().reload_config(&cfg);
-    if !session.runtime_mut().core.engine.raw_input().is_empty() {
-        session.refresh_surface();
-    }
-}
-
-/// 执行 Wayland V1 会话的运行配置与词库热重载
-pub fn reload_wayland_v1_session(session: &mut WaylanV1Session) {
-    reload_wayland_session(session);
-}
-
-/// 执行 Wayland V2 会话的运行配置与词库热重载
-pub fn reload_wayland_v2_session(session: &mut WaylanV2Session) {
-    reload_wayland_session(session);
-}
-
-/// Wayland 内部会话参数包
-struct WaylandSessionParams<'a> {
-    engine: AlgoEngine,
-    renderer: CandidateBoxRenderer,
-    cfg: &'a AppConfig,
-    watched_paths: Vec<PathBuf>,
-    initial_mtime: Option<waylan_sys::FileSignature>,
-    tray: Option<&'a TrayService>,
-    coordinator: &'a ShutdownCoordinator,
-}
-
-/// 运行 Wayland V1 会话
-fn run_v1_session(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
-    let mut session = WaylanV1Session::with_engine(params.engine);
-    session.surface.surface_manager.renderer = params.renderer;
-    session.watcher.watched_paths = params.watched_paths;
-    session.watcher.last_watched_mtime = params.initial_mtime;
-    session.runtime.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
-    session.runtime.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
-    session.runtime.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-    session.watcher.exit_requested = Some(params.coordinator.flag());
-    session.watcher.loop_wakeup = params.coordinator.loop_wakeup();
-    session.watcher.reload_callback = Some(Box::new(reload_wayland_v1_session));
-    session.runtime.reload_config(params.cfg);
-    run_session_v1_loop(session).map_err(Into::into)
-}
-
-/// 运行 Wayland V2 会话，并在协议失败时自动降级至 V1 会话
-fn run_v2_session_with_v1_fallback(params: WaylandSessionParams<'_>) -> Result<(), DaemonError> {
-    info!("[微澜守护进程] 检测到 zwp_input_method_manager_v2 支持，启用现代 Wayland V2 协议会话。");
-    let mut session_v2 = WaylanV2Session::new(params.engine);
-    session_v2.surface.surface_manager.renderer = params.renderer;
-    session_v2.watcher.watched_paths = params.watched_paths;
-    session_v2.watcher.last_watched_mtime = params.initial_mtime;
-    session_v2.runtime.shared_flags = params.tray.as_ref().map(|t| t.shared_flags().clone());
-    session_v2.runtime.mode_notify_tx = params.tray.as_ref().map(|t| t.icon_notifier());
-    session_v2.runtime.reload_requested = params.tray.as_ref().map(|t| t.reload_flag());
-    session_v2.watcher.exit_requested = Some(params.coordinator.flag());
-    session_v2.watcher.loop_wakeup = params.coordinator.loop_wakeup();
-    session_v2.watcher.reload_callback = Some(Box::new(reload_wayland_v2_session));
-    session_v2.runtime.reload_config(params.cfg);
-    let v2_result = run_session_v2_loop_fallible(session_v2);
-    match v2_result {
-        Ok(()) => Ok(()),
-        Err((e, returned_session)) => {
-            if params.coordinator.is_shutting_down() {
-                info!("[微澜守护进程] 检测到优雅退出请求，服务安全退场。");
-                return Ok(());
-            }
-            warn!(
-                "[微澜守护进程 警告] Wayland V2 会话建立或运行失败 ({})，正在优雅降级至广泛兼容的 V1 会话...",
-                e
-            );
-            let session = WaylanV1Session {
-                runtime: returned_session.runtime,
-                surface: WaylandV1SurfaceContext {
-                    surface_manager: returned_session.surface.surface_manager,
-                    ..Default::default()
-                },
-                watcher: WaylandV1WatcherContext {
-                    watched_paths: returned_session.watcher.watched_paths,
-                    last_watched_mtime: returned_session.watcher.last_watched_mtime,
-                    exit_requested: Some(params.coordinator.flag()),
-                    loop_wakeup: params.coordinator.loop_wakeup(),
-                    reload_callback: Some(Box::new(reload_wayland_v1_session)),
-                    ..Default::default()
-                },
-                ..WaylanV1Session::default()
-            };
-            run_session_v1_loop(session).map_err(Into::into)
-        }
-    }
-}
 
 /// Wayland 会话派发参数包
 pub struct WaylandDispatchOptions<'a> {
@@ -179,21 +32,20 @@ pub struct WaylandDispatchOptions<'a> {
 
 /// 运行 Wayland 会话并处理异常退出
 pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), DaemonError> {
-    let session_params = WaylandSessionParams {
+    let prefer_v2 = opts.caps.has_input_method_v2 && opts.caps.has_seat;
+    let loop_result = run_wayland_session(WaylandSessionOptions {
         engine: opts.engine,
         renderer: opts.renderer,
         cfg: opts.cfg,
+        prefer_v2,
         watched_paths: opts.watched_paths,
         initial_mtime: opts.initial_mtime,
-        tray: opts.tray,
-        coordinator: opts.coordinator,
-    };
-
-    let loop_result = if opts.caps.has_input_method_v2 && opts.caps.has_seat {
-        run_v2_session_with_v1_fallback(session_params)
-    } else {
-        run_v1_session(session_params)
-    };
+        shared_flags: opts.tray.as_ref().map(|t| t.shared_flags().clone()),
+        mode_notify_tx: opts.tray.as_ref().map(|t| t.icon_notifier()),
+        reload_requested: opts.tray.as_ref().map(|t| t.reload_flag()),
+        exit_requested: Some(opts.coordinator.flag()),
+        loop_wakeup: opts.coordinator.loop_wakeup(),
+    });
 
     match loop_result {
         Ok(_) => {
