@@ -132,27 +132,14 @@ impl UserAdaptiveWal {
         }
     }
 
-    /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
-    pub fn append<P: AsRef<Path>>(
-        &mut self,
-        model: &mut UserAdaptiveModel,
-        path: P,
-        text: &str,
-        pinyin: &str,
-        timestamp: u64,
-    ) -> Result<(), AlgoError> {
-        let path_ref = path.as_ref();
-        let mut guard = self
-            .wal_file
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        let need_reopen = match &*guard {
+    /// 判断已打开的文件是否与目标磁盘文件一致，需要重新打开
+    fn check_need_reopen(current_opt: Option<&(PathBuf, File)>, target_path: &Path) -> bool {
+        match current_opt {
             Some((current_path, opened_file)) => {
-                if current_path != path_ref {
+                if current_path != target_path {
                     true
                 } else {
-                    match (opened_file.metadata(), std::fs::metadata(path_ref)) {
+                    match (opened_file.metadata(), std::fs::metadata(target_path)) {
                         (Ok(opened_meta), Ok(disk_meta)) => {
                             #[cfg(unix)]
                             {
@@ -170,70 +157,87 @@ impl UserAdaptiveWal {
                 }
             }
             None => true,
-        };
+        }
+    }
 
-        if need_reopen {
-            if let Some(parent) = path_ref.parent() {
-                if !parent.as_os_str().is_empty() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
+    /// 校验并初始化打开 WAL 追加写文件句柄（支持旧格式升级与跨进程排他锁）
+    fn ensure_wal_file_opened(
+        &mut self,
+        model: &mut UserAdaptiveModel,
+        path_ref: &Path,
+    ) -> Result<(), AlgoError> {
+        let mut guard = self
+            .wal_file
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if !Self::check_need_reopen(guard.as_ref(), path_ref) {
+            return Ok(());
+        }
+
+        if let Some(parent) = path_ref.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
             }
+        }
 
-            // 若目标文件已存在但并非当前 V2 WAL 格式，先合并重放旧数据再归并升级为标准 V2 WAL 格式
-            if path_ref.exists() {
-                if let Ok(mut existing_file) = File::open(path_ref) {
-                    let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
-                    if len > 0 {
-                        let mut magic = [0u8; 16];
-                        if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
-                            drop(existing_file);
-                            drop(guard);
-                            if let Ok(old_model) = Self::load_or_replay(path_ref) {
-                                model.merge(&old_model);
-                            }
-                            self.compact(model, path_ref)?;
-                            guard = self
-                                .wal_file
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // 若目标文件已存在但并非当前 V2 WAL 格式，先合并重放旧数据再归并升级为标准 V2 WAL 格式
+        if path_ref.exists() {
+            if let Ok(mut existing_file) = File::open(path_ref) {
+                let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
+                if len > 0 {
+                    let mut magic = [0u8; 16];
+                    if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
+                        drop(existing_file);
+                        drop(guard);
+                        if let Ok(old_model) = Self::load_or_replay(path_ref) {
+                            model.merge(&old_model);
                         }
+                        self.compact(model, path_ref)?;
+                        guard = self
+                            .wal_file
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                     }
                 }
             }
-
-            let mut options = OpenOptions::new();
-            options.create(true).append(true);
-            #[cfg(unix)]
-            options.mode(0o600);
-
-            let mut file =
-                options
-                    .open(path_ref)
-                    .map_err(|e| AlgoError::UserDictPersistFailed {
-                        path: PathBuf::from(path_ref),
-                        source: e,
-                    })?;
-
-            // 跨进程锁保护：尝试获取排他锁以防与其他进程初始化交错
-            let _ = flock(&file, FlockOperation::LockExclusive);
-
-            // 文件大小为 0 时写入魔数头
-            if file.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
-                let res = file
-                    .write_all(WAL_MAGIC)
-                    .map_err(|e| AlgoError::UserDictPersistFailed {
-                        path: PathBuf::from(path_ref),
-                        source: e,
-                    });
-                let _ = flock(&file, FlockOperation::Unlock);
-                res?;
-            } else {
-                let _ = flock(&file, FlockOperation::Unlock);
-            }
-
-            *guard = Some((PathBuf::from(path_ref), file));
         }
 
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+
+        let mut file = options
+            .open(path_ref)
+            .map_err(|e| AlgoError::UserDictPersistFailed {
+                path: PathBuf::from(path_ref),
+                source: e,
+            })?;
+
+        // 跨进程锁保护：尝试获取排他锁以防与其他进程初始化交错
+        let _ = flock(&file, FlockOperation::LockExclusive);
+
+        // 文件大小为 0 时写入魔数头
+        if file.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+            let res = file
+                .write_all(WAL_MAGIC)
+                .map_err(|e| AlgoError::UserDictPersistFailed {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                });
+            let _ = flock(&file, FlockOperation::Unlock);
+            res?;
+        } else {
+            let _ = flock(&file, FlockOperation::Unlock);
+        }
+
+        *guard = Some((PathBuf::from(path_ref), file));
+        Ok(())
+    }
+
+    /// 序列化单条用户上屏 WAL 帧二进制数据包（包含校验和）
+    fn serialize_wal_frame(text: &str, pinyin: &str, timestamp: u64) -> Option<Vec<u8>> {
         let py_bytes = pinyin.as_bytes();
         let text_bytes = text.as_bytes();
         if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
@@ -242,8 +246,9 @@ impl UserAdaptiveWal {
                 py_bytes.len(),
                 text_bytes.len()
             );
-            return Ok(());
+            return None;
         }
+
         let py_len = py_bytes.len() as u16;
         let text_len = text_bytes.len() as u16;
         let count: u32 = 1;
@@ -262,17 +267,50 @@ impl UserAdaptiveWal {
             .fold(WAL_CHECKSUM_SEED, |acc, &b| acc.wrapping_add(b as u32));
         buf.extend_from_slice(&checksum.to_le_bytes());
 
+        Some(buf)
+    }
+
+    /// 跨进程排他锁保护下将序列化帧安全写入文件并持久化
+    fn write_wal_frame_with_lock(
+        file: &mut File,
+        frame_buf: &[u8],
+        path_ref: &Path,
+    ) -> Result<(), AlgoError> {
+        let _ = flock(&*file, FlockOperation::LockExclusive);
+        let write_res = file
+            .write_all(frame_buf)
+            .map_err(|e| AlgoError::UserDictPersistFailed {
+                path: PathBuf::from(path_ref),
+                source: e,
+            });
+        let _ = flock(&*file, FlockOperation::Unlock);
+        write_res
+    }
+
+    /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
+    pub fn append<P: AsRef<Path>>(
+        &mut self,
+        model: &mut UserAdaptiveModel,
+        path: P,
+        text: &str,
+        pinyin: &str,
+        timestamp: u64,
+    ) -> Result<(), AlgoError> {
+        let path_ref = path.as_ref();
+        let frame_buf = match Self::serialize_wal_frame(text, pinyin, timestamp) {
+            Some(buf) => buf,
+            None => return Ok(()),
+        };
+
+        self.ensure_wal_file_opened(model, path_ref)?;
+
+        let mut guard = self
+            .wal_file
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         if let Some((_, ref mut file)) = *guard {
-            // 跨进程锁保护：追加写入期间持有排他锁，防止被并发截断或并发交错写入
-            let _ = flock(&*file, FlockOperation::LockExclusive);
-            let write_res = file
-                .write_all(&buf)
-                .map_err(|e| AlgoError::UserDictPersistFailed {
-                    path: PathBuf::from(path_ref),
-                    source: e,
-                });
-            let _ = flock(&*file, FlockOperation::Unlock);
-            write_res?;
+            Self::write_wal_frame_with_lock(file, &frame_buf, path_ref)?;
         }
 
         drop(guard);
