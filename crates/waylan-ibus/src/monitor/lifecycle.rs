@@ -13,7 +13,7 @@ use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
 use super::super::keys::IbusSessionCore;
-use crate::desktop_integration::{safe_gsettings_set_async, DEFAULT_DESKTOP_COMMAND_TIMEOUT};
+use waylan_sys::process::safe_gsettings_set_async;
 
 /// 确保微澜为当前活跃的全局输入法引擎（用于开机启动与桌面服务时差自愈）
 pub(crate) fn ensure_global_engine_active(conn: &Connection) {
@@ -45,12 +45,7 @@ pub(crate) fn ensure_global_engine_active(conn: &Connection) {
             debug!("[微澜 IBus] 自愈激活全局引擎 waylan 重试提示: {}", e);
         } else {
             info!("[微澜 IBus] 开机自愈完成：成功将全局引擎激活为 waylan (微澜)");
-            safe_gsettings_set_async(
-                "org.gnome.desktop.input-sources",
-                "current",
-                "0",
-                DEFAULT_DESKTOP_COMMAND_TIMEOUT,
-            );
+            safe_gsettings_set_async("org.gnome.desktop.input-sources", "current", "0");
         }
     }
 }
@@ -78,12 +73,7 @@ pub(crate) fn handle_screen_saver_transition(
             guard.is_password_context = false;
         }
         ensure_global_engine_active(conn);
-        safe_gsettings_set_async(
-            "org.gnome.desktop.input-sources",
-            "current",
-            "0",
-            DEFAULT_DESKTOP_COMMAND_TIMEOUT,
-        );
+        safe_gsettings_set_async("org.gnome.desktop.input-sources", "current", "0");
     }
     *last_screen_locked = current_screen_locked;
 }

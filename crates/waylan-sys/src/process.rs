@@ -1,10 +1,11 @@
-//! 桌面环境外部子进程安全执行与生命周期守护模块
+//! 平台操作系统外部子进程安全执行与生命周期守护模块
 //!
 //! # 设计原理
-//! - **实现初衷**：在与 GNOME Shell、IBus 以及 GSettings 交互时，若直接调用 `Command::output()`，
-//!   一旦 D-Bus 或桌面总线挂起，调用线程将被永久阻塞，导致输入法事件监听循环直接卡死。
-//! - **核心优势**：通过非阻塞轮询 `try_wait` 配合管道并发读取，在超时发生时主动发送 `SIGKILL`
-//!   并调用 `wait` 回收进程控制块（PCB），彻底杜绝僵尸进程残留与事件循环冻结。
+//! - **实现初衷**：在与宿主机桌面环境（如 GNOME Shell、IBus、GSettings）交互拉起外部命令时，
+//!   若直接调用同步的 `Command::output()`，一旦 D-Bus 或桌面总线挂起，调用线程将被永久阻塞，导致
+//!   输入法主事件循环直接卡死。
+//! - **核心优势**：通过并发管道读取避免缓冲区打满死锁，结合非阻塞 `try_wait` 微休眠轮询，在超时发生时
+//!   主动发送 `SIGKILL` 并调用 `wait` 回收进程控制块（PCB），彻底杜绝僵尸进程残留与事件循环冻结。
 //! - **代价与局限**：命令执行期间存在微休眠轮询（10ms），超时场景下子进程会被强制终止。
 
 use log::{debug, warn};
@@ -13,8 +14,8 @@ use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-/// 默认桌面集成外部命令执行超时时限（2 秒）
-pub const DEFAULT_DESKTOP_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+/// 默认外部系统命令执行超时时限（2 秒）
+pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 管道读取工作线程句柄对
 struct PipeReaderHandles {
@@ -110,27 +111,30 @@ pub fn run_command_with_timeout(mut cmd: Command, timeout: Duration) -> io::Resu
     wait_child_with_timeout(child, readers, timeout)
 }
 
-/// 在后台独立线程中异步派发执行外部命令，并附带强制超时保护与自动僵尸进程回收
-pub fn spawn_command_detached(cmd: Command, timeout: Duration, task_name: &'static str) {
+/// 在独立后台线程中异步执行带超时保护的外部命令（不阻塞当前线程）
+pub fn spawn_command_detached(cmd: Command, task_name: &'static str, timeout: Duration) {
     let builder = thread::Builder::new().name(format!("waylan-cmd-{}", task_name));
     let spawn_result = builder.spawn(move || match run_command_with_timeout(cmd, timeout) {
         Ok(output) => {
             if !output.status.success() {
                 debug!(
-                    "[桌面集成] 后台命令 [{}] 退出状态非成功: {:?}",
+                    "[系统子进程] 后台命令 [{}] 退出状态非成功: {:?}",
                     task_name,
                     output.status.code()
                 );
             }
         }
         Err(e) => {
-            debug!("[桌面集成] 后台命令 [{}] 执行失败或超时: {}", task_name, e);
+            debug!(
+                "[系统子进程] 后台命令 [{}] 执行失败或超时: {}",
+                task_name, e
+            );
         }
     });
 
     if let Err(e) = spawn_result {
         warn!(
-            "[桌面集成] 派发后台命令任务 [{}] 线程失败: {}",
+            "[系统子进程] 派发后台命令任务 [{}] 线程失败: {}",
             task_name, e
         );
     }
@@ -158,10 +162,10 @@ pub fn safe_gsettings_set(schema: &str, key: &str, value: &str, timeout: Duratio
 }
 
 /// 异步后台安全设置 GSettings 键值（不阻塞调用线程，带超时保护与僵尸进程回收）
-pub fn safe_gsettings_set_async(schema: &str, key: &str, value: &str, timeout: Duration) {
+pub fn safe_gsettings_set_async(schema: &str, key: &str, value: &str) {
     let mut cmd = Command::new("gsettings");
     cmd.args(["set", schema, key, value]);
-    spawn_command_detached(cmd, timeout, "gsettings-set");
+    spawn_command_detached(cmd, "gsettings-set", DEFAULT_COMMAND_TIMEOUT);
 }
 
 #[cfg(test)]
@@ -190,7 +194,6 @@ mod tests {
 
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().kind(), io::ErrorKind::TimedOut);
-        // 超时应该在短时间内（如 200ms 内）返回，绝不能等待 2 秒
         assert!(elapsed < Duration::from_millis(500));
     }
 

@@ -9,7 +9,7 @@
 //!   同时复用 `inotify` 与 `eventfd` (`LoopWakeup`) 实现零忙轮询的配置热重载与系统托盘联动。
 //! - **代价与局限**：依赖宿主机运行中的 `ibus-daemon` 会话实例。
 
-pub mod desktop_integration;
+pub mod component;
 pub mod discovery;
 pub mod engine;
 pub mod error;
@@ -19,6 +19,7 @@ pub mod screensaver;
 pub mod session;
 pub mod types;
 
+pub use component::{format_ibus_component_xml, format_ibus_engines_xml};
 pub use error::IbusError;
 
 use std::env;
@@ -29,8 +30,6 @@ use std::sync::Arc;
 
 pub use session::run_ibus_session;
 use waylan_sys::LoopWakeup;
-
-use desktop_integration::{format_ibus_component_xml, format_ibus_engines_xml};
 
 /// IBus 菜单项外部动作处理器（如打开偏好设置界面、查看系统日志）
 pub trait IbusMenuActionHandler: Send + Sync {

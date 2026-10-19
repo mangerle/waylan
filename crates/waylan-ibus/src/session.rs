@@ -16,7 +16,7 @@ use zbus::blocking::connection::Builder;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
-use super::desktop_integration::ensure_ibus_and_gnome_integration;
+use super::component::ensure_ibus_component_installed;
 use super::discovery::discover_ibus_address;
 use super::engine::{
     IbusEngineService, IbusFactoryService, IbusGenericService, WAYLAN_ENGINE_OBJECT_PATH,
@@ -77,10 +77,10 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
     let ibus_addr = discover_ibus_address().ok_or(IbusError::AddressNotFound)?;
     info!("[微澜 IBus] 成功探测到活跃 IBus 总线地址: {}", ibus_addr);
 
-    let (shared_core, engine_srv, monitor_params, is_child, exclusive) =
+    let (shared_core, engine_srv, monitor_params, is_child, _exclusive) =
         assemble_ibus_services(opts);
     let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv)?;
-    register_or_activate_ibus_engine(&conn, is_child, exclusive)?;
+    register_or_activate_ibus_engine(&conn, is_child)?;
 
     let mut inotify_watcher: Option<InotifyWatcher> = None;
     init_session_inotify_watcher(&monitor_params.watched_paths, &mut inotify_watcher, "IBus");
@@ -142,7 +142,6 @@ fn build_ibus_connection(
 fn register_or_activate_ibus_engine(
     conn: &Connection,
     is_ibus_child_mode: bool,
-    exclusive: bool,
 ) -> Result<(), IbusError> {
     let exe_path = env::current_exe()
         .ok()
@@ -189,7 +188,7 @@ fn register_or_activate_ibus_engine(
     }
 
     if !is_ibus_child_mode {
-        ensure_ibus_and_gnome_integration(&exe_path, exclusive);
+        ensure_ibus_component_installed(&exe_path);
     }
 
     Ok(())

@@ -12,6 +12,7 @@
 pub mod assets;
 pub mod fs_watcher;
 pub mod loop_wakeup;
+pub mod process;
 
 pub use assets::{detect_default_assets_path, resolve_icon_path_or_name};
 pub use fs_watcher::{
@@ -19,3 +20,7 @@ pub use fs_watcher::{
     init_session_inotify_watcher_with_filter, DirEventFilter, FileSignature, InotifyWatcher,
 };
 pub use loop_wakeup::LoopWakeup;
+pub use process::{
+    run_command_with_timeout, safe_gsettings_get, safe_gsettings_set, safe_gsettings_set_async,
+    spawn_command_detached, DEFAULT_COMMAND_TIMEOUT,
+};
