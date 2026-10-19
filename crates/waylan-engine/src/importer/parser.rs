@@ -10,12 +10,12 @@
 //! - **代价与局限**：
 //!   仅负责单文件的语法与二进制解码，不直接负责自适应历史记录合入与去重。
 
-use crate::error::AlgoError;
-use crate::syllables::normalize_pinyin_tones;
-use crate::types::ImportedDictEntry;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use waylan_algo::error::AlgoError;
+use waylan_algo::syllables::normalize_pinyin_tones;
+use waylan_algo::types::ImportedDictEntry;
 use waylan_core::MAX_IMPORT_FILE_BYTES;
 
 /// 搜狗细胞词库标准文件头前 4 字节魔数

@@ -8,9 +8,12 @@
 
 pub mod factory;
 pub mod frontend;
+pub mod importer;
 pub mod input;
 pub mod runtime;
 pub mod session;
+
+pub use importer::{AuxImportReport, DictImportReport, DictImportService, DictImporter};
 
 pub use input::{PunctuationOptions, PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 

@@ -10,8 +10,8 @@ use crate::error::DaemonError;
 use log::info;
 use std::path::Path;
 use waylan_algo::builder::DictBuilder;
-use waylan_algo::dict_importer::DictImportService;
 use waylan_algo::opencc::OpenCcDict;
+use waylan_engine::importer::DictImportService;
 
 /// 词库管理子命令枚举
 #[derive(Debug, Clone, PartialEq, Eq)]

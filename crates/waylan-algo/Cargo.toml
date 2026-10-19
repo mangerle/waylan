@@ -8,9 +8,8 @@ description = "微澜 (WayLan) - 纯 Rust 现代中文拼音输入核心算法�
 
 [features]
 default = []
-dict-importer = []
 dict-builder = []
-tools = ["dict-importer", "dict-builder"]
+tools = ["dict-builder"]
 
 [[example]]
 name = "build_aux_dict"

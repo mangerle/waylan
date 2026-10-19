@@ -10,15 +10,17 @@
 //! - **代价与局限**：
 //!   合入自适应词库时会触发 WAL 文件的压实（Compaction），超大词库首次合入需要毫秒级磁盘 I/O。
 
-use crate::custom_phrase::AuxiliaryDict;
-use crate::dict_importer::parser::DictImporter;
-use crate::error::AlgoError;
-use crate::user_adaptive::UserAdaptiveModel;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use waylan_algo::custom_phrase::AuxiliaryDict;
+use waylan_algo::error::AlgoError;
+use waylan_algo::user_adaptive::UserAdaptiveModel;
 use waylan_core::MAX_IMPORT_FILE_BYTES;
+
+use super::parser::DictImporter;
 
 /// 拼音词典导入结果报告
 #[derive(Debug, Clone, PartialEq, Eq)]

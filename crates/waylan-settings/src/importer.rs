@@ -13,11 +13,11 @@
 
 use std::path::Path;
 use thiserror::Error;
-use waylan_algo::dict_importer::DictImportService;
 use waylan_algo::error::AlgoError;
 use waylan_algo::AuxiliaryDict;
 use waylan_core::config::AppConfig;
 pub use waylan_core::MAX_IMPORT_FILE_BYTES;
+use waylan_engine::importer::DictImportService;
 
 /// 外部词库与字典数据导入错误枚举
 #[derive(Debug, Error)]
