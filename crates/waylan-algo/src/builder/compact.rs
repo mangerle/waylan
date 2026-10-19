@@ -1,3 +1,4 @@
+use crate::builder::compact_writer::{write_compact_file, CompactWritePayload};
 use crate::builder::{normalize_pinyin_tones, BuildStats};
 use crate::dat::DoubleArrayTrie;
 use crate::error::AlgoError;
@@ -7,7 +8,7 @@ use crate::table::COMPACT_DICT_MAGIC;
 use crate::vocab::Vocabulary;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -25,17 +26,6 @@ struct ParsedTextSources {
     dict_map: KeyCandidateMap,
     total_lines: usize,
     total_words: usize,
-}
-
-/// 紧凑词库二进制持久化装配参数对象
-pub struct CompactWritePayload<'a> {
-    pub output_path: &'a Path,
-    pub dat: &'a DoubleArrayTrie,
-    pub key_metas_data: &'a [u8],
-    pub candidates_data: &'a [u8],
-    pub words: &'a [String],
-    pub num_keys: usize,
-    pub num_candidates: usize,
 }
 
 /// 紧凑二进制词库构建器
@@ -67,7 +57,7 @@ impl CompactDictBuilder {
             Self::encode_keys_and_candidates(&combined_keys, &sorted_keys);
 
         // 6. 计算绝对偏移并持久化写入目标二进制文件
-        Self::write_compact_file(CompactWritePayload {
+        write_compact_file(CompactWritePayload {
             output_path: out_ref,
             dat: &dat,
             key_metas_data: &key_metas_data,
@@ -360,105 +350,5 @@ impl CompactDictBuilder {
         }
 
         (key_metas_data, candidates_data, cand_counter as usize)
-    }
-
-    /// 组装文件头与各段数据并写入目标磁盘文件
-    fn write_compact_file(payload: CompactWritePayload<'_>) -> Result<(), AlgoError> {
-        let CompactWritePayload {
-            output_path,
-            dat,
-            key_metas_data,
-            candidates_data,
-            words,
-            num_keys,
-            num_candidates,
-        } = payload;
-        let vocab_size = words.len();
-        let mut vocab_offsets: Vec<u32> = Vec::with_capacity(vocab_size + 1);
-        let mut vocab_strings: Vec<u8> = Vec::new();
-        let mut current_str_offset: u32 = 0;
-
-        for w in words {
-            vocab_offsets.push(current_str_offset);
-            let b = w.as_bytes();
-            vocab_strings.extend_from_slice(b);
-            current_str_offset += b.len() as u32;
-        }
-        vocab_offsets.push(current_str_offset);
-
-        let mut sorted_vocab_ids: Vec<u32> = (0..vocab_size as u32).collect();
-        sorted_vocab_ids.sort_by(|&a, &b| words[a as usize].cmp(&words[b as usize]));
-
-        let header_len = 64usize;
-        let dat_base_bytes = dat.base.len() * 4;
-        let dat_check_bytes = dat.check.len() * 4;
-        let dat_tail_bytes = dat.tail.len();
-
-        let mut current_offset = header_len + dat_base_bytes + dat_check_bytes + dat_tail_bytes;
-        let pad1 = (4 - (current_offset % 4)) % 4;
-        current_offset += pad1;
-
-        let key_metas_offset = current_offset as u64;
-        current_offset += key_metas_data.len();
-
-        let candidates_offset = current_offset as u64;
-        current_offset += candidates_data.len();
-
-        let pad2 = (4 - (current_offset % 4)) % 4;
-        current_offset += pad2;
-
-        let vocab_offset = current_offset as u64;
-
-        let out_file = File::create(output_path).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(output_path),
-            source: e,
-        })?;
-        let mut writer = BufWriter::new(out_file);
-
-        let mut header = [0u8; 64];
-        header[0..16].copy_from_slice(COMPACT_DICT_MAGIC);
-        header[16..20].copy_from_slice(&3u32.to_le_bytes());
-        header[20..24].copy_from_slice(&(num_keys as u32).to_le_bytes());
-        header[24..28].copy_from_slice(&(num_candidates as u32).to_le_bytes());
-        header[28..32].copy_from_slice(&(vocab_size as u32).to_le_bytes());
-        header[32..36].copy_from_slice(&(dat.base.len() as u32).to_le_bytes());
-        header[36..40].copy_from_slice(&(dat.tail.len() as u32).to_le_bytes());
-        header[40..48].copy_from_slice(&key_metas_offset.to_le_bytes());
-        header[48..56].copy_from_slice(&candidates_offset.to_le_bytes());
-        header[56..64].copy_from_slice(&vocab_offset.to_le_bytes());
-
-        let io_err = |e| AlgoError::DictionaryIo {
-            path: PathBuf::from(output_path),
-            source: e,
-        };
-
-        writer.write_all(&header).map_err(io_err)?;
-        for &b in &dat.base {
-            writer.write_all(&b.to_le_bytes()).map_err(io_err)?;
-        }
-        for &c in &dat.check {
-            writer.write_all(&c.to_le_bytes()).map_err(io_err)?;
-        }
-        writer.write_all(&dat.tail).map_err(io_err)?;
-        if pad1 > 0 {
-            writer.write_all(&vec![0u8; pad1]).map_err(io_err)?;
-        }
-
-        writer.write_all(key_metas_data).map_err(io_err)?;
-        writer.write_all(candidates_data).map_err(io_err)?;
-        if pad2 > 0 {
-            writer.write_all(&vec![0u8; pad2]).map_err(io_err)?;
-        }
-
-        for &off in &vocab_offsets {
-            writer.write_all(&off.to_le_bytes()).map_err(io_err)?;
-        }
-        for &id in &sorted_vocab_ids {
-            writer.write_all(&id.to_le_bytes()).map_err(io_err)?;
-        }
-        writer.write_all(&vocab_strings).map_err(io_err)?;
-
-        writer.flush().map_err(io_err)?;
-        Ok(())
     }
 }

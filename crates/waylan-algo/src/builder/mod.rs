@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod compact;
+pub mod compact_writer;
 pub use compact::CompactDictBuilder;
+pub use compact_writer::{write_compact_file, CompactWritePayload};
 
 /// 词库编译统计指标
 #[derive(Debug, Clone, PartialEq, Eq)]
