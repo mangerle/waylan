@@ -17,45 +17,12 @@ impl AlgoEngine {
         paths: &[SegmentPath],
         candidates: &mut Vec<AlgoCandidate>,
     ) {
-        // 1. 状态机感知与容错门禁控制：
-        // 若当前输入处于正常的合法前缀打字态（已成功检索出 ExactWord 级别的完整成词或受保护专名），
-        // 免受激进物理空间容错打扰；仅在无任何合法成词命中时（如输入 yingxaing, nihso, cehng），激活拼写纠错。
-        let has_exact_or_prefix_words = candidates.iter().any(|c| {
-            c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity
-        });
         let is_broken_typo = paths
             .first()
             .is_some_and(|p| p.is_broken_typo_fallback(&self.config.fuzzy));
 
-        if !has_exact_or_prefix_words {
-            let mut merged_typos: Vec<AlgoCandidate> = candidates
-                .iter()
-                .filter(|c| c.tier == CandidateTier::TypoCorrection)
-                .take(2)
-                .cloned()
-                .collect();
-            for mut spatial_cand in
-                SpatialTypoCorrector::generate_candidates(raw_input, &self.resources.table)
-            {
-                if self.config.traditional_chinese {
-                    spatial_cand.text = self.resources.opencc_dict.convert_text(&spatial_cand.text);
-                }
-                if !merged_typos.iter().any(|c| c.text == spatial_cand.text) {
-                    merged_typos.push(spatial_cand);
-                }
-            }
-
-            for (i, mut typo_cand) in merged_typos.into_iter().take(2).enumerate() {
-                typo_cand.consumed_len = Some(raw_input.len());
-                candidates.retain(|c| c.text != typo_cand.text);
-                let target_pos = if is_broken_typo || candidates.is_empty() {
-                    i.min(candidates.len())
-                } else {
-                    (1 + i).min(candidates.len())
-                };
-                candidates.insert(target_pos, typo_cand);
-            }
-        }
+        // 1. 容错门禁控制：在无合法成词命中时注入物理空间纠错
+        self.inject_typo_candidates_if_needed(raw_input, is_broken_typo, candidates);
 
         // 2. 前缀高频短词混排注入（支持长句分段确认 Partial Commit，仅在正常切分路径上启用）
         if let Some(best_path) = paths.first() {
@@ -64,10 +31,64 @@ impl AlgoEngine {
             }
         }
 
-        // 3. 收集扩展项（用户自定义短语、动态日期时间、英文单词联想、符号表情）
+        // 3. 收集并编排扩展项（自定义短语、动态时间、英文联想、符号表情）
+        let extensions = self.collect_page_zero_extensions(raw_input, candidates);
+        self.merge_extensions_by_hierarchy(extensions, candidates);
+    }
+
+    /// 在无完整合法成词命中时注入物理空间键盘按键纠错候选
+    fn inject_typo_candidates_if_needed(
+        &self,
+        raw_input: &str,
+        is_broken_typo: bool,
+        candidates: &mut Vec<AlgoCandidate>,
+    ) {
+        let has_exact_or_prefix_words = candidates.iter().any(|c| {
+            c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity
+        });
+        if has_exact_or_prefix_words {
+            return;
+        }
+
+        let mut merged_typos: Vec<AlgoCandidate> = candidates
+            .iter()
+            .filter(|c| c.tier == CandidateTier::TypoCorrection)
+            .take(2)
+            .cloned()
+            .collect();
+
+        for mut spatial_cand in
+            SpatialTypoCorrector::generate_candidates(raw_input, &self.resources.table)
+        {
+            if self.config.traditional_chinese {
+                spatial_cand.text = self.resources.opencc_dict.convert_text(&spatial_cand.text);
+            }
+            if !merged_typos.iter().any(|c| c.text == spatial_cand.text) {
+                merged_typos.push(spatial_cand);
+            }
+        }
+
+        for (i, mut typo_cand) in merged_typos.into_iter().take(2).enumerate() {
+            typo_cand.consumed_len = Some(raw_input.len());
+            candidates.retain(|c| c.text != typo_cand.text);
+            let target_pos = if is_broken_typo || candidates.is_empty() {
+                i.min(candidates.len())
+            } else {
+                (1 + i).min(candidates.len())
+            };
+            candidates.insert(target_pos, typo_cand);
+        }
+    }
+
+    /// 收集首页扩展建议（自定义短语、动态日期时间、英文词汇与特殊符号）
+    fn collect_page_zero_extensions(
+        &self,
+        raw_input: &str,
+        existing_candidates: &[AlgoCandidate],
+    ) -> Vec<AlgoCandidate> {
         let mut extensions: Vec<AlgoCandidate> = Vec::new();
 
-        // 3.1 用户自定义短语（最高优先级，标记为 ProtectedEntity 置顶）
+        // 1. 用户自定义短语（最高优先级，标记为 ProtectedEntity 置顶）
         let phrase_cands = self.resources.custom_phrases.lookup(raw_input);
         for mut phrase in phrase_cands {
             if self.config.traditional_chinese {
@@ -78,7 +99,7 @@ impl AlgoEngine {
             extensions.push(phrase);
         }
 
-        // 3.2 动态扩展功能（日期、时间、干支等强相关功能卡片）
+        // 2. 动态扩展功能（日期、时间、干支等强相关功能卡片）
         if let Some(mut dynamic_cand) = DateTimeEvaluator::try_evaluate(raw_input) {
             if self.config.traditional_chinese {
                 dynamic_cand.text = self.resources.opencc_dict.convert_text(&dynamic_cand.text);
@@ -90,10 +111,10 @@ impl AlgoEngine {
             extensions.push(dynamic_cand);
         }
 
-        // 3.3 英文单词联想（次要辅助建议，至多取 1 项避免污染候选列表）
+        // 3. 英文单词联想（次要辅助建议，至多取 1 项避免污染候选列表）
         let eng_cands = self.resources.english_suggester.lookup(raw_input);
         for mut eng in eng_cands.into_iter().take(1) {
-            if !candidates
+            if !existing_candidates
                 .iter()
                 .any(|c| c.text.eq_ignore_ascii_case(&eng.text))
             {
@@ -102,29 +123,33 @@ impl AlgoEngine {
             }
         }
 
-        // 3.4 符号与表情联想（次要辅助建议，至多取 1 项）
+        // 4. 符号与表情联想（次要辅助建议，至多取 1 项）
         let sym_cands = self.resources.symbol_suggester.lookup(raw_input);
         for mut sym in sym_cands.into_iter().take(1) {
-            if !candidates.iter().any(|c| c.text == sym.text) {
+            if !existing_candidates.iter().any(|c| c.text == sym.text) {
                 sym.consumed_len = Some(raw_input.len());
                 extensions.push(sym);
             }
         }
 
-        // 4. 按照确定的语义层级编排扩展候选，杜绝多个扩展项连续 insert(1) 暴力覆盖挤出中文最优词
+        extensions
+    }
+
+    /// 按照确定的语义层级编排扩展候选，杜绝多个扩展项暴力覆盖挤出中文最优词
+    fn merge_extensions_by_hierarchy(
+        &self,
+        extensions: Vec<AlgoCandidate>,
+        candidates: &mut Vec<AlgoCandidate>,
+    ) {
         for ext in extensions {
             if ext.tier == CandidateTier::ProtectedEntity {
-                // 自定义短语置顶
                 candidates.retain(|c| c.text != ext.text);
                 candidates.insert(0, ext);
             } else if ext.is_expandable {
-                // 动态日期/时间功能项：若已有候选项，插入到 index 1（紧随首选常规成词），否则置顶
                 candidates.retain(|c| c.text != ext.text);
                 let insert_pos = if candidates.is_empty() { 0 } else { 1 };
                 candidates.insert(insert_pos, ext);
             } else {
-                // 英文联想与符号表情等辅助备选项：
-                // 排在核心成词与动态功能之后（至少在 index 2 或末尾），确保首选与次选中文成词不受挤压
                 candidates.retain(|c| c.text != ext.text);
                 let insert_pos = if candidates.len() <= 1 {
                     candidates.len()
@@ -255,12 +280,48 @@ impl AlgoEngine {
         syllables: &[String],
         remaining: &str,
     ) -> Vec<AlgoCandidate> {
-        let n = syllables.len();
-        if n == 0 || remaining.is_empty() {
+        let (split_idx, initial_chain) =
+            match self.resolve_head_and_tail_split(syllables, remaining) {
+                Some(res) => res,
+                None => return Vec::new(),
+            };
+
+        // 1. 检索尾部展开候选词集合
+        let tail_cands = self.lookup_tail_cands(&initial_chain, syllables, split_idx, remaining);
+        if tail_cands.is_empty() {
             return Vec::new();
         }
 
-        // 1. 动态向前回溯提取尾部声母链 initial_chain
+        // 2. 确定真正的前驱短语音节切片
+        let effective_head_syls = if initial_chain.len() == 1 {
+            if split_idx == 0 {
+                return Vec::new();
+            }
+            &syllables[..split_idx - 1]
+        } else {
+            &syllables[..split_idx]
+        };
+
+        if effective_head_syls.is_empty() {
+            return tail_cands;
+        }
+
+        // 3. 求解前驱段候选并与尾部进行笛卡尔积合成与打分
+        let head_options = self.decode_head_candidates(effective_head_syls);
+        self.combine_and_score_phrases(&head_options, &tail_cands)
+    }
+
+    /// 动态向前回溯切分声母链与前驱音节
+    fn resolve_head_and_tail_split(
+        &self,
+        syllables: &[String],
+        remaining: &str,
+    ) -> Option<(usize, Vec<String>)> {
+        let n = syllables.len();
+        if n == 0 || remaining.is_empty() {
+            return None;
+        }
+
         let mut initial_chain = vec![remaining.to_string()];
         let mut split_idx = n;
 
@@ -274,18 +335,25 @@ impl AlgoEngine {
             }
         }
 
-        let k = initial_chain.len();
         let head_syls = &syllables[..split_idx];
-
-        // 校验前驱段必须全部由合法的完整全拼音节组成（不含夹在中间的孤立单字母辅音声母或单鼻音）
         if !head_syls.iter().all(|s| {
             is_valid_syllable(s) && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e"))
         }) {
-            return Vec::new();
+            return None;
         }
 
-        // 2. 尾部展开候选词集合 (tail_cands)
-        let tail_cands: Vec<AlgoCandidate> = if k == 1 {
+        Some((split_idx, initial_chain))
+    }
+
+    /// 检索尾部展开候选词集合
+    fn lookup_tail_cands(
+        &self,
+        initial_chain: &[String],
+        syllables: &[String],
+        split_idx: usize,
+        remaining: &str,
+    ) -> Vec<AlgoCandidate> {
+        if initial_chain.len() == 1 {
             if split_idx == 0 {
                 return Vec::new();
             }
@@ -297,27 +365,11 @@ impl AlgoEngine {
         } else {
             let acronym_key = initial_chain.concat();
             self.resources.table.lookup_acronym(&acronym_key)
-        };
-
-        if tail_cands.is_empty() {
-            return Vec::new();
         }
+    }
 
-        // 3. 确定真正的前驱短语音节切片 (effective_head_syls)
-        let effective_head_syls = if k == 1 {
-            if split_idx == 0 {
-                return Vec::new();
-            }
-            &syllables[..split_idx - 1]
-        } else {
-            head_syls
-        };
-
-        if effective_head_syls.is_empty() {
-            return tail_cands;
-        }
-
-        // 4. 求解前驱段文本与得分 (如 wo'men'gong'tong'de -> 我们共同的)
+    /// 求解前驱段文本与得分
+    fn decode_head_candidates(&self, effective_head_syls: &[String]) -> Vec<(String, String, u32)> {
         let head_key = effective_head_syls.join("'");
         let mut head_options: Vec<(String, String, u32)> = Vec::with_capacity(2);
 
@@ -337,9 +389,17 @@ impl AlgoEngine {
             }
         }
 
-        // 5. 跨词短语笛卡尔积合成与打分
+        head_options
+    }
+
+    /// 跨词短语笛卡尔积合成与二元文法打分
+    fn combine_and_score_phrases(
+        &self,
+        head_options: &[(String, String, u32)],
+        tail_cands: &[AlgoCandidate],
+    ) -> Vec<AlgoCandidate> {
         let mut results = Vec::with_capacity(head_options.len() * 5);
-        for (head_text, head_pinyin, head_score) in &head_options {
+        for (head_text, head_pinyin, head_score) in head_options {
             let head_last_char = head_text
                 .chars()
                 .last()

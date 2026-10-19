@@ -49,18 +49,8 @@ impl AlgoEngine {
         Some(self.commit_candidate_internal(selected, current_timestamp))
     }
 
-    /// 核心提交逻辑内部实现：自造词、调频、盘古之白与消费前缀
-    fn commit_candidate_internal(
-        &mut self,
-        selected: AlgoCandidate,
-        current_timestamp: u64,
-    ) -> (String, usize) {
-        self.adaptive.last_timestamp = self.adaptive.last_timestamp.max(current_timestamp);
-        let should_record = self.should_record_to_user_dict(&selected);
-
-        // 若选中的是可展开项，且直接按数字键确认（未展开时）：
-        // 优先将首个格式化子候选文本（如当前标准日期 2026年10月9日）上屏
-        let mut selected = selected;
+    /// 准备上屏文本并根据盘古之白规则注入空格，同时更新跨句历史上下文
+    fn prepare_commit_text(&mut self, selected: &mut AlgoCandidate, should_record: bool) -> String {
         let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
             selected.sub_candidates.swap_remove(0)
         } else if should_record {
@@ -69,13 +59,6 @@ impl AlgoEngine {
             std::mem::take(&mut selected.text)
         };
 
-        // 当选中的候选词为合规中文拼音词条（支持简繁中文）时，记录用户选词并动态调频
-        if should_record {
-            self.adaptive
-                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
-        }
-
-        // 记录上一次上屏词条作为跨句历史上下文（记录去除前后空格的纯净词条，避免干扰语言模型转移概率）
         let trimmed_commit = raw_commit.trim();
         let last_context = if !trimmed_commit.is_empty() {
             Some(trimmed_commit.to_string())
@@ -83,7 +66,6 @@ impl AlgoEngine {
             None
         };
 
-        // 盘古之白（中西文智能空格）：自动在交界处补充半角空格
         let commit_text = if self.config.auto_pangu_spacing {
             if let Some(prev) = self.composition.last_commit_context() {
                 if PanguSpacing::should_insert_pangu_space(prev, &raw_commit) {
@@ -102,7 +84,11 @@ impl AlgoEngine {
             self.composition.set_last_commit_context(Some(ctx));
         }
 
-        // 计算消费的拼音字母长度并执行分段确认（优先直接读取候选词产生时统一标记的 consumed_len，避免重复构图）
+        commit_text
+    }
+
+    /// 计算选词提交需要消费的拼音长度，具备多级对齐与防死锁保底策略
+    fn calculate_candidate_consumed_len(&self, selected: &AlgoCandidate) -> usize {
         let mut consumed_len = if let Some(len) = selected.consumed_len {
             len.min(self.composition.len())
         } else if selected.is_expandable
@@ -121,9 +107,6 @@ impl AlgoEngine {
             }
         };
 
-        // 核心安全保底：用户主动选词提交时，消费长度绝对不可为 0！
-        // 若经过多级音节对齐计算后消费长度仍为 0，说明候选词属于整段联想或长词补全，
-        // 必须保底消费全部剩余拼音，彻底消除状态机死锁与重复上屏。
         if consumed_len == 0 {
             log::warn!(
                 "[算法引擎] 选词提交消费长度为 0，触发安全保底消费全部拼音: 词条=\"{}\", 拼音=\"{}\", 剩余拼音=\"{}\"",
@@ -134,16 +117,24 @@ impl AlgoEngine {
             consumed_len = self.composition.len();
         }
 
+        consumed_len
+    }
+
+    /// 处理分段选词记录与多音节用户自造词自动合成
+    fn finalize_partial_segments(
+        &mut self,
+        selected_text: String,
+        selected_pinyin: String,
+        should_record: bool,
+        current_timestamp: u64,
+    ) {
         if should_record {
             self.composition
-                .record_partial_segment(selected.text, selected.pinyin);
+                .record_partial_segment(selected_text, selected_pinyin);
         } else {
             self.composition.clear_partial_segments();
         }
 
-        self.composition.consume_prefix(consumed_len);
-
-        // 若当前整串拼音已全部消费完毕，且通过 2 次及以上分段选词完成，自动合成为用户自造新词
         if self.composition.is_empty() {
             if self.composition.partial_segments().len() >= 2 {
                 let full_text: String = self
@@ -167,6 +158,32 @@ impl AlgoEngine {
             }
             self.composition.clear_partial_segments();
         }
+    }
+
+    /// 核心提交逻辑内部实现：自造词、调频、盘古之白与消费前缀
+    fn commit_candidate_internal(
+        &mut self,
+        mut selected: AlgoCandidate,
+        current_timestamp: u64,
+    ) -> (String, usize) {
+        self.adaptive.last_timestamp = self.adaptive.last_timestamp.max(current_timestamp);
+        let should_record = self.should_record_to_user_dict(&selected);
+
+        if should_record {
+            self.adaptive
+                .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+        }
+
+        let commit_text = self.prepare_commit_text(&mut selected, should_record);
+        let consumed_len = self.calculate_candidate_consumed_len(&selected);
+
+        self.composition.consume_prefix(consumed_len);
+        self.finalize_partial_segments(
+            selected.text,
+            selected.pinyin,
+            should_record,
+            current_timestamp,
+        );
 
         self.viewport.page_index = 0;
         if self.composition.is_empty() {

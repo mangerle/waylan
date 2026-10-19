@@ -125,133 +125,28 @@ impl ImeCoreSession {
             return ImeOutputAction::ShortcutToggled(toggle);
         }
 
-        // 英文模式、CapsLock 锁定或按住 Ctrl/Alt 时一律原生透传
-        if self.is_caps_locked() || self.has_ctrl_or_alt() {
-            return ImeOutputAction::PassThrough;
+        // 英文模式、CapsLock 锁定或按住 Ctrl/Alt 时的直通或全角处理
+        if let Some(action) = self.dispatch_passthrough_or_fullwidth_english(keycode) {
+            return action;
         }
 
-        // 若处于英文模式但开启了全角字符，直通字母转换为全角字符输出
-        if self.mode == InputMode::English {
-            if self.full_width_char && !self.is_shift_active() {
-                if let Some(ch) = self.keymap_layout.get_char(keycode) {
-                    let full = to_full_width_char(ch);
-                    return ImeOutputAction::Commit(full.to_string());
-                }
-            }
-            return ImeOutputAction::PassThrough;
-        }
-
-        // 1. 若处于拼音组词状态，优先流转大网格展开态或拼音状态机
+        // 1. 若处于拼音组词状态，流转大网格展开态或拼音状态机
         if !self.engine.raw_input().is_empty() {
-            if self.is_grid_expanded() {
-                if let Some(action) = self.handle_grid_expanded_key(keycode, now) {
-                    return action;
-                }
-            }
-
-            let params = CompositionKeyParams {
-                key: keycode,
-                shift_active: self.is_shift_active(),
-                page_keys: self.page_keys,
-                now,
-            };
-            if let Some(action) = handle_composition_key_with_params(
-                &mut self.engine,
-                &mut self.punctuation_processor,
-                params,
-            ) {
-                if action == ImeOutputAction::ExpandGrid {
-                    self.expand_grid();
-                }
-                return match action {
-                    ImeOutputAction::Commit(text) => {
-                        let final_text = if self.full_width_char {
-                            to_full_width_string(&text)
-                        } else {
-                            text
-                        };
-                        ImeOutputAction::Commit(final_text)
-                    }
-                    ImeOutputAction::CommitPartial {
-                        committed,
-                        remaining_preedit,
-                    } => {
-                        let final_committed = if self.full_width_char {
-                            to_full_width_string(&committed)
-                        } else {
-                            committed
-                        };
-                        ImeOutputAction::CommitPartial {
-                            committed: final_committed,
-                            remaining_preedit,
-                        }
-                    }
-                    other => other,
-                };
+            if let Some(action) = self.dispatch_composing_key(keycode, now) {
+                return action;
             }
         }
 
-        // 2. 若输入缓冲区为空（空闲输入），拦截并处理智能标点
+        // 2. 若输入缓冲区为空（空闲输入），拦截并处理智能标点与数字上下文
         if self.engine.raw_input().is_empty() {
-            // 空闲下的退格与空格保持透传
             if keycode == KEY_BACKSPACE || keycode == KEY_SPACE {
                 return ImeOutputAction::PassThrough;
             }
-
-            // 检查标点符号映射
-            if let Some(punct_char) =
-                keycode_to_punctuation_with_shift(keycode, self.is_shift_active())
-            {
-                let actions_opt = match context_surrounding {
-                    Some(ctx) => self
-                        .punctuation_processor
-                        .process_punctuation_with_context(punct_char, ctx),
-                    None => self.punctuation_processor.process_punctuation(punct_char),
-                };
-                if let Some(actions) = actions_opt {
-                    let mut commit_str = String::new();
-                    let mut cursor_offset = 0;
-                    for act in actions {
-                        match act {
-                            TextAction::Commit(t) => {
-                                self.punctuation_processor.record_commit(&t);
-                                commit_str.push_str(&t);
-                            }
-                            TextAction::MoveCursor(off) => {
-                                cursor_offset += off;
-                            }
-                            _ => {}
-                        }
-                    }
-                    if !commit_str.is_empty() {
-                        let final_commit = if self.full_width_char {
-                            to_full_width_string(&commit_str)
-                        } else {
-                            commit_str
-                        };
-                        if cursor_offset != 0 {
-                            return ImeOutputAction::CommitPunctuation {
-                                text: final_commit,
-                                cursor_offset,
-                            };
-                        } else {
-                            return ImeOutputAction::Commit(final_commit);
-                        }
-                    }
-                }
+            if let Some(action) = self.dispatch_idle_punctuation(keycode, context_surrounding) {
+                return action;
             }
-
-            // 空闲下的数字按键记录上下文（用于小数点等数字语境智能半角判定）
-            if !self.is_shift_active() {
-                if let Some(digit_ch) = keycode_to_ascii_digit_char(keycode) {
-                    self.punctuation_processor
-                        .record_commit(&digit_ch.to_string());
-                    if self.full_width_char {
-                        let full = to_full_width_char(digit_ch);
-                        return ImeOutputAction::Commit(full.to_string());
-                    }
-                    return ImeOutputAction::PassThrough;
-                }
+            if let Some(action) = self.dispatch_idle_digit(keycode) {
+                return action;
             }
         }
 
@@ -262,5 +157,137 @@ impl ImeCoreSession {
         }
 
         ImeOutputAction::PassThrough
+    }
+
+    /// 处理英文模式、CapsLock 锁定及控制键按下时的透传或全角字母转换
+    fn dispatch_passthrough_or_fullwidth_english(&self, keycode: u32) -> Option<ImeOutputAction> {
+        if self.is_caps_locked() || self.has_ctrl_or_alt() {
+            return Some(ImeOutputAction::PassThrough);
+        }
+        if self.mode == InputMode::English {
+            if self.full_width_char && !self.is_shift_active() {
+                if let Some(ch) = self.keymap_layout.get_char(keycode) {
+                    let full = to_full_width_char(ch);
+                    return Some(ImeOutputAction::Commit(full.to_string()));
+                }
+            }
+            return Some(ImeOutputAction::PassThrough);
+        }
+        None
+    }
+
+    /// 组词态按键分流（网格展开键、翻页、选词、字母编辑）
+    fn dispatch_composing_key(&mut self, keycode: u32, now: u64) -> Option<ImeOutputAction> {
+        if self.is_grid_expanded() {
+            if let Some(action) = self.handle_grid_expanded_key(keycode, now) {
+                return Some(action);
+            }
+        }
+
+        let params = CompositionKeyParams {
+            key: keycode,
+            shift_active: self.is_shift_active(),
+            page_keys: self.page_keys,
+            now,
+        };
+        let action = handle_composition_key_with_params(
+            &mut self.engine,
+            &mut self.punctuation_processor,
+            params,
+        )?;
+
+        if action == ImeOutputAction::ExpandGrid {
+            self.expand_grid();
+        }
+
+        Some(match action {
+            ImeOutputAction::Commit(text) => {
+                let final_text = if self.full_width_char {
+                    to_full_width_string(&text)
+                } else {
+                    text
+                };
+                ImeOutputAction::Commit(final_text)
+            }
+            ImeOutputAction::CommitPartial {
+                committed,
+                remaining_preedit,
+            } => {
+                let final_committed = if self.full_width_char {
+                    to_full_width_string(&committed)
+                } else {
+                    committed
+                };
+                ImeOutputAction::CommitPartial {
+                    committed: final_committed,
+                    remaining_preedit,
+                }
+            }
+            other => other,
+        })
+    }
+
+    /// 空闲输入状态下处理智能标点
+    fn dispatch_idle_punctuation(
+        &mut self,
+        keycode: u32,
+        context_surrounding: Option<&str>,
+    ) -> Option<ImeOutputAction> {
+        let punct_char = keycode_to_punctuation_with_shift(keycode, self.is_shift_active())?;
+        let actions = match context_surrounding {
+            Some(ctx) => self
+                .punctuation_processor
+                .process_punctuation_with_context(punct_char, ctx)?,
+            None => self.punctuation_processor.process_punctuation(punct_char)?,
+        };
+
+        let mut commit_str = String::new();
+        let mut cursor_offset = 0;
+        for act in actions {
+            match act {
+                TextAction::Commit(t) => {
+                    self.punctuation_processor.record_commit(&t);
+                    commit_str.push_str(&t);
+                }
+                TextAction::MoveCursor(off) => {
+                    cursor_offset += off;
+                }
+                _ => {}
+            }
+        }
+
+        if commit_str.is_empty() {
+            return None;
+        }
+
+        let final_commit = if self.full_width_char {
+            to_full_width_string(&commit_str)
+        } else {
+            commit_str
+        };
+
+        Some(if cursor_offset != 0 {
+            ImeOutputAction::CommitPunctuation {
+                text: final_commit,
+                cursor_offset,
+            }
+        } else {
+            ImeOutputAction::Commit(final_commit)
+        })
+    }
+
+    /// 空闲状态下记录数字上下文以支持小数点智能判定
+    fn dispatch_idle_digit(&mut self, keycode: u32) -> Option<ImeOutputAction> {
+        if self.is_shift_active() {
+            return None;
+        }
+        let digit_ch = keycode_to_ascii_digit_char(keycode)?;
+        self.punctuation_processor
+            .record_commit(&digit_ch.to_string());
+        if self.full_width_char {
+            let full = to_full_width_char(digit_ch);
+            return Some(ImeOutputAction::Commit(full.to_string()));
+        }
+        Some(ImeOutputAction::PassThrough)
     }
 }

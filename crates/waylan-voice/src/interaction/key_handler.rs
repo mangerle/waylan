@@ -28,120 +28,122 @@ impl VoiceInteractionManager {
             }
         }
 
-        let shift_active = (mods_depressed & MOD_SHIFT) != 0;
-        let ctrl_active = (mods_depressed & MOD_CTRL) != 0;
-        let alt_active = (mods_depressed & MOD_ALT) != 0;
-        let super_active = (mods_depressed & MOD_SUPER) != 0;
-
         // 1. 若处于对讲机长按录音态，检测主键或修饰键松开
         if !is_press {
-            if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state {
-                let is_main_release = trigger_key == evdev_key;
-                let is_mod_release = matches!(
-                    evdev_key,
-                    KEY_LEFTCTRL
-                        | KEY_RIGHTCTRL
-                        | KEY_LEFTALT
-                        | KEY_RIGHTALT
-                        | KEY_LEFTSHIFT
-                        | KEY_RIGHTSHIFT
-                        | KEY_LEFTMETA
-                        | KEY_RIGHTMETA
-                );
-                if is_main_release || is_mod_release {
-                    info!("[微澜语音] 对讲机快捷键松开，进入转录结算");
-                    if let Some(text) = self.stop_and_resolve_commit() {
-                        let trimmed = text.trim().to_string();
-                        if !trimmed.is_empty() {
-                            return VoiceKeyAction::Commit(trimmed);
-                        }
-                    }
-                    return VoiceKeyAction::Consumed;
-                }
+            if let Some(action) = self.handle_ptt_release(evdev_key) {
+                return action;
             }
-        }
-
-        // 2. 录音或转录结算过程中的按键拦截（按下阶段）
-        let is_recording = self.is_recording();
-        let is_finalizing = self.is_finalizing();
-
-        if is_press && (is_recording || is_finalizing) {
-            if evdev_key == KEY_ESC {
-                info!("[微澜语音] 收到 Esc 键，取消语音录制或转录");
-                self.cancel();
-                return VoiceKeyAction::Consumed;
-            }
-
-            // 若处于转录结算阶段，非 Esc 按键一律静默拦截，防止按键误打字抢先上屏
-            if is_finalizing {
-                return VoiceKeyAction::Consumed;
-            }
-
-            if evdev_key == KEY_ENTER {
-                info!("[微澜语音] 收到 Enter 键，提前完成录音并请求转录上屏");
-                if let Some(text) = self.stop_and_resolve_commit() {
-                    let trimmed = text.trim().to_string();
-                    if !trimmed.is_empty() {
-                        return VoiceKeyAction::Commit(trimmed);
-                    }
-                }
-                return VoiceKeyAction::Consumed;
-            }
-
-            // 对讲机模式下若重复按下 PTT 主键（如键盘硬件 Auto-Repeat 连发），静默消费保持录音
-            if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state {
-                if trigger_key == evdev_key {
-                    return VoiceKeyAction::Consumed;
-                }
-            }
-
-            let toggle_shortcut = self.config.get_effective_toggle_shortcut();
-            let is_toggle = toggle_shortcut.as_ref().is_some_and(|s| {
-                s.matches(
-                    evdev_key,
-                    shift_active,
-                    ctrl_active,
-                    alt_active,
-                    super_active,
-                )
-            });
-            if is_toggle {
-                let now = Instant::now();
-                if now.duration_since(self.last_toggle_time) < Duration::from_millis(300) {
-                    return VoiceKeyAction::Consumed;
-                }
-                self.last_toggle_time = now;
-                info!("[微澜语音] 触发开关快捷键停止录音并请求转录上屏");
-                if let Some(text) = self.stop_and_resolve_commit() {
-                    let trimmed = text.trim().to_string();
-                    if !trimmed.is_empty() {
-                        return VoiceKeyAction::Commit(trimmed);
-                    }
-                }
-                return VoiceKeyAction::Consumed;
-            }
-
-            // 录音期间其他任意按键均静默消费，防止误打字
-            return VoiceKeyAction::Consumed;
-        }
-
-        // 3. 仅在按键按下时匹配启动快捷键
-        if !is_press {
             return VoiceKeyAction::PassThrough;
         }
 
-        let ptt_shortcut = self.config.get_effective_ptt_shortcut();
-        let toggle_shortcut = self.config.get_effective_toggle_shortcut();
+        // 2. 录音或转录结算过程中的按键拦截（按下阶段）
+        if self.is_recording() || self.is_finalizing() {
+            return self.handle_active_key_press(evdev_key, mods_depressed);
+        }
 
-        // 3.1 尝试匹配对讲机模式 (Push-to-Talk)
-        if let Some(ref ptt) = ptt_shortcut {
-            if ptt.matches(
+        // 3. 空闲待命时的启动快捷键匹配
+        self.handle_idle_key_press(evdev_key, mods_depressed)
+    }
+
+    /// 检测对讲机模式下的主键或修饰键松开事件并结算上屏
+    fn handle_ptt_release(&mut self, evdev_key: u32) -> Option<VoiceKeyAction> {
+        if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state {
+            let is_main_release = trigger_key == evdev_key;
+            let is_mod_release = matches!(
                 evdev_key,
-                shift_active,
-                ctrl_active,
-                alt_active,
-                super_active,
-            ) {
+                KEY_LEFTCTRL
+                    | KEY_RIGHTCTRL
+                    | KEY_LEFTALT
+                    | KEY_RIGHTALT
+                    | KEY_LEFTSHIFT
+                    | KEY_RIGHTSHIFT
+                    | KEY_LEFTMETA
+                    | KEY_RIGHTMETA
+            );
+            if is_main_release || is_mod_release {
+                info!("[微澜语音] 对讲机快捷键松开，进入转录结算");
+                if let Some(text) = self.stop_and_resolve_commit() {
+                    let trimmed = text.trim().to_string();
+                    if !trimmed.is_empty() {
+                        return Some(VoiceKeyAction::Commit(trimmed));
+                    }
+                }
+                return Some(VoiceKeyAction::Consumed);
+            }
+        }
+        None
+    }
+
+    /// 录音或结算进行中的按键过滤与控制（Esc 取消、Enter 提交、Toggle 结束）
+    fn handle_active_key_press(&mut self, evdev_key: u32, mods_depressed: u32) -> VoiceKeyAction {
+        if evdev_key == KEY_ESC {
+            info!("[微澜语音] 收到 Esc 键，取消语音录制或转录");
+            self.cancel();
+            return VoiceKeyAction::Consumed;
+        }
+
+        // 若处于转录结算阶段，非 Esc 按键一律静默拦截，防止按键误打字抢先上屏
+        if self.is_finalizing() {
+            return VoiceKeyAction::Consumed;
+        }
+
+        if evdev_key == KEY_ENTER {
+            info!("[微澜语音] 收到 Enter 键，提前完成录音并请求转录上屏");
+            if let Some(text) = self.stop_and_resolve_commit() {
+                let trimmed = text.trim().to_string();
+                if !trimmed.is_empty() {
+                    return VoiceKeyAction::Commit(trimmed);
+                }
+            }
+            return VoiceKeyAction::Consumed;
+        }
+
+        // 对讲机模式下若重复按下 PTT 主键（如键盘硬件 Auto-Repeat 连发），静默消费保持录音
+        if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state {
+            if trigger_key == evdev_key {
+                return VoiceKeyAction::Consumed;
+            }
+        }
+
+        let shift = (mods_depressed & MOD_SHIFT) != 0;
+        let ctrl = (mods_depressed & MOD_CTRL) != 0;
+        let alt = (mods_depressed & MOD_ALT) != 0;
+        let super_mod = (mods_depressed & MOD_SUPER) != 0;
+        let toggle_shortcut = self.config.get_effective_toggle_shortcut();
+        let is_toggle = toggle_shortcut
+            .as_ref()
+            .is_some_and(|s| s.matches(evdev_key, shift, ctrl, alt, super_mod));
+
+        if is_toggle {
+            let now = Instant::now();
+            if now.duration_since(self.last_toggle_time) < Duration::from_millis(300) {
+                return VoiceKeyAction::Consumed;
+            }
+            self.last_toggle_time = now;
+            info!("[微澜语音] 触发开关快捷键停止录音并请求转录上屏");
+            if let Some(text) = self.stop_and_resolve_commit() {
+                let trimmed = text.trim().to_string();
+                if !trimmed.is_empty() {
+                    return VoiceKeyAction::Commit(trimmed);
+                }
+            }
+            return VoiceKeyAction::Consumed;
+        }
+
+        // 录音期间其他任意按键均静默消费，防止误打字
+        VoiceKeyAction::Consumed
+    }
+
+    /// 空闲状态下匹配对讲机或开关连续听写快捷键
+    fn handle_idle_key_press(&mut self, evdev_key: u32, mods_depressed: u32) -> VoiceKeyAction {
+        let shift = (mods_depressed & MOD_SHIFT) != 0;
+        let ctrl = (mods_depressed & MOD_CTRL) != 0;
+        let alt = (mods_depressed & MOD_ALT) != 0;
+        let super_mod = (mods_depressed & MOD_SUPER) != 0;
+
+        // 1. 尝试匹配对讲机模式 (Push-to-Talk)
+        if let Some(ref ptt) = self.config.get_effective_ptt_shortcut() {
+            if ptt.matches(evdev_key, shift, ctrl, alt, super_mod) {
                 if !self.controller.is_recording() {
                     info!("[微澜语音] 触发对讲机快捷键，启动语音采集");
                     self.start_recording(true, Some(evdev_key));
@@ -150,15 +152,9 @@ impl VoiceInteractionManager {
             }
         }
 
-        // 3.2 尝试匹配开关模式开启录音 (Toggle)
-        if let Some(ref toggle) = toggle_shortcut {
-            if toggle.matches(
-                evdev_key,
-                shift_active,
-                ctrl_active,
-                alt_active,
-                super_active,
-            ) {
+        // 2. 尝试匹配开关模式开启录音 (Toggle)
+        if let Some(ref toggle) = self.config.get_effective_toggle_shortcut() {
+            if toggle.matches(evdev_key, shift, ctrl, alt, super_mod) {
                 let now = Instant::now();
                 if now.duration_since(self.last_toggle_time) < Duration::from_millis(300) {
                     return VoiceKeyAction::Consumed;

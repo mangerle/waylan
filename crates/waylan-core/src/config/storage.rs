@@ -80,165 +80,182 @@ struct FlatConfigFallback {
 
 impl FlatConfigFallback {
     /// 合流为标准的结构化 AppConfig
-    fn into_app_config(self) -> AppConfig {
+    fn into_app_config(mut self) -> AppConfig {
         let mut cfg = AppConfig::default();
 
         // 1. 优先加载标准子段落
-        if let Some(ui) = self.ui {
+        if let Some(ui) = self.ui.take() {
             cfg.ui = ui;
         }
-        if let Some(shortcuts) = self.shortcuts {
+        if let Some(shortcuts) = self.shortcuts.take() {
             cfg.shortcuts = shortcuts;
         }
-        if let Some(pinyin) = self.pinyin {
+        if let Some(pinyin) = self.pinyin.take() {
             cfg.pinyin = pinyin;
         }
-        if let Some(desktop) = self.desktop {
+        if let Some(desktop) = self.desktop.take() {
             cfg.desktop = desktop;
         }
-        if let Some(voice) = self.voice {
+        if let Some(voice) = self.voice.take() {
             cfg.voice = voice;
         }
 
         // 2. 平铺历史字段兜底覆盖（兼容未划分 [ui]、[pinyin] 等段落的旧版配置）
-        if let Some(v) = self.page_size {
-            cfg.ui.page_size = v;
-        }
-        if let Some(v) = self.font_size {
-            cfg.ui.font_size = v;
-        }
-        if let Some(v) = self.theme {
-            cfg.ui.theme = v;
-        }
-        if let Some(v) = self.candidate_orientation {
-            cfg.ui.candidate_orientation = v;
-        }
-        if let Some(v) = self.candidate_index_style {
-            cfg.ui.candidate_index_style = v;
-        }
-        if let Some(v) = self.candidate_window_mode {
-            cfg.ui.candidate_window_mode = v;
-        }
-        if let Some(v) = self.candidate_density {
-            cfg.ui.candidate_density = v;
-        }
-        if let Some(v) = self.candidate_theme {
-            cfg.ui.candidate_theme = v;
-        }
-        if let Some(v) = self.candidate_item_spacing {
-            cfg.ui.candidate_item_spacing = v;
-        }
-        if let Some(v) = self.candidate_padding_v {
-            cfg.ui.candidate_padding_v = v;
-        }
-        if let Some(v) = self.candidate_padding_h {
-            cfg.ui.candidate_padding_h = v;
-        }
-        if let Some(v) = self.candidate_corner_radius {
-            cfg.ui.candidate_corner_radius = v;
-        }
-        if let Some(v) = self.candidate_opacity {
-            cfg.ui.candidate_opacity = v;
-        }
-        if let Some(v) = self.show_pinyin_comment {
-            cfg.ui.show_pinyin_comment = v;
-        }
-
-        if let Some(v) = self.switch_key {
-            cfg.shortcuts.switch_key = v;
-        }
-        if let Some(v) = self.page_keys {
-            cfg.shortcuts.page_keys = v;
-        }
-        if let Some(v) = self.traditional_shortcut {
-            cfg.shortcuts.traditional_shortcut = v;
-        }
-        if let Some(v) = self.full_width_char_shortcut {
-            cfg.shortcuts.full_width_char_shortcut = v;
-        }
-        if let Some(v) = self.full_width_punct_shortcut {
-            cfg.shortcuts.full_width_punct_shortcut = v;
-        }
-        if let Some(v) = self.shift_select_second {
-            cfg.shortcuts.shift_select_second = v;
-        }
-
-        if let Some(v) = self.init_chinese {
-            cfg.pinyin.init_chinese = v;
-        }
-        if let Some(v) = self.full_width_char {
-            cfg.pinyin.full_width_char = v;
-        }
-        if let Some(v) = self.full_width_punct {
-            cfg.pinyin.full_width_punct = v;
-        }
-        if let Some(v) = self.dynamic_adjust_freq {
-            cfg.pinyin.dynamic_adjust_freq = v;
-        }
-        if let Some(v) = self.enable_acronym {
-            cfg.pinyin.enable_acronym = v;
-        }
-        if let Some(v) = self.slash_to_dunhao {
-            cfg.pinyin.slash_to_dunhao = v;
-        }
-        if let Some(v) = self.backslash_to_dunhao {
-            cfg.pinyin.backslash_to_dunhao = v;
-        }
-        if let Some(v) = self.protect_digits_punctuation {
-            cfg.pinyin.protect_digits_punctuation = v;
-        }
-        if let Some(v) = self.auto_complete_pairs {
-            cfg.pinyin.auto_complete_pairs = v;
-        }
-        if let Some(v) = self.v_mode {
-            cfg.pinyin.v_mode = v;
-        }
-        if let Some(v) = self.enable_u_mode {
-            cfg.pinyin.enable_u_mode = v;
-        }
-        if let Some(v) = self.enable_i_mode {
-            cfg.pinyin.enable_i_mode = v;
-        }
-        if let Some(v) = self.fuzzy_pinyin {
-            cfg.pinyin.fuzzy_pinyin = v;
-        }
-        if let Some(v) = self.fuzzy_rules {
-            cfg.pinyin.fuzzy_rules = v;
-        }
-        if let Some(v) = self.typo_rules {
-            cfg.pinyin.typo_rules = v;
-        }
-        if let Some(v) = self.traditional_chinese {
-            cfg.pinyin.traditional_chinese = v;
-        }
-        if let Some(v) = self.auto_pangu_spacing {
-            cfg.pinyin.auto_pangu_spacing = v;
-        }
-        if let Some(v) = self.filter_uncommon_charset {
-            cfg.pinyin.filter_uncommon_charset = v;
-        }
-        if let Some(v) = self.auto_dedup {
-            cfg.pinyin.auto_dedup = v;
-        }
-
-        if let Some(v) = self.tray_icon_theme_path {
-            cfg.desktop.tray_icon_theme_path = Some(v);
-        }
-        if let Some(v) = self.tray_icon_zh {
-            cfg.desktop.tray_icon_zh = Some(v);
-        }
-        if let Some(v) = self.tray_icon_en {
-            cfg.desktop.tray_icon_en = Some(v);
-        }
-        if let Some(v) = self.enable_tray {
-            cfg.desktop.enable_tray = v;
-        }
-        if let Some(v) = self.exclusive_input_source {
-            cfg.desktop.exclusive_input_source = v;
-        }
+        self.merge_legacy_ui(&mut cfg.ui);
+        self.merge_legacy_shortcuts(&mut cfg.shortcuts);
+        self.merge_legacy_pinyin(&mut cfg.pinyin);
+        self.merge_legacy_desktop(&mut cfg.desktop);
 
         cfg.sanitize();
         cfg
+    }
+
+    /// 合并历史扁平 UI 配置字段
+    fn merge_legacy_ui(&mut self, ui: &mut UiConfig) {
+        if let Some(v) = self.page_size {
+            ui.page_size = v;
+        }
+        if let Some(v) = self.font_size {
+            ui.font_size = v;
+        }
+        if let Some(v) = self.theme.take() {
+            ui.theme = v;
+        }
+        if let Some(v) = self.candidate_orientation {
+            ui.candidate_orientation = v;
+        }
+        if let Some(v) = self.candidate_index_style {
+            ui.candidate_index_style = v;
+        }
+        if let Some(v) = self.candidate_window_mode {
+            ui.candidate_window_mode = v;
+        }
+        if let Some(v) = self.candidate_density {
+            ui.candidate_density = v;
+        }
+        if let Some(v) = self.candidate_theme.take() {
+            ui.candidate_theme = v;
+        }
+        if let Some(v) = self.candidate_item_spacing {
+            ui.candidate_item_spacing = v;
+        }
+        if let Some(v) = self.candidate_padding_v {
+            ui.candidate_padding_v = v;
+        }
+        if let Some(v) = self.candidate_padding_h {
+            ui.candidate_padding_h = v;
+        }
+        if let Some(v) = self.candidate_corner_radius {
+            ui.candidate_corner_radius = v;
+        }
+        if let Some(v) = self.candidate_opacity {
+            ui.candidate_opacity = v;
+        }
+        if let Some(v) = self.show_pinyin_comment {
+            ui.show_pinyin_comment = v;
+        }
+    }
+
+    /// 合并历史扁平快捷键配置字段
+    fn merge_legacy_shortcuts(&mut self, shortcuts: &mut ShortcutConfig) {
+        if let Some(v) = self.switch_key {
+            shortcuts.switch_key = v;
+        }
+        if let Some(v) = self.page_keys {
+            shortcuts.page_keys = v;
+        }
+        if let Some(v) = self.traditional_shortcut.take() {
+            shortcuts.traditional_shortcut = v;
+        }
+        if let Some(v) = self.full_width_char_shortcut.take() {
+            shortcuts.full_width_char_shortcut = v;
+        }
+        if let Some(v) = self.full_width_punct_shortcut.take() {
+            shortcuts.full_width_punct_shortcut = v;
+        }
+        if let Some(v) = self.shift_select_second {
+            shortcuts.shift_select_second = v;
+        }
+    }
+
+    /// 合并历史扁平拼音配置字段
+    fn merge_legacy_pinyin(&mut self, pinyin: &mut PinyinConfig) {
+        if let Some(v) = self.init_chinese {
+            pinyin.init_chinese = v;
+        }
+        if let Some(v) = self.full_width_char {
+            pinyin.full_width_char = v;
+        }
+        if let Some(v) = self.full_width_punct {
+            pinyin.full_width_punct = v;
+        }
+        if let Some(v) = self.dynamic_adjust_freq {
+            pinyin.dynamic_adjust_freq = v;
+        }
+        if let Some(v) = self.enable_acronym {
+            pinyin.enable_acronym = v;
+        }
+        if let Some(v) = self.slash_to_dunhao {
+            pinyin.slash_to_dunhao = v;
+        }
+        if let Some(v) = self.backslash_to_dunhao {
+            pinyin.backslash_to_dunhao = v;
+        }
+        if let Some(v) = self.protect_digits_punctuation {
+            pinyin.protect_digits_punctuation = v;
+        }
+        if let Some(v) = self.auto_complete_pairs {
+            pinyin.auto_complete_pairs = v;
+        }
+        if let Some(v) = self.v_mode {
+            pinyin.v_mode = v;
+        }
+        if let Some(v) = self.enable_u_mode {
+            pinyin.enable_u_mode = v;
+        }
+        if let Some(v) = self.enable_i_mode {
+            pinyin.enable_i_mode = v;
+        }
+        if let Some(v) = self.fuzzy_pinyin {
+            pinyin.fuzzy_pinyin = v;
+        }
+        if let Some(v) = self.fuzzy_rules {
+            pinyin.fuzzy_rules = v;
+        }
+        if let Some(v) = self.typo_rules.take() {
+            pinyin.typo_rules = v;
+        }
+        if let Some(v) = self.traditional_chinese {
+            pinyin.traditional_chinese = v;
+        }
+        if let Some(v) = self.auto_pangu_spacing {
+            pinyin.auto_pangu_spacing = v;
+        }
+        if let Some(v) = self.filter_uncommon_charset {
+            pinyin.filter_uncommon_charset = v;
+        }
+        if let Some(v) = self.auto_dedup {
+            pinyin.auto_dedup = v;
+        }
+    }
+
+    /// 合并历史扁平桌面环境配置字段
+    fn merge_legacy_desktop(&mut self, desktop: &mut DesktopConfig) {
+        if let Some(v) = self.tray_icon_theme_path.take() {
+            desktop.tray_icon_theme_path = Some(v);
+        }
+        if let Some(v) = self.tray_icon_zh.take() {
+            desktop.tray_icon_zh = Some(v);
+        }
+        if let Some(v) = self.tray_icon_en.take() {
+            desktop.tray_icon_en = Some(v);
+        }
+        if let Some(v) = self.enable_tray {
+            desktop.enable_tray = v;
+        }
+        if let Some(v) = self.exclusive_input_source {
+            desktop.exclusive_input_source = v;
+        }
     }
 }
 

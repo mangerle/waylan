@@ -11,7 +11,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, Stream, StreamConfig};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use log::{error, info, warn};
 
 use crate::error::VoiceError;
@@ -126,6 +126,53 @@ impl AudioCapture {
         pcm_sender: SyncSender<Vec<f32>>,
         target_device: Option<&str>,
     ) -> Result<Self, VoiceError> {
+        let (device, device_name) = Self::select_input_device(target_device)?;
+        info!("[语音采集] 正在初始化音频捕获设备: {}", device_name);
+
+        let default_config =
+            device
+                .default_input_config()
+                .map_err(|e| VoiceError::DeviceInitFailed {
+                    device: device_name.clone(),
+                    message: format!("获取设备默认配置失败: {}", e),
+                })?;
+
+        let sample_format = default_config.sample_format();
+        let config: StreamConfig = default_config.into();
+        let channels = config.channels;
+        let native_sample_rate = config.sample_rate.0;
+
+        info!(
+            "[语音采集] 设备采样率: {} Hz, 声道数: {}, 采样格式: {:?}",
+            native_sample_rate, channels, sample_format
+        );
+
+        let is_stream_dead = Arc::new(AtomicBool::new(false));
+        let stream = Self::build_input_stream_by_format(
+            &device,
+            &config,
+            sample_format,
+            is_stream_dead.clone(),
+            pcm_sender,
+        )?;
+
+        stream
+            .play()
+            .map_err(|e| VoiceError::StreamStartFailed(format!("激活音频捕获流失败: {}", e)))?;
+
+        info!("[语音采集] 麦克风捕获流已成功启动");
+
+        Ok(Self {
+            _stream: stream,
+            is_stream_dead,
+            device_name,
+            native_sample_rate,
+            channels,
+        })
+    }
+
+    /// 探测并选择音频输入硬件设备
+    fn select_input_device(target_device: Option<&str>) -> Result<(Device, String), VoiceError> {
         let host = cpal::default_host();
         let device = if let Some(target_name) = target_device.filter(|s| !s.trim().is_empty()) {
             match host.input_devices() {
@@ -149,44 +196,35 @@ impl AudioCapture {
             message: "未在当前系统中检测到可用的音频输入设备".to_string(),
         })?;
 
-        let device_name = device
+        let name = device
             .name()
             .unwrap_or_else(|_| "未知音频输入设备".to_string());
-        info!("[语音采集] 正在初始化音频捕获设备: {}", device_name);
+        Ok((device, name))
+    }
 
-        let default_config =
-            device
-                .default_input_config()
-                .map_err(|e| VoiceError::DeviceInitFailed {
-                    device: device_name.clone(),
-                    message: format!("获取设备默认配置失败: {}", e),
-                })?;
-
-        let sample_format = default_config.sample_format();
-        let config: StreamConfig = default_config.into();
+    /// 根据底层硬件采样格式构建重采样管道与音频输入流
+    fn build_input_stream_by_format(
+        device: &Device,
+        config: &StreamConfig,
+        sample_format: SampleFormat,
+        is_stream_dead: Arc<AtomicBool>,
+        pcm_sender: SyncSender<Vec<f32>>,
+    ) -> Result<cpal::Stream, VoiceError> {
         let channels = config.channels;
         let native_sample_rate = config.sample_rate.0;
-
-        info!(
-            "[语音采集] 设备采样率: {} Hz, 声道数: {}, 采样格式: {:?}",
-            native_sample_rate, channels, sample_format
-        );
-
         let mut resampler = LinearResampler::new(native_sample_rate, TARGET_SAMPLE_RATE);
         let mut mono_buf = Vec::with_capacity(1024);
         let mut resampled_buf = Vec::with_capacity(1024);
 
-        let is_stream_dead = Arc::new(AtomicBool::new(false));
         let dead_flag = is_stream_dead.clone();
         let err_fn = move |err| {
             error!("[语音采集 错误] 麦克风音频捕获流异常: {}", err);
             dead_flag.store(true, Ordering::Release);
         };
 
-        // 根据不同底层采样格式分流处理
-        let stream = match sample_format {
+        match sample_format {
             SampleFormat::F32 => device.build_input_stream(
-                &config,
+                config,
                 move |data: &[f32], _| {
                     convert_and_downsample(
                         data,
@@ -202,7 +240,7 @@ impl AudioCapture {
                 None,
             ),
             SampleFormat::I16 => device.build_input_stream(
-                &config,
+                config,
                 move |data: &[i16], _| {
                     convert_and_downsample(
                         data,
@@ -218,7 +256,7 @@ impl AudioCapture {
                 None,
             ),
             SampleFormat::U16 => device.build_input_stream(
-                &config,
+                config,
                 move |data: &[u16], _| {
                     convert_and_downsample(
                         data,
@@ -240,21 +278,7 @@ impl AudioCapture {
                 })
             }
         }
-        .map_err(|e| VoiceError::StreamStartFailed(e.to_string()))?;
-
-        stream
-            .play()
-            .map_err(|e| VoiceError::StreamStartFailed(format!("激活音频捕获流失败: {}", e)))?;
-
-        info!("[语音采集] 麦克风捕获流已成功启动");
-
-        Ok(Self {
-            _stream: stream,
-            is_stream_dead,
-            device_name,
-            native_sample_rate,
-            channels,
-        })
+        .map_err(|e| VoiceError::StreamStartFailed(e.to_string()))
     }
 
     /// 获取当前激活的硬件设备名称
