@@ -319,5 +319,4 @@ mod dispatch;
 mod protocol;
 
 #[cfg(test)]
-#[path = "session_v2_tests.rs"]
 mod tests;
