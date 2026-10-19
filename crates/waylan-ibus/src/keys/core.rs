@@ -115,19 +115,9 @@ impl IbusSessionCore {
     }
 
     /// 同步来自托盘与全局状态的简繁与标点/字符全半角配置
+    #[inline]
     pub fn sync_shared_settings(&mut self) {
-        if let Some(ref flags) = self.runtime.shared_flags {
-            let snap = flags.snapshot();
-            if self.runtime.core.engine.config.traditional_chinese != snap.traditional_chinese {
-                self.runtime.core.engine.config.traditional_chinese = snap.traditional_chinese;
-            }
-            if self.runtime.core.punctuation_processor.full_width_punct != snap.full_width_punct {
-                self.runtime.core.punctuation_processor.full_width_punct = snap.full_width_punct;
-            }
-            if self.runtime.core.full_width_char != snap.full_width_char {
-                self.runtime.core.full_width_char = snap.full_width_char;
-            }
-        }
+        self.runtime.sync_shared_mode();
     }
 
     /// 判定当前是否开启了全角字符/字母模式

@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use waylan_algo::AlgoEngine;
-use waylan_core::input::sync_mode_from_shared_flags;
 use waylan_core::input::MOD_CAPS;
 use waylan_core::state::SharedInputFlags;
 use waylan_core::{CandidateBoxState, InputMode, ParsedShortcut, VoiceConfig};
@@ -192,21 +191,52 @@ impl ImeRuntime {
         }
     }
 
-    /// 同步来自系统托盘的共享中英文与大写锁定状态标志
+    /// 同步来自系统托盘的共享中英文、大写锁定、简繁及全半角状态标志
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
+        let mut mode_changed = None;
         if let Some(ref flags) = self.shared_flags {
-            let external_caps = flags.is_caps_locked();
-            if self.core.is_caps_locked() != external_caps {
-                self.update_caps_lock_state(external_caps);
+            let snap = flags.snapshot();
+
+            // 1. 同步 CapsLock 大写锁定状态
+            if self.core.is_caps_locked() != snap.is_caps_locked {
+                self.update_caps_lock_state(snap.is_caps_locked);
+            }
+
+            // 2. 同步中英文输入语言模式
+            let current_zh = matches!(self.core.mode, InputMode::Chinese | InputMode::VMode);
+            if snap.is_chinese != current_zh {
+                let new_mode = if snap.is_chinese {
+                    InputMode::Chinese
+                } else {
+                    InputMode::English
+                };
+                self.core.mode = new_mode;
+                mode_changed = Some(new_mode);
+            }
+
+            // 3. 同步简繁输出模式
+            if self.core.engine.config.traditional_chinese != snap.traditional_chinese {
+                self.core.engine.config.traditional_chinese = snap.traditional_chinese;
+            }
+
+            // 4. 同步全角/半角标点
+            if self.core.punctuation_processor.full_width_punct != snap.full_width_punct {
+                self.core.punctuation_processor.full_width_punct = snap.full_width_punct;
+            }
+
+            // 5. 同步全角/半角字符
+            if self.core.full_width_char != snap.full_width_char {
+                self.core.full_width_char = snap.full_width_char;
             }
         }
-        let changed = sync_mode_from_shared_flags(self.shared_flags.as_ref(), &mut self.core.mode);
-        if let Some(new_mode) = changed {
+
+        if let Some(new_mode) = mode_changed {
             if let Some(ref tx) = self.mode_notify_tx {
                 let _ = tx.try_send(());
             }
             return Some(new_mode);
         }
+
         None
     }
 
@@ -424,5 +454,53 @@ impl ImeRuntime {
                 voice_manager: self.voice_manager.as_ref(),
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_shared_mode_comprehensive() {
+        let mut runtime = ImeRuntime::default();
+        // 初始托盘 flags：中文模式、繁体关闭、半角标点、半角字符
+        let flags = SharedInputFlags::new(true, false, false, false);
+        runtime = runtime.with_shared_flags(flags.clone());
+
+        // 初始状态验证：引擎默认中文全角标点，尚未同步
+        assert_eq!(runtime.core.mode, InputMode::Chinese);
+        assert!(!runtime.core.engine.config.traditional_chinese);
+        assert!(runtime.core.punctuation_processor.full_width_punct);
+        assert!(!runtime.core.full_width_char);
+
+        // 首次同步：将托盘的半角标点同步至运行时
+        let mode_changed = runtime.sync_shared_mode();
+        assert_eq!(mode_changed, None);
+        assert!(!runtime.core.punctuation_processor.full_width_punct);
+
+        // 外部托盘切换为繁体、全角标点、全角字符、英文
+        flags.set_traditional(true);
+        flags.set_full_width_punct(true);
+        flags.set_full_width_char(true);
+        flags.set_chinese(false);
+
+        let mode_changed = runtime.sync_shared_mode();
+        assert_eq!(mode_changed, Some(InputMode::English));
+        assert_eq!(runtime.core.mode, InputMode::English);
+        assert!(runtime.core.engine.config.traditional_chinese);
+        assert!(runtime.core.punctuation_processor.full_width_punct);
+        assert!(runtime.core.full_width_char);
+
+        // 再次同步，无状态变化
+        let mode_changed = runtime.sync_shared_mode();
+        assert_eq!(mode_changed, None);
+
+        // 外部托盘切回简体和中文
+        flags.set_traditional(false);
+        flags.set_chinese(true);
+        let mode_changed = runtime.sync_shared_mode();
+        assert_eq!(mode_changed, Some(InputMode::Chinese));
+        assert!(!runtime.core.engine.config.traditional_chinese);
     }
 }
