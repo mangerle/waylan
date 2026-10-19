@@ -252,17 +252,29 @@ impl VoiceSessionController {
 
         is_active.store(false, Ordering::Release);
     }
+
+    /// 请求平滑终止后台常驻语音工作线程并等待线程资源完全回收（具备幂等性）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：防止控制器析构时常驻工作线程沦为脱缰孤儿任务（Orphan Task）。
+    /// - **核心优势**：先通过非阻塞 `try_send` 派发 `Shutdown` 指令（杜绝通道积压导致的析构死锁），
+    ///   随后主动等待线程句柄 `join()` 彻底析构，确保 RAII 确定性资源释放与 Panic 感知。
+    pub fn shutdown(&mut self) {
+        self.is_active.store(false, Ordering::Release);
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = self.cmd_tx.try_send(WorkerCommand::Shutdown);
+            if let Err(e) = handle.join() {
+                log::error!("[微澜语音] 后台常驻语音工作线程析构异常 (Panic): {:?}", e);
+            } else {
+                log::info!("[微澜语音] 后台常驻语音工作线程已确定性平滑退出并完成资源回收");
+            }
+        }
+    }
 }
 
 impl Drop for VoiceSessionController {
     fn drop(&mut self) {
-        self.is_active.store(false, Ordering::Release);
-        if self.worker_handle.is_some() {
-            let _ = self.cmd_tx.send(WorkerCommand::Shutdown);
-            if let Some(handle) = self.worker_handle.take() {
-                let _ = handle.join();
-            }
-        }
+        self.shutdown();
     }
 }
 
@@ -423,9 +435,14 @@ mod tests {
     fn test_voice_session_controller_shutdown_without_deadlock() {
         // 构造控制器并在常驻工作线程中模拟收到 Shutdown 命令平滑退场
         let controller = VoiceSessionController::try_new();
-        if let Ok(c) = controller {
+        if let Ok(mut c) = controller {
             assert!(!c.is_recording());
-            // drop 发生时会向工作线程发送 Shutdown 并 join，测试其在微秒内顺利退场绝不死锁
+            // 显式主动停机
+            c.shutdown();
+            assert!(!c.is_recording());
+            // 验证多次 shutdown 具备幂等性
+            c.shutdown();
+            // drop 发生时自动委托 shutdown，测试其在微秒内顺利退场绝不死锁
             drop(c);
         }
     }
