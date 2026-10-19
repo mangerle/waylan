@@ -5,7 +5,7 @@
 //! - **核心优势**：将输入确认与基础编辑动作聚合在单一模块，保证选词提交与词频学习逻辑严密一致。
 //! - **代价与局限**：选词提交需向 PunctuationProcessor 记录提交历史以支持智能成对标点与自动推断。
 
-use waylan_algo::preprocessor::PunctuationProcessor;
+use crate::input::PunctuationProcessor;
 use waylan_algo::AlgoEngine;
 use waylan_core::input::constants::{
     KEY_APOSTROPHE, KEY_BACKSPACE, KEY_DELETE, KEY_ENTER, KEY_ESC, KEY_KPENTER, KEY_SPACE,

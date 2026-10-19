@@ -10,7 +10,7 @@ mod expanded;
 mod navigation;
 mod selection;
 
-use waylan_algo::preprocessor::PunctuationProcessor;
+use crate::input::PunctuationProcessor;
 use waylan_algo::AlgoEngine;
 use waylan_core::input::page_keys::PageKeyConfig;
 

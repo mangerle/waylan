@@ -19,7 +19,7 @@ pub use key_handler::{
     handle_composition_key, handle_composition_key_with_params, CompositionKeyParams,
 };
 
-use waylan_algo::preprocessor::{PunctuationProcessor, ShiftToggleStateMachine};
+use crate::input::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
 use waylan_core::{ExpandedCardState, GridState, InputMode, ParsedShortcut};

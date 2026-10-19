@@ -5,7 +5,8 @@
 //! - **核心优势**：在拼音引擎外层形成纯函数式拦截，打数字（如 12:30 或 3.14）时无需切英文模式。
 //! - **代价与局限**：需由外部在选词上屏时调用 `record_commit` 维护前驱字符上下文。
 
-use crate::TextAction;
+use waylan_core::config::PinyinConfig;
+use waylan_core::TextAction;
 
 /// 智能标点符号处理选项（参数对象）
 ///
@@ -39,8 +40,8 @@ impl Default for PunctuationOptions {
     }
 }
 
-impl From<&crate::config::PinyinConfig> for PunctuationOptions {
-    fn from(cfg: &crate::config::PinyinConfig) -> Self {
+impl From<&PinyinConfig> for PunctuationOptions {
+    fn from(cfg: &PinyinConfig) -> Self {
         Self {
             slash_to_dunhao: cfg.slash_to_dunhao,
             backslash_to_dunhao: cfg.backslash_to_dunhao,

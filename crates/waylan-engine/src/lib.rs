@@ -8,8 +8,11 @@
 
 pub mod factory;
 pub mod frontend;
+pub mod input;
 pub mod runtime;
 pub mod session;
+
+pub use input::{PunctuationOptions, PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 
 pub use factory::{
     create_engine_with_table, create_standard_engine, ensure_user_dictionaries_linked,

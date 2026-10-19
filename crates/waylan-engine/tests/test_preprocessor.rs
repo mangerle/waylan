@@ -1,5 +1,5 @@
-use waylan_algo::preprocessor::*;
 use waylan_core::{InputMode, TextAction};
+use waylan_engine::input::*;
 
 #[test]
 fn test_shift_toggle() {

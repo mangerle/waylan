@@ -13,7 +13,6 @@ pub mod error;
 pub mod evaluator;
 pub mod opencc;
 pub mod pipeline;
-pub mod preprocessor;
 pub mod prism;
 pub mod syllables;
 pub mod table;
