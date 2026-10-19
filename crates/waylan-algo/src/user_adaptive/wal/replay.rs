@@ -14,6 +14,7 @@ use log::warn;
 use crate::error::AlgoError;
 use crate::user_adaptive::wal::compactor::compact_model;
 use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1};
+use crate::user_adaptive::wal::lock::ProcessFileLock;
 use crate::user_adaptive::UserAdaptiveModel;
 
 /// 从二进制缓冲区重放 WAL 记录帧（公共重放逻辑）
@@ -87,12 +88,9 @@ pub(crate) fn replay_wal_records(buf: &[u8], is_v2: bool) -> (UserAdaptiveModel,
     (model, has_corrupted_tail, record_count)
 }
 
-/// 从 WAL 日志文件中重放还原用户词库模型，向下兼容旧版全量文件与旧版 V1 WAL
-pub fn load_or_replay<P: AsRef<Path>>(path: P) -> Result<UserAdaptiveModel, AlgoError> {
-    let path_ref = path.as_ref();
-    if !path_ref.exists() {
-        return Ok(UserAdaptiveModel::new());
-    }
+/// 在跨进程共享读锁保护下读取并解析 WAL 文件
+fn read_and_replay_file(path_ref: &Path) -> Result<(UserAdaptiveModel, bool), AlgoError> {
+    let _shared_lock = ProcessFileLock::acquire_shared(path_ref);
 
     let mut file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
         path: PathBuf::from(path_ref),
@@ -127,18 +125,32 @@ pub fn load_or_replay<P: AsRef<Path>>(path: P) -> Result<UserAdaptiveModel, Algo
 
             let (model, has_corrupted_tail, record_count) = replay_wal_records(&buf, is_v2);
 
-            if !is_v2
+            let need_compact = !is_v2
                 || has_corrupted_tail
-                || (record_count >= 50 && record_count > model.total_entries() * 3)
-            {
-                let _ = compact_model(&model, path_ref);
-            }
+                || (record_count >= 50 && record_count > model.total_entries() * 3);
 
-            Ok(model)
+            Ok((model, need_compact))
         } else {
-            UserAdaptiveModel::load_from_file(path_ref)
+            Ok((UserAdaptiveModel::load_from_file(path_ref)?, false))
         }
     } else {
-        UserAdaptiveModel::load_from_file(path_ref)
+        Ok((UserAdaptiveModel::load_from_file(path_ref)?, false))
     }
+}
+
+/// 从 WAL 日志文件中重放还原用户词库模型，向下兼容旧版全量文件与旧版 V1 WAL
+pub fn load_or_replay<P: AsRef<Path>>(path: P) -> Result<UserAdaptiveModel, AlgoError> {
+    let path_ref = path.as_ref();
+    if !path_ref.exists() {
+        return Ok(UserAdaptiveModel::new());
+    }
+
+    let (model, need_compact) = read_and_replay_file(path_ref)?;
+
+    // 共享读锁在 read_and_replay_file 退出时已析构释放，此处若需要归并压缩则能安全获取排他写锁，杜绝自死锁
+    if need_compact {
+        let _ = compact_model(&model, path_ref);
+    }
+
+    Ok(model)
 }

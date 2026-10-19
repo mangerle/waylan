@@ -8,6 +8,7 @@
 
 pub mod compactor;
 pub mod constants;
+pub mod lock;
 pub mod replay;
 
 use std::fs::{File, OpenOptions};
@@ -21,10 +22,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::warn;
 use parking_lot::Mutex;
-use rustix::fs::{flock, FlockOperation};
 
 use crate::error::AlgoError;
 use crate::user_adaptive::UserAdaptiveModel;
+use lock::ProcessFileLock;
 
 pub use compactor::compact_model;
 pub use constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1};
@@ -189,7 +190,9 @@ impl UserAdaptiveWal {
                         if let Ok(old_model) = Self::load_or_replay(path_ref) {
                             model.merge(&old_model);
                         }
-                        self.compact(model, path_ref)?;
+                        compactor::compact_model_internal(model, path_ref, || {
+                            self.mark_internal_compact();
+                        })?;
                         guard = self.wal_file.lock();
                     }
                 }
@@ -208,21 +211,13 @@ impl UserAdaptiveWal {
                 source: e,
             })?;
 
-        // 跨进程锁保护：尝试获取排他锁以防与其他进程初始化交错
-        let _ = flock(&file, FlockOperation::LockExclusive);
-
-        // 文件大小为 0 时写入魔数头
+        // 文件大小为 0 时写入魔数头（受跨进程排他锁保护）
         if file.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
-            let res = file
-                .write_all(WAL_MAGIC)
+            file.write_all(WAL_MAGIC)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: PathBuf::from(path_ref),
                     source: e,
-                });
-            let _ = flock(&file, FlockOperation::Unlock);
-            res?;
-        } else {
-            let _ = flock(&file, FlockOperation::Unlock);
+                })?;
         }
 
         *guard = Some((PathBuf::from(path_ref), file));
@@ -263,23 +258,6 @@ impl UserAdaptiveWal {
         Some(buf)
     }
 
-    /// 跨进程排他锁保护下将序列化帧安全写入文件并持久化
-    fn write_wal_frame_with_lock(
-        file: &mut File,
-        frame_buf: &[u8],
-        path_ref: &Path,
-    ) -> Result<(), AlgoError> {
-        let _ = flock(&*file, FlockOperation::LockExclusive);
-        let write_res = file
-            .write_all(frame_buf)
-            .map_err(|e| AlgoError::UserDictPersistFailed {
-                path: PathBuf::from(path_ref),
-                source: e,
-            });
-        let _ = flock(&*file, FlockOperation::Unlock);
-        write_res
-    }
-
     /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
     pub fn append<P: AsRef<Path>>(
         &mut self,
@@ -295,12 +273,19 @@ impl UserAdaptiveWal {
             None => return Ok(()),
         };
 
+        // 跨进程排他锁保护：从检查打开文件到写入单条帧均受排他互斥保护
+        let _process_lock = ProcessFileLock::acquire_exclusive(path_ref);
+
         self.ensure_wal_file_opened(model, path_ref)?;
 
         let mut guard = self.wal_file.lock();
 
         if let Some((_, ref mut file)) = *guard {
-            Self::write_wal_frame_with_lock(file, &frame_buf, path_ref)?;
+            file.write_all(&frame_buf)
+                .map_err(|e| AlgoError::UserDictPersistFailed {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                })?;
         }
 
         drop(guard);
