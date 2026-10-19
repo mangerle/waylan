@@ -17,8 +17,30 @@ use super::super::types::{
 use super::service::IbusEngineService;
 
 impl IbusEngineService {
+    /// 统一响应 GNOME / IBus 原生状态栏菜单项激活事件
+    pub(crate) async fn handle_property_activate(&self, ctxt: &SignalContext<'_>, name: &str) {
+        match name {
+            "InputMode" => self.on_prop_input_mode(ctxt).await,
+            "TraditionalChinese" => self.on_prop_traditional_chinese(ctxt).await,
+            "FullWidthPunct" => self.on_prop_full_width_punct(ctxt).await,
+            "FullWidthChar" => self.on_prop_full_width_char(ctxt).await,
+            "ReloadConfig" => self.on_prop_reload_config(),
+            "Setup" => {
+                if let Some(ref handler) = self.menu_handler {
+                    handler.open_settings(&self.settings_running);
+                }
+            }
+            "ViewLog" => {
+                if let Some(ref handler) = self.menu_handler {
+                    handler.view_log();
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// 响应状态栏点击切换中英文输入模式
-    pub(crate) async fn on_prop_input_mode(&self, ctxt: &SignalContext<'_>) {
+    async fn on_prop_input_mode(&self, ctxt: &SignalContext<'_>) {
         let (new_mode, is_caps) = {
             let mut guard = self.core.lock();
             let next = guard.runtime.toggle_input_mode();

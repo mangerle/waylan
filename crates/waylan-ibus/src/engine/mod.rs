@@ -9,6 +9,7 @@
 
 pub mod emitter;
 pub mod factory;
+pub mod navigation;
 pub mod properties;
 pub mod service;
 pub mod snapshot;

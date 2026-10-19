@@ -8,13 +8,12 @@
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_sys::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
 
-use super::super::keys::{IbusKeyOutcome, IbusSessionCore};
+use super::super::keys::IbusSessionCore;
 use super::super::screensaver::ScreenLockHealer;
 use super::super::types::{build_ibus_prop_list, extract_text_from_ibus_variant};
 use super::snapshot::UiSnapshot;
@@ -122,24 +121,7 @@ impl IbusEngineService {
         name: &str,
         _state: u32,
     ) {
-        match name {
-            "InputMode" => self.on_prop_input_mode(&ctxt).await,
-            "TraditionalChinese" => self.on_prop_traditional_chinese(&ctxt).await,
-            "FullWidthPunct" => self.on_prop_full_width_punct(&ctxt).await,
-            "FullWidthChar" => self.on_prop_full_width_char(&ctxt).await,
-            "ReloadConfig" => self.on_prop_reload_config(),
-            "Setup" => {
-                if let Some(ref handler) = self.menu_handler {
-                    handler.open_settings(&self.settings_running);
-                }
-            }
-            "ViewLog" => {
-                if let Some(ref handler) = self.menu_handler {
-                    handler.view_log();
-                }
-            }
-            _ => {}
-        }
+        self.handle_property_activate(&ctxt, name).await;
     }
 
     fn property_show(&self, _name: &str) {}
@@ -154,51 +136,7 @@ impl IbusEngineService {
         _button: u32,
         _state: u32,
     ) {
-        let (outcome, snap, is_caps_locked) = {
-            let mut guard = self.core.lock();
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let mut out = IbusKeyOutcome {
-                consumed: true,
-                update_ui: true,
-                ..Default::default()
-            };
-            if guard.runtime.core.is_card_expanded() {
-                let sel = guard.runtime.core.selected_global_index();
-                guard.runtime.core.collapse_card();
-                if let Some((committed, _)) = guard
-                    .runtime
-                    .core
-                    .engine
-                    .select_expanded_item(sel, index as usize)
-                {
-                    guard
-                        .runtime
-                        .core
-                        .punctuation_processor
-                        .record_commit(&committed);
-                    out.commit_text = Some(committed);
-                }
-            } else if let Some((committed, _)) = guard
-                .runtime
-                .core
-                .engine
-                .select_candidate(index as usize, now)
-            {
-                guard
-                    .runtime
-                    .core
-                    .punctuation_processor
-                    .record_commit(&committed);
-                out.commit_text = Some(committed);
-            }
-            let snap = UiSnapshot::capture(&guard);
-            (out, Some(snap), guard.is_caps_locked())
-        };
-        self.dispatch_outcome(&ctxt, outcome, snap, is_caps_locked)
-            .await;
+        self.handle_candidate_clicked(&ctxt, index).await;
     }
 
     /// 焦点进入输入上下文
@@ -280,54 +218,22 @@ impl IbusEngineService {
 
     /// 响应候选框上一页按钮事件
     async fn page_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
-        let snap = {
-            let mut guard = self.core.lock();
-            if !guard.runtime.core.is_card_expanded() {
-                let _ = guard.runtime.core.prev_page();
-            }
-            UiSnapshot::capture(&guard)
-        };
-        Self::emit_ui_snapshot(&ctxt, &snap).await;
+        self.handle_page_up(&ctxt).await;
     }
 
     /// 响应候选框下一页按钮事件
     async fn page_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
-        let snap = {
-            let mut guard = self.core.lock();
-            if !guard.runtime.core.is_card_expanded() {
-                let _ = guard.runtime.core.next_page();
-            }
-            UiSnapshot::capture(&guard)
-        };
-        Self::emit_ui_snapshot(&ctxt, &snap).await;
+        self.handle_page_down(&ctxt).await;
     }
 
     /// 响应候选框光标上移事件
     async fn cursor_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
-        let snap = {
-            let mut guard = self.core.lock();
-            if guard.runtime.core.is_card_expanded() {
-                guard.runtime.core.prev_card_item();
-            } else {
-                guard.runtime.core.prev_candidate();
-            }
-            UiSnapshot::capture(&guard)
-        };
-        Self::emit_ui_snapshot(&ctxt, &snap).await;
+        self.handle_cursor_up(&ctxt).await;
     }
 
     /// 响应候选框光标下移事件
     async fn cursor_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
-        let snap = {
-            let mut guard = self.core.lock();
-            if guard.runtime.core.is_card_expanded() {
-                guard.runtime.core.next_card_item();
-            } else {
-                guard.runtime.core.next_candidate();
-            }
-            UiSnapshot::capture(&guard)
-        };
-        Self::emit_ui_snapshot(&ctxt, &snap).await;
+        self.handle_cursor_down(&ctxt).await;
     }
 
     /// 接收客户端同步的光标周围文本
