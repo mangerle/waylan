@@ -23,16 +23,12 @@ pub use models::*;
 #[serde(default)]
 pub struct AppConfig {
     /// 界面视觉排版与候选框渲染配置
-    #[serde(flatten)]
     pub ui: UiConfig,
     /// 快捷键与操作按键配置
-    #[serde(flatten)]
     pub shortcuts: ShortcutConfig,
     /// 拼音算法、词库处理与字符输出配置
-    #[serde(flatten)]
     pub pinyin: PinyinConfig,
     /// 桌面环境集成与系统托盘配置
-    #[serde(flatten)]
     pub desktop: DesktopConfig,
     /// 语音输入功能配置
     pub voice: VoiceConfig,
@@ -220,5 +216,38 @@ fuzzy_pinyin = true
         // 原 broken 文件应已被重命名为 restored
         assert!(!broken_path.exists());
         assert!(broken_path.with_extension("restored").exists());
+    }
+
+    #[test]
+    fn test_standard_section_and_hybrid_parsing() {
+        // 1. 标准 TOML 分段解析
+        let sectioned_toml = r#"
+[ui]
+page_size = 7
+font_size = 16.0
+
+[shortcuts]
+switch_key = "Ctrl"
+
+[pinyin]
+slash_to_dunhao = false
+"#;
+        let cfg = AppConfig::parse_tolerant(sectioned_toml).expect("标准分段解析应成功");
+        assert_eq!(cfg.ui.page_size, 7);
+        assert_eq!(cfg.ui.font_size, 16.0);
+        assert_eq!(cfg.shortcuts.switch_key, SwitchKey::Ctrl);
+        assert!(!cfg.pinyin.slash_to_dunhao);
+        assert!(cfg.pinyin.v_mode); // 默认值应补齐
+
+        // 2. 混合解析：标准分段结合根级历史平铺覆盖
+        let hybrid_toml = r#"
+page_size = 8
+
+[shortcuts]
+switch_key = "Ctrl"
+"#;
+        let hybrid_cfg = AppConfig::parse_tolerant(hybrid_toml).expect("混合格式解析应成功");
+        assert_eq!(hybrid_cfg.ui.page_size, 8);
+        assert_eq!(hybrid_cfg.shortcuts.switch_key, SwitchKey::Ctrl);
     }
 }

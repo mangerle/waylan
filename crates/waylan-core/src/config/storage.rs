@@ -1,65 +1,253 @@
 //! 配置文件的宽容反序列化、损坏备份救援与原子持久化存储
+//!
+//! # 设计原理
+//! - **实现初衷**：为输入法提供坚如磐石的配置持久化，消除手动操作 `toml::Table` 字典树的复杂性与安全隐患。
+//! - **核心优势**：利用 serde 强类型派生默认值（`#[serde(default)]`）实现声明式容错；透明兼顾现代标准分段与历史平铺格式。
+//! - **代价与局限**：平铺格式合流优先采纳显式子段落配置，平铺历史字段作为缺省增量补齐。
 
 use std::fs;
 use std::path::Path;
 
+use serde::Deserialize;
+
 use super::error::ConfigError;
+use super::models::*;
 use super::AppConfig;
 
+/// 宽容配置反序列化兼容载体（支持标准分段与历史平铺字段无缝合流）
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct FlatConfigFallback {
+    // 1. 标准现代分段
+    ui: Option<UiConfig>,
+    shortcuts: Option<ShortcutConfig>,
+    pinyin: Option<PinyinConfig>,
+    desktop: Option<DesktopConfig>,
+    voice: Option<VoiceConfig>,
+
+    // 2. 历史顶层平铺字段兼容（UI）
+    page_size: Option<usize>,
+    font_size: Option<f32>,
+    theme: Option<ThemeMode>,
+    candidate_orientation: Option<CandidateOrientation>,
+    candidate_index_style: Option<CandidateIndexStyle>,
+    candidate_window_mode: Option<CandidateWindowMode>,
+    candidate_density: Option<CandidateDensity>,
+    candidate_theme: Option<CandidateThemePreset>,
+    candidate_item_spacing: Option<f32>,
+    candidate_padding_v: Option<f32>,
+    candidate_padding_h: Option<f32>,
+    candidate_corner_radius: Option<f32>,
+    candidate_opacity: Option<u32>,
+    show_pinyin_comment: Option<bool>,
+
+    // 3. 历史顶层平铺字段兼容（Shortcuts）
+    switch_key: Option<SwitchKey>,
+    page_keys: Option<PageKeys>,
+    traditional_shortcut: Option<String>,
+    full_width_char_shortcut: Option<String>,
+    full_width_punct_shortcut: Option<String>,
+    shift_select_second: Option<bool>,
+
+    // 4. 历史顶层平铺字段兼容（Pinyin）
+    init_chinese: Option<bool>,
+    full_width_char: Option<bool>,
+    full_width_punct: Option<bool>,
+    dynamic_adjust_freq: Option<bool>,
+    enable_acronym: Option<bool>,
+    slash_to_dunhao: Option<bool>,
+    backslash_to_dunhao: Option<bool>,
+    protect_digits_punctuation: Option<bool>,
+    auto_complete_pairs: Option<bool>,
+    v_mode: Option<bool>,
+    enable_u_mode: Option<bool>,
+    enable_i_mode: Option<bool>,
+    fuzzy_pinyin: Option<bool>,
+    fuzzy_rules: Option<FuzzyPinyinRules>,
+    typo_rules: Option<TypoCorrectionRules>,
+    traditional_chinese: Option<bool>,
+    auto_pangu_spacing: Option<bool>,
+    filter_uncommon_charset: Option<bool>,
+    auto_dedup: Option<bool>,
+
+    // 5. 历史顶层平铺字段兼容（Desktop）
+    tray_icon_theme_path: Option<String>,
+    tray_icon_zh: Option<String>,
+    tray_icon_en: Option<String>,
+    enable_tray: Option<TrayDisplayMode>,
+    exclusive_input_source: Option<bool>,
+}
+
+impl FlatConfigFallback {
+    /// 合流为标准的结构化 AppConfig
+    fn into_app_config(self) -> AppConfig {
+        let mut cfg = AppConfig::default();
+
+        // 1. 优先加载标准子段落
+        if let Some(ui) = self.ui {
+            cfg.ui = ui;
+        }
+        if let Some(shortcuts) = self.shortcuts {
+            cfg.shortcuts = shortcuts;
+        }
+        if let Some(pinyin) = self.pinyin {
+            cfg.pinyin = pinyin;
+        }
+        if let Some(desktop) = self.desktop {
+            cfg.desktop = desktop;
+        }
+        if let Some(voice) = self.voice {
+            cfg.voice = voice;
+        }
+
+        // 2. 平铺历史字段兜底覆盖（兼容未划分 [ui]、[pinyin] 等段落的旧版配置）
+        if let Some(v) = self.page_size {
+            cfg.ui.page_size = v;
+        }
+        if let Some(v) = self.font_size {
+            cfg.ui.font_size = v;
+        }
+        if let Some(v) = self.theme {
+            cfg.ui.theme = v;
+        }
+        if let Some(v) = self.candidate_orientation {
+            cfg.ui.candidate_orientation = v;
+        }
+        if let Some(v) = self.candidate_index_style {
+            cfg.ui.candidate_index_style = v;
+        }
+        if let Some(v) = self.candidate_window_mode {
+            cfg.ui.candidate_window_mode = v;
+        }
+        if let Some(v) = self.candidate_density {
+            cfg.ui.candidate_density = v;
+        }
+        if let Some(v) = self.candidate_theme {
+            cfg.ui.candidate_theme = v;
+        }
+        if let Some(v) = self.candidate_item_spacing {
+            cfg.ui.candidate_item_spacing = v;
+        }
+        if let Some(v) = self.candidate_padding_v {
+            cfg.ui.candidate_padding_v = v;
+        }
+        if let Some(v) = self.candidate_padding_h {
+            cfg.ui.candidate_padding_h = v;
+        }
+        if let Some(v) = self.candidate_corner_radius {
+            cfg.ui.candidate_corner_radius = v;
+        }
+        if let Some(v) = self.candidate_opacity {
+            cfg.ui.candidate_opacity = v;
+        }
+        if let Some(v) = self.show_pinyin_comment {
+            cfg.ui.show_pinyin_comment = v;
+        }
+
+        if let Some(v) = self.switch_key {
+            cfg.shortcuts.switch_key = v;
+        }
+        if let Some(v) = self.page_keys {
+            cfg.shortcuts.page_keys = v;
+        }
+        if let Some(v) = self.traditional_shortcut {
+            cfg.shortcuts.traditional_shortcut = v;
+        }
+        if let Some(v) = self.full_width_char_shortcut {
+            cfg.shortcuts.full_width_char_shortcut = v;
+        }
+        if let Some(v) = self.full_width_punct_shortcut {
+            cfg.shortcuts.full_width_punct_shortcut = v;
+        }
+        if let Some(v) = self.shift_select_second {
+            cfg.shortcuts.shift_select_second = v;
+        }
+
+        if let Some(v) = self.init_chinese {
+            cfg.pinyin.init_chinese = v;
+        }
+        if let Some(v) = self.full_width_char {
+            cfg.pinyin.full_width_char = v;
+        }
+        if let Some(v) = self.full_width_punct {
+            cfg.pinyin.full_width_punct = v;
+        }
+        if let Some(v) = self.dynamic_adjust_freq {
+            cfg.pinyin.dynamic_adjust_freq = v;
+        }
+        if let Some(v) = self.enable_acronym {
+            cfg.pinyin.enable_acronym = v;
+        }
+        if let Some(v) = self.slash_to_dunhao {
+            cfg.pinyin.slash_to_dunhao = v;
+        }
+        if let Some(v) = self.backslash_to_dunhao {
+            cfg.pinyin.backslash_to_dunhao = v;
+        }
+        if let Some(v) = self.protect_digits_punctuation {
+            cfg.pinyin.protect_digits_punctuation = v;
+        }
+        if let Some(v) = self.auto_complete_pairs {
+            cfg.pinyin.auto_complete_pairs = v;
+        }
+        if let Some(v) = self.v_mode {
+            cfg.pinyin.v_mode = v;
+        }
+        if let Some(v) = self.enable_u_mode {
+            cfg.pinyin.enable_u_mode = v;
+        }
+        if let Some(v) = self.enable_i_mode {
+            cfg.pinyin.enable_i_mode = v;
+        }
+        if let Some(v) = self.fuzzy_pinyin {
+            cfg.pinyin.fuzzy_pinyin = v;
+        }
+        if let Some(v) = self.fuzzy_rules {
+            cfg.pinyin.fuzzy_rules = v;
+        }
+        if let Some(v) = self.typo_rules {
+            cfg.pinyin.typo_rules = v;
+        }
+        if let Some(v) = self.traditional_chinese {
+            cfg.pinyin.traditional_chinese = v;
+        }
+        if let Some(v) = self.auto_pangu_spacing {
+            cfg.pinyin.auto_pangu_spacing = v;
+        }
+        if let Some(v) = self.filter_uncommon_charset {
+            cfg.pinyin.filter_uncommon_charset = v;
+        }
+        if let Some(v) = self.auto_dedup {
+            cfg.pinyin.auto_dedup = v;
+        }
+
+        if let Some(v) = self.tray_icon_theme_path {
+            cfg.desktop.tray_icon_theme_path = Some(v);
+        }
+        if let Some(v) = self.tray_icon_zh {
+            cfg.desktop.tray_icon_zh = Some(v);
+        }
+        if let Some(v) = self.tray_icon_en {
+            cfg.desktop.tray_icon_en = Some(v);
+        }
+        if let Some(v) = self.enable_tray {
+            cfg.desktop.enable_tray = v;
+        }
+        if let Some(v) = self.exclusive_input_source {
+            cfg.desktop.exclusive_input_source = v;
+        }
+
+        cfg.sanitize();
+        cfg
+    }
+}
+
 impl AppConfig {
-    /// 宽容解析配置文件：优先严格解析，失败时尝试提取有效字段并以默认配置补齐
+    /// 宽容解析配置文件：利用声明式强类型载体平滑合流，自动补齐默认配置
     pub fn parse_tolerant(content: &str) -> Result<Self, ConfigError> {
-        match toml::from_str::<Self>(content) {
-            Ok(mut cfg) => {
-                cfg.sanitize();
-                Ok(cfg)
-            }
-            Err(strict_err) => {
-                // 尝试作为通用 toml::Table 解析，最大限度挽救用户已有配置项
-                let Ok(table) = toml::from_str::<toml::Table>(content) else {
-                    return Err(ConfigError::SyntaxCorrupted(strict_err.to_string()));
-                };
-
-                let mut base_val =
-                    toml::Value::try_from(Self::default()).map_err(ConfigError::TomlSer)?;
-
-                if let toml::Value::Table(ref mut base_table) = base_val {
-                    for (k, v) in table {
-                        if let Some(existing) = base_table.get_mut(&k) {
-                            match (existing, v) {
-                                (
-                                    toml::Value::Table(ref mut ex_tbl),
-                                    toml::Value::Table(new_tbl),
-                                ) => {
-                                    for (sub_k, sub_v) in new_tbl {
-                                        ex_tbl.insert(sub_k, sub_v);
-                                    }
-                                }
-                                (_, non_tbl_val) => {
-                                    base_table.insert(k, non_tbl_val);
-                                }
-                            }
-                        } else {
-                            base_table.insert(k, v);
-                        }
-                    }
-                }
-
-                match base_val.try_into::<Self>() {
-                    Ok(mut merged_cfg) => {
-                        merged_cfg.sanitize();
-                        log::warn!(
-                            "[配置系统] 配置文件存在格式偏差 ({})，已平滑容错合并有效配置项并补充默认字段。",
-                            strict_err
-                        );
-                        Ok(merged_cfg)
-                    }
-                    Err(merge_err) => Err(ConfigError::ParseFailed {
-                        strict_err: strict_err.to_string(),
-                        merge_err: merge_err.to_string(),
-                    }),
-                }
-            }
+        match toml::from_str::<FlatConfigFallback>(content) {
+            Ok(fallback) => Ok(fallback.into_app_config()),
+            Err(e) => Err(ConfigError::SyntaxCorrupted(e.to_string())),
         }
     }
 
