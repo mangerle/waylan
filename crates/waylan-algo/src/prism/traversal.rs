@@ -22,6 +22,101 @@ pub struct DfsContext<'a> {
     pub results: &'a mut Vec<SegmentPath>,
 }
 
+/// 探索模糊音音节匹配扩展分支
+fn explore_fuzzy_syllables(
+    ctx: &mut DfsContext<'_>,
+    start: usize,
+    current_cost: u32,
+    typo_count: u8,
+    max_len: usize,
+    fsa_matches: &[(&str, usize)],
+    matched_full: &mut bool,
+) {
+    if !ctx.fuzzy.has_active_rules() {
+        return;
+    }
+    for len in (1..=max_len).rev() {
+        let end = start + len;
+        if !ctx.input.is_char_boundary(end) {
+            continue;
+        }
+        let slice = &ctx.input[start..end];
+        if PrismFuzzy::is_fuzzy_valid(slice, ctx.fuzzy) && !fsa_matches.iter().any(|m| m.0 == slice)
+        {
+            *matched_full = true;
+            let mut step_cost = 12;
+            if let Some(prev) = ctx.current.last() {
+                if PrismFuzzy::is_zero_initial_borrowing_split(prev, slice) {
+                    step_cost += 35;
+                }
+            }
+            ctx.current.push(slice.to_string());
+            dfs_dag(ctx, end, current_cost + step_cost, typo_count);
+            ctx.current.pop();
+        }
+    }
+}
+
+/// 探索物理键盘紧邻按键高斯误触与常见韵母规则纠错
+fn explore_spatial_and_rule_typo(
+    ctx: &mut DfsContext<'_>,
+    start: usize,
+    current_cost: u32,
+    max_len: usize,
+    fsa_matches: &[(&str, usize)],
+) {
+    if !ctx.enable_typo || fsa_matches.iter().any(|m| m.1 >= 4) || ctx.results.len() >= 48 {
+        return;
+    }
+
+    for len in (2..=max_len).rev() {
+        let end = start + len;
+        if !ctx.input.is_char_boundary(end) {
+            continue;
+        }
+        let slice = &ctx.input[start..end];
+        let mut corrections = get_spatial_typo_corrections(slice, 25);
+        for rule_alt in get_typo_corrections(slice) {
+            if !corrections.iter().any(|(s, _)| s == &rule_alt) {
+                corrections.push((rule_alt, 16));
+            }
+        }
+        for (std_syl, edit_cost) in corrections {
+            if !fsa_matches.iter().any(|m| m.0 == std_syl) {
+                ctx.current.push(std_syl);
+                dfs_dag(ctx, end, current_cost + 10 + edit_cost, 1);
+                ctx.current.pop();
+            }
+        }
+    }
+}
+
+/// 探索声母简拼混合转移边
+fn explore_initials_transitions(
+    ctx: &mut DfsContext<'_>,
+    start: usize,
+    current_cost: u32,
+    typo_count: u8,
+) {
+    for &initial in STANDARD_INITIALS {
+        if ctx.input[start..].starts_with(initial) {
+            let len = initial.len();
+            if start + len < ctx.input.len() {
+                ctx.current.push(initial.to_string());
+                dfs_dag(ctx, start + len, current_cost + 25, typo_count);
+                ctx.current.pop();
+            } else if !ctx.current.is_empty() {
+                ctx.results.push(SegmentPath {
+                    syllables: ctx.current.clone(),
+                    remaining: initial.to_string(),
+                    cost: current_cost + 30,
+                    is_typo: typo_count > 0,
+                });
+            }
+        }
+    }
+}
+
 /// 深度优先搜索构建音节与声母混合 DAG 路径（保证 100% 原始击键字母保真）
 pub fn dfs_dag(ctx: &mut DfsContext<'_>, start: usize, current_cost: u32, typo_count: u8) {
     if start >= ctx.input.len() {
@@ -68,83 +163,29 @@ pub fn dfs_dag(ctx: &mut DfsContext<'_>, start: usize, current_cost: u32, typo_c
         ctx.current.pop();
     }
 
-    // 1.2 模糊音音节匹配扩展（若启用了模糊音开关，严格使用原输入切片 slice）
-    if ctx.fuzzy.has_active_rules() {
-        for len in (1..=max_len).rev() {
-            let end = start + len;
-            if !ctx.input.is_char_boundary(end) {
-                continue;
-            }
-            let slice = &ctx.input[start..end];
-            if PrismFuzzy::is_fuzzy_valid(slice, ctx.fuzzy)
-                && !fsa_matches.iter().any(|m| m.0 == slice)
-            {
-                matched_full = true;
-                let mut step_cost = 12;
-                if let Some(prev) = ctx.current.last() {
-                    if PrismFuzzy::is_zero_initial_borrowing_split(prev, slice) {
-                        step_cost += 35;
-                    }
-                }
-                ctx.current.push(slice.to_string());
-                dfs_dag(ctx, end, current_cost + step_cost, typo_count);
-                ctx.current.pop();
-            }
-        }
-    }
+    // 1.2 模糊音音节匹配扩展
+    explore_fuzzy_syllables(
+        ctx,
+        start,
+        current_cost,
+        typo_count,
+        max_len,
+        &fsa_matches,
+        &mut matched_full,
+    );
 
     // 1.3 容错虚边：相邻按键倒置（支持音节内 (0,1)..=(4,5) 交换与跨音节边界交换）
     if ctx.enable_typo && typo_count == 0 && start + 1 < ctx.input.len() && ctx.results.len() < 48 {
         explore_transpose_typo(ctx, start, current_cost, fsa);
     }
 
-    // 1.4 容错虚边：物理键盘紧邻按键高斯误触与常见韵母规则纠错（如 nihso -> nihao, zhegn -> zheng）
-    // 防候选词爆炸：仅在第二阶段且未匹配出 4 字符以上音节时探索
-    if ctx.enable_typo
-        && typo_count == 0
-        && !fsa_matches.iter().any(|m| m.1 >= 4)
-        && ctx.results.len() < 48
-    {
-        for len in (2..=max_len).rev() {
-            let end = start + len;
-            if !ctx.input.is_char_boundary(end) {
-                continue;
-            }
-            let slice = &ctx.input[start..end];
-            let mut corrections = get_spatial_typo_corrections(slice, 25);
-            for rule_alt in get_typo_corrections(slice) {
-                if !corrections.iter().any(|(s, _)| s == &rule_alt) {
-                    corrections.push((rule_alt, 16));
-                }
-            }
-            for (std_syl, edit_cost) in corrections {
-                if !fsa_matches.iter().any(|m| m.0 == std_syl) {
-                    ctx.current.push(std_syl);
-                    dfs_dag(ctx, end, current_cost + 10 + edit_cost, 1);
-                    ctx.current.pop();
-                }
-            }
-        }
+    // 1.4 容错虚边：物理键盘紧邻按键高斯误触与常见韵母规则纠错
+    if typo_count == 0 {
+        explore_spatial_and_rule_typo(ctx, start, current_cost, max_len, &fsa_matches);
     }
 
-    // 2. 声母简拼混合转移边（严格保持原始声母字母，绝不改动任何字符）：
-    for &initial in STANDARD_INITIALS {
-        if ctx.input[start..].starts_with(initial) {
-            let len = initial.len();
-            if start + len < ctx.input.len() {
-                ctx.current.push(initial.to_string());
-                dfs_dag(ctx, start + len, current_cost + 25, typo_count);
-                ctx.current.pop();
-            } else if !ctx.current.is_empty() {
-                ctx.results.push(SegmentPath {
-                    syllables: ctx.current.clone(),
-                    remaining: initial.to_string(),
-                    cost: current_cost + 30,
-                    is_typo: typo_count > 0,
-                });
-            }
-        }
-    }
+    // 2. 声母简拼混合转移边
+    explore_initials_transitions(ctx, start, current_cost, typo_count);
 
     // 3. 若当前处于末尾且无法凑成完整音节，但属于合法前缀，记录为带有 remaining 的候选路径
     if !matched_full && !ctx.current.is_empty() {
