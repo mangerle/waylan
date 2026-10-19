@@ -36,8 +36,17 @@ pub struct ExtensionContext<'a> {
 ///
 /// 遵循开闭原则 (OCP)，支持动态插拔不同类型的候选词扩展源。
 pub trait CandidateExtensionProvider {
-    /// 根据当前上下文生成扩展候选词
-    fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate>;
+    /// 根据当前上下文生成扩展候选词并追加至输出缓冲区（推荐零分配实现）
+    fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
+        out.extend(self.provide(ctx));
+    }
+
+    /// 根据当前上下文生成扩展候选词（默认实现自动委托至 append_candidates）
+    fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
+        let mut results = Vec::new();
+        self.append_candidates(ctx, &mut results);
+        results
+    }
 }
 
 /// 用户自定义短语提供者（最高优先级，标记为 ProtectedEntity 置顶）
@@ -46,18 +55,16 @@ pub struct CustomPhraseProvider<'a> {
 }
 
 impl<'a> CandidateExtensionProvider for CustomPhraseProvider<'a> {
-    fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
+    fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
         let phrase_cands = self.custom_phrases.lookup(ctx.raw_input);
-        let mut results = Vec::with_capacity(phrase_cands.len());
         for mut phrase in phrase_cands {
             if ctx.traditional_chinese {
                 phrase.text = ctx.opencc.convert_text(&phrase.text);
             }
             phrase.tier = CandidateTier::ProtectedEntity;
             phrase.consumed_len = Some(ctx.raw_input.len());
-            results.push(phrase);
+            out.push(phrase);
         }
-        results
     }
 }
 
@@ -65,8 +72,7 @@ impl<'a> CandidateExtensionProvider for CustomPhraseProvider<'a> {
 pub struct DateTimeProvider;
 
 impl CandidateExtensionProvider for DateTimeProvider {
-    fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
-        let mut results = Vec::new();
+    fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
         if let Some(mut dynamic_cand) = DateTimeEvaluator::try_evaluate(ctx.raw_input) {
             if ctx.traditional_chinese {
                 dynamic_cand.text = ctx.opencc.convert_text(&dynamic_cand.text);
@@ -75,9 +81,8 @@ impl CandidateExtensionProvider for DateTimeProvider {
                 }
             }
             dynamic_cand.consumed_len = Some(ctx.raw_input.len());
-            results.push(dynamic_cand);
+            out.push(dynamic_cand);
         }
-        results
     }
 }
 
@@ -87,9 +92,8 @@ pub struct EnglishSuggesterProvider<'a> {
 }
 
 impl<'a> CandidateExtensionProvider for EnglishSuggesterProvider<'a> {
-    fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
+    fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
         let eng_cands = self.english_suggester.lookup(ctx.raw_input);
-        let mut results = Vec::with_capacity(1);
         for mut eng in eng_cands.into_iter().take(1) {
             if !ctx
                 .existing_candidates
@@ -97,10 +101,9 @@ impl<'a> CandidateExtensionProvider for EnglishSuggesterProvider<'a> {
                 .any(|c| c.text.eq_ignore_ascii_case(&eng.text))
             {
                 eng.consumed_len = Some(ctx.raw_input.len());
-                results.push(eng);
+                out.push(eng);
             }
         }
-        results
     }
 }
 
@@ -110,16 +113,14 @@ pub struct SymbolSuggesterProvider<'a> {
 }
 
 impl<'a> CandidateExtensionProvider for SymbolSuggesterProvider<'a> {
-    fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
+    fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
         let sym_cands = self.symbol_suggester.lookup(ctx.raw_input);
-        let mut results = Vec::with_capacity(1);
         for mut sym in sym_cands.into_iter().take(1) {
             if !ctx.existing_candidates.iter().any(|c| c.text == sym.text) {
                 sym.consumed_len = Some(ctx.raw_input.len());
-                results.push(sym);
+                out.push(sym);
             }
         }
-        results
     }
 }
 
@@ -147,6 +148,27 @@ impl<'a> ExtensionPipeline<'a> {
         }
     }
 
+    /// 静态无分配收集默认扩展源候选（热点路径优先调用，消除 Box 与动态分派堆开销）
+    pub fn collect_default_extensions(
+        resources: &'a LexiconResources,
+        ctx: &ExtensionContext<'_>,
+        out: &mut Vec<AlgoCandidate>,
+    ) {
+        CustomPhraseProvider {
+            custom_phrases: &resources.custom_phrases,
+        }
+        .append_candidates(ctx, out);
+        DateTimeProvider.append_candidates(ctx, out);
+        EnglishSuggesterProvider {
+            english_suggester: &resources.english_suggester,
+        }
+        .append_candidates(ctx, out);
+        SymbolSuggesterProvider {
+            symbol_suggester: &resources.symbol_suggester,
+        }
+        .append_candidates(ctx, out);
+    }
+
     /// 注册自定义扩展提供者
     pub fn register(&mut self, provider: Box<dyn CandidateExtensionProvider + 'a>) {
         self.providers.push(provider);
@@ -156,7 +178,7 @@ impl<'a> ExtensionPipeline<'a> {
     pub fn collect_extensions(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
         let mut extensions = Vec::new();
         for provider in &self.providers {
-            extensions.extend(provider.provide(ctx));
+            provider.append_candidates(ctx, &mut extensions);
         }
         extensions
     }
@@ -184,18 +206,18 @@ impl AlgoEngine {
             }
         }
 
-        // 3. 基于 CandidateExtensionProvider 管道收集扩展项
+        // 3. 静态分派零分配收集扩展项
         let ctx = ExtensionContext {
             raw_input,
             existing_candidates: candidates,
             traditional_chinese: self.config.traditional_chinese,
             opencc: &self.resources.opencc_dict,
         };
-        let pipeline = ExtensionPipeline::default_pipeline(&self.resources);
-        let extensions = pipeline.collect_extensions(&ctx);
+        let mut extensions = Vec::with_capacity(8);
+        ExtensionPipeline::collect_default_extensions(&self.resources, &ctx, &mut extensions);
 
         // 4. 按照确定的语义层级编排扩展候选
-        self.merge_extensions_by_hierarchy(extensions, candidates);
+        self.merge_extensions_by_hierarchy(&extensions, candidates);
     }
 
     /// 在无完整合法成词命中时注入物理空间键盘按键纠错候选
@@ -245,17 +267,17 @@ impl AlgoEngine {
     /// 按照确定的语义层级编排扩展候选，杜绝多个扩展项暴力覆盖挤出中文最优词
     fn merge_extensions_by_hierarchy(
         &self,
-        extensions: Vec<AlgoCandidate>,
+        extensions: &[AlgoCandidate],
         candidates: &mut Vec<AlgoCandidate>,
     ) {
         for ext in extensions {
             if ext.tier == CandidateTier::ProtectedEntity {
                 candidates.retain(|c| c.text != ext.text);
-                candidates.insert(0, ext);
+                candidates.insert(0, ext.clone());
             } else if ext.is_expandable {
                 candidates.retain(|c| c.text != ext.text);
                 let insert_pos = if candidates.is_empty() { 0 } else { 1 };
-                candidates.insert(insert_pos, ext);
+                candidates.insert(insert_pos, ext.clone());
             } else {
                 candidates.retain(|c| c.text != ext.text);
                 let insert_pos = if candidates.len() <= 1 {
@@ -263,7 +285,7 @@ impl AlgoEngine {
                 } else {
                     2.min(candidates.len())
                 };
-                candidates.insert(insert_pos, ext);
+                candidates.insert(insert_pos, ext.clone());
             }
         }
     }
