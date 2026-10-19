@@ -64,6 +64,8 @@ impl ImeRuntime {
         is_active: bool,
         inline_preedit: bool,
     ) -> CandidateBoxState {
+        let voice_state = self.voice_manager.as_ref().and_then(|vm| vm.render_state());
+
         build_common_candidate_box_state(
             &self.core.engine,
             CandidateBoxBuildOptions {
@@ -72,7 +74,7 @@ impl ImeRuntime {
                 grid_state: self.core.grid_state,
                 expanded_card: Some(self.core.expanded_card),
                 inline_preedit,
-                voice_manager: self.voice_manager.as_ref(),
+                voice_state,
             },
         )
     }

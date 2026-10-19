@@ -7,12 +7,14 @@ pub mod conversion;
 pub mod keymap;
 pub mod modifiers;
 pub mod page_keys;
+pub mod voice;
 
 pub use constants::*;
 pub use conversion::*;
 pub use keymap::KeymapLayout;
 pub use modifiers::*;
 pub use page_keys::*;
+pub use voice::*;
 
 #[cfg(test)]
 mod tests {

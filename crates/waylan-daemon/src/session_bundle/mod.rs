@@ -92,21 +92,16 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        session.runtime.voice_manager =
-            Some(waylan_voice::VoiceInteractionManager::new(initial_voice));
+        session.runtime.voice_manager = Some(Box::new(waylan_voice::VoiceInteractionManager::new(
+            initial_voice,
+        )));
 
         reload_wayland_session(&mut session);
 
         // 验证热重载后，Wayland 会话内部的 voice_manager 配置已同步为磁盘当前配置
         let disk_cfg = AppConfig::load_or_create();
         assert_eq!(
-            session
-                .runtime
-                .voice_manager
-                .as_ref()
-                .unwrap()
-                .config
-                .enabled,
+            session.runtime.voice_manager.as_ref().unwrap().is_enabled(),
             disk_cfg.voice.enabled
         );
     }

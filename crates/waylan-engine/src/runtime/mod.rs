@@ -12,15 +12,11 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use waylan_algo::AlgoEngine;
+use waylan_core::input::VoiceProvider;
 use waylan_core::state::SharedInputFlags;
-use waylan_core::{ParsedShortcut, VoiceConfig};
+use waylan_core::ParsedShortcut;
 #[cfg(feature = "voice")]
-use waylan_voice::VoiceInteractionManager;
-
-#[cfg(not(feature = "voice"))]
-pub mod voice_stub;
-#[cfg(not(feature = "voice"))]
-pub use voice_stub::VoiceInteractionManager;
+use waylan_core::VoiceConfig;
 
 pub mod candidate_builder;
 pub mod key_dispatcher;
@@ -40,8 +36,8 @@ use crate::session::ImeCoreSession;
 pub struct ImeRuntime {
     /// 核心算法与按键决策会话状态机
     pub core: ImeCoreSession,
-    /// 统一语音按键交互与录音流式管理器
-    pub voice_manager: Option<VoiceInteractionManager>,
+    /// 统一语音按键交互与录音流式提供者（抽象特型对象）
+    pub voice_manager: Option<Box<dyn VoiceProvider>>,
     /// 与系统托盘和外部进程共享的原子状态标志集合
     pub shared_flags: Option<SharedInputFlags>,
     /// 切换中英文或大写时唤醒系统托盘刷新图标的通知发送端
@@ -59,9 +55,16 @@ impl Default for ImeRuntime {
 impl ImeRuntime {
     /// 使用指定的底层核心会话创建统一交互运行时
     pub fn new(core: ImeCoreSession) -> Self {
+        #[cfg(feature = "voice")]
+        let voice_manager: Option<Box<dyn VoiceProvider>> = Some(Box::new(
+            waylan_voice::VoiceInteractionManager::new(VoiceConfig::default()),
+        ));
+        #[cfg(not(feature = "voice"))]
+        let voice_manager: Option<Box<dyn VoiceProvider>> = None;
+
         Self {
             core,
-            voice_manager: Some(VoiceInteractionManager::new(VoiceConfig::default())),
+            voice_manager,
             shared_flags: None,
             mode_notify_tx: None,
             reload_requested: None,
@@ -91,6 +94,17 @@ impl ImeRuntime {
         self
     }
 
+    /// 挂载外部语音或多模态输入提供者
+    pub fn with_voice_provider(mut self, provider: Box<dyn VoiceProvider>) -> Self {
+        self.voice_manager = Some(provider);
+        self
+    }
+
+    /// 动态设置外部语音输入提供者
+    pub fn set_voice_provider(&mut self, provider: Option<Box<dyn VoiceProvider>>) {
+        self.voice_manager = provider;
+    }
+
     /// 获取核心会话不可变引用
     #[inline]
     pub fn core(&self) -> &ImeCoreSession {
@@ -105,14 +119,16 @@ impl ImeRuntime {
 
     /// 获取语音管理器不可变引用
     #[inline]
-    pub fn voice_manager(&self) -> Option<&VoiceInteractionManager> {
-        self.voice_manager.as_ref()
+    pub fn voice_manager(&self) -> Option<&(dyn VoiceProvider + '_)> {
+        self.voice_manager.as_deref()
     }
 
     /// 获取语音管理器可变引用
     #[inline]
-    pub fn voice_manager_mut(&mut self) -> Option<&mut VoiceInteractionManager> {
-        self.voice_manager.as_mut()
+    pub fn voice_manager_mut(&mut self) -> Option<&mut (dyn VoiceProvider + '_)> {
+        self.voice_manager
+            .as_deref_mut()
+            .map(|b| b as &mut (dyn VoiceProvider + '_))
     }
 
     /// 查询当前是否处于语音激活状态（录音中、等待转录结算中或有展示浮条）
@@ -147,7 +163,7 @@ impl ImeRuntime {
 
         // 语音配置同步
         if let Some(ref mut vm) = self.voice_manager {
-            vm.update_config(cfg.voice.clone());
+            vm.update_config(&cfg.voice);
         }
     }
 }

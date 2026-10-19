@@ -134,6 +134,12 @@ impl WaylanV2Session {
 
     /// 根据当前算法引擎与输入模式构建候选框渲染状态
     pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
+        let voice_state = self
+            .runtime
+            .voice_manager
+            .as_ref()
+            .and_then(|vm| vm.render_state());
+
         build_common_candidate_box_state(
             &self.runtime.core.engine,
             CandidateBoxBuildOptions {
@@ -142,7 +148,7 @@ impl WaylanV2Session {
                 grid_state: self.runtime.core.grid_state,
                 expanded_card: Some(self.runtime.core.expanded_card),
                 inline_preedit: true,
-                voice_manager: self.runtime.voice_manager.as_ref(),
+                voice_state,
             },
         )
     }

@@ -8,11 +8,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(feature = "voice")]
-use waylan_voice::VoiceKeyAction;
-
-#[cfg(not(feature = "voice"))]
-use super::voice_stub::VoiceKeyAction;
+use waylan_core::input::VoiceKeyAction;
 
 use super::types::ProcessKeyEventParams;
 use super::ImeRuntime;
@@ -40,7 +36,7 @@ impl ImeRuntime {
 
         // 1. 统一语音按键状态机优先分发
         if let Some(ref mut vm) = self.voice_manager {
-            match vm.dispatch_voice_key(
+            match vm.dispatch_key(
                 key,
                 is_press,
                 self.core.mods_depressed(),

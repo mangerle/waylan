@@ -12,9 +12,15 @@ const KEY_V: u32 = 47;
 fn test_ibus_voice_input_disabled_by_default() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    // 验证默认情况下 voice_manager.config.enabled 为 false
+    // 验证默认情况下 voice_manager.config().enabled 为 false
     assert!(
-        !core.runtime.voice_manager.as_ref().unwrap().config.enabled,
+        !core
+            .runtime
+            .voice_manager
+            .as_ref()
+            .unwrap()
+            .config()
+            .enabled,
         "语音输入默认应处于关闭状态"
     );
 
@@ -30,7 +36,7 @@ fn test_ibus_voice_input_disabled_by_default() {
         .voice_manager
         .as_ref()
         .unwrap()
-        .display_text
+        .display_text()
         .is_none());
 
     // 按下 F8（evdev 扫描码 66）也不应被拦截
@@ -46,12 +52,17 @@ fn test_ibus_voice_input_disabled_by_default() {
 fn test_ibus_voice_input_shortcut_and_cancel() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    core.runtime.voice_manager.as_mut().unwrap().config.enabled = true;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
+        .enabled = true;
+    core.runtime
+        .voice_manager
+        .as_mut()
+        .unwrap()
+        .config_mut()
         .engine_type = VoiceEngineType::Mock;
 
     // 1. 验证开启语音配置下按下 Ctrl + Alt + V 触发语音输入激活
@@ -67,7 +78,7 @@ fn test_ibus_voice_input_shortcut_and_cancel() {
         .voice_manager
         .as_ref()
         .unwrap()
-        .display_text
+        .display_text()
         .is_some());
 
     // 2. 录音状态下按下 ESC 键应取消录音并清除预编辑
@@ -83,7 +94,7 @@ fn test_ibus_voice_input_shortcut_and_cancel() {
         .voice_manager
         .as_ref()
         .unwrap()
-        .display_text
+        .display_text()
         .is_none());
 }
 
@@ -91,12 +102,17 @@ fn test_ibus_voice_input_shortcut_and_cancel() {
 fn test_ibus_voice_input_commit_on_enter() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    core.runtime.voice_manager.as_mut().unwrap().config.enabled = true;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
+        .enabled = true;
+    core.runtime
+        .voice_manager
+        .as_mut()
+        .unwrap()
+        .config_mut()
         .engine_type = VoiceEngineType::Mock;
 
     // 1. 触发语音录音
@@ -115,7 +131,7 @@ fn test_ibus_voice_input_commit_on_enter() {
         .voice_manager
         .as_ref()
         .unwrap()
-        .display_text
+        .display_text()
         .is_none());
 }
 
@@ -123,18 +139,23 @@ fn test_ibus_voice_input_commit_on_enter() {
 fn test_ibus_voice_input_push_to_talk_mode() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    core.runtime.voice_manager.as_mut().unwrap().config.enabled = true;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
+        .enabled = true;
+    core.runtime
+        .voice_manager
+        .as_mut()
+        .unwrap()
+        .config_mut()
         .engine_type = VoiceEngineType::Mock;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
         .push_to_talk_shortcut = "Ctrl + Alt + V".to_string();
 
     // 1. 按下快捷键 Ctrl + Alt + V 开始录音
@@ -161,11 +182,14 @@ fn test_ibus_voice_input_push_to_talk_mode() {
         .voice_manager
         .as_ref()
         .unwrap()
-        .partial_text
+        .partial_text()
         .is_none()
     {
-        core.runtime.voice_manager.as_mut().unwrap().partial_text =
-            Some("测试对讲机语音文本".to_string());
+        core.runtime
+            .voice_manager
+            .as_mut()
+            .unwrap()
+            .set_partial_text(Some("测试对讲机语音文本".to_string()));
     }
 
     // 3. 模拟松开 V 键 (Release)，对讲机模式应立即停止录音并请求提交
@@ -193,18 +217,23 @@ fn test_ibus_voice_input_push_to_talk_mode() {
 fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    core.runtime.voice_manager.as_mut().unwrap().config.enabled = true;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
+        .enabled = true;
+    core.runtime
+        .voice_manager
+        .as_mut()
+        .unwrap()
+        .config_mut()
         .engine_type = VoiceEngineType::Mock;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
         .push_to_talk_shortcut = "F8".to_string();
 
     // 1. 按下 F8（evdev 扫描码 66）触发对讲机录音
@@ -219,8 +248,11 @@ fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
     assert!(core.runtime.voice_manager.as_ref().unwrap().is_recording());
 
     // 2. 模拟流式识别出了部分文字预览
-    core.runtime.voice_manager.as_mut().unwrap().partial_text =
-        Some("流式已输出的文本".to_string());
+    core.runtime
+        .voice_manager
+        .as_mut()
+        .unwrap()
+        .set_partial_text(Some("流式已输出的文本".to_string()));
 
     // 3. 松开 F8 键，必须成功上屏提交文字，绝不能被清空为 None
     let release_res = core.process_key_event(0xffc5, 66, IBUS_RELEASE_MASK);
@@ -242,7 +274,7 @@ fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
         .voice_manager
         .as_ref()
         .unwrap()
-        .partial_text
+        .partial_text()
         .is_none());
 }
 
@@ -250,24 +282,29 @@ fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
 fn test_ibus_voice_input_custom_shortcut() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    core.runtime.voice_manager.as_mut().unwrap().config.enabled = true;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
+        .enabled = true;
+    core.runtime
+        .voice_manager
+        .as_mut()
+        .unwrap()
+        .config_mut()
         .engine_type = VoiceEngineType::Mock;
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
         .toggle_shortcut = "F8".to_string();
     core.runtime
         .voice_manager
         .as_mut()
         .unwrap()
-        .config
+        .config_mut()
         .push_to_talk_shortcut = "已禁用".to_string();
 
     // 1. 按下无关快捷键（例如默认的 Ctrl+Alt+V）不应触发

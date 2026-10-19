@@ -5,17 +5,7 @@ use std::time::Instant;
 
 use crate::session::VoiceEvent;
 
-/// 语音按键交互事件的处理决策输出
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub enum VoiceKeyAction {
-    /// 按键未触发语音交互，放行原生透传给输入法或宿主应用
-    #[default]
-    PassThrough,
-    /// 按键已被语音模块拦截消费，无文本上屏
-    Consumed,
-    /// 触发语音识别文本上屏提交
-    Commit(String),
-}
+pub use waylan_core::input::VoiceKeyAction;
 
 /// 语音交互会话显式状态机枚举
 ///

@@ -40,6 +40,12 @@ impl UiSnapshot {
             return Self::empty();
         }
 
+        let voice_state = core
+            .runtime
+            .voice_manager
+            .as_ref()
+            .and_then(|vm| vm.render_state());
+
         let box_state = build_common_candidate_box_state(
             &core.runtime.core.engine,
             CandidateBoxBuildOptions {
@@ -48,7 +54,7 @@ impl UiSnapshot {
                 grid_state: GridState::Collapsed,
                 expanded_card: Some(core.runtime.core.expanded_card),
                 inline_preedit: false,
-                voice_manager: core.runtime.voice_manager.as_ref(),
+                voice_state,
             },
         );
 
@@ -119,9 +125,16 @@ mod tests {
         assert!(!normal_snap.candidates.is_empty());
 
         // 模拟语音激活状态：正在聆听中...
-        core.runtime.voice_manager.as_mut().unwrap().display_text =
-            Some("正在聆听中...".to_string());
-        core.runtime.voice_manager.as_mut().unwrap().waveform = Some(" ▂▃▄▅".to_string());
+        core.runtime
+            .voice_manager
+            .as_mut()
+            .unwrap()
+            .set_display_text(Some("正在聆听中...".to_string()));
+        core.runtime
+            .voice_manager
+            .as_mut()
+            .unwrap()
+            .set_waveform(Some(" ▂▃▄▅".to_string()));
         let voice_snap = UiSnapshot::capture(&core);
 
         // 核心断言：输入框预编辑必须完全为空，严禁将波形塞入输入框光标处

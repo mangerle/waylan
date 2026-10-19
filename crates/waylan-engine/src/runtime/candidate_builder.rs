@@ -5,30 +5,26 @@
 //! - **核心优势**：职责单一（SRP），消除单文件超标坏味道；方便针对候选框构建与模式徽章格式化编写高覆盖单元测试。
 //! - **代价与局限**：对算法引擎与语音管理器采用借用传递。
 
-#[cfg(not(feature = "voice"))]
-use super::voice_stub::VoiceInteractionManager;
 use waylan_algo::AlgoEngine;
 use waylan_core::{
     Candidate, CandidateBoxState, ExpandedCardState, GridState, InputMode, VoiceBoxState,
 };
-#[cfg(feature = "voice")]
-use waylan_voice::VoiceInteractionManager;
 
 /// 候选词卡片构建参数配置
-#[derive(Clone, Copy)]
-pub struct CandidateBoxBuildOptions<'a> {
+#[derive(Clone)]
+pub struct CandidateBoxBuildOptions {
     pub mode: InputMode,
     pub is_active: bool,
     pub grid_state: GridState,
     pub expanded_card: Option<ExpandedCardState>,
     pub inline_preedit: bool,
-    pub voice_manager: Option<&'a VoiceInteractionManager>,
+    pub voice_state: Option<VoiceBoxState>,
 }
 
 /// 统合构建通用候选框渲染状态模型
 pub fn build_common_candidate_box_state(
     engine: &AlgoEngine,
-    opts: CandidateBoxBuildOptions<'_>,
+    opts: CandidateBoxBuildOptions,
 ) -> CandidateBoxState {
     let CandidateBoxBuildOptions {
         mode,
@@ -36,39 +32,32 @@ pub fn build_common_candidate_box_state(
         grid_state,
         expanded_card: card_opt,
         inline_preedit,
-        voice_manager,
+        voice_state,
     } = opts;
 
     // 若当前处于语音输入状态，优先呈现语音识别流式预览与动态波形（与 IBus 视觉契约 100% 对齐）
-    if let Some(vm) = voice_manager {
-        if vm.is_active() {
-            let partial_text = vm.partial_text.clone().unwrap_or_default();
-            let waveform = vm.waveform.clone().unwrap_or_default();
-            let display_text = vm.display_text.clone();
-
-            let voice_state = VoiceBoxState {
-                partial_text: partial_text.clone(),
-                waveform: waveform.clone(),
-                display_text: display_text.clone(),
-                is_listening: true,
-            };
-
-            let candidates = if let Some(ref voice_text) = display_text {
-                vec![Candidate::new(voice_text.clone(), waveform, 1000)]
+    if let Some(ref voice_box) = voice_state {
+        if voice_box.is_listening {
+            let candidates = if let Some(ref voice_text) = voice_box.display_text {
+                vec![Candidate::new(
+                    voice_text.clone(),
+                    voice_box.waveform.clone(),
+                    1000,
+                )]
             } else {
                 Vec::new()
             };
 
             return CandidateBoxState {
                 visible: is_active,
-                preedit: partial_text,
+                preedit: voice_box.partial_text.clone(),
                 candidates,
                 selected_index: 0,
                 expanded_card: ExpandedCardState::Collapsed,
                 mode_badge: String::new(),
                 grid_state: GridState::Collapsed,
                 grid_candidates: Vec::new(),
-                voice: Some(voice_state),
+                voice: Some(voice_box.clone()),
             };
         }
     }
