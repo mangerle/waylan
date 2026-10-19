@@ -57,8 +57,12 @@ fn test_candidate_view_mode_mutually_exclusive() {
     let mut state = CandidateBoxState::default();
     assert_eq!(state.view_mode(), CandidateViewMode::Hidden);
 
-    // 包含普通候选时为 Compact
+    // 未激活 visible 时，无论是否有候选均保持 Hidden
     state.candidates.push(Candidate::new("测试", "ce'shi", 100));
+    assert_eq!(state.view_mode(), CandidateViewMode::Hidden);
+
+    // 激活 visible 后，包含普通候选时为 Compact
+    state.visible = true;
     assert_eq!(state.view_mode(), CandidateViewMode::Compact);
 
     // 展开二级卡片时为 ExpandedCard
@@ -75,11 +79,18 @@ fn test_candidate_view_mode_mutually_exclusive() {
         ..Default::default()
     });
     assert_eq!(state.view_mode(), CandidateViewMode::VoiceCapsule);
+
+    // 关闭 visible 时，即便语音活跃也必须安全隐藏
+    state.visible = false;
+    assert_eq!(state.view_mode(), CandidateViewMode::Hidden);
 }
 
 #[test]
 fn test_candidate_box_state_mutual_exclusion() {
-    let mut state = CandidateBoxState::default();
+    let mut state = CandidateBoxState {
+        visible: true,
+        ..Default::default()
+    };
     state.candidates.push(Candidate::new("测试", "ce'shi", 100));
 
     // 展开二级卡片

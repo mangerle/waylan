@@ -104,6 +104,9 @@ pub struct CandidateBoxState {
 impl CandidateBoxState {
     /// 计算并提取当前唯一确定的强类型代数视图
     pub fn view(&self) -> CandidateBoxView<'_> {
+        if !self.visible {
+            return CandidateBoxView::Hidden;
+        }
         if let Some(ref voice) = self.voice {
             if voice.is_listening {
                 return CandidateBoxView::VoiceCapsule(voice);
