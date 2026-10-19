@@ -284,11 +284,7 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
 /// 处理鼠标点击候选框事件（包含展开/折叠、选词上屏与翻页）
 fn handle_pointer_click(state: &mut WaylanV2Session) {
     let (px, py) = state.surface.pointer_pos;
-    let hit = state
-        .surface
-        .surface_manager
-        .renderer
-        .hit_test(px as f32, py as f32);
+    let hit = state.surface.surface_manager.hit_test(px as f32, py as f32);
     let Some(target) = hit else {
         return;
     };

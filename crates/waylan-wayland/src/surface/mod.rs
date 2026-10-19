@@ -3,6 +3,7 @@
 //! 负责 Wayland 候选框图层位置计算、多缓冲共享内存管理与矢量位图提交。
 
 pub mod cursor_rect;
+pub mod interaction;
 pub mod shm_slot;
 pub mod state_builder;
 
@@ -70,24 +71,6 @@ impl CandidateSurfaceManager {
         self.pending_release_buffers.push((slot_idx, buffer));
     }
 
-    /// 更新当前活动显示器的逻辑分辨率 (宽, 高)
-    pub fn update_screen_size(&mut self, width: i32, height: i32) {
-        if width > 0 && height > 0 {
-            self.screen_size = (width, height);
-        }
-    }
-
-    /// 基于当前跟踪的光标位置与屏幕逻辑分辨率计算候选框最佳悬浮坐标
-    #[inline]
-    pub fn compute_popup_position(&self, popup_width: u32, popup_height: u32) -> (i32, i32) {
-        self.cursor_rect.compute_popup_position_constrained(
-            popup_width,
-            popup_height,
-            self.screen_size.0,
-            self.screen_size.1,
-        )
-    }
-
     /// 创建默认候选框悬浮表面管理器实例
     ///
     /// # 设计原理
@@ -143,29 +126,6 @@ impl CandidateSurfaceManager {
             slot.ensure_capacity(required_bytes)?;
         }
         Ok(())
-    }
-
-    /// 更新来自合成器的光标矩形位置
-    pub fn update_cursor_rect(&mut self, x: i32, y: i32, width: i32, height: i32) {
-        self.cursor_rect = CursorRect::new(x, y, width, height);
-    }
-
-    /// 当用户开始输入时，准备呈现候选框
-    pub fn on_input_active(&mut self, width: u32, height: u32) {
-        self.is_visible = true;
-        self.current_size = (width, height);
-        debug!(
-            "[悬浮窗口] 显示候选框图层，尺寸: {}x{}，吸附光标: ({}, {})",
-            width, height, self.cursor_rect.x, self.cursor_rect.y
-        );
-    }
-
-    /// 当输入上屏或清空缓冲区时，隐藏候选框
-    pub fn on_input_inactive(&mut self) {
-        if self.is_visible {
-            self.is_visible = false;
-            debug!("[悬浮窗口] 隐藏候选框悬浮图层。");
-        }
     }
 
     /// 响应合成器发射的 wl_buffer.release 事件，标记对应槽位为空闲并销毁旧 buffer
