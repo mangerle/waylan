@@ -14,6 +14,11 @@ pub use waylan_core::input::sync_mode_from_shared_flags;
 pub use waylan_engine::{apply_default_engine_reload, apply_default_runtime_reload};
 pub use waylan_sys::fs_watcher::*;
 
+/// 构造默认的用户词库过滤回调（忽略短时间内的 WAL 内部写落盘事件）
+pub fn default_user_dict_filter() -> DirEventFilter {
+    create_timed_file_event_filter("user_dict.bin", None, 2000)
+}
+
 /// 判断热重载原子标志是否被触发（用于按键热路径轻量检测，避免高频系统调用）
 #[inline]
 pub fn is_reload_requested(reload_requested: Option<&AtomicBool>) -> bool {

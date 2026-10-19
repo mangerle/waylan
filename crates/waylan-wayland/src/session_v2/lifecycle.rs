@@ -3,7 +3,7 @@ use waylan_core::InputMode;
 
 use crate::session_common::{
     apply_default_runtime_reload, check_reload_requested_or_files_changed,
-    init_session_inotify_watcher, is_reload_requested,
+    default_user_dict_filter, init_session_inotify_watcher_with_filter, is_reload_requested,
 };
 
 use super::WaylanV2Session;
@@ -110,10 +110,11 @@ impl WaylanV2Session {
 
     /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
     pub(crate) fn init_inotify_watcher(&mut self) {
-        init_session_inotify_watcher(
+        init_session_inotify_watcher_with_filter(
             &self.watcher.watched_paths,
             &mut self.watcher.inotify_watcher,
             "Wayland V2",
+            Some(default_user_dict_filter()),
         );
     }
 

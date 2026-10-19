@@ -112,10 +112,11 @@ impl WaylanV1Session {
 
     /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
     pub(crate) fn init_inotify_watcher(&mut self) {
-        init_session_inotify_watcher(
+        init_session_inotify_watcher_with_filter(
             &self.watcher.watched_paths,
             &mut self.watcher.inotify_watcher,
             "Wayland V1",
+            Some(default_user_dict_filter()),
         );
     }
 

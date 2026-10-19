@@ -16,9 +16,10 @@ pub mod process;
 
 pub use assets::{detect_default_assets_path, resolve_icon_path_or_name};
 pub use fs_watcher::{
-    check_watched_paths_changed, compute_initial_signature, default_user_dict_filter,
-    init_session_inotify_watcher, init_session_inotify_watcher_with_filter,
-    user_dict_filter_with_tracker, DirEventFilter, FileSignature, InotifyWatcher,
+    check_reload_requested_or_files_changed, check_watched_paths_changed,
+    compute_initial_signature, create_timed_file_event_filter, init_session_inotify_watcher,
+    init_session_inotify_watcher_with_filter, DirEventFilter, FileSignature, InotifyWatcher,
+    ReadFlags,
 };
 pub use loop_wakeup::LoopWakeup;
 pub use process::{
