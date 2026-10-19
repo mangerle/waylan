@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Mutex};
 
 use log::{debug, info};
-use waylan_sys::fs_watcher::{init_session_inotify_watcher, InotifyWatcher};
+use waylan_sys::fs_watcher::{
+    default_user_dict_filter, init_session_inotify_watcher_with_filter, InotifyWatcher,
+};
 use zbus::blocking::connection::Builder;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
@@ -83,7 +85,12 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
     register_or_activate_ibus_engine(&conn, is_child)?;
 
     let mut inotify_watcher: Option<InotifyWatcher> = None;
-    init_session_inotify_watcher(&monitor_params.watched_paths, &mut inotify_watcher, "IBus");
+    init_session_inotify_watcher_with_filter(
+        &monitor_params.watched_paths,
+        &mut inotify_watcher,
+        "IBus",
+        Some(default_user_dict_filter()),
+    );
 
     info!("[微澜 IBus] 引擎服务已就绪，进入 GNOME / IBus 输入法事件循环。");
     run_ibus_monitor_loop(&conn, &shared_core, &mut inotify_watcher, monitor_params);

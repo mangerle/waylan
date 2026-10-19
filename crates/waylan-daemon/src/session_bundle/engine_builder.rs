@@ -7,13 +7,11 @@
 
 use crate::error::DaemonError;
 
+use crate::system::ShutdownCoordinator;
 use log::info;
 use waylan_algo::AlgoEngine;
 use waylan_core::config::AppConfig;
-use waylan_engine::create_engine_with_table;
-
-use super::dict_loader::load_lexicon_table;
-use crate::system::ShutdownCoordinator;
+use waylan_engine::{create_engine_with_table, load_lexicon_table};
 
 /// 构建算法引擎并加载全量汉字库、自定义短语与用户个性化词库
 pub fn build_algo_engine(

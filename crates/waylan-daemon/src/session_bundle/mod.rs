@@ -2,7 +2,6 @@
 //!
 //! 负责整合输入法会话运行所需的词库加载、配置装配、环境能力探测与 Wayland 原生语音快捷键拦截器。
 
-mod dict_loader;
 mod engine_builder;
 mod ibus_dispatcher;
 mod system_env;
@@ -18,12 +17,11 @@ pub use wayland_dispatcher::{reload_wayland_v1_session, reload_wayland_v2_sessio
 
 #[cfg(test)]
 mod tests {
-    use super::dict_loader::{load_auxiliary_dict, load_lexicon_table, load_opencc_dict};
     use super::*;
     use waylan_algo::{AlgoConfig, AlgoEngine};
     use waylan_core::config::AppConfig;
     use waylan_core::VoiceConfig;
-    use waylan_engine::ImeRuntime;
+    use waylan_engine::{load_auxiliary_dict, load_lexicon_table, load_opencc_dict, ImeRuntime};
 
     #[test]
     fn test_app_config_to_algo_config_conversion() {

@@ -5,52 +5,13 @@
 //! - **核心优势**：解耦硬编码文件名与算法内部状态，保证外部修改时自动更新、内部归并时不误触发。
 //! - **代价与局限**：对部分不支持 inotify 的特殊文件系统降级采用 mtime 轮询机制。
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use rustix::fs::inotify::ReadFlags;
 use waylan_engine::AlgoEngine;
-use waylan_sys::fs_watcher::{DirEventFilter, InotifyWatcher};
+use waylan_sys::fs_watcher::InotifyWatcher;
 
 pub use waylan_sys::fs_watcher::{
-    check_reload_requested_or_files_changed, check_watched_paths_changed,
+    check_reload_requested_or_files_changed, check_watched_paths_changed, default_user_dict_filter,
+    user_dict_filter_with_tracker,
 };
-
-/// 构造附带专用落盘时间戳跟踪器的用户词库过滤回调
-pub fn user_dict_filter_with_tracker(tracker: Option<Arc<AtomicU64>>) -> DirEventFilter {
-    Arc::new(move |_dir, file_name, flags| {
-        if file_name == "user_dict.bin" {
-            let is_recent = if let Some(ref t) = tracker {
-                let last = t.load(Ordering::Acquire);
-                if last != 0 {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    now.saturating_sub(last) <= 2000
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            if is_recent {
-                return Some(false);
-            }
-            if flags.intersects(ReadFlags::DELETE | ReadFlags::MOVED_TO) {
-                return Some(true);
-            }
-        }
-        None
-    })
-}
-
-/// 构造默认的用户词库过滤回调，解耦硬编码文件名与算法状态依赖
-pub fn default_user_dict_filter() -> DirEventFilter {
-    user_dict_filter_with_tracker(None)
-}
 
 /// 尝试为 Wayland 会话初始化 inotify 文件监控器（注入默认用户词库过滤规则）
 pub fn init_session_inotify_watcher(
@@ -81,6 +42,9 @@ pub fn apply_default_runtime_reload(runtime: &mut waylan_engine::ImeRuntime) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use waylan_engine::AlgoConfig;
 
     #[test]
