@@ -1,27 +1,27 @@
 //! 维特比整句动态规划解码器 (Viterbi Beam Search Decoder)
 
 use super::language_model::BigramLanguageModel;
-use crate::syllables::find_syllables_by_prefix;
+use super::tail_expansion::expand_remaining_tail;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 
 /// 束搜索动态规划格点状态（引入反向指针拓扑与词 ID 缓存，彻底消除中间路径字符串克隆与重复查表）
 #[derive(Debug, Clone)]
-struct ViterbiBeamNode {
+pub(super) struct ViterbiBeamNode {
     /// 当前步转移的构词文本
-    word: String,
+    pub(super) word: String,
     /// 当前词在 Bigram 词表中的整数 ID 缓存
-    last_word_id: Option<u32>,
+    pub(super) last_word_id: Option<u32>,
     /// 前驱步在 dp 中的索引（0 表示虚拟根节点）
-    prev_step: usize,
+    pub(super) prev_step: usize,
     /// 前驱节点在 dp[prev_step] 束集合中的下标
-    prev_beam_idx: usize,
+    pub(super) prev_beam_idx: usize,
     /// 累计对数语言模型得分
-    total_score: i64,
+    pub(super) total_score: i64,
 }
 
 /// 沿反向指针逆向回溯拼装整句文本，仅在选出全局最优解时触发一次聚合
-fn backtrack_sentence(
+pub(super) fn backtrack_sentence(
     dp: &[Vec<ViterbiBeamNode>],
     mut step: usize,
     mut beam_idx: usize,
@@ -118,14 +118,9 @@ impl ViterbiDecoder {
 
         // 末尾残缺音节与声母扩展（处理未完成键入态）
         if !remaining.is_empty() {
-            if let Some(cand) = Self::expand_remaining_tail(
-                syllables,
-                remaining,
-                table,
-                has_bigram,
-                prev_context,
-                &dp,
-            ) {
+            if let Some(cand) =
+                expand_remaining_tail(syllables, remaining, table, has_bigram, prev_context, &dp)
+            {
                 return Some(cand);
             }
         }
@@ -138,7 +133,7 @@ impl ViterbiDecoder {
         let best = &dp[n][0];
         let full_text = backtrack_sentence(&dp, n, 0, None);
         let pinyin_str = syllables.join("'");
-        let positive_score = Self::to_positive_score(best.total_score);
+        let positive_score = to_positive_score(best.total_score);
 
         Some(
             AlgoCandidate::new(full_text, pinyin_str, positive_score)
@@ -206,7 +201,7 @@ impl ViterbiDecoder {
                 let target_beam = &mut right_dp[0];
 
                 for (text, raw_score, word_id_opt) in raw_entries.iter().take(raw_limit) {
-                    let freq_score = Self::unigram_log_score(*raw_score);
+                    let freq_score = unigram_log_score(*raw_score);
                     let curr_word_id = word_id_opt.or_else(|| {
                         if has_bigram {
                             table.get_word_id(text)
@@ -265,175 +260,18 @@ impl ViterbiDecoder {
             }
         }
     }
+}
 
-    /// 对末尾残存拼音与声母链进行结合扩展与整句回溯生成
-    fn expand_remaining_tail(
-        syllables: &[String],
-        remaining: &str,
-        table: &LexiconTable,
-        has_bigram: bool,
-        prev_context: Option<&str>,
-        dp: &[Vec<ViterbiBeamNode>],
-    ) -> Option<AlgoCandidate> {
-        let n = syllables.len();
-        let mut ext_candidates: Vec<(usize, usize, String, i64)> = Vec::new();
+/// 将原始静态词频转换为与二元转移矩阵同量纲的对数似然得分
+#[inline]
+pub(super) fn unigram_log_score(raw_score: u32) -> i64 {
+    ((raw_score as f64 + 1.0).ln() * 1_200.0) as i64
+}
 
-        // 1. 动态回溯提取尾部声母链 initial_chain
-        let mut initial_chain = vec![remaining.to_string()];
-        let mut split_idx = n;
-        while split_idx > 0 {
-            let prev_syl = &syllables[split_idx - 1];
-            if !crate::syllables::is_valid_syllable(prev_syl) {
-                initial_chain.insert(0, prev_syl.clone());
-                split_idx -= 1;
-            } else {
-                break;
-            }
-        }
-
-        let k = initial_chain.len();
-
-        if k >= 2 {
-            // 策略 A1：多声母连续简拼链绑定
-            if !dp[split_idx].is_empty() {
-                let acronym_key = initial_chain.concat();
-                let acronym_cands = table.lookup_acronym(&acronym_key);
-                for cand in acronym_cands.iter().take(3) {
-                    let freq_score = Self::unigram_log_score(cand.score);
-                    let curr_char_len = cand.text.chars().count() as i64;
-                    for (prev_beam_idx, prev) in dp[split_idx].iter().enumerate() {
-                        let prev_word = if split_idx == 0 {
-                            prev_context.unwrap_or("")
-                        } else {
-                            &prev.word
-                        };
-                        let trans_score = BigramLanguageModel::transition_score_cached(
-                            (prev_word, prev.last_word_id),
-                            (&cand.text, cand.word_id, curr_char_len),
-                            freq_score,
-                            table,
-                        );
-                        ext_candidates.push((
-                            split_idx,
-                            prev_beam_idx,
-                            cand.text.clone(),
-                            prev.total_score.saturating_add(trans_score),
-                        ));
-                    }
-                }
-            }
-        } else if split_idx >= 1 && !dp[split_idx - 1].is_empty() {
-            // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词
-            let last_syl = &syllables[split_idx - 1];
-            let prev_step = split_idx - 1;
-            let mut key_buf = String::with_capacity(16);
-            for &syl in find_syllables_by_prefix(remaining) {
-                key_buf.clear();
-                key_buf.push_str(last_syl);
-                key_buf.push('\'');
-                key_buf.push_str(syl);
-                if let Some(entries) = table.get_top_raw_entries(&key_buf, 2) {
-                    for (text, raw_score, word_id_opt) in entries.iter().take(2) {
-                        let freq_score = Self::unigram_log_score(*raw_score);
-                        let curr_word_id = word_id_opt.or_else(|| {
-                            if has_bigram {
-                                table.get_word_id(text)
-                            } else {
-                                None
-                            }
-                        });
-                        let curr_char_len = text.chars().count() as i64;
-                        for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
-                            let prev_word = if prev_step == 0 {
-                                prev_context.unwrap_or("")
-                            } else {
-                                &prev.word
-                            };
-                            let trans_score = BigramLanguageModel::transition_score_cached(
-                                (prev_word, prev.last_word_id),
-                                (text, curr_word_id, curr_char_len),
-                                freq_score,
-                                table,
-                            );
-                            ext_candidates.push((
-                                prev_step,
-                                prev_beam_idx,
-                                text.clone(),
-                                prev.total_score.saturating_add(trans_score),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // 策略 B：降级回退（仅当策略 A1/A2 均无法组合成词时，才允许单字母枚举为高频单字）
-        if ext_candidates.is_empty() && !dp[n].is_empty() {
-            if let Some(entries) = table.get_initial_raw_entries(remaining) {
-                for (text, raw_score, word_id_opt) in entries.iter().take(3) {
-                    let freq_score = Self::unigram_log_score(*raw_score);
-                    let curr_word_id = word_id_opt.or_else(|| {
-                        if has_bigram {
-                            table.get_word_id(text)
-                        } else {
-                            None
-                        }
-                    });
-                    let curr_char_len = text.chars().count() as i64;
-                    for (prev_beam_idx, prev) in dp[n].iter().enumerate() {
-                        let prev_word = if n == 0 {
-                            prev_context.unwrap_or("")
-                        } else {
-                            &prev.word
-                        };
-                        let trans_score = BigramLanguageModel::transition_score_cached(
-                            (prev_word, prev.last_word_id),
-                            (text, curr_word_id, curr_char_len),
-                            freq_score,
-                            table,
-                        );
-                        ext_candidates.push((
-                            n,
-                            prev_beam_idx,
-                            text.clone(),
-                            prev.total_score.saturating_add(trans_score),
-                        ));
-                    }
-                }
-            }
-        }
-
-        if let Some((best_step, best_beam_idx, best_word, best_score)) =
-            ext_candidates.into_iter().max_by_key(|cand| cand.3)
-        {
-            let full_text = backtrack_sentence(dp, best_step, best_beam_idx, Some(&best_word));
-            let pinyin_str = if syllables.is_empty() {
-                remaining.to_string()
-            } else {
-                format!("{}'{}", syllables.join("'"), remaining)
-            };
-            let positive_score = Self::to_positive_score(best_score);
-            return Some(
-                AlgoCandidate::new(full_text, pinyin_str, positive_score)
-                    .with_comment("整句预测")
-                    .with_tier(CandidateTier::SentenceViterbi),
-            );
-        }
-
-        None
-    }
-
-    /// 将原始静态词频转换为与二元转移矩阵同量纲的对数似然得分
-    #[inline]
-    fn unigram_log_score(raw_score: u32) -> i64 {
-        ((raw_score as f64 + 1.0).ln() * 1_200.0) as i64
-    }
-
-    /// 将 Viterbi 路径累计对数似然安全映射为正整数候选分
-    #[inline]
-    fn to_positive_score(total_score: i64) -> u32 {
-        total_score
-            .saturating_add(100_000)
-            .clamp(1, u32::MAX as i64) as u32
-    }
+/// 将 Viterbi 路径累计对数似然安全映射为正整数候选分
+#[inline]
+pub(super) fn to_positive_score(total_score: i64) -> u32 {
+    total_score
+        .saturating_add(100_000)
+        .clamp(1, u32::MAX as i64) as u32
 }

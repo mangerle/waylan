@@ -4,6 +4,7 @@
 
 mod decoder;
 mod language_model;
+mod tail_expansion;
 
 pub use decoder::ViterbiDecoder;
 pub use language_model::BigramLanguageModel;

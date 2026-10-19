@@ -5,16 +5,18 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
-use log::{debug, info, warn};
+use log::{info, warn};
 use waylan_core::VoiceConfig;
 
+pub(super) use super::commit::{
+    extract_final_text, handle_stop_and_commit, process_recognition_feed, push_pre_speech_silence,
+};
 use super::types::{
     ActiveRecordingContext, RecognitionFeedContext, StopCommitContext, VoiceEvent, WorkerCommand,
     PRE_SPEECH_BUFFER_CAPACITY,
 };
 use crate::afe::AudioFrontEndPipeline;
 use crate::capture::AudioCapture;
-use crate::recognizer::{PunctuationRestorer, VoiceRecognizer};
 use crate::vad::calculate_rms;
 
 /// 活跃录音主循环内部运行时状态缓存
@@ -257,204 +259,4 @@ fn check_stream_dead(
     } else {
         false
     }
-}
-
-/// 处理主动停止录音与优雅排空提交
-pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
-    info!("[语音会话] 收到外部主动提交指令，正在执行音频管道排空与整句结算");
-
-    // 1. 等待并排空麦克风硬件驱动与管道中的在途音频（最长 80ms，单次 40ms 无新数据即快速跳出）
-    let drain_start = Instant::now();
-    while drain_start.elapsed() < Duration::from_millis(80) {
-        match ctx.pcm_rx.recv_timeout(Duration::from_millis(40)) {
-            Ok(mut samples) => {
-                ctx.afe.process(&mut samples);
-                let _ = process_recognition_feed(
-                    RecognitionFeedContext {
-                        recognizer: ctx.recognizer,
-                        pre_speech_buffer: ctx.pre_speech_buffer,
-                        last_partial_text: ctx.last_partial_text,
-                        event_tx: ctx.event_tx,
-                        real_time_preview: ctx.voice_config.interaction.real_time_preview,
-                    },
-                    &samples,
-                );
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    // 2. 显式释放音频捕获硬件，彻底终止麦克风录入
-    drop(ctx.capture.take());
-
-    // 3. 将通道中可能剩余的任何切片彻底清空并处理
-    while let Ok(mut samples) = ctx.pcm_rx.try_recv() {
-        ctx.afe.process(&mut samples);
-        let _ = process_recognition_feed(
-            RecognitionFeedContext {
-                recognizer: ctx.recognizer,
-                pre_speech_buffer: ctx.pre_speech_buffer,
-                last_partial_text: ctx.last_partial_text,
-                event_tx: ctx.event_tx,
-                real_time_preview: ctx.voice_config.interaction.real_time_preview,
-            },
-            &samples,
-        );
-    }
-
-    // 若此前尚未检测到人声起音（短句），将预存的静音缓冲倒出送入识别器
-    if !ctx.pre_speech_buffer.is_empty() {
-        let buffered: Vec<f32> = ctx.pre_speech_buffer.drain(..).collect();
-        let _ = ctx.recognizer.feed_pcm(&buffered);
-    }
-
-    // 4. 注入约 200ms 的尾部静音 padding（3200 个 16kHz 零采样点）
-    const TRAILING_SILENCE_SAMPLES: usize = 16_000 * 200 / 1000;
-    let silence = vec![0.0f32; TRAILING_SILENCE_SAMPLES];
-    let _ = process_recognition_feed(
-        RecognitionFeedContext {
-            recognizer: ctx.recognizer,
-            pre_speech_buffer: ctx.pre_speech_buffer,
-            last_partial_text: ctx.last_partial_text,
-            event_tx: ctx.event_tx,
-            real_time_preview: ctx.voice_config.interaction.real_time_preview,
-        },
-        &silence,
-    );
-
-    // 5. 调用 finish 提取最终整句识别文字与标点预测
-    let mut final_text = extract_final_text(
-        ctx.recognizer,
-        ctx.punct_restorer,
-        ctx.voice_config.auto_punctuation,
-        &ctx.voice_config.itn,
-    );
-
-    if final_text.is_empty() && !ctx.last_partial_text.is_empty() {
-        info!(
-            "[语音会话] finish 结果为空，采用实时流式识别出的预览文本保底: \"{}\"",
-            ctx.last_partial_text
-        );
-        final_text = ctx.last_partial_text.clone();
-    }
-
-    info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
-    let _ = ctx.event_tx.send(VoiceEvent::FinalCommit(final_text));
-    ctx.is_active.store(false, Ordering::Release);
-}
-
-/// 将静音音频采样压入前置环形队列，并维持最大容量限制
-#[inline]
-pub(super) fn push_pre_speech_silence(buffer: &mut VecDeque<f32>, samples: &[f32]) {
-    buffer.extend(samples.iter().copied());
-    if buffer.len() > PRE_SPEECH_BUFFER_CAPACITY {
-        let excess = buffer.len() - PRE_SPEECH_BUFFER_CAPACITY;
-        buffer.drain(0..excess);
-    }
-}
-
-/// 推进 ASR 解码流并向外部通道发送流式文字
-pub(super) fn process_recognition_feed(ctx: RecognitionFeedContext<'_>, samples: &[f32]) -> bool {
-    let feed_result = if !ctx.pre_speech_buffer.is_empty() {
-        let mut combined = Vec::with_capacity(ctx.pre_speech_buffer.len() + samples.len());
-        combined.extend(ctx.pre_speech_buffer.drain(..));
-        combined.extend_from_slice(samples);
-        ctx.recognizer.feed_pcm(&combined)
-    } else {
-        ctx.recognizer.feed_pcm(samples)
-    };
-
-    match feed_result {
-        Ok(Some(partial)) => {
-            if !partial.is_empty() && partial != *ctx.last_partial_text {
-                debug!("[语音会话] 实时流式识别出字: \"{}\"", partial);
-                *ctx.last_partial_text = partial.clone();
-                if ctx.real_time_preview {
-                    if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-                        ctx.event_tx.try_send(VoiceEvent::PartialText(partial))
-                    {
-                        info!("[语音会话] 外部事件通道已关闭，退出录音循环");
-                        return false;
-                    }
-                }
-            }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            warn!("[语音会话] 语音识别推理遇到异常: {}", e);
-            let _ = ctx.event_tx.try_send(VoiceEvent::Error(e.to_string()));
-            return false;
-        }
-    }
-
-    true
-}
-
-/// 提取最终整句识别文字并按需自动预测补全标点符号及进行 ITN 规整
-pub(super) fn extract_final_text(
-    recognizer: &mut dyn VoiceRecognizer,
-    punct_restorer: Option<&PunctuationRestorer>,
-    auto_punctuation: bool,
-    itn_config: &waylan_core::VoiceItnConfig,
-) -> String {
-    let raw_text = recognizer.finish().unwrap_or_default();
-    if raw_text.is_empty() {
-        return String::new();
-    }
-    let punct_text = if !auto_punctuation {
-        raw_text
-    } else if let Some(restorer) = punct_restorer {
-        restorer.restore(&raw_text)
-    } else {
-        let mut fallback = raw_text;
-        if !fallback.ends_with('。')
-            && !fallback.ends_with('，')
-            && !fallback.ends_with('！')
-            && !fallback.ends_with('？')
-        {
-            fallback.push('。');
-        }
-        fallback
-    };
-
-    crate::itn::normalize_voice_text(&punct_text, itn_config)
-}
-
-/// 提取当前语音识别器的关键配置指纹，用于识别器缓存失效判定
-pub(super) fn compute_asr_fingerprint(
-    cfg: &VoiceConfig,
-) -> (
-    waylan_core::VoiceEngineType,
-    Option<String>,
-    Option<waylan_core::CloudAsrConfig>,
-    Option<String>,
-) {
-    let effective_cloud = if let Some(ref sel) = cfg.selected_asr {
-        if let Some(profile_id) = sel.strip_prefix("cloud:") {
-            cfg.cloud_profiles
-                .iter()
-                .find(|p| p.id == profile_id)
-                .map(|p| waylan_core::CloudAsrConfig {
-                    provider: p.provider,
-                    endpoint: p.endpoint.clone(),
-                    api_key: p.api_key.clone(),
-                    model: p.model.clone(),
-                })
-                .or_else(|| Some(cfg.cloud.clone()))
-        } else {
-            None
-        }
-    } else if cfg.engine_type == waylan_core::VoiceEngineType::Cloud {
-        Some(cfg.cloud.clone())
-    } else {
-        None
-    };
-
-    (
-        cfg.engine_type,
-        cfg.selected_asr.clone(),
-        effective_cloud,
-        cfg.offline.model_dir.clone(),
-    )
 }

@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use log::info;
 use waylan_core::VoiceConfig;
 
-use super::pipeline::compute_asr_fingerprint;
 use super::types::IDLE_MODEL_UNLOAD_TIMEOUT;
 use crate::recognizer::{create_recognizer, PunctuationRestorer, VoiceRecognizer};
 use crate::vad::{create_vad, VadProcessor};
@@ -21,6 +20,37 @@ pub type AsrFingerprint = (
     Option<waylan_core::CloudAsrConfig>,
     Option<String>,
 );
+
+/// 提取当前语音识别器的关键配置指纹，用于识别器缓存失效判定
+pub fn compute_asr_fingerprint(cfg: &VoiceConfig) -> AsrFingerprint {
+    let effective_cloud = if let Some(ref sel) = cfg.selected_asr {
+        if let Some(profile_id) = sel.strip_prefix("cloud:") {
+            cfg.cloud_profiles
+                .iter()
+                .find(|p| p.id == profile_id)
+                .map(|p| waylan_core::CloudAsrConfig {
+                    provider: p.provider,
+                    endpoint: p.endpoint.clone(),
+                    api_key: p.api_key.clone(),
+                    model: p.model.clone(),
+                })
+                .or_else(|| Some(cfg.cloud.clone()))
+        } else {
+            None
+        }
+    } else if cfg.engine_type == waylan_core::VoiceEngineType::Cloud {
+        Some(cfg.cloud.clone())
+    } else {
+        None
+    };
+
+    (
+        cfg.engine_type,
+        cfg.selected_asr.clone(),
+        effective_cloud,
+        cfg.offline.model_dir.clone(),
+    )
+}
 
 /// 语音会话工作线程常驻模型与指纹缓存容器
 #[derive(Default)]
