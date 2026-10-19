@@ -2,6 +2,131 @@ use crate::prism::SegmentPath;
 use crate::syllables::is_valid_syllable;
 use crate::types::FuzzyConfig;
 
+/// 模糊音成对变换规则结构
+type RulePred = fn(&FuzzyConfig) -> bool;
+
+struct FuzzyPair {
+    a: &'static str,
+    b: &'static str,
+    is_active: RulePred,
+}
+
+const INITIAL_RULES: &[FuzzyPair] = &[
+    FuzzyPair {
+        a: "zh",
+        b: "z",
+        is_active: |c| c.z_zh,
+    },
+    FuzzyPair {
+        a: "ch",
+        b: "c",
+        is_active: |c| c.c_ch,
+    },
+    FuzzyPair {
+        a: "sh",
+        b: "s",
+        is_active: |c| c.s_sh,
+    },
+    FuzzyPair {
+        a: "l",
+        b: "n",
+        is_active: |c| c.l_n,
+    },
+    FuzzyPair {
+        a: "f",
+        b: "h",
+        is_active: |c| c.f_h,
+    },
+    FuzzyPair {
+        a: "r",
+        b: "l",
+        is_active: |c| c.r_l,
+    },
+    FuzzyPair {
+        a: "g",
+        b: "k",
+        is_active: |c| c.g_k,
+    },
+];
+
+const FINAL_RULES: &[FuzzyPair] = &[
+    FuzzyPair {
+        a: "ang",
+        b: "an",
+        is_active: |c| c.an_ang,
+    },
+    FuzzyPair {
+        a: "eng",
+        b: "en",
+        is_active: |c| c.en_eng,
+    },
+    FuzzyPair {
+        a: "ing",
+        b: "in",
+        is_active: |c| c.in_ing,
+    },
+];
+
+/// 尝试基于成对前缀规则查找替换变体
+#[inline]
+fn match_prefix_pair<'a>(text: &'a str, rule: &FuzzyPair) -> Option<(&'static str, &'a str)> {
+    if let Some(rest) = text.strip_prefix(rule.a) {
+        Some((rule.b, rest))
+    } else if let Some(rest) = text.strip_prefix(rule.b) {
+        Some((rule.a, rest))
+    } else {
+        None
+    }
+}
+
+/// 尝试基于成对后缀规则查找替换变体
+#[inline]
+fn match_suffix_pair<'a>(text: &'a str, rule: &FuzzyPair) -> Option<(&'a str, &'static str)> {
+    if let Some(stem) = text.strip_suffix(rule.a) {
+        Some((stem, rule.b))
+    } else if let Some(stem) = text.strip_suffix(rule.b) {
+        Some((stem, rule.a))
+    } else {
+        None
+    }
+}
+
+/// 在栈上拼接声母、词干与韵母并校验是否为不同于原切片的有效拼音音节
+#[inline]
+fn check_stack(prefix: &str, stem: &str, suffix: &str, original: &str) -> bool {
+    let mut buf = [0u8; 16];
+    let p_bytes = prefix.as_bytes();
+    let st_bytes = stem.as_bytes();
+    let sf_bytes = suffix.as_bytes();
+    let total = p_bytes.len() + st_bytes.len() + sf_bytes.len();
+    if total > buf.len() {
+        return false;
+    }
+    buf[..p_bytes.len()].copy_from_slice(p_bytes);
+    buf[p_bytes.len()..p_bytes.len() + st_bytes.len()].copy_from_slice(st_bytes);
+    buf[p_bytes.len() + st_bytes.len()..total].copy_from_slice(sf_bytes);
+    if let Ok(s) = std::str::from_utf8(&buf[..total]) {
+        s != original && is_valid_syllable(s)
+    } else {
+        false
+    }
+}
+
+/// 检查在指定声母和主体下，叠加韵母规则是否能构成不同于原切片的合法音节
+#[inline]
+fn check_fuzzy_finals(init: &str, rest: &str, slice: &str, fuzzy: &FuzzyConfig) -> bool {
+    for rule in FINAL_RULES {
+        if (rule.is_active)(fuzzy) {
+            if let Some((stem, target_final)) = match_suffix_pair(rest, rule) {
+                if check_stack(init, stem, target_final, slice) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// 拼音模糊音规则展开与等价键扩展模块
 pub struct PrismFuzzy;
 impl PrismFuzzy {
@@ -14,53 +139,11 @@ impl PrismFuzzy {
         let mut init_variants = Vec::with_capacity(4);
         init_variants.push(slice.to_string());
 
-        if fuzzy.z_zh {
-            if let Some(rest) = slice.strip_prefix("zh") {
-                init_variants.push(format!("z{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('z') {
-                init_variants.push(format!("zh{}", rest));
-            }
-        }
-        if fuzzy.c_ch {
-            if let Some(rest) = slice.strip_prefix("ch") {
-                init_variants.push(format!("c{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('c') {
-                init_variants.push(format!("ch{}", rest));
-            }
-        }
-        if fuzzy.s_sh {
-            if let Some(rest) = slice.strip_prefix("sh") {
-                init_variants.push(format!("s{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('s') {
-                init_variants.push(format!("sh{}", rest));
-            }
-        }
-        if fuzzy.l_n {
-            if let Some(rest) = slice.strip_prefix('l') {
-                init_variants.push(format!("n{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('n') {
-                init_variants.push(format!("l{}", rest));
-            }
-        }
-        if fuzzy.f_h {
-            if let Some(rest) = slice.strip_prefix('f') {
-                init_variants.push(format!("h{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('h') {
-                init_variants.push(format!("f{}", rest));
-            }
-        }
-        if fuzzy.r_l {
-            if let Some(rest) = slice.strip_prefix('r') {
-                init_variants.push(format!("l{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('l') {
-                init_variants.push(format!("r{}", rest));
-            }
-        }
-        if fuzzy.g_k {
-            if let Some(rest) = slice.strip_prefix('g') {
-                init_variants.push(format!("k{}", rest));
-            } else if let Some(rest) = slice.strip_prefix('k') {
-                init_variants.push(format!("g{}", rest));
+        for rule in INITIAL_RULES {
+            if (rule.is_active)(fuzzy) {
+                if let Some((target_init, rest)) = match_prefix_pair(slice, rule) {
+                    init_variants.push(format!("{}{}", target_init, rest));
+                }
             }
         }
 
@@ -69,25 +152,11 @@ impl PrismFuzzy {
         let mut final_cands = Vec::with_capacity(3);
         for v in init_variants {
             final_cands.clear();
-            if fuzzy.an_ang {
-                if let Some(stem) = v.strip_suffix("ang") {
-                    final_cands.push(format!("{}an", stem));
-                } else if let Some(stem) = v.strip_suffix("an") {
-                    final_cands.push(format!("{}ang", stem));
-                }
-            }
-            if fuzzy.en_eng {
-                if let Some(stem) = v.strip_suffix("eng") {
-                    final_cands.push(format!("{}en", stem));
-                } else if let Some(stem) = v.strip_suffix("en") {
-                    final_cands.push(format!("{}eng", stem));
-                }
-            }
-            if fuzzy.in_ing {
-                if let Some(stem) = v.strip_suffix("ing") {
-                    final_cands.push(format!("{}in", stem));
-                } else if let Some(stem) = v.strip_suffix("in") {
-                    final_cands.push(format!("{}ing", stem));
+            for rule in FINAL_RULES {
+                if (rule.is_active)(fuzzy) {
+                    if let Some((stem, target_final)) = match_suffix_pair(&v, rule) {
+                        final_cands.push(format!("{}{}", stem, target_final));
+                    }
                 }
             }
 
@@ -179,129 +248,19 @@ impl PrismFuzzy {
             return false;
         }
 
-        let mut init_variants: [(&str, &str); 2] = [("", ""); 2];
-        let mut init_count = 0;
-
-        init_variants[init_count] = ("", slice);
-        init_count += 1;
-
-        if fuzzy.z_zh {
-            if let Some(rest) = slice.strip_prefix("zh") {
-                init_variants[init_count] = ("z", rest);
-                init_count += 1;
-            } else if let Some(rest) = slice.strip_prefix('z') {
-                init_variants[init_count] = ("zh", rest);
-                init_count += 1;
-            }
-        }
-        if init_count < 2 && fuzzy.c_ch {
-            if let Some(rest) = slice.strip_prefix("ch") {
-                init_variants[init_count] = ("c", rest);
-                init_count += 1;
-            } else if let Some(rest) = slice.strip_prefix('c') {
-                init_variants[init_count] = ("ch", rest);
-                init_count += 1;
-            }
-        }
-        if init_count < 2 && fuzzy.s_sh {
-            if let Some(rest) = slice.strip_prefix("sh") {
-                init_variants[init_count] = ("s", rest);
-                init_count += 1;
-            } else if let Some(rest) = slice.strip_prefix('s') {
-                init_variants[init_count] = ("sh", rest);
-                init_count += 1;
-            }
-        }
-        if init_count < 2 && fuzzy.l_n {
-            if let Some(rest) = slice.strip_prefix('l') {
-                init_variants[init_count] = ("n", rest);
-                init_count += 1;
-            } else if let Some(rest) = slice.strip_prefix('n') {
-                init_variants[init_count] = ("l", rest);
-                init_count += 1;
-            }
-        }
-        if init_count < 2 && fuzzy.f_h {
-            if let Some(rest) = slice.strip_prefix('f') {
-                init_variants[init_count] = ("h", rest);
-                init_count += 1;
-            } else if let Some(rest) = slice.strip_prefix('h') {
-                init_variants[init_count] = ("f", rest);
-                init_count += 1;
-            }
-        }
-        if init_count < 2 && fuzzy.r_l {
-            if let Some(rest) = slice.strip_prefix('r') {
-                init_variants[init_count] = ("l", rest);
-                init_count += 1;
-            } else if let Some(rest) = slice.strip_prefix('l') {
-                init_variants[init_count] = ("r", rest);
-                init_count += 1;
-            }
-        }
-        if init_count < 2 && fuzzy.g_k {
-            if let Some(rest) = slice.strip_prefix('g') {
-                init_variants[init_count] = ("k", rest);
-                init_count += 1;
-            } else if let Some(rest) = slice.strip_prefix('k') {
-                init_variants[init_count] = ("g", rest);
-                init_count += 1;
-            }
+        // 1. 检查原始切片结合韵母模糊音规则
+        if check_fuzzy_finals("", slice, slice, fuzzy) {
+            return true;
         }
 
-        let check_stack = |prefix: &str, stem: &str, suffix: &str| -> bool {
-            let mut buf = [0u8; 16];
-            let p_bytes = prefix.as_bytes();
-            let st_bytes = stem.as_bytes();
-            let sf_bytes = suffix.as_bytes();
-            let total = p_bytes.len() + st_bytes.len() + sf_bytes.len();
-            if total > buf.len() {
-                return false;
-            }
-            buf[..p_bytes.len()].copy_from_slice(p_bytes);
-            buf[p_bytes.len()..p_bytes.len() + st_bytes.len()].copy_from_slice(st_bytes);
-            buf[p_bytes.len() + st_bytes.len()..total].copy_from_slice(sf_bytes);
-            if let Ok(s) = std::str::from_utf8(&buf[..total]) {
-                s != slice && is_valid_syllable(s)
-            } else {
-                false
-            }
-        };
-
-        for &(init, rest) in &init_variants[..init_count] {
-            if !init.is_empty() && check_stack(init, rest, "") {
-                return true;
-            }
-
-            if fuzzy.an_ang {
-                if let Some(stem) = rest.strip_suffix("ang") {
-                    if check_stack(init, stem, "an") {
+        // 2. 检查声母模糊音变换及其韵母组合
+        for rule in INITIAL_RULES {
+            if (rule.is_active)(fuzzy) {
+                if let Some((target_init, rest)) = match_prefix_pair(slice, rule) {
+                    if check_stack(target_init, rest, "", slice) {
                         return true;
                     }
-                } else if let Some(stem) = rest.strip_suffix("an") {
-                    if check_stack(init, stem, "ang") {
-                        return true;
-                    }
-                }
-            }
-            if fuzzy.en_eng {
-                if let Some(stem) = rest.strip_suffix("eng") {
-                    if check_stack(init, stem, "en") {
-                        return true;
-                    }
-                } else if let Some(stem) = rest.strip_suffix("en") {
-                    if check_stack(init, stem, "eng") {
-                        return true;
-                    }
-                }
-            }
-            if fuzzy.in_ing {
-                if let Some(stem) = rest.strip_suffix("ing") {
-                    if check_stack(init, stem, "in") {
-                        return true;
-                    }
-                } else if let Some(stem) = rest.strip_suffix("in") {
-                    if check_stack(init, stem, "ing") {
+                    if check_fuzzy_finals(target_init, rest, slice, fuzzy) {
                         return true;
                     }
                 }
@@ -347,5 +306,80 @@ impl PrismFuzzy {
         combined.push_str(prev);
         combined.push_str(curr);
         is_valid_syllable(&combined)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_initial_rules_expansion_and_validity() {
+        let fuzzy = FuzzyConfig {
+            z_zh: true,
+            c_ch: true,
+            s_sh: true,
+            l_n: true,
+            f_h: true,
+            r_l: true,
+            g_k: true,
+            ..Default::default()
+        };
+
+        assert!(PrismFuzzy::is_fuzzy_valid("zhi", &fuzzy));
+        assert!(PrismFuzzy::is_fuzzy_valid("zi", &fuzzy));
+        let alts = PrismFuzzy::expand_fuzzy_syllables("zhi", &fuzzy);
+        assert!(alts.contains(&"zi".to_string()));
+
+        let alts = PrismFuzzy::expand_fuzzy_syllables("chi", &fuzzy);
+        assert!(alts.contains(&"ci".to_string()));
+
+        let alts = PrismFuzzy::expand_fuzzy_syllables("shi", &fuzzy);
+        assert!(alts.contains(&"si".to_string()));
+
+        let alts = PrismFuzzy::expand_fuzzy_syllables("li", &fuzzy);
+        assert!(alts.contains(&"ni".to_string()));
+
+        let alts = PrismFuzzy::expand_fuzzy_syllables("hu", &fuzzy);
+        assert!(alts.contains(&"fu".to_string()));
+
+        let alts = PrismFuzzy::expand_fuzzy_syllables("re", &fuzzy);
+        assert!(alts.contains(&"le".to_string()));
+
+        let alts = PrismFuzzy::expand_fuzzy_syllables("ge", &fuzzy);
+        assert!(alts.contains(&"ke".to_string()));
+    }
+
+    #[test]
+    fn test_final_rules_expansion_and_combination() {
+        let fuzzy = FuzzyConfig {
+            z_zh: true,
+            an_ang: true,
+            en_eng: true,
+            in_ing: true,
+            ..Default::default()
+        };
+
+        let alts = PrismFuzzy::expand_fuzzy_syllables("zhang", &fuzzy);
+        assert!(alts.contains(&"zang".to_string()));
+        assert!(alts.contains(&"zhan".to_string()));
+        assert!(alts.contains(&"zan".to_string()));
+
+        assert!(PrismFuzzy::is_fuzzy_valid("zhang", &fuzzy));
+        assert!(PrismFuzzy::is_fuzzy_valid("pin", &fuzzy));
+        let alts = PrismFuzzy::expand_fuzzy_syllables("pin", &fuzzy);
+        assert!(alts.contains(&"ping".to_string()));
+    }
+
+    #[test]
+    fn test_zero_initial_and_borrowing_split() {
+        assert!(PrismFuzzy::is_zero_initial_syllable("an"));
+        assert!(PrismFuzzy::is_zero_initial_syllable("er"));
+        assert!(!PrismFuzzy::is_zero_initial_syllable("ba"));
+
+        // "ti" + "an" => "tian" (合法)
+        assert!(PrismFuzzy::is_zero_initial_borrowing_split("ti", "an"));
+        // "ba" + "ba" (ba 不是零声母)
+        assert!(!PrismFuzzy::is_zero_initial_borrowing_split("ba", "ba"));
     }
 }
