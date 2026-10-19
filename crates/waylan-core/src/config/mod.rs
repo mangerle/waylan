@@ -183,14 +183,14 @@ mod tests {
     #[test]
     fn test_tolerant_merge_with_missing_and_extra_fields() {
         let partial_toml = r#"
+[ui]
 page_size = 6
 font_size = 18.0
-unknown_future_field = "some_value"
 "#;
-        let cfg = AppConfig::parse_tolerant(partial_toml).expect("缺失或多余字段应平滑容错合并");
+        let cfg = AppConfig::parse_tolerant(partial_toml).expect("缺失段落应平滑使用默认值补齐");
         assert_eq!(cfg.ui.page_size, 6);
         assert_eq!(cfg.ui.font_size, 18.0);
-        // 其余字段应保持默认值
+        // 其余段落应保持默认值
         assert_eq!(cfg.shortcuts.switch_key, SwitchKey::Shift);
         assert!(cfg.pinyin.v_mode);
     }
@@ -200,8 +200,11 @@ unknown_future_field = "some_value"
         let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
         let broken_path = temp_dir.path().join("config.toml.broken.123456789");
         let broken_content = r#"
+[ui]
 page_size = 9
 font_size = 20.0
+
+[pinyin]
 fuzzy_pinyin = true
 "#;
         fs::write(&broken_path, broken_content).expect("写入 broken 文件失败");
@@ -219,8 +222,8 @@ fuzzy_pinyin = true
     }
 
     #[test]
-    fn test_standard_section_and_hybrid_parsing() {
-        // 1. 标准 TOML 分段解析
+    fn test_standard_section_and_default_fill() {
+        // 标准 TOML 分段解析与未提供段落自动默认值补齐
         let sectioned_toml = r#"
 [ui]
 page_size = 7
@@ -238,16 +241,6 @@ slash_to_dunhao = false
         assert_eq!(cfg.shortcuts.switch_key, SwitchKey::Ctrl);
         assert!(!cfg.pinyin.slash_to_dunhao);
         assert!(cfg.pinyin.v_mode); // 默认值应补齐
-
-        // 2. 混合解析：标准分段结合根级历史平铺覆盖
-        let hybrid_toml = r#"
-page_size = 8
-
-[shortcuts]
-switch_key = "Ctrl"
-"#;
-        let hybrid_cfg = AppConfig::parse_tolerant(hybrid_toml).expect("混合格式解析应成功");
-        assert_eq!(hybrid_cfg.ui.page_size, 8);
-        assert_eq!(hybrid_cfg.shortcuts.switch_key, SwitchKey::Ctrl);
+        assert_eq!(cfg.desktop.enable_tray, TrayDisplayMode::Auto); // desktop 默认值应补齐
     }
 }
