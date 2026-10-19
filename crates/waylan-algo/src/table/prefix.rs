@@ -69,7 +69,16 @@ impl LexiconTable {
         candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
         let mut count = 0;
         for cand in candidates {
-            if !out.iter().any(|u: &AlgoCandidate| u.text == cand.text) {
+            if let Some(existing) = out.iter_mut().find(|u| u.text == cand.text) {
+                if existing.tier < cand.tier {
+                    existing.tier = cand.tier;
+                    if cand.score > existing.score {
+                        existing.score = cand.score;
+                    }
+                    existing.pinyin = cand.pinyin;
+                    existing.word_id = cand.word_id;
+                }
+            } else {
                 out.push(cand);
                 count += 1;
                 if count >= 20 {
@@ -106,7 +115,7 @@ impl LexiconTable {
                     }
                 }
                 res.sort_by_key(|b| std::cmp::Reverse(b.1));
-                res.truncate(5);
+                res.truncate(16);
                 Some(res)
             }
             (Some(c_list), None) => Some(

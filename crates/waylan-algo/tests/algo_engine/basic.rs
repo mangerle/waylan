@@ -167,3 +167,36 @@ fn test_engine_entity_protection() {
     assert_eq!(dm_cands[0].text, "DeepMind");
     assert_eq!(dm_cands[0].comment.as_deref(), Some("专名"));
 }
+
+#[test]
+fn test_engine_shenme_and_initial_l_recall() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table_mut().insert("shen'me", "什么", 2_500_000);
+    engine.table_mut().insert("shen'me", "甚么", 30_000);
+    engine.table_mut().insert("le", "了", 5_521_194);
+    engine.table_mut().insert("lai", "来", 963_666);
+
+    for ch in "shenme".chars() {
+        engine.push_char(ch);
+    }
+    let cands = engine.candidates();
+    assert!(!cands.is_empty());
+    assert_eq!(cands[0].text, "什么", "输入 shenme 时‘什么’必须排在首位");
+
+    engine.reset();
+    for ch in "shen'me".chars() {
+        engine.push_char(ch);
+    }
+    let cands_sep = engine.candidates();
+    assert!(!cands_sep.is_empty());
+    assert_eq!(
+        cands_sep[0].text, "什么",
+        "输入带分词符 shen'me 时‘什么’必须排在首位"
+    );
+
+    engine.reset();
+    engine.push_char('l');
+    let cands_l = engine.candidates();
+    assert!(!cands_l.is_empty());
+    assert_eq!(cands_l[0].text, "了", "单声母 l 展开单字时‘了’必须排在首位");
+}

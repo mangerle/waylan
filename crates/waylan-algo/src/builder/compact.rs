@@ -77,6 +77,41 @@ impl CompactDictBuilder {
         })
     }
 
+    /// 从现有的紧凑二进制词库文件中抽取词表（支持版本 2 与版本 3）
+    fn extract_vocab_from_bin(path: &Path) -> Option<Vec<String>> {
+        let file = File::open(path).ok()?;
+        let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
+        if mmap.len() < 64 || &mmap[0..16] != COMPACT_DICT_MAGIC {
+            return None;
+        }
+        let version = u32::from_le_bytes(mmap[16..20].try_into().ok()?);
+        if version != 2 && version != 3 {
+            return None;
+        }
+        let vocab_size = u32::from_le_bytes(mmap[28..32].try_into().ok()?) as usize;
+        let vocab_offset = u64::from_le_bytes(mmap[56..64].try_into().ok()?) as usize;
+        let vocab_offsets_offset = vocab_offset;
+        let sorted_vocab_ids_offset =
+            vocab_offsets_offset.saturating_add((vocab_size.saturating_add(1)).saturating_mul(4));
+        let vocab_strings_offset =
+            sorted_vocab_ids_offset.saturating_add(vocab_size.saturating_mul(4));
+
+        let mut words = Vec::with_capacity(vocab_size);
+        for id in 0..vocab_size {
+            let off1_pos = vocab_offsets_offset.saturating_add(id.saturating_mul(4));
+            let off2_pos = off1_pos.saturating_add(4);
+            let off3_pos = off2_pos.saturating_add(4);
+            let start = u32::from_le_bytes(mmap.get(off1_pos..off2_pos)?.try_into().ok()?) as usize;
+            let end = u32::from_le_bytes(mmap.get(off2_pos..off3_pos)?.try_into().ok()?) as usize;
+            let s_start = vocab_strings_offset.saturating_add(start);
+            let s_end = vocab_strings_offset.saturating_add(end);
+            let slice = mmap.get(s_start..s_end)?;
+            let text = std::str::from_utf8(slice).ok()?;
+            words.push(text.to_string());
+        }
+        Some(words)
+    }
+
     /// 初始化或继承旧版词表以保持 Word ID 稳定性
     fn init_vocab(output_path: &Path) -> (HashMap<String, u32>, Vec<String>) {
         let mut word_to_id = HashMap::new();
@@ -100,13 +135,12 @@ impl CompactDictBuilder {
                     ];
                     for bin_path in &candidates_bin {
                         if bin_path.exists() {
-                            if let Ok(compact) = crate::table::CompactMmapLexicon::open(bin_path) {
-                                if compact.vocab_size > 1_800_000 {
-                                    words.reserve(compact.vocab_size);
-                                    word_to_id.reserve(compact.vocab_size);
-                                    for id in 0..compact.vocab_size as u32 {
-                                        let w = compact.get_word(id).unwrap_or("").to_string();
-                                        word_to_id.insert(w.clone(), id);
+                            if let Some(extracted) = Self::extract_vocab_from_bin(bin_path) {
+                                if extracted.len() > 1_800_000 {
+                                    words.reserve(extracted.len());
+                                    word_to_id.reserve(extracted.len());
+                                    for (id, w) in extracted.into_iter().enumerate() {
+                                        word_to_id.insert(w.clone(), id as u32);
                                         words.push(w);
                                     }
                                     break;
@@ -218,7 +252,7 @@ impl CompactDictBuilder {
                         }
                     }
                     if acronym.len() >= 2 {
-                        let min_score = if acronym.len() == 2 { 200 } else { 1 };
+                        let min_score = if acronym.len() == 2 { 200 } else { 50 };
                         let list = acronym_map.entry(acronym).or_default();
                         for &(wid, score) in cand_list.iter().take(8) {
                             if score >= min_score {
@@ -256,7 +290,7 @@ impl CompactDictBuilder {
             list.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
             list.dedup_by(|a, b| a.0 == b.0);
             list.sort_by_key(|r| std::cmp::Reverse(r.1));
-            list.truncate(5);
+            list.truncate(16);
             if !list.is_empty() {
                 initial_map.insert(initial.to_string(), list);
             }
@@ -299,13 +333,12 @@ impl CompactDictBuilder {
                 .get(k)
                 .expect("键来自于 combined_keys 自身集合，查询必定命中");
             let c_start = cand_counter;
-            let capped_len = cands.len().min(u16::MAX as usize);
+            let capped_len = cands.len().min(64);
             let c_count = capped_len as u16;
 
             for &(wid, score) in cands.iter().take(capped_len) {
                 candidates_data.extend_from_slice(&wid.to_le_bytes());
-                let score_u16 = encode_compact_score(score);
-                candidates_data.extend_from_slice(&score_u16.to_le_bytes());
+                candidates_data.extend_from_slice(&score.to_le_bytes());
                 cand_counter += 1;
             }
 
@@ -372,7 +405,7 @@ impl CompactDictBuilder {
 
         let mut header = [0u8; 64];
         header[0..16].copy_from_slice(COMPACT_DICT_MAGIC);
-        header[16..20].copy_from_slice(&2u32.to_le_bytes());
+        header[16..20].copy_from_slice(&3u32.to_le_bytes());
         header[20..24].copy_from_slice(&(num_keys as u32).to_le_bytes());
         header[24..28].copy_from_slice(&(num_candidates as u32).to_le_bytes());
         header[28..32].copy_from_slice(&(vocab_size as u32).to_le_bytes());
@@ -417,5 +450,3 @@ impl CompactDictBuilder {
         Ok(())
     }
 }
-
-pub(crate) use crate::table::mmap::encode_compact_score;

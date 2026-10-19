@@ -96571,6 +96571,10 @@ sort: by_weight
 热车	rè chē	392
 热忱	rè chén	1422
 热诚	rè chéng	418
+热重载	rè zhòng zǎi	5000
+热重载	rè zhòng zài	5000
+热重载	rè chóng zǎi	5000
+热重载	rè chóng zài	5000
 惹出	rě chū	320
 热传	rè chuán	129
 热床	rè chuáng	176
@@ -103444,8 +103448,8 @@ sort: by_weight
 慎买	shèn mǎi	1017
 申脉	shēn mài	966
 深埋	shēn mái	688
-什么	shén me	283934
-甚么	shèn me	269737
+什么	shén me	2500000
+甚么	shèn me	30000
 审美	shěn měi	34697
 甚美	shèn měi	662
 神门	shén mén	25
@@ -158095,6 +158099,7 @@ sort: by_weight
 重韵	zhòng yùn	62
 重在	zhòng zài	3476
 重载	zhòng zài	593
+重载	chóng zǎi	1000
 种在	zhòng zài	474
 重灾	zhòng zāi	379
 冢宰	zhǒng zǎi	303

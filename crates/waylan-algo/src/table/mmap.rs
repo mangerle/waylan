@@ -17,7 +17,8 @@ pub const COMPACT_DICT_MAGIC: &[u8; 16] = b"WAYLAN_COMPACT02";
 /// - **核心优势**：
 ///   1. 彻底消灭明文拼音存储，检索严格为 $O(L)$ 状态跳转；
 ///   2. 词条文本单源只读存储，同时承担反查与正查，消灭独立词表文件；
-///   3. 零堆分配，零反序列化，由操作系统虚拟内存按需分页置换。
+///   3. 零堆分配，零反序列化，由操作系统虚拟内存按需分页置换；
+///   4. 原生 32 位词频存储与 8 字节天然对齐，消灭对数压缩失真与溢出截断，零浮点解压开销。
 pub struct CompactMmapLexicon {
     mmap: Mmap,
     pub num_keys: usize,
@@ -73,10 +74,10 @@ impl CompactMmapLexicon {
         }
 
         let version = u32::from_le_bytes(mmap[16..20].try_into().unwrap_or([0; 4]));
-        if version != 2 {
+        if version != 3 {
             return Err(AlgoError::deserialize_failed(
                 path,
-                format!("不支持的词库版本号: {}", version),
+                format!("不支持的词库版本号: {} (需版本 3)", version),
             ));
         }
 
@@ -97,7 +98,7 @@ impl CompactMmapLexicon {
         let dat_tail_offset = dat_check_offset.saturating_add(dat_node_count.saturating_mul(4));
         let dat_tail_end = dat_tail_offset.saturating_add(dat_tail_len);
         let key_metas_end = key_metas_offset.saturating_add(num_keys.saturating_mul(8));
-        let candidates_end = candidates_offset.saturating_add(num_candidates.saturating_mul(6));
+        let candidates_end = candidates_offset.saturating_add(num_candidates.saturating_mul(8));
 
         let vocab_offsets_offset = vocab_offset;
         let sorted_vocab_ids_offset =
@@ -257,11 +258,10 @@ impl CompactMmapLexicon {
         for i in 0..take_count {
             let item_pos = self
                 .candidates_offset
-                .saturating_add(cand_start.saturating_add(i).saturating_mul(6));
-            let item_slice = self.mmap.get(item_pos..item_pos.saturating_add(6))?;
+                .saturating_add(cand_start.saturating_add(i).saturating_mul(8));
+            let item_slice = self.mmap.get(item_pos..item_pos.saturating_add(8))?;
             let word_id = u32::from_le_bytes(item_slice[0..4].try_into().ok()?);
-            let score_u16 = u16::from_le_bytes(item_slice[4..6].try_into().ok()?);
-            let score = decode_compact_score(score_u16);
+            let score = u32::from_le_bytes(item_slice[4..8].try_into().ok()?);
 
             if let Some(text) = self.get_word(word_id) {
                 res.push((text.to_string(), score, word_id));
@@ -327,70 +327,4 @@ fn match_with_prefix(reader: &DatReader<'_>, prefix: &[u8], key: &str) -> Option
     }
     s.push_str(key);
     reader.exact_match(&s).map(|idx| idx as usize)
-}
-
-/// 将 32 位原始词频单调映射为 16 位紧凑存储分：
-/// - `0..=32_767` 保持 1:1 线性原值；
-/// - `> 32_767` 采用对数压缩映射至 `32_768..=65_534`，保留百万级高频词之间的相对梯度。
-#[allow(dead_code)]
-#[inline]
-pub(crate) fn encode_compact_score(score: u32) -> u16 {
-    if score <= 32_767 {
-        score as u16
-    } else {
-        let extra = ((score - 32_767) as f64 + 1.0).ln() * 2_000.0;
-        (32_768 + (extra as u32).min(32_766)) as u16
-    }
-}
-
-/// 将 16 位紧凑存储分还原为 32 位真实词频量纲
-///
-/// # 设计说明
-/// - `encode_compact_score` 对 `<= 32_767` 保持线性原值，对 `> 32_767` 采用对数压缩；
-/// - 此处执行对称的逆指数反演，还原真实词频量纲，消除 Viterbi 解码阶段双重取对数导致的词频梯度坍缩。
-#[inline]
-pub(crate) fn decode_compact_score(score_u16: u16) -> u32 {
-    if score_u16 <= 32_767 {
-        score_u16 as u32
-    } else {
-        let extra = (score_u16 - 32_768) as f64 / 2_000.0;
-        let delta = (extra.exp() - 1.0).round().max(1.0) as u32;
-        32_767u32.saturating_add(delta)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_compact_score_encode_decode_roundtrip() {
-        // 线性区间应 100% 精确无损还原
-        for s in [0u32, 1, 100, 1_000, 10_000, 32_767] {
-            let enc = encode_compact_score(s);
-            assert_eq!(decode_compact_score(enc), s);
-        }
-
-        // 高频对数压缩区间应保持严格单调且近似还原真实量纲（相对误差 < 0.2%）
-        let high_scores = [32_768u32, 50_000, 100_000, 500_000, 1_000_000, 5_000_000];
-        let mut prev_dec = 32_767u32;
-        for &s in &high_scores {
-            let enc = encode_compact_score(s);
-            let dec = decode_compact_score(enc);
-            assert!(
-                dec > prev_dec,
-                "解码分必须严格单调递增: {} <= {}",
-                dec,
-                prev_dec
-            );
-            let diff = (dec as i64 - s as i64).unsigned_abs() as f64;
-            assert!(
-                diff / (s as f64) < 0.002,
-                "原始分 {} 解码后为 {}，误差过大",
-                s,
-                dec
-            );
-            prev_dec = dec;
-        }
-    }
 }
