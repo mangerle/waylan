@@ -14,8 +14,9 @@ const GRID_COLS: usize = 6;
 const MAX_GRID_CANDIDATES: usize = 30;
 
 impl ImeCoreSession {
-    /// 展开 5 行网格大候选词面板
+    /// 展开 5 行网格大候选词面板（严格互斥：自动收起二级格式扩展卡片）
     pub fn expand_grid(&mut self) {
+        self.collapse_card();
         self.grid_state = GridState::Expanded {
             selected_index: self.engine.selected_index(),
         };

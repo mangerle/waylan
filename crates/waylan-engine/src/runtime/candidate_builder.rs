@@ -89,14 +89,6 @@ pub fn build_common_candidate_box_state(
         (ExpandedCardState::Collapsed, grid_state, grid)
     } else if let Some(card @ ExpandedCardState::Expanded { .. }) = card_opt {
         (card, GridState::Collapsed, Vec::new())
-    } else if engine.is_expanded() {
-        (
-            ExpandedCardState::Expanded {
-                selected_index: engine.expanded_selected_index(),
-            },
-            GridState::Collapsed,
-            Vec::new(),
-        )
     } else {
         (
             ExpandedCardState::Collapsed,

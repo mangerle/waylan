@@ -192,6 +192,7 @@ impl ImeCoreSession {
         };
         let action = handle_composition_key_with_params(
             &mut self.engine,
+            &mut self.expanded_card,
             &mut self.punctuation_processor,
             params,
         )?;
@@ -202,6 +203,7 @@ impl ImeCoreSession {
 
         Some(match action {
             ImeOutputAction::Commit(text) => {
+                self.collapse_card();
                 let final_text = if self.full_width_char {
                     to_full_width_string(&text)
                 } else {

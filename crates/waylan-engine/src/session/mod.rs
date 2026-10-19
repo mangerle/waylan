@@ -146,6 +146,60 @@ impl ImeCoreSession {
         self.expanded_card.is_expanded()
     }
 
+    /// 展开二级格式扩展卡片（严格互斥：自动收起 5 行大网格面板）
+    pub fn expand_card(&mut self, selected_sub_index: usize) {
+        self.collapse_grid();
+        self.expanded_card = ExpandedCardState::Expanded {
+            selected_index: selected_sub_index,
+        };
+    }
+
+    /// 折叠二级格式扩展卡片
+    #[inline]
+    pub fn collapse_card(&mut self) {
+        self.expanded_card = ExpandedCardState::Collapsed;
+    }
+
+    /// 获取二级卡片展开态下的高亮子项索引，未展开则返回 0
+    #[inline]
+    pub fn card_selected_index(&self) -> usize {
+        self.expanded_card.selected_index().unwrap_or(0)
+    }
+
+    /// 在二级展开卡片中向下移动选中项
+    pub fn next_card_item(&mut self) {
+        if let ExpandedCardState::Expanded {
+            ref mut selected_index,
+        } = self.expanded_card
+        {
+            let sel = self.engine.selected_index();
+            if let Some(cand) = self.engine.candidates().get(sel) {
+                if !cand.sub_candidates.is_empty() {
+                    *selected_index = (*selected_index + 1) % cand.sub_candidates.len();
+                }
+            }
+        }
+    }
+
+    /// 在二级展开卡片中向上移动选中项
+    pub fn prev_card_item(&mut self) {
+        if let ExpandedCardState::Expanded {
+            ref mut selected_index,
+        } = self.expanded_card
+        {
+            let sel = self.engine.selected_index();
+            if let Some(cand) = self.engine.candidates().get(sel) {
+                if !cand.sub_candidates.is_empty() {
+                    *selected_index = if *selected_index == 0 {
+                        cand.sub_candidates.len().saturating_sub(1)
+                    } else {
+                        *selected_index - 1
+                    };
+                }
+            }
+        }
+    }
+
     /// 重置会话交互状态（大网格与二级卡片均收起，并清空算法组词缓冲区）
     pub fn reset_context(&mut self) {
         self.grid_state = GridState::Collapsed;
@@ -252,6 +306,7 @@ impl ImeCoreSession {
         self.shift_sm.reset();
         self.punctuation_processor.reset();
         self.collapse_grid();
+        self.collapse_card();
         self.engine.reset();
     }
 

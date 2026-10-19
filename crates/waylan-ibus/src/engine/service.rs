@@ -164,8 +164,9 @@ impl IbusEngineService {
                 update_ui: true,
                 ..Default::default()
             };
-            if guard.runtime.core.engine.is_expanded() {
+            if guard.runtime.core.is_card_expanded() {
                 let sel = guard.runtime.core.engine.selected_index();
+                guard.runtime.core.collapse_card();
                 if let Some((committed, _)) = guard
                     .runtime
                     .core
@@ -280,7 +281,7 @@ impl IbusEngineService {
     async fn page_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if !guard.runtime.core.engine.is_expanded() {
+            if !guard.runtime.core.is_card_expanded() {
                 let _ = guard.runtime.core.engine.prev_page();
             }
             UiSnapshot::capture(&guard)
@@ -292,7 +293,7 @@ impl IbusEngineService {
     async fn page_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if !guard.runtime.core.engine.is_expanded() {
+            if !guard.runtime.core.is_card_expanded() {
                 let _ = guard.runtime.core.engine.next_page();
             }
             UiSnapshot::capture(&guard)
@@ -304,9 +305,8 @@ impl IbusEngineService {
     async fn cursor_up(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.runtime.core.engine.is_expanded() {
-                let sel = guard.runtime.core.engine.selected_index();
-                guard.runtime.core.engine.prev_expanded_item(sel);
+            if guard.runtime.core.is_card_expanded() {
+                guard.runtime.core.prev_card_item();
             } else {
                 guard.runtime.core.engine.prev_candidate();
             }
@@ -319,9 +319,8 @@ impl IbusEngineService {
     async fn cursor_down(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
         let snap = {
             let mut guard = self.core.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.runtime.core.engine.is_expanded() {
-                let sel = guard.runtime.core.engine.selected_index();
-                guard.runtime.core.engine.next_expanded_item(sel);
+            if guard.runtime.core.is_card_expanded() {
+                guard.runtime.core.next_card_item();
             } else {
                 guard.runtime.core.engine.next_candidate();
             }
