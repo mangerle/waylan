@@ -161,17 +161,17 @@ struct VoiceWorkerLoopState<'a> {
     is_active: &'a Arc<AtomicBool>,
 }
 
-/// 处理 Start 指令并拉起活动录音事件循环
+/// 处理 Start 指令并拉起活动录音事件循环，返回是否收到了全局销毁指令需要退出常驻工作线程
 fn handle_start_command(
     state: &mut VoiceWorkerLoopState<'_>,
     options: VoiceSessionOptions,
     event_tx: SyncSender<VoiceEvent>,
-) {
+) -> bool {
     let Some((recognizer, vad, punct_restorer)) = state.cache.prepare_models(&options.voice_config)
     else {
         warn!("[语音会话] 语音识别器或 VAD 模型未正确初始化，跳过本次录音");
         state.is_active.store(false, Ordering::Release);
-        return;
+        return false;
     };
     state.visualizer.reset();
 
@@ -185,7 +185,7 @@ fn handle_start_command(
             warn!("[语音会话] 启动音频采集硬件失败: {}", e);
             let _ = event_tx.send(VoiceEvent::Error(e.to_string()));
             state.is_active.store(false, Ordering::Release);
-            return;
+            return false;
         }
     };
 
@@ -201,7 +201,7 @@ fn handle_start_command(
         punct_restorer,
         voice_config: &options.voice_config,
         is_active: state.is_active,
-    });
+    })
 }
 
 impl VoiceSessionController {
@@ -230,7 +230,10 @@ impl VoiceSessionController {
                         cmd_rx: &cmd_rx,
                         is_active: &is_active,
                     };
-                    handle_start_command(&mut loop_state, *options, event_tx);
+                    if handle_start_command(&mut loop_state, *options, event_tx) {
+                        info!("[语音会话] 录音过程中收到销毁指令，后台常驻语音工作线程平滑退出");
+                        break;
+                    }
                 }
                 WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
                     is_active.store(false, Ordering::Release);
@@ -413,5 +416,16 @@ mod tests {
             }
         }
         assert!(final_commit_received, "必须收到 FinalCommit 终态事件");
+    }
+
+    #[test]
+    fn test_voice_session_controller_shutdown_without_deadlock() {
+        // 构造控制器并在常驻工作线程中模拟收到 Shutdown 命令平滑退场
+        let controller = VoiceSessionController::try_new();
+        if let Ok(c) = controller {
+            assert!(!c.is_recording());
+            // drop 发生时会向工作线程发送 Shutdown 并 join，测试其在微秒内顺利退场绝不死锁
+            drop(c);
+        }
     }
 }

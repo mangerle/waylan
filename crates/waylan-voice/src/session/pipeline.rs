@@ -45,14 +45,31 @@ impl ActiveRecordingState {
 }
 
 /// 活跃录音与实时推理循环
-pub(super) fn active_recording_loop(mut ctx: ActiveRecordingContext<'_>) {
+/// 录音循环接收外部命令后的控制流决策
+enum RecordingCommandOutcome {
+    /// 继续录音
+    Continue,
+    /// 结束本次录音（Stop/Cancel/Unload），但保持后台工作线程就绪待命
+    StopRecording,
+    /// 收到全局销毁指令，彻底终止录音并终止常驻工作线程
+    Shutdown,
+}
+
+/// 活跃录音与实时推理循环
+pub(super) fn active_recording_loop(mut ctx: ActiveRecordingContext<'_>) -> bool {
     let mut state = ActiveRecordingState::new(ctx.voice_config);
+    let mut is_shutdown = false;
 
     while ctx.is_active.load(Ordering::Acquire) {
         // 1. 优先检查外部主动停止、提交或取消命令
         if let Ok(cmd) = ctx.cmd_rx.try_recv() {
-            if handle_recording_command(cmd, &mut state, &mut ctx) {
-                break;
+            match handle_recording_command(cmd, &mut state, &mut ctx) {
+                RecordingCommandOutcome::Continue => {}
+                RecordingCommandOutcome::StopRecording => break,
+                RecordingCommandOutcome::Shutdown => {
+                    is_shutdown = true;
+                    break;
+                }
             }
         }
 
@@ -77,14 +94,15 @@ pub(super) fn active_recording_loop(mut ctx: ActiveRecordingContext<'_>) {
 
     ctx.is_active.store(false, Ordering::Release);
     info!("[语音会话] 录音会话结束，音频捕获硬件已释放");
+    is_shutdown
 }
 
-/// 处理来自控制通道的外部指令，返回是否应当终止录音主循环
+/// 处理来自控制通道的外部指令，返回控制流决策
 fn handle_recording_command(
     cmd: WorkerCommand,
     state: &mut ActiveRecordingState,
     ctx: &mut ActiveRecordingContext<'_>,
-) -> bool {
+) -> RecordingCommandOutcome {
     match cmd {
         WorkerCommand::StopAndCommit => {
             let commit_ctx = StopCommitContext {
@@ -100,7 +118,7 @@ fn handle_recording_command(
                 is_active: ctx.is_active,
             };
             handle_stop_and_commit(commit_ctx);
-            true
+            RecordingCommandOutcome::StopRecording
         }
         WorkerCommand::Cancel => {
             info!("[语音会话] 收到外部取消指令，放弃本次录音");
@@ -109,14 +127,15 @@ fn handle_recording_command(
             ctx.recognizer.reset();
             let _ = ctx.event_tx.send(VoiceEvent::Cancelled);
             ctx.is_active.store(false, Ordering::Release);
-            true
+            RecordingCommandOutcome::StopRecording
         }
         WorkerCommand::Shutdown => {
+            info!("[语音会话] 录音过程中收到销毁指令，准备彻底退出语音工作线程");
             drop(ctx.capture.take());
             state.pre_speech_buffer.clear();
             ctx.recognizer.reset();
             ctx.is_active.store(false, Ordering::Release);
-            true
+            RecordingCommandOutcome::Shutdown
         }
         WorkerCommand::UnloadModels => {
             info!("[语音会话] 录音过程中收到卸载指令，中止当前录音并退出");
@@ -124,11 +143,11 @@ fn handle_recording_command(
             state.pre_speech_buffer.clear();
             ctx.recognizer.reset();
             ctx.is_active.store(false, Ordering::Release);
-            true
+            RecordingCommandOutcome::StopRecording
         }
         WorkerCommand::Start { .. } => {
             // 录音进行期间忽略重复 Start
-            false
+            RecordingCommandOutcome::Continue
         }
     }
 }
