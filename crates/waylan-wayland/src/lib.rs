@@ -200,7 +200,7 @@ mod tests {
         let result = probe_wayland_environment();
         assert!(result.is_err(), "应探测失败并返回强类型错误");
         match result.unwrap_err() {
-            WaylandRunnerError::Connect(_) => {}
+            WaylandRunnerError::Connect { .. } => {}
             other => panic!("预期返回 Connect 变体，实际返回: {:?}", other),
         }
     }

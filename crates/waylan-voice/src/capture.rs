@@ -156,9 +156,9 @@ impl AudioCapture {
             pcm_sender,
         )?;
 
-        stream
-            .play()
-            .map_err(|e| VoiceError::StreamStartFailed(format!("激活音频捕获流失败: {}", e)))?;
+        stream.play().map_err(|e| VoiceError::StreamStartFailed {
+            message: format!("激活音频捕获流失败: {}", e),
+        })?;
 
         info!("[语音采集] 麦克风捕获流已成功启动");
 
@@ -278,7 +278,9 @@ impl AudioCapture {
                 })
             }
         }
-        .map_err(|e| VoiceError::StreamStartFailed(e.to_string()))
+        .map_err(|e| VoiceError::StreamStartFailed {
+            message: e.to_string(),
+        })
     }
 
     /// 获取当前激活的硬件设备名称

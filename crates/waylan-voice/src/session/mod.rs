@@ -60,7 +60,9 @@ impl VoiceSessionController {
             .spawn(move || {
                 Self::worker_main(cmd_rx, active_clone);
             })
-            .map_err(|e| VoiceError::WorkerThreadSpawnFailed(e.to_string()))?;
+            .map_err(|e| VoiceError::WorkerThreadSpawnFailed {
+                message: e.to_string(),
+            })?;
 
         Ok(Self {
             is_active,
@@ -105,9 +107,9 @@ impl VoiceSessionController {
         event_tx: SyncSender<VoiceEvent>,
     ) -> Result<(), VoiceError> {
         if self.worker_handle.is_none() {
-            return Err(VoiceError::WorkerThreadSpawnFailed(
-                "语音后台工作线程未就绪（已被安全降级禁用）".to_string(),
-            ));
+            return Err(VoiceError::WorkerThreadSpawnFailed {
+                message: "语音后台工作线程未就绪（已被安全降级禁用）".to_string(),
+            });
         }
 
         if self.is_recording() {
@@ -121,10 +123,9 @@ impl VoiceSessionController {
             event_tx,
         }) {
             self.is_active.store(false, Ordering::Release);
-            return Err(VoiceError::StreamStartFailed(format!(
-                "向语音工作线程发送启动指令失败: {}",
-                e
-            )));
+            return Err(VoiceError::StreamStartFailed {
+                message: format!("向语音工作线程发送启动指令失败: {}", e),
+            });
         }
 
         Ok(())

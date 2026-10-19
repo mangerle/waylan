@@ -15,16 +15,16 @@ pub enum VoiceError {
     DeviceInitFailed { device: String, message: String },
 
     /// 音频数据流启动失败
-    #[error("音频捕获流启动失败，原因: {0}")]
-    StreamStartFailed(String),
+    #[error("音频捕获流启动失败，原因: {message}")]
+    StreamStartFailed { message: String },
 
     /// 麦克风音频配置不支持（例如不支持采样率转换）
     #[error("不支持的音频格式配置，采样率: {sample_rate}，通道数: {channels}")]
     UnsupportedFormat { sample_rate: u32, channels: u16 },
 
     /// 音频数据通道已满或断开
-    #[error("音频传输通道异常，原因: {0}")]
-    ChannelError(String),
+    #[error("音频传输通道异常，原因: {message}")]
+    ChannelError { message: String },
 
     /// ASR 语音识别引擎错误
     #[error("语音识别引擎处理失败，引擎类型: {engine_type}，原因: {message}")]
@@ -34,6 +34,6 @@ pub enum VoiceError {
     },
 
     /// 创建语音后台常驻工作线程失败
-    #[error("创建语音后台工作线程失败，原因: {0}")]
-    WorkerThreadSpawnFailed(String),
+    #[error("创建语音后台工作线程失败，原因: {message}")]
+    WorkerThreadSpawnFailed { message: String },
 }

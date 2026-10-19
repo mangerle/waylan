@@ -15,14 +15,41 @@ pub enum IbusError {
     AddressNotFound,
 
     /// D-Bus 通信失败
-    #[error("IBus D-Bus 通信错误: {0}")]
-    Dbus(#[from] zbus::Error),
+    #[error("IBus D-Bus 通信失败，原因: {reason}")]
+    Dbus {
+        /// 具体失败原因
+        reason: String,
+    },
 
     /// 系统 I/O 错误
-    #[error("IBus 底层 I/O 错误: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("IBus 底层 I/O 操作失败，原因: {reason}")]
+    Io {
+        /// 具体失败原因
+        reason: String,
+    },
 
-    /// 通用会话交互错误
-    #[error("IBus 会话交互失败: {0}")]
-    Session(String),
+    /// 通用会话交互与协议调用失败
+    #[error("IBus 会话交互失败，阶段: {stage}，原因: {reason}")]
+    Session {
+        /// 发生阶段或操作描述
+        stage: &'static str,
+        /// 具体失败原因
+        reason: String,
+    },
+}
+
+impl From<zbus::Error> for IbusError {
+    fn from(err: zbus::Error) -> Self {
+        Self::Dbus {
+            reason: err.to_string(),
+        }
+    }
+}
+
+impl From<std::io::Error> for IbusError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io {
+            reason: err.to_string(),
+        }
+    }
 }
