@@ -11,12 +11,6 @@ default = []
 dict-importer = []
 dict-builder = []
 tools = ["dict-importer", "dict-builder"]
-corpus-builder = ["dep:jieba-rs", "dep:rayon", "dep:regex", "dep:serde_json"]
-
-[[bin]]
-name = "build_bigram"
-path = "src/bin/build_bigram/main.rs"
-required-features = ["corpus-builder"]
 
 [[example]]
 name = "build_aux_dict"
@@ -41,10 +35,6 @@ thiserror.workspace = true
 log.workspace = true
 memmap2.workspace = true
 chrono.workspace = true
-jieba-rs = { workspace = true, optional = true }
-rayon = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
-regex = { workspace = true, optional = true }
 rustix.workspace = true
 
 [dev-dependencies]

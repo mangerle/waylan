@@ -1,0 +1,17 @@
+[package]
+name = "waylan-bigram-builder"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "微澜 (WayLan) 离线语料切分与 Bigram CSR 语言模型压缩构建工具"
+
+[dependencies]
+waylan-algo = { path = "../../crates/waylan-algo" }
+waylan-core = { path = "../../crates/waylan-core" }
+jieba-rs.workspace = true
+rayon.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true

@@ -11,6 +11,7 @@ members = [
     "crates/waylan-ibus",
     "crates/waylan-engine",
     "crates/waylan-sys",
+    "tools/waylan-bigram-builder",
 ]
 
 [workspace.package]
