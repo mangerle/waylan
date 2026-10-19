@@ -181,6 +181,51 @@ impl ImeCoreSession {
         self.full_width_char = enabled;
     }
 
+    /// 获取当前输入模式
+    #[inline]
+    pub fn input_mode(&self) -> InputMode {
+        self.mode
+    }
+
+    /// 设置输入模式
+    #[inline]
+    pub fn set_input_mode(&mut self, mode: InputMode) {
+        self.mode = mode;
+    }
+
+    /// 查询当前是否开启繁体中文输出
+    #[inline]
+    pub fn is_traditional(&self) -> bool {
+        self.engine.config.traditional_chinese
+    }
+
+    /// 设置繁体中文输出模式
+    #[inline]
+    pub fn set_traditional(&mut self, enabled: bool) {
+        self.engine.config.traditional_chinese = enabled;
+    }
+
+    /// 查询当前是否开启全角标点
+    #[inline]
+    pub fn is_full_width_punct(&self) -> bool {
+        self.punctuation_processor.is_full_width_punct()
+    }
+
+    /// 设置全角标点模式
+    #[inline]
+    pub fn set_full_width_punct(&mut self, enabled: bool) {
+        self.punctuation_processor.set_full_width_punct(enabled);
+    }
+
+    /// 设置 CapsLock 锁定状态
+    pub fn set_caps_lock(&mut self, is_locked: bool) {
+        if is_locked {
+            self.modifiers.locked |= MOD_CAPS;
+        } else {
+            self.modifiers.locked &= !MOD_CAPS;
+        }
+    }
+
     /// 获取当前按下的修饰键位掩码
     #[inline]
     pub fn mods_depressed(&self) -> u32 {
