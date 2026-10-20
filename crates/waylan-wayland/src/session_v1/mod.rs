@@ -253,9 +253,7 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
                 state.protocol.commit_serial = serial;
             }
             ContextEvent::Reset => {
-                state.runtime.core.shift_sm.reset();
-                state.runtime.core.punctuation_processor.reset();
-                state.runtime.core.engine.reset();
+                state.runtime.core.reset_input_state();
                 state.hide_candidate_surface();
             }
             _ => {}

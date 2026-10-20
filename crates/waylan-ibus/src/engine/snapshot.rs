@@ -42,8 +42,7 @@ impl UiSnapshot {
 
         let voice_state = core
             .runtime
-            .voice_manager
-            .as_ref()
+            .voice_manager()
             .and_then(|vm| vm.render_state());
 
         let box_state = build_common_candidate_box_state(
@@ -123,14 +122,12 @@ mod tests {
 
         // 模拟语音激活状态：正在聆听中...
         core.runtime
-            .voice_manager
-            .as_mut()
-            .unwrap()
+            .voice_manager_mut()
+            .expect("测试语音管理器应存在")
             .set_display_text(Some("正在聆听中...".to_string()));
         core.runtime
-            .voice_manager
-            .as_mut()
-            .unwrap()
+            .voice_manager_mut()
+            .expect("测试语音管理器应存在")
             .set_waveform(Some(" ▂▃▄▅".to_string()));
         let voice_snap = UiSnapshot::capture(&core);
 

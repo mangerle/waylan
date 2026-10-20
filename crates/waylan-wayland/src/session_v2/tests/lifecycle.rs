@@ -8,7 +8,7 @@ fn test_v2_session_initialization() {
     let session = WaylanV2Session::new(engine);
 
     assert!(!session.focus.is_active);
-    assert_eq!(session.runtime.core.mode, InputMode::Chinese);
+    assert_eq!(session.runtime.core.input_mode(), InputMode::Chinese);
     assert_eq!(session.protocol.done_serial, 0);
     assert!(session.protocol.keyboard_grab.is_none());
     assert!(session.protocol.input_method.is_none());
@@ -169,13 +169,23 @@ fn test_v2_double_buffered_done_atomic_commit() {
 
     // 模拟输入拼音与残留引号状态后，在同一批次内收到 Deactivate + Activate 焦点切换
     session.runtime.core.engine.push_char('n');
-    session.runtime.core.punctuation_processor.double_quote_open = true;
+    session
+        .runtime
+        .core
+        .punctuation_processor_mut()
+        .double_quote_open = true;
     session.stage_deactivate();
     session.stage_activate();
     assert!(session.apply_done_state());
     assert!(session.focus.is_active);
     assert_eq!(session.protocol.done_serial, 2);
     assert!(session.runtime.core.engine.raw_input().is_empty());
-    assert!(!session.runtime.core.punctuation_processor.double_quote_open);
+    assert!(
+        !session
+            .runtime
+            .core
+            .punctuation_processor()
+            .double_quote_open
+    );
     assert!(session.focus.surrounding_text.is_none());
 }

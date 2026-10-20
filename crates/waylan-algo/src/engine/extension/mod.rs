@@ -25,12 +25,12 @@ mod tests {
 
     struct MockCustomProvider;
     impl CandidateExtensionProvider for MockCustomProvider {
-        fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
+        fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
             if ctx.raw_input == "test" {
-                vec![AlgoCandidate::new("测试扩展", "ce'shi", 100)
-                    .with_tier(CandidateTier::ProtectedEntity)]
-            } else {
-                Vec::new()
+                out.push(
+                    AlgoCandidate::new("测试扩展", "ce'shi", 100)
+                        .with_tier(CandidateTier::ProtectedEntity),
+                );
             }
         }
     }

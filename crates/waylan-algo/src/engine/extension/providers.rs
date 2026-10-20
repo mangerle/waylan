@@ -29,16 +29,7 @@ pub struct ExtensionContext<'a> {
 /// 遵循开闭原则 (OCP)，支持动态插拔不同类型的候选词扩展源。
 pub trait CandidateExtensionProvider {
     /// 根据当前上下文生成扩展候选词并追加至输出缓冲区（推荐零分配实现）
-    fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
-        out.extend(self.provide(ctx));
-    }
-
-    /// 根据当前上下文生成扩展候选词（默认实现自动委托至 append_candidates）
-    fn provide(&self, ctx: &ExtensionContext<'_>) -> Vec<AlgoCandidate> {
-        let mut results = Vec::new();
-        self.append_candidates(ctx, &mut results);
-        results
-    }
+    fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>);
 }
 
 /// 用户自定义短语提供者（最高优先级，标记为 ProtectedEntity 置顶）

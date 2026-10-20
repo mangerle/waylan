@@ -8,7 +8,7 @@
 //!   3. 零额外运行时开销：所有特型方法均为 `#[inline]` 转发。
 
 use waylan_core::input::{ConsumedKeyTracker, VoiceKeyAction, VoiceProvider};
-use waylan_core::{VoiceBoxState, VoiceConfig, VoiceEngineType};
+use waylan_core::{VoiceBoxState, VoiceConfig};
 
 use super::VoiceInteractionManager;
 
@@ -19,18 +19,8 @@ impl VoiceProvider for VoiceInteractionManager {
     }
 
     #[inline]
-    fn set_enabled(&mut self, enabled: bool) {
-        self.config.enabled = enabled;
-    }
-
-    #[inline]
     fn config(&self) -> &VoiceConfig {
         &self.config
-    }
-
-    #[inline]
-    fn config_mut(&mut self) -> &mut VoiceConfig {
-        &mut self.config
     }
 
     #[inline]
@@ -61,11 +51,6 @@ impl VoiceProvider for VoiceInteractionManager {
     #[inline]
     fn update_config(&mut self, cfg: &VoiceConfig) {
         self.update_config(cfg.clone());
-    }
-
-    #[inline]
-    fn set_engine_type(&mut self, engine_type: VoiceEngineType) {
-        self.config.engine_type = engine_type;
     }
 
     #[inline]
@@ -102,11 +87,6 @@ impl VoiceProvider for VoiceInteractionManager {
     #[inline]
     fn set_partial_text(&mut self, text: Option<String>) {
         self.partial_text = text;
-    }
-
-    #[inline]
-    fn waveform(&self) -> Option<String> {
-        self.waveform.clone()
     }
 
     #[inline]

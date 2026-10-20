@@ -154,16 +154,11 @@ pub fn build_common_candidate_box_state(
     let (expansion, grid_candidates) = resolve_expansion_and_grid(all, expansion_in);
     let (preedit, mode_badge) = resolve_preedit_and_badge(engine, mode, inline_preedit);
 
-    let final_selected_index = match expansion {
-        CandidateExpansion::Grid { selected_index } => selected_index,
-        _ => selected_index,
-    };
-
     CandidateBoxState {
         visible: is_active && !engine.raw_input().is_empty(),
         preedit,
         candidates,
-        selected_index: final_selected_index,
+        selected_index,
         expansion,
         mode_badge,
         grid_candidates,

@@ -154,7 +154,7 @@ fn handle_grab_keymap(
             state
                 .runtime
                 .core
-                .keymap_layout
+                .keymap_layout_mut()
                 .update_from_xkb_text(text.trim_end_matches('\0'));
             debug!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
         }
@@ -271,7 +271,7 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
         state
             .runtime
             .core
-            .punctuation_processor
+            .punctuation_processor_mut()
             .record_commit(&commit_text);
         if remaining_len == 0 {
             state.commit_text(&commit_text);

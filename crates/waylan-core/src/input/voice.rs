@@ -8,7 +8,7 @@
 //! - **代价与局限**：使用动态分派 (`Box<dyn VoiceProvider>`) 带来微不足道的虚表调用开销。
 
 use crate::candidate::VoiceBoxState;
-use crate::config::{VoiceConfig, VoiceEngineType};
+use crate::config::VoiceConfig;
 use crate::input::modifiers::ConsumedKeyTracker;
 
 /// 语音按键交互事件的处理决策动作
@@ -28,14 +28,8 @@ pub trait VoiceProvider: Send {
     /// 查询当前语音输入是否处于开启/启用状态
     fn is_enabled(&self) -> bool;
 
-    /// 设置语音输入的开启状态
-    fn set_enabled(&mut self, enabled: bool);
-
     /// 获取当前语音配置的只读引用
     fn config(&self) -> &VoiceConfig;
-
-    /// 获取当前语音配置的可变引用
-    fn config_mut(&mut self) -> &mut VoiceConfig;
 
     /// 查询当前是否处于对讲机按键录音中
     fn is_push_to_talk_recording(&self) -> bool;
@@ -54,9 +48,6 @@ pub trait VoiceProvider: Send {
 
     /// 热重载语音配置
     fn update_config(&mut self, cfg: &VoiceConfig);
-
-    /// 设置语音识别引擎类型（用于测试模拟或引擎热切换）
-    fn set_engine_type(&mut self, engine_type: VoiceEngineType);
 
     /// 轮询异步识别事件流并返回提交文本（若有）
     fn poll_events(&mut self) -> Option<String>;
@@ -81,9 +72,6 @@ pub trait VoiceProvider: Send {
 
     /// 设置实时流式预览文字（用于测试模拟或前端注入）
     fn set_partial_text(&mut self, text: Option<String>);
-
-    /// 获取当前音频振幅波形可视化数据
-    fn waveform(&self) -> Option<String>;
 
     /// 设置当前音频振幅波形数据（用于测试模拟或前端注入）
     fn set_waveform(&mut self, waveform: Option<String>);

@@ -31,37 +31,37 @@ pub struct ImeCoreSession {
     /// 底层算法引擎门面
     pub engine: AlgoEngine,
     /// Shift 快速点按中英切换状态机
-    pub shift_sm: ShiftToggleStateMachine,
+    pub(crate) shift_sm: ShiftToggleStateMachine,
     /// 中文智能标点与成对符号处理器
-    pub punctuation_processor: PunctuationProcessor,
+    pub(crate) punctuation_processor: PunctuationProcessor,
     /// 翻页与选词热键配置
-    pub page_keys: PageKeyConfig,
+    pub(crate) page_keys: PageKeyConfig,
     /// 是否允许使用 Shift+数字键选择对应候选词
     pub shift_select_second: bool,
     /// 动态键盘物理扫描码到字符的映射表（适配 QWERTY、Dvorak 等）
-    pub keymap_layout: KeymapLayout,
+    pub(crate) keymap_layout: KeymapLayout,
     /// 当前输入模式（中文 / 英文 / V模式）
-    pub mode: InputMode,
+    pub(crate) mode: InputMode,
     /// 已被输入法消费的物理按键追踪器（保证按下与释放事件严格对称）
-    pub consumed_keys: ConsumedKeyTracker,
+    pub(crate) consumed_keys: ConsumedKeyTracker,
     /// 统一修饰键状态跟踪器
-    pub modifiers: ModifierState,
+    pub(crate) modifiers: ModifierState,
     /// 简繁即时切换快捷键选项
-    pub traditional_shortcut: Option<ParsedShortcut>,
+    pub(crate) traditional_shortcut: Option<ParsedShortcut>,
     /// 字符全角/半角切换快捷键选项
-    pub full_width_char_shortcut: Option<ParsedShortcut>,
+    pub(crate) full_width_char_shortcut: Option<ParsedShortcut>,
     /// 标点全角/半角切换快捷键选项
-    pub full_width_punct_shortcut: Option<ParsedShortcut>,
+    pub(crate) full_width_punct_shortcut: Option<ParsedShortcut>,
     /// 输入修饰扩展状态（繁体输出、全角标点、全角字符）
-    pub decoration_flags: InputDecorationFlags,
+    pub(crate) decoration_flags: InputDecorationFlags,
     /// 当前候选词分页索引（0-indexed）
-    pub page_index: usize,
+    pub(crate) page_index: usize,
     /// 当前页内选中的高亮候选词局部索引（0-indexed）
-    pub selected_index: usize,
+    pub(crate) selected_index: usize,
     /// 候选框单页展示的最大候选词数量
-    pub page_size: usize,
+    pub(crate) page_size: usize,
     /// 候选框展开交互状态机（大卡片与多行大网格在类型层面严格互斥）
-    pub expansion: CandidateExpansion,
+    pub(crate) expansion: CandidateExpansion,
 }
 
 impl Default for ImeCoreSession {
@@ -187,6 +187,74 @@ impl ImeCoreSession {
     #[inline]
     pub fn mods_depressed(&self) -> u32 {
         self.modifiers.depressed
+    }
+
+    /// 显式设置当前按下的修饰键位掩码（保留锁定位）
+    pub fn set_mods_depressed(&mut self, depressed: u32) {
+        self.modifiers.depressed = depressed;
+    }
+
+    /// 使用物理修饰键跟踪位图更新修饰键掩码
+    pub fn update_modifier_masks(&mut self, phys_mods: &mut u8, keycode: u32, is_press: bool) {
+        waylan_core::input::update_modifier_masks(
+            &mut self.modifiers.depressed,
+            phys_mods,
+            keycode,
+            is_press,
+        );
+    }
+
+    /// 获取当前翻页与选词热键配置
+    #[inline]
+    pub fn page_keys(&self) -> PageKeyConfig {
+        self.page_keys
+    }
+
+    /// 获取中文智能标点处理器不可变引用
+    #[inline]
+    pub fn punctuation_processor(&self) -> &PunctuationProcessor {
+        &self.punctuation_processor
+    }
+
+    /// 获取中文智能标点处理器可变引用
+    #[inline]
+    pub fn punctuation_processor_mut(&mut self) -> &mut PunctuationProcessor {
+        &mut self.punctuation_processor
+    }
+
+    /// 获取当前键盘布局映射不可变引用
+    #[inline]
+    pub fn keymap_layout(&self) -> &KeymapLayout {
+        &self.keymap_layout
+    }
+
+    /// 获取当前键盘布局映射可变引用
+    #[inline]
+    pub fn keymap_layout_mut(&mut self) -> &mut KeymapLayout {
+        &mut self.keymap_layout
+    }
+
+    /// 替换当前键盘布局映射
+    pub fn set_keymap_layout(&mut self, layout: KeymapLayout) {
+        self.keymap_layout = layout;
+    }
+
+    /// 获取简繁体切换快捷键
+    #[inline]
+    pub fn traditional_shortcut(&self) -> Option<ParsedShortcut> {
+        self.traditional_shortcut
+    }
+
+    /// 获取字符全半角切换快捷键
+    #[inline]
+    pub fn full_width_char_shortcut(&self) -> Option<ParsedShortcut> {
+        self.full_width_char_shortcut
+    }
+
+    /// 获取标点全半角切换快捷键
+    #[inline]
+    pub fn full_width_punct_shortcut(&self) -> Option<ParsedShortcut> {
+        self.full_width_punct_shortcut
     }
 
     /// 获取当前锁定的修饰键位掩码

@@ -35,13 +35,13 @@ pub struct ImeRuntime {
     /// 核心算法与按键决策会话状态机
     pub core: ImeCoreSession,
     /// 统一语音按键交互与录音流式提供者（抽象特型对象）
-    pub voice_manager: Option<Box<dyn VoiceProvider>>,
+    voice_manager: Option<Box<dyn VoiceProvider>>,
     /// 与系统托盘和外部进程共享的原子状态标志集合
-    pub shared_flags: Option<SharedInputFlags>,
+    shared_flags: Option<SharedInputFlags>,
     /// 切换中英文或大写时唤醒系统托盘刷新图标的通知发送端
-    pub mode_notify_tx: Option<SyncSender<()>>,
+    mode_notify_tx: Option<SyncSender<()>>,
     /// 与外部系统托盘共享的配置与词库重载请求标志
-    pub reload_requested: Option<Arc<AtomicBool>>,
+    reload_requested: Option<Arc<AtomicBool>>,
 }
 
 impl Default for ImeRuntime {
@@ -83,6 +83,32 @@ impl ImeRuntime {
     pub fn with_reload_requested(mut self, flag: Arc<AtomicBool>) -> Self {
         self.reload_requested = Some(flag);
         self
+    }
+
+    /// 设置与托盘共享的输入状态标志
+    pub fn set_shared_flags(&mut self, flags: Option<SharedInputFlags>) {
+        self.shared_flags = flags;
+    }
+
+    /// 查询是否挂载了托盘共享状态
+    #[inline]
+    pub fn has_shared_flags(&self) -> bool {
+        self.shared_flags.is_some()
+    }
+
+    /// 设置托盘刷新通知通道
+    pub fn set_mode_notify_tx(&mut self, tx: Option<SyncSender<()>>) {
+        self.mode_notify_tx = tx;
+    }
+
+    /// 设置配置重载请求标志
+    pub fn set_reload_requested(&mut self, flag: Option<Arc<AtomicBool>>) {
+        self.reload_requested = flag;
+    }
+
+    /// 获取配置重载请求标志的共享句柄
+    pub fn reload_requested(&self) -> Option<Arc<AtomicBool>> {
+        self.reload_requested.clone()
     }
 
     /// 挂载外部语音或多模态输入提供者

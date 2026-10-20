@@ -7,7 +7,6 @@
 //!   密码框保护、CapsLock 截断提交、中英模式切换、语音听写与全局快捷键全部由核心运行时单一真实源驱动。
 //! - **代价与局限**：需将 X11 修饰键状态位映射至统一修饰键位掩码。
 
-use waylan_core::input::modifiers::update_modifier_masks;
 use waylan_core::input::*;
 use waylan_core::{CandidateBoxState, InputMode};
 use waylan_engine::InputMethodFrontend;
@@ -53,14 +52,11 @@ impl<'a> InputMethodFrontend for IbusFrontend<'a> {
 impl IbusSessionCore {
     /// 同步并计算最终的修饰键位掩码与 CapsLock 状态
     fn sync_and_calculate_modifiers(&mut self, evdev_key: u32, is_press: bool, state: u32) -> u32 {
-        update_modifier_masks(
-            &mut self.runtime.core.modifiers.depressed,
-            &mut self.phys_mods,
-            evdev_key,
-            is_press,
-        );
+        self.runtime
+            .core
+            .update_modifier_masks(&mut self.phys_mods, evdev_key, is_press);
 
-        let mut event_mods = self.runtime.core.modifiers.depressed;
+        let mut event_mods = self.runtime.core.mods_depressed();
         if (state & IBUS_SHIFT_MASK) != 0 {
             event_mods |= MOD_SHIFT;
         }
@@ -93,11 +89,11 @@ impl IbusSessionCore {
 
         let next_locked = !self.is_caps_locked();
         self.update_caps_lock_state(next_locked);
-        if self.runtime.core.mode != InputMode::English {
+        if self.runtime.core.input_mode() != InputMode::English {
             let effective_mode = if next_locked {
                 InputMode::English
             } else {
-                self.runtime.core.mode
+                self.runtime.core.input_mode()
             };
             Some(effective_mode)
         } else {
@@ -113,8 +109,8 @@ impl IbusSessionCore {
 
         let event_mods = self.sync_and_calculate_modifiers(evdev_key, is_press, state);
 
-        let saved_mods = self.runtime.core.modifiers.depressed;
-        self.runtime.core.modifiers.depressed = event_mods;
+        let saved_mods = self.runtime.core.mods_depressed();
+        self.runtime.core.set_mods_depressed(event_mods);
 
         let mut outcome = IbusKeyOutcome::default();
         let is_password_or_locked = self.is_screen_locked || self.is_password_context;
@@ -135,7 +131,7 @@ impl IbusSessionCore {
                 },
             )
         };
-        self.runtime.core.modifiers.depressed = saved_mods;
+        self.runtime.core.set_mods_depressed(saved_mods);
 
         outcome.consumed = consumed;
         if outcome.commit_text.is_none() {

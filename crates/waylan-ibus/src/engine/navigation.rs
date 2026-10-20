@@ -37,7 +37,7 @@ impl IbusEngineService {
                     guard
                         .runtime
                         .core
-                        .punctuation_processor
+                        .punctuation_processor_mut()
                         .record_commit(&committed);
                     out.commit_text = Some(committed);
                 }
@@ -50,7 +50,7 @@ impl IbusEngineService {
                 guard
                     .runtime
                     .core
-                    .punctuation_processor
+                    .punctuation_processor_mut()
                     .record_commit(&committed);
                 out.commit_text = Some(committed);
             }

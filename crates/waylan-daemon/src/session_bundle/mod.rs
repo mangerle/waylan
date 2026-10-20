@@ -51,11 +51,11 @@ mod tests {
         // 模拟已输入左双引号与上下文网址前缀
         runtime
             .core
-            .punctuation_processor
+            .punctuation_processor_mut()
             .record_commit("“https://example.com");
-        assert!(runtime.core.punctuation_processor.double_quote_open);
+        assert!(runtime.core.punctuation_processor().double_quote_open);
         assert_eq!(
-            runtime.core.punctuation_processor.recent_context,
+            runtime.core.punctuation_processor().recent_context,
             "“https://example.com"
         );
 
@@ -65,17 +65,17 @@ mod tests {
         runtime.reload_config(&cfg);
 
         // 验证热重载更新了配置开关，同时完整保留了引号开闭状态与最近输入上下文
-        assert!(!runtime.core.punctuation_processor.options.slash_to_dunhao);
+        assert!(!runtime.core.punctuation_processor().options.slash_to_dunhao);
         assert!(
             !runtime
                 .core
-                .punctuation_processor
+                .punctuation_processor()
                 .options
                 .backslash_to_dunhao
         );
-        assert!(runtime.core.punctuation_processor.double_quote_open);
+        assert!(runtime.core.punctuation_processor().double_quote_open);
         assert_eq!(
-            runtime.core.punctuation_processor.recent_context,
+            runtime.core.punctuation_processor().recent_context,
             "“https://example.com"
         );
     }
@@ -92,8 +92,8 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        session.runtime.voice_manager = Some(Box::new(waylan_voice::VoiceInteractionManager::new(
-            initial_voice,
+        session.runtime.set_voice_provider(Some(Box::new(
+            waylan_voice::VoiceInteractionManager::new(initial_voice),
         )));
 
         reload_wayland_session(&mut session);
@@ -101,7 +101,11 @@ mod tests {
         // 验证热重载后，Wayland 会话内部的 voice_manager 配置已同步为磁盘当前配置
         let disk_cfg = AppConfig::load_or_create();
         assert_eq!(
-            session.runtime.voice_manager.as_ref().unwrap().is_enabled(),
+            session
+                .runtime
+                .voice_manager()
+                .expect("语音管理器应存在")
+                .is_enabled(),
             disk_cfg.voice.enabled
         );
     }

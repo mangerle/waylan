@@ -79,10 +79,10 @@ pub fn apply_session_setup<S: 'static>(
     *renderer = opts.renderer;
     watcher.watched_paths = opts.watched_paths;
     watcher.last_watched_mtime = opts.initial_mtime;
-    runtime.shared_flags = opts.shared_flags;
-    runtime.mode_notify_tx = opts.mode_notify_tx;
-    runtime.reload_requested = opts.reload_requested;
-    runtime.voice_manager = opts.voice_provider;
+    runtime.set_shared_flags(opts.shared_flags);
+    runtime.set_mode_notify_tx(opts.mode_notify_tx);
+    runtime.set_reload_requested(opts.reload_requested);
+    runtime.set_voice_provider(opts.voice_provider);
     watcher.exit_requested = opts.exit_requested;
     watcher.loop_wakeup = opts.loop_wakeup;
     watcher.reload_callback = Some(Box::new(reload_cb));
@@ -110,7 +110,7 @@ pub trait WaylandSessionLifecycle: Sized {
     fn sync_external_state(&mut self) {
         let label = self.session_label();
         let should_reload = {
-            let reload_flag = self.runtime().reload_requested.clone();
+            let reload_flag = self.runtime().reload_requested();
             let watcher = self.watcher();
             check_reload_requested_or_files_changed(
                 reload_flag.as_deref(),
@@ -148,7 +148,7 @@ pub trait WaylandSessionLifecycle: Sized {
 
     /// 按键热路径轻量同步：仅检查原子标志位
     fn sync_atomic_state(&mut self) {
-        let reload_flag = self.runtime().reload_requested.clone();
+        let reload_flag = self.runtime().reload_requested();
         if is_reload_requested(reload_flag.as_deref()) {
             self.sync_external_state();
             return;

@@ -58,7 +58,7 @@ impl IbusSessionCore {
     /// 注入外部语音提供者实例（遵循依赖倒置 DIP 原则）
     #[inline]
     pub fn with_voice_provider(mut self, provider: Box<dyn VoiceProvider>) -> Self {
-        self.runtime.voice_manager = Some(provider);
+        self.runtime.set_voice_provider(Some(provider));
         self
     }
 
@@ -99,7 +99,7 @@ impl IbusSessionCore {
     /// 查询是否已挂载系统托盘状态容器
     #[inline]
     pub fn has_tray(&self) -> bool {
-        self.runtime.shared_flags.is_some()
+        self.runtime.has_shared_flags()
     }
 
     /// 关联挂载系统托盘状态与图标刷新通道
@@ -108,8 +108,8 @@ impl IbusSessionCore {
         shared_flags: SharedInputFlags,
         mode_notify_tx: Option<SyncSender<()>>,
     ) {
-        self.runtime.shared_flags = Some(shared_flags);
-        self.runtime.mode_notify_tx = mode_notify_tx;
+        self.runtime.set_shared_flags(Some(shared_flags));
+        self.runtime.set_mode_notify_tx(mode_notify_tx);
     }
 
     /// 查询当前是否处于 CapsLock 大写锁定状态
@@ -129,7 +129,7 @@ impl IbusSessionCore {
 
     /// 重置当前预编辑与修饰键跟踪状态（用于失焦 `FocusOut` 或 `Reset`）
     pub fn reset_context(&mut self) {
-        if let Some(ref mut vm) = self.runtime.voice_manager {
+        if let Some(vm) = self.runtime.voice_manager_mut() {
             if vm.is_recording() {
                 vm.cancel();
             }

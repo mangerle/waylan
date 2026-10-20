@@ -109,7 +109,7 @@ impl VoiceInteractionManager {
         let ctrl = (mods_depressed & MOD_CTRL) != 0;
         let alt = (mods_depressed & MOD_ALT) != 0;
         let super_mod = (mods_depressed & MOD_SUPER) != 0;
-        let toggle_shortcut = self.config.get_effective_toggle_shortcut();
+        let toggle_shortcut = self.toggle_shortcut;
         let is_toggle = toggle_shortcut
             .as_ref()
             .is_some_and(|s| s.matches(evdev_key, shift, ctrl, alt, super_mod));
@@ -142,7 +142,7 @@ impl VoiceInteractionManager {
         let super_mod = (mods_depressed & MOD_SUPER) != 0;
 
         // 1. 尝试匹配对讲机模式 (Push-to-Talk)
-        if let Some(ref ptt) = self.config.get_effective_ptt_shortcut() {
+        if let Some(ref ptt) = self.ptt_shortcut {
             if ptt.matches(evdev_key, shift, ctrl, alt, super_mod) {
                 if !self.controller.is_recording() {
                     info!("[微澜语音] 触发对讲机快捷键，启动语音采集");
@@ -153,7 +153,7 @@ impl VoiceInteractionManager {
         }
 
         // 2. 尝试匹配开关模式开启录音 (Toggle)
-        if let Some(ref toggle) = self.config.get_effective_toggle_shortcut() {
+        if let Some(ref toggle) = self.toggle_shortcut {
             if toggle.matches(evdev_key, shift, ctrl, alt, super_mod) {
                 let now = Instant::now();
                 if now.duration_since(self.last_toggle_time) < Duration::from_millis(300) {

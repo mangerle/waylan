@@ -100,9 +100,7 @@ fn read_and_replay_file(path_ref: &Path) -> Result<(UserAdaptiveModel, bool), Al
 }
 
 /// 在调用方已持有排他锁的前提下读取并解析 WAL 文件
-fn read_and_replay_file_unlocked(
-    path_ref: &Path,
-) -> Result<(UserAdaptiveModel, bool), AlgoError> {
+fn read_and_replay_file_unlocked(path_ref: &Path) -> Result<(UserAdaptiveModel, bool), AlgoError> {
     let mut file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
         path: PathBuf::from(path_ref),
         source: e,

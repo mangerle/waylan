@@ -21,7 +21,7 @@ fn handle_v1_keymap(state: &mut WaylanV1Session, fd: std::os::fd::OwnedFd, size:
         state
             .runtime
             .core
-            .keymap_layout
+            .keymap_layout_mut()
             .update_from_xkb_text(text.trim_end_matches('\0'));
         debug!("[Wayland v1 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
     }

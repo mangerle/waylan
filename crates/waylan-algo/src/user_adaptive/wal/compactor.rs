@@ -40,11 +40,12 @@ pub(crate) fn compact_model_with_callback<F: Fn()>(
     path_ref: &Path,
     mark_compact_fn: F,
 ) -> Result<(), AlgoError> {
-    let _process_lock =
-        ProcessFileLock::acquire_exclusive(path_ref).map_err(|e| AlgoError::UserDictPersistFailed {
+    let _process_lock = ProcessFileLock::acquire_exclusive(path_ref).map_err(|e| {
+        AlgoError::UserDictPersistFailed {
             path: path_ref.to_path_buf(),
             source: e,
-        })?;
+        }
+    })?;
     compact_model_internal(model, path_ref, mark_compact_fn)
 }
 

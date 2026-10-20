@@ -17,7 +17,7 @@ impl IbusSessionCore {
     /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
     #[inline]
     pub fn poll_voice_events(&mut self) -> Option<String> {
-        if let Some(ref mut vm) = self.runtime.voice_manager {
+        if let Some(vm) = self.runtime.voice_manager_mut() {
             vm.poll_events()
         } else {
             None

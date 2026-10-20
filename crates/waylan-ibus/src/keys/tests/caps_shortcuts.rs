@@ -67,7 +67,7 @@ fn test_ibus_caps_lock_with_shift_interaction() {
         core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK | IBUS_RELEASE_MASK);
     assert_eq!(shift_up.mode_changed, None);
     assert_eq!(
-        core.runtime.core.mode,
+        core.runtime.core.input_mode(),
         InputMode::Chinese,
         "大写锁定时敲击 Shift 不得篡改基准中文模式"
     );
@@ -98,7 +98,7 @@ fn test_ibus_caps_lock_with_shift_interaction() {
 fn test_ibus_caps_lock_in_english_mode_no_flicker() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    core.runtime.core.mode = InputMode::English;
+    core.runtime.core.set_input_mode(InputMode::English);
 
     // 1. 在纯英文模式下开启 CapsLock：不触发任何 mode_changed 信号
     let caps_on = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
@@ -116,7 +116,7 @@ fn test_ibus_caps_lock_in_english_mode_no_flicker() {
     );
     assert!(!core.is_caps_locked());
     assert_eq!(
-        core.runtime.core.mode,
+        core.runtime.core.input_mode(),
         InputMode::English,
         "始终保持纯英文模式"
     );
@@ -127,14 +127,14 @@ fn test_ibus_caps_lock_tray_flags_and_subsequent_keys() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
     let flags = SharedInputFlags::new(true, false, true, false);
-    core.runtime.shared_flags = Some(flags.clone());
+    core.runtime.set_shared_flags(Some(flags.clone()));
 
     // 1. 中文状态下按下 CapsLock：大写标志权威置为 true（托盘读取该标志直接展现 A 大写图标与大写菜单项）
     let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
     assert!(core.is_caps_locked());
     assert!(flags.is_caps_locked());
     assert_eq!(
-        core.runtime.core.mode,
+        core.runtime.core.input_mode(),
         InputMode::Chinese,
         "基准中文模式状态不受篡改"
     );
@@ -153,7 +153,7 @@ fn test_ibus_caps_lock_tray_flags_and_subsequent_keys() {
     assert!(!core.is_caps_locked());
     assert!(!flags.is_caps_locked());
     assert_eq!(
-        core.runtime.core.mode,
+        core.runtime.core.input_mode(),
         InputMode::Chinese,
         "退出大写锁定后丝滑保持中文模式"
     );
@@ -165,14 +165,14 @@ fn test_ibus_shared_settings_sync_and_full_width() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
     let flags = SharedInputFlags::new(true, false, true, false);
-    core.runtime.shared_flags = Some(flags.clone());
+    core.runtime.set_shared_flags(Some(flags.clone()));
 
     // 默认状态：简体、全角标点、半角字母
     assert!(!core.runtime.core.engine.config.traditional_chinese);
     assert!(core
         .runtime
         .core
-        .punctuation_processor
+        .punctuation_processor()
         .is_full_width_punct());
     assert!(!core.is_full_width_char());
 
@@ -209,19 +209,19 @@ fn test_ibus_global_shortcuts_toggle() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
     let flags = SharedInputFlags::new(true, false, true, false);
-    core.runtime.shared_flags = Some(flags.clone());
+    core.runtime.set_shared_flags(Some(flags.clone()));
 
     // 默认快捷键：Ctrl+Shift+F (简繁), Shift+Space (字符全半角), Ctrl+. (标点全半角)
     assert_eq!(
-        core.runtime.core.traditional_shortcut,
+        core.runtime.core.traditional_shortcut(),
         ParsedShortcut::parse("Ctrl + Shift + F")
     );
     assert_eq!(
-        core.runtime.core.full_width_char_shortcut,
+        core.runtime.core.full_width_char_shortcut(),
         ParsedShortcut::parse("Shift + Space")
     );
     assert_eq!(
-        core.runtime.core.full_width_punct_shortcut,
+        core.runtime.core.full_width_punct_shortcut(),
         ParsedShortcut::parse("Ctrl + .")
     );
 
@@ -263,7 +263,7 @@ fn test_ibus_global_shortcuts_toggle() {
         !core
             .runtime
             .core
-            .punctuation_processor
+            .punctuation_processor()
             .is_full_width_punct(),
         "标点状态应由全角切换为半角"
     );
@@ -275,7 +275,7 @@ fn test_ibus_global_shortcuts_toggle() {
     assert!(
         core.runtime
             .core
-            .punctuation_processor
+            .punctuation_processor()
             .is_full_width_punct(),
         "标点状态应切回全角中文标点"
     );

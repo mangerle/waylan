@@ -15,7 +15,7 @@ use std::sync::mpsc::sync_channel;
 use std::time::{Duration, Instant};
 
 use log::{debug, error, info, warn};
-use waylan_core::VoiceConfig;
+use waylan_core::{ParsedShortcut, VoiceConfig};
 
 use crate::session::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 
@@ -37,6 +37,10 @@ pub struct VoiceInteractionManager {
     pub display_text: Option<String>,
     /// 当前音频振幅波形可视化数据
     pub waveform: Option<String>,
+    /// 缓存的长按对讲机快捷键（按键热路径不再重复解析字符串）
+    ptt_shortcut: Option<ParsedShortcut>,
+    /// 缓存的连续听写开关快捷键
+    toggle_shortcut: Option<ParsedShortcut>,
 }
 
 impl Default for VoiceInteractionManager {
@@ -48,6 +52,8 @@ impl Default for VoiceInteractionManager {
 impl VoiceInteractionManager {
     /// 使用指定的语音配置创建交互管理器实例
     pub fn new(config: VoiceConfig) -> Self {
+        let ptt_shortcut = ParsedShortcut::parse(&config.push_to_talk_shortcut);
+        let toggle_shortcut = ParsedShortcut::parse(&config.toggle_shortcut);
         Self {
             controller: VoiceSessionController::new(),
             config,
@@ -56,6 +62,8 @@ impl VoiceInteractionManager {
             partial_text: None,
             display_text: None,
             waveform: None,
+            ptt_shortcut,
+            toggle_shortcut,
         }
     }
 
@@ -105,6 +113,8 @@ impl VoiceInteractionManager {
     /// 更新语音配置，若禁用语音则自动卸载常驻模型
     pub fn update_config(&mut self, config: VoiceConfig) {
         self.config = config;
+        self.ptt_shortcut = ParsedShortcut::parse(&self.config.push_to_talk_shortcut);
+        self.toggle_shortcut = ParsedShortcut::parse(&self.config.toggle_shortcut);
         if !self.config.enabled {
             self.unload_models();
         }

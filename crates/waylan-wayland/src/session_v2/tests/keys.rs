@@ -90,7 +90,7 @@ fn test_v2_english_mode_and_empty_buffer_passthrough() {
     assert_eq!(commit_comma, Some("，".to_string()));
 
     // 2. 切换至英文模式：普通字母、回车、Tab、退格等全部原生透传给席位
-    session.runtime.core.mode = InputMode::English;
+    session.runtime.core.set_input_mode(InputMode::English);
     let (consumed_a, _) = session.process_key_event(30, true);
     assert!(!consumed_a, "英文模式普通字母应原生透传");
     let (consumed_en_enter, _) = session.process_key_event(KEY_ENTER, true);
@@ -115,7 +115,7 @@ fn test_shift_toggle_commits_raw_preedit() {
     session.handle_key_event(KEY_LEFTSHIFT, true);
     let commit = session.handle_key_event(KEY_LEFTSHIFT, false);
 
-    assert_eq!(session.runtime.core.mode, InputMode::English);
+    assert_eq!(session.runtime.core.input_mode(), InputMode::English);
     assert_eq!(commit, Some("ni".to_string()));
     assert!(session.runtime.core.engine.raw_input().is_empty());
     assert!(!session.build_candidate_box_state().visible);
@@ -185,7 +185,7 @@ fn test_key_press_release_symmetry() {
         !shift_release_consumed,
         "Shift 按下透传给客户端后，松开事件也必须透传以防客户端 Shift 卡死"
     );
-    assert_eq!(session.runtime.core.mode, InputMode::English);
+    assert_eq!(session.runtime.core.input_mode(), InputMode::English);
 }
 
 #[test]
@@ -279,7 +279,7 @@ fn test_caps_lock_toggle_and_passthrough() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut session = WaylanV2Session::new(engine);
     session.focus.is_active = true;
-    assert_eq!(session.runtime.core.mode, InputMode::Chinese);
+    assert_eq!(session.runtime.core.input_mode(), InputMode::Chinese);
     assert!(!session.runtime.core.is_caps_locked());
 
     // 1. 中文状态下输入拼音字母
@@ -302,7 +302,7 @@ fn test_caps_lock_toggle_and_passthrough() {
     assert!(!caps_up_consumed);
 
     // 3. 模拟合成器下发修饰键锁定状态（mods_locked 包含 MOD_CAPS）
-    session.runtime.core.modifiers.locked = MOD_CAPS;
+    session.runtime.core.set_caps_lock(true);
     assert!(session.runtime.core.is_caps_locked());
 
     // 大写锁定期间，敲击字母键（如 A 键，扫描码 30），输入法不拦截消费，直通焦点应用
@@ -311,10 +311,10 @@ fn test_caps_lock_toggle_and_passthrough() {
     assert!(session.runtime.core.engine.raw_input().is_empty());
 
     // 4. 解除大写锁定（合成器更新 mods_locked = 0）
-    session.runtime.core.modifiers.locked = 0;
+    session.runtime.core.set_caps_lock(false);
     assert!(!session.runtime.core.is_caps_locked());
     assert_eq!(
-        session.runtime.core.mode,
+        session.runtime.core.input_mode(),
         InputMode::Chinese,
         "解除大写锁定后应恢复中文模式"
     );
@@ -325,13 +325,13 @@ fn test_caps_lock_toggle_and_passthrough() {
     assert_eq!(session.runtime.core.engine.raw_input(), "n");
 
     // 5. 若原来是英文模式：解除大写锁定后应保持英文模式
-    session.runtime.core.mode = InputMode::English;
-    session.runtime.core.modifiers.locked = MOD_CAPS;
+    session.runtime.core.set_input_mode(InputMode::English);
+    session.runtime.core.set_caps_lock(true);
     assert!(session.runtime.core.is_caps_locked());
-    session.runtime.core.modifiers.locked = 0;
+    session.runtime.core.set_caps_lock(false);
     assert!(!session.runtime.core.is_caps_locked());
     assert_eq!(
-        session.runtime.core.mode,
+        session.runtime.core.input_mode(),
         InputMode::English,
         "原本是英文模式时解除大写锁定仍应为英文模式"
     );
