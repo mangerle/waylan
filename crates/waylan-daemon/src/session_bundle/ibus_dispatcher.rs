@@ -152,8 +152,7 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
         initial_mtime: opts.initial_mtime,
         reload_requested: opts.tray.as_ref().map(|t| t.reload_flag()),
         coordinator: ibus_coordinator,
-        suppress_properties: false,
-        exclusive_input_source: opts.exclusive_source,
+        suppress_properties: opts.should_spawn_tray && opts.exclusive_source,
         menu_handler: Some(menu_handler),
         config_reloader: Some(config_reloader),
     });

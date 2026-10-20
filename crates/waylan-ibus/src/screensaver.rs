@@ -6,7 +6,7 @@
 //! - **代价与局限**：监听线程在 Drop 时通过向总线发射本地信号唤醒以安全回收线程。
 
 use crate::IbusShutdownCoordinator;
-use log::info;
+use log::{info, warn};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
@@ -295,6 +295,7 @@ pub(crate) fn spawn_screen_saver_listener_with_flag(
                 std::thread::sleep(Duration::from_millis(200));
             }
         })
+        .map_err(|e| warn!("[微澜 IBus 警告] 创建锁屏信号监听线程失败: {}", e))
         .ok();
 
     ScreenSaverListenerHandle {

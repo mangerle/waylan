@@ -122,12 +122,6 @@ impl IbusSessionCore {
         self.runtime.sync_shared_mode()
     }
 
-    /// 同步来自托盘与全局状态的简繁与标点/字符全半角配置
-    #[inline]
-    pub fn sync_shared_settings(&mut self) {
-        self.runtime.sync_shared_mode();
-    }
-
     /// 判定当前是否开启了全角字符/字母模式
     pub fn is_full_width_char(&self) -> bool {
         self.runtime.core.is_full_width_char()

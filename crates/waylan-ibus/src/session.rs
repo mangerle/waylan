@@ -32,16 +32,16 @@ use super::screensaver::ScreenLockHealer;
 use super::types::build_waylan_ibus_component;
 use super::IbusSessionOptions;
 
+/// IBus 会话内部服务装配结果
+struct AssembledIbusServices {
+    shared_core: Arc<Mutex<IbusSessionCore>>,
+    engine_srv: IbusEngineService,
+    monitor_params: IbusMonitorParams,
+    is_child: bool,
+}
+
 /// 基于外部参数装配并初始化 IBus 共享状态、服务实例与循环参数
-fn assemble_ibus_services(
-    opts: IbusSessionOptions,
-) -> (
-    Arc<Mutex<IbusSessionCore>>,
-    IbusEngineService,
-    IbusMonitorParams,
-    bool,
-    bool,
-) {
+fn assemble_ibus_services(opts: IbusSessionOptions) -> AssembledIbusServices {
     let loop_wakeup = opts.coordinator.loop_wakeup().cloned();
     let shared_core = Arc::new(Mutex::new(opts.session_core));
 
@@ -76,13 +76,12 @@ fn assemble_ibus_services(
         screen_locked_flag,
     };
 
-    (
+    AssembledIbusServices {
         shared_core,
         engine_srv,
         monitor_params,
-        opts.is_ibus_child_mode,
-        opts.exclusive_input_source,
-    )
+        is_child: opts.is_ibus_child_mode,
+    }
 }
 
 /// 启动并运行 IBus 输入法会话事件循环
@@ -93,8 +92,12 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
     let ibus_addr = discover_ibus_address().ok_or(IbusError::AddressNotFound)?;
     info!("[微澜 IBus] 成功探测到活跃 IBus 总线地址: {}", ibus_addr);
 
-    let (shared_core, engine_srv, monitor_params, is_child, _exclusive) =
-        assemble_ibus_services(opts);
+    let AssembledIbusServices {
+        shared_core,
+        engine_srv,
+        monitor_params,
+        is_child,
+    } = assemble_ibus_services(opts);
     let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv)?;
     register_or_activate_ibus_engine(&conn, is_child)?;
 

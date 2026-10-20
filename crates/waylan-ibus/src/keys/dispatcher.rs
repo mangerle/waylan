@@ -108,7 +108,6 @@ impl IbusSessionCore {
     /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
     pub fn process_key_event(&mut self, keyval: u32, keycode: u32, state: u32) -> IbusKeyOutcome {
         let _ = self.sync_shared_mode();
-        self.sync_shared_settings();
         let is_press = (state & IBUS_RELEASE_MASK) == 0;
         let evdev_key = ibus_keyval_to_evdev(keyval, keycode);
 

@@ -126,8 +126,6 @@ pub struct IbusSessionOptions {
     pub coordinator: IbusShutdownCoordinator,
     /// 是否静默原生 IBus 属性上报（在独立托盘开启时置为 true 以实现原生顶栏白字指示器自动隐藏）
     pub suppress_properties: bool,
-    /// 是否将微澜设为 GNOME 独占单一输入源
-    pub exclusive_input_source: bool,
     /// 外部菜单动作处理器（打开配置/日志）
     pub menu_handler: Option<Arc<dyn IbusMenuActionHandler>>,
     /// 外部热重载与自重启决策驱动器

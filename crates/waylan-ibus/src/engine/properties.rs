@@ -64,8 +64,10 @@ impl IbusEngineService {
             );
             next
         };
-        if let Ok(prop_val) = build_traditional_property(is_trad) {
-            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+        if !self.suppress_properties {
+            if let Ok(prop_val) = build_traditional_property(is_trad) {
+                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+            }
         }
     }
 
@@ -84,8 +86,10 @@ impl IbusEngineService {
             );
             next
         };
-        if let Ok(prop_val) = build_full_width_punct_property(is_full) {
-            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+        if !self.suppress_properties {
+            if let Ok(prop_val) = build_full_width_punct_property(is_full) {
+                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+            }
         }
     }
 
@@ -104,8 +108,10 @@ impl IbusEngineService {
             );
             next
         };
-        if let Ok(prop_val) = build_full_width_char_property(is_full) {
-            let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+        if !self.suppress_properties {
+            if let Ok(prop_val) = build_full_width_char_property(is_full) {
+                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
+            }
         }
     }
 

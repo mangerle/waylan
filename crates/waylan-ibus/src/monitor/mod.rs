@@ -108,11 +108,7 @@ fn probe_and_handle_screensaver(
         && last_lock_probe_instant.elapsed() >= Duration::from_secs(3)
     {
         *last_lock_probe_instant = Instant::now();
-        let real_locked = Connection::session()
-            .ok()
-            .as_ref()
-            .map(query_initial_screen_saver_active)
-            .unwrap_or(false);
+        let real_locked = query_initial_screen_saver_active(conn);
         if !real_locked && (current_locked || *last_screen_locked) {
             screen_locked_flag.store(false, Ordering::Release);
             current_locked = false;

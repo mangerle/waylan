@@ -92,22 +92,7 @@ impl IbusEngineService {
     /// 取消手写输入事件（保持空实现以兼容协议）
     fn cancel_hand_writing(&self, _n_strokes: u32) {}
 
-    /// 更新当前引擎实例与核心会话的密码框感知标记（统一单一维护入口，清除非密码态残留）
-    pub(crate) fn update_password_state(&self, is_pwd: bool) {
-        self.is_password.store(is_pwd, Ordering::Release);
-        let mut guard = self.core.lock();
-        guard.is_password_context = is_pwd;
-        if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
-            guard.reset_context();
-        }
-    }
-
-    /// 清除密码输入感知标记
-    pub(crate) fn clear_password_state(&self) {
-        self.is_password.store(false, Ordering::Release);
-    }
-
-    /// 设置客户端支持的输入法能力位掩码（同步更新密码框感知标记并清除非密码态残留）
+    /// 设置客户端支持的输入法能力位掩码（IBus 协议方法，自动同步密码框感知标记）
     pub(crate) fn set_capabilities(&self, caps: u32) {
         const IBUS_CAP_PASSWORD: u32 = 1 << 4;
         let is_pwd = (caps & IBUS_CAP_PASSWORD) != 0;
@@ -154,7 +139,6 @@ impl IbusEngineService {
                 self.loop_wakeup.as_ref(),
             );
             let _ = guard.sync_shared_mode();
-            guard.sync_shared_settings();
             let trad = guard.runtime.core.engine.config.traditional_chinese;
             let punct = guard
                 .runtime
@@ -171,8 +155,10 @@ impl IbusEngineService {
                 UiSnapshot::capture(&guard),
             )
         };
-        if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps, trad, punct, char_full) {
-            let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
+        if !self.suppress_properties {
+            if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps, trad, punct, char_full) {
+                let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
+            }
         }
         Self::emit_ui_snapshot(&ctxt, &snap).await;
     }
@@ -322,6 +308,23 @@ impl IbusEngineService {
         keycode: u32,
         state: u32,
     ) -> zbus::Result<()>;
+}
+
+impl IbusEngineService {
+    /// 更新当前引擎实例与核心会话的密码框感知标记（内部辅助方法，不暴露为 D-Bus 方法）
+    pub(crate) fn update_password_state(&self, is_pwd: bool) {
+        self.is_password.store(is_pwd, Ordering::Release);
+        let mut guard = self.core.lock();
+        guard.is_password_context = is_pwd;
+        if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
+            guard.reset_context();
+        }
+    }
+
+    /// 清除密码输入感知标记（内部辅助方法，不暴露为 D-Bus 方法）
+    pub(crate) fn clear_password_state(&self) {
+        self.is_password.store(false, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
