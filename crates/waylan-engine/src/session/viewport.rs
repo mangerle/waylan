@@ -73,6 +73,20 @@ impl ImeCoreSession {
     /// 设置当前候选框分页容量
     pub fn set_page_size(&mut self, size: usize) {
         self.page_size = size.max(1);
+        self.clamp_viewport();
+    }
+
+    /// 将页码与页内选中索引钳制到当前候选列表的合法范围
+    ///
+    /// 候选数量变化（热重载分页容量、候选过滤或清空）后必须调用，否则 UI 可能停留在空页。
+    pub fn clamp_viewport(&mut self) {
+        let total = self.engine.candidates().len();
+        let max_page = if total == 0 {
+            0
+        } else {
+            total.saturating_sub(1) / self.page_size()
+        };
+        self.page_index = self.page_index.min(max_page);
         let max_idx = self.current_page_candidates().len().saturating_sub(1);
         self.selected_index = self.selected_index.min(max_idx);
     }

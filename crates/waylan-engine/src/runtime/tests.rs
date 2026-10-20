@@ -1,6 +1,43 @@
 use super::*;
 use waylan_core::state::SharedInputFlags;
-use waylan_core::InputMode;
+use waylan_core::{AppConfig, InputMode};
+
+#[test]
+fn test_apply_initial_config_sets_mode_and_decorations() {
+    let mut cfg = AppConfig::default();
+    cfg.pinyin.init_chinese = false;
+    cfg.pinyin.traditional_chinese = true;
+    cfg.pinyin.full_width_punct = false;
+    cfg.pinyin.full_width_char = true;
+    cfg.ui.page_size = 9;
+
+    let mut runtime = ImeRuntime::default();
+    runtime.apply_initial_config(&cfg);
+
+    assert_eq!(runtime.core.mode, InputMode::English);
+    assert!(runtime.core.is_traditional());
+    assert!(!runtime.core.is_full_width_punct());
+    assert!(!runtime.core.punctuation_processor.is_full_width_punct());
+    assert!(runtime.core.is_full_width_char());
+    assert_eq!(runtime.core.page_size(), 9);
+}
+
+#[test]
+fn test_reload_config_updates_page_size_and_clamps_viewport() {
+    let mut runtime = ImeRuntime::default();
+    runtime.core.page_index = 3;
+    runtime.core.selected_index = 4;
+
+    let mut cfg = AppConfig::default();
+    cfg.ui.page_size = 9;
+    cfg.pinyin.full_width_char = true;
+    runtime.reload_config(&cfg);
+
+    assert_eq!(runtime.core.page_size(), 9);
+    assert_eq!(runtime.core.page_index(), 0);
+    assert_eq!(runtime.core.selected_index(), 0);
+    assert!(runtime.core.is_full_width_char());
+}
 
 #[test]
 fn test_sync_shared_mode_comprehensive() {

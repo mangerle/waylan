@@ -28,7 +28,7 @@ mod tests;
 pub use candidate_builder::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 pub use types::ProcessKeyEventParams;
 
-use crate::session::ImeCoreSession;
+use crate::session::{ImeCoreSession, InputDecorationFlags};
 
 /// 微澜统一输入法交互运行时 (IME Runtime)
 pub struct ImeRuntime {
@@ -137,6 +137,20 @@ impl ImeRuntime {
         !self.core.engine.raw_input().is_empty()
     }
 
+    /// 应用启动阶段的初始配置（仅调用一次）
+    ///
+    /// 在热重载路径中不能调用本方法，否则每次保存设置都会把用户当前的中英文模式强制重置为
+    /// `init_chinese`。热重载请使用 [`ImeRuntime::reload_config`]。
+    pub fn apply_initial_config(&mut self, cfg: &waylan_core::AppConfig) {
+        self.reload_config(cfg);
+        let initial_mode = if cfg.pinyin.init_chinese {
+            waylan_core::InputMode::Chinese
+        } else {
+            waylan_core::InputMode::English
+        };
+        self.core.set_input_mode(initial_mode);
+    }
+
     /// 热重载应用程序配置与词库资源（使输入法交互运行时自闭环更新）
     pub fn reload_config(&mut self, cfg: &waylan_core::AppConfig) {
         crate::factory::reload_engine_resources(&mut self.core.engine, cfg);
@@ -145,6 +159,12 @@ impl ImeRuntime {
         self.core
             .punctuation_processor
             .set_options((&cfg.pinyin).into());
+        self.core.set_decoration_flags(InputDecorationFlags::new(
+            cfg.pinyin.traditional_chinese,
+            cfg.pinyin.full_width_punct,
+            cfg.pinyin.full_width_char,
+        ));
+        self.core.set_page_size(cfg.ui.page_size);
         self.core.page_keys = waylan_core::input::PageKeyConfig::from(cfg.shortcuts.page_keys);
         self.core.traditional_shortcut = ParsedShortcut::parse(&cfg.shortcuts.traditional_shortcut);
         self.core.full_width_char_shortcut =

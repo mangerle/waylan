@@ -99,6 +99,13 @@ fn apply_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
     core.runtime_mut().reload_config(cfg);
 }
 
+/// 应用 IBus 会话启动阶段的初始配置（仅调用一次，负责初始化中英文模式）
+fn apply_initial_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
+    core.set_candidate_index_style(cfg.ui.candidate_index_style);
+    core.set_candidate_orientation(cfg.ui.candidate_orientation);
+    core.runtime_mut().apply_initial_config(cfg);
+}
+
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
 pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), DaemonError> {
     info!(
@@ -120,7 +127,7 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
             opts.tray.as_ref().map(|t| t.icon_notifier()),
         );
     }
-    apply_config_to_ibus_core(&initial_cfg, &mut session_core);
+    apply_initial_config_to_ibus_core(&initial_cfg, &mut session_core);
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {
         subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),

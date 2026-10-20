@@ -85,7 +85,7 @@ pub fn apply_session_setup<S: 'static>(
     watcher.exit_requested = opts.exit_requested;
     watcher.loop_wakeup = opts.loop_wakeup;
     watcher.reload_callback = Some(Box::new(reload_cb));
-    runtime.reload_config(opts.cfg);
+    runtime.apply_initial_config(opts.cfg);
 }
 
 /// 构造默认的用户词库过滤回调（忽略短时间内的 WAL 内部写落盘事件）
