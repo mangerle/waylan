@@ -8,16 +8,8 @@ export component PinyinTab inherits VerticalLayout {
     // 拼音检索
     in-out property <bool> enable_acronym: true;
 
-    // 纠错规则
+    // 纠错规则（细分改写规则不入界面，仅由 config.toml 承载，界面只暴露总闸）
     in-out property <bool> typo_enable: false;
-    in-out property <bool> typo_gn_ng: true;
-    in-out property <bool> typo_mg_ng: true;
-    in-out property <bool> typo_iou_iu: true;
-    in-out property <bool> typo_uei_ui: true;
-    in-out property <bool> typo_uen_un: true;
-    in-out property <bool> typo_ue_ve: true;
-    in-out property <bool> typo_v_u: true;
-    in-out property <bool> typo_on_ong: true;
 
     // 高级拼音与候选处理
     in-out property <bool> enable_u_mode: true;
@@ -44,68 +36,11 @@ export component PinyinTab inherits VerticalLayout {
 
     SettingCard {
         title: "拼音纠错选项";
-        subtitle: "自动识别并修正拼音键入过程中的常见击键笔误与旧拼音格式";
+        subtitle: "自动归一非标准拼音写法（如 niou -> niu），并容错邻键误触与字母倒置";
 
         AppCheckBox {
             text: "启用拼音自动纠错功能";
             checked <=> root.typo_enable;
-        }
-
-        Rectangle {
-            height: 1px;
-            background: #f1f5f9;
-        }
-
-        HorizontalLayout {
-            spacing: 32px;
-
-            VerticalLayout {
-                spacing: 10px;
-                AppCheckBox {
-                    text: "gn -> ng (例如: zhangn -> zhang)";
-                    checked <=> root.typo_gn_ng;
-                    enabled: root.typo_enable;
-                }
-                AppCheckBox {
-                    text: "mg -> ng (例如: zhangm -> zhang)";
-                    checked <=> root.typo_mg_ng;
-                    enabled: root.typo_enable;
-                }
-                AppCheckBox {
-                    text: "iou -> iu (例如: niou -> niu)";
-                    checked <=> root.typo_iou_iu;
-                    enabled: root.typo_enable;
-                }
-                AppCheckBox {
-                    text: "uei -> ui (例如: guei -> gui)";
-                    checked <=> root.typo_uei_ui;
-                    enabled: root.typo_enable;
-                }
-            }
-
-            VerticalLayout {
-                spacing: 10px;
-                AppCheckBox {
-                    text: "uen -> un (例如: luen -> lun)";
-                    checked <=> root.typo_uen_un;
-                    enabled: root.typo_enable;
-                }
-                AppCheckBox {
-                    text: "ue -> ve (例如: jue -> jve)";
-                    checked <=> root.typo_ue_ve;
-                    enabled: root.typo_enable;
-                }
-                AppCheckBox {
-                    text: "v -> u (例如: lv -> lu)";
-                    checked <=> root.typo_v_u;
-                    enabled: root.typo_enable;
-                }
-                AppCheckBox {
-                    text: "on -> ong (例如: zon -> zong)";
-                    checked <=> root.typo_on_ong;
-                    enabled: root.typo_enable;
-                }
-            }
         }
     }
 

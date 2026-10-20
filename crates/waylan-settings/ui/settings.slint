@@ -61,14 +61,6 @@ export component SettingsWindow inherits Window {
     in-out property <bool> page_keys_bracket: false;
     in-out property <bool> page_keys_comma_period: false;
     in-out property <bool> typo_enable: false;
-    in-out property <bool> typo_gn_ng: true;
-    in-out property <bool> typo_mg_ng: true;
-    in-out property <bool> typo_iou_iu: true;
-    in-out property <bool> typo_uei_ui: true;
-    in-out property <bool> typo_uen_un: true;
-    in-out property <bool> typo_ue_ve: true;
-    in-out property <bool> typo_v_u: true;
-    in-out property <bool> typo_on_ong: true;
     in-out property <bool> enable_u_mode: true;
     in-out property <bool> enable_i_mode: true;
     in-out property <bool> filter_uncommon_charset: false;
@@ -389,14 +381,6 @@ export component SettingsWindow inherits Window {
                     if root.active_tab == 2: PinyinTab {
                         enable_acronym <=> root.enable_acronym;
                         typo_enable <=> root.typo_enable;
-                        typo_gn_ng <=> root.typo_gn_ng;
-                        typo_mg_ng <=> root.typo_mg_ng;
-                        typo_iou_iu <=> root.typo_iou_iu;
-                        typo_uei_ui <=> root.typo_uei_ui;
-                        typo_uen_un <=> root.typo_uen_un;
-                        typo_ue_ve <=> root.typo_ue_ve;
-                        typo_v_u <=> root.typo_v_u;
-                        typo_on_ong <=> root.typo_on_ong;
                         enable_u_mode <=> root.enable_u_mode;
                         enable_i_mode <=> root.enable_i_mode;
                         filter_uncommon_charset <=> root.filter_uncommon_charset;

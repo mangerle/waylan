@@ -4,7 +4,7 @@ use crate::SettingsWindow;
 use waylan_core::config::{
     AppConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
     CandidateWindowMode, DesktopConfig, FuzzyPinyinRules, PageKeys, PinyinConfig, ShortcutConfig,
-    SwitchKey, TrayDisplayMode, TypoCorrectionRules, UiConfig,
+    SwitchKey, TrayDisplayMode, UiConfig,
 };
 
 /// 同步常规输入、按键习惯与外观排版属性至 Slint 界面属性
@@ -188,16 +188,8 @@ fn sync_pinyin_rules(window: &SettingsWindow, pinyin: &PinyinConfig) {
     window.set_filter_uncommon_charset(pinyin.filter_uncommon_charset);
     window.set_auto_dedup(pinyin.auto_dedup);
 
-    // 拼音纠错规则
+    // 拼音纠错：界面仅暴露总闸，细分改写规则由 config.toml 承载
     window.set_typo_enable(pinyin.typo_rules.enable);
-    window.set_typo_gn_ng(pinyin.typo_rules.gn_ng);
-    window.set_typo_mg_ng(pinyin.typo_rules.mg_ng);
-    window.set_typo_iou_iu(pinyin.typo_rules.iou_iu);
-    window.set_typo_uei_ui(pinyin.typo_rules.uei_ui);
-    window.set_typo_uen_un(pinyin.typo_rules.uen_un);
-    window.set_typo_ue_ve(pinyin.typo_rules.ue_ve);
-    window.set_typo_v_u(pinyin.typo_rules.v_u);
-    window.set_typo_on_ong(pinyin.typo_rules.on_ong);
 }
 
 /// 从界面更新拼音输入特性与纠错规则
@@ -215,17 +207,8 @@ fn update_pinyin_rules(window: &SettingsWindow, pinyin: &mut PinyinConfig) {
     pinyin.filter_uncommon_charset = window.get_filter_uncommon_charset();
     pinyin.auto_dedup = window.get_auto_dedup();
 
-    pinyin.typo_rules = TypoCorrectionRules {
-        enable: window.get_typo_enable(),
-        gn_ng: window.get_typo_gn_ng(),
-        mg_ng: window.get_typo_mg_ng(),
-        iou_iu: window.get_typo_iou_iu(),
-        uei_ui: window.get_typo_uei_ui(),
-        uen_un: window.get_typo_uen_un(),
-        ue_ve: window.get_typo_ue_ve(),
-        v_u: window.get_typo_v_u(),
-        on_ong: window.get_typo_on_ong(),
-    };
+    // 仅回写总闸：细分规则不在界面呈现，必须保留磁盘加载值，避免保存时被默认值覆盖
+    pinyin.typo_rules.enable = window.get_typo_enable();
 }
 
 /// 同步模糊音开关与各细分规则
