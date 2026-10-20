@@ -10,9 +10,18 @@ default-run = "waylan"
 name = "waylan"
 path = "src/main.rs"
 
+[[bin]]
+name = "waylan-dict"
+path = "src/bin/waylan_dict.rs"
+required-features = ["admin-tools"]
+
+[features]
+default = []
+admin-tools = ["waylan-algo/tools"]
+
 [dependencies]
 waylan-core = { path = "../waylan-core" }
-waylan-algo = { path = "../waylan-algo", features = ["tools"] }
+waylan-algo = { path = "../waylan-algo" }
 waylan-engine = { path = "../waylan-engine" }
 waylan-ui = { path = "../waylan-ui" }
 waylan-wayland = { path = "../waylan-wayland" }
@@ -49,6 +58,7 @@ priority = "optional"
 maintainer-scripts = "../../debian"
 assets = [
     ["target/release/waylan", "usr/bin/waylan", "755"],
+    ["target/release/waylan-dict", "usr/bin/waylan-dict", "755"],
     ["target/release/waylan-settings", "usr/bin/waylan-settings", "755"],
     ["../../data/base.dict.bin", "usr/share/waylan/data/base.dict.bin", "644"],
     ["../../data/aux.dict.bin", "usr/share/waylan/data/aux.dict.bin", "644"],

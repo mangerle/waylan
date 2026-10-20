@@ -54,7 +54,6 @@ fn run() -> Result<(), DaemonError> {
             print_ibus_component_xml();
             Ok(())
         }
-        CliCommand::Dict(dict_cmd) => dict_cmd.execute(),
         CliCommand::Daemon(opts) => run_daemon(opts),
     }
 }

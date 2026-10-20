@@ -35,9 +35,10 @@ done
 echo "[微澜打包] 步骤 1/4: 检查维护者安装脚本权限规范..."
 chmod +x "${PROJECT_ROOT}/debian/postinst" "${PROJECT_ROOT}/debian/prerm"
 
-echo "[微澜打包] 步骤 2/4: 编译 Release 优化版本二进制程序 (waylan & waylan-settings)..."
+echo "[微澜打包] 步骤 2/4: 编译 Release 优化版本二进制程序 (waylan、waylan-dict 与 waylan-settings)..."
 cd "${PROJECT_ROOT}"
-cargo build --release --bin waylan --bin waylan-settings
+cargo build --release -p waylan-settings --bin waylan-settings
+cargo build --release -p waylan-daemon --bin waylan --bin waylan-dict --features admin-tools
 
 echo "[微澜打包] 步骤 3/4: 检查模型资产、cargo-deb 工具与动态生成组件元数据..."
 if [ ! -d "${PROJECT_ROOT}/models" ] || [ -z "$(ls -A "${PROJECT_ROOT}/models" 2>/dev/null)" ]; then

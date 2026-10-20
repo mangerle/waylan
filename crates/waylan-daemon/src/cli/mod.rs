@@ -1,4 +1,4 @@
-//! 命令行参数解析与词库管理工具分发模块
+//! 守护进程命令行参数解析与子命令分发模块
 //!
 //! # 设计原理
 //! - **实现初衷**：消除手工比对 `args[1]` 的脆弱命令行判断，提供类型安全、语义清晰的强类型命令与选项抽象。
@@ -7,9 +7,7 @@
 
 use crate::error::DaemonError;
 
-pub mod dict_cmd;
 pub mod self_check;
-pub use dict_cmd::DictSubcommand;
 pub use self_check::run_self_check;
 
 /// 顶层命令行解析决策枚举
@@ -25,8 +23,6 @@ pub enum CliCommand {
     IbusEnginesXml,
     /// 输出符合 IBus 组件元数据规范的 XML 描述 (--ibus-component-xml, --component-xml)
     IbusComponentXml,
-    /// 词库管理子命令 (dict <子命令>)
-    Dict(DictSubcommand),
     /// 守护进程运行模式
     Daemon(DaemonOptions),
 }
@@ -57,7 +53,6 @@ impl CliCommand {
             "settings" | "--settings" => Ok(Self::Settings),
             "--xml" | "--ibus-xml" => Ok(Self::IbusEnginesXml),
             "--ibus-component-xml" | "--component-xml" => Ok(Self::IbusComponentXml),
-            "dict" => parse_dict_subcommand(&tokens[1..]).map(Self::Dict),
             _ => parse_daemon_options(tokens).map(Self::Daemon),
         }
     }
@@ -93,77 +88,6 @@ fn parse_daemon_options(tokens: &[String]) -> Result<DaemonOptions, DaemonError>
     Ok(opts)
 }
 
-/// 解析词库管理子命令参数
-fn parse_dict_subcommand(sub_tokens: &[String]) -> Result<DictSubcommand, DaemonError> {
-    if sub_tokens.is_empty() || sub_tokens[0] == "-h" || sub_tokens[0] == "--help" {
-        return Ok(DictSubcommand::Help);
-    }
-
-    match sub_tokens[0].as_str() {
-        "build" => {
-            let args = &sub_tokens[1..];
-            if args.len() < 2 {
-                return Err(DaemonError::Cli(
-                    "dict build 命令需要至少一个输入文本词库和一个输出路径".into(),
-                ));
-            }
-            let output = args[args.len() - 1].clone();
-            let inputs = args[..args.len() - 1].to_vec();
-            Ok(DictSubcommand::Build { inputs, output })
-        }
-        "build-opencc" => {
-            let args = &sub_tokens[1..];
-            let (chars, phrases, output) = if args.is_empty() {
-                (
-                    "/usr/share/opencc/STCharacters.txt".to_string(),
-                    "/usr/share/opencc/STPhrases.txt".to_string(),
-                    "opencc.dict.bin".to_string(),
-                )
-            } else if args.len() == 3 {
-                (args[0].clone(), args[1].clone(), args[2].clone())
-            } else {
-                return Err(DaemonError::Cli(
-                    "dict build-opencc 命令需要指定 [STCharacters.txt] [STPhrases.txt] [输出文件] 三个参数，或完全留空使用系统默认路径".into(),
-                ));
-            };
-            Ok(DictSubcommand::BuildOpenCc {
-                chars,
-                phrases,
-                output,
-            })
-        }
-        "build-aux" => {
-            let args = &sub_tokens[1..];
-            if args.len() < 3 {
-                return Err(DaemonError::Cli(
-                    "dict build-aux 命令需要 <英文词表> <符号表> <输出文件> 三个参数".into(),
-                ));
-            }
-            Ok(DictSubcommand::BuildAux {
-                english: args[0].clone(),
-                symbols: args[1].clone(),
-                output: args[2].clone(),
-            })
-        }
-        "import-user" => {
-            let args = &sub_tokens[1..];
-            if args.len() < 2 {
-                return Err(DaemonError::Cli(
-                    "dict import-user 命令需要 <用户文本词库> <用户二进制WAL路径> 两个参数".into(),
-                ));
-            }
-            Ok(DictSubcommand::ImportUser {
-                input: args[0].clone(),
-                user_dict: args[1].clone(),
-            })
-        }
-        other => Err(DaemonError::Cli(format!(
-            "未知的词库管理子命令: '{}'，请使用 waylan dict --help 查看使用说明",
-            other
-        ))),
-    }
-}
-
 /// 打印主程序 CLI 使用帮助
 pub fn print_main_usage() {
     println!("微澜输入法 (WayLan) - 专为 Wayland 打造的现代轻量纯 Rust 中文输入法");
@@ -180,7 +104,7 @@ pub fn print_main_usage() {
     println!("  --settings           启动图形化偏好设置界面");
     println!("子命令:");
     println!("  settings             启动图形化偏好设置界面");
-    println!("  dict <子命令>        词库编译与用户词库导入管理工具");
+    println!("词库编译与导入请使用独立管理工具: waylan-dict --help");
 }
 
 #[cfg(test)]
@@ -261,73 +185,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_dict_subcommands() {
-        let cmd_build = CliCommand::parse(&to_args(&[
-            "waylan", "dict", "build", "a.txt", "b.txt", "out.bin",
-        ]))
-        .expect("dict build 解析成功");
-        assert_eq!(
-            cmd_build,
-            CliCommand::Dict(DictSubcommand::Build {
-                inputs: vec!["a.txt".to_string(), "b.txt".to_string()],
-                output: "out.bin".to_string(),
-            })
-        );
-
-        let cmd_opencc_default = CliCommand::parse(&to_args(&["waylan", "dict", "build-opencc"]))
-            .expect("dict build-opencc 默认路径解析成功");
-        assert_eq!(
-            cmd_opencc_default,
-            CliCommand::Dict(DictSubcommand::BuildOpenCc {
-                chars: "/usr/share/opencc/STCharacters.txt".to_string(),
-                phrases: "/usr/share/opencc/STPhrases.txt".to_string(),
-                output: "opencc.dict.bin".to_string(),
-            })
-        );
-
-        let cmd_aux = CliCommand::parse(&to_args(&[
-            "waylan",
-            "dict",
-            "build-aux",
-            "en.txt",
-            "sym.txt",
-            "aux.bin",
-        ]))
-        .expect("dict build-aux 解析成功");
-        assert_eq!(
-            cmd_aux,
-            CliCommand::Dict(DictSubcommand::BuildAux {
-                english: "en.txt".to_string(),
-                symbols: "sym.txt".to_string(),
-                output: "aux.bin".to_string(),
-            })
-        );
-
-        let cmd_import = CliCommand::parse(&to_args(&[
-            "waylan",
-            "dict",
-            "import-user",
-            "u.txt",
-            "user.bin",
-        ]))
-        .expect("dict import-user 解析成功");
-        assert_eq!(
-            cmd_import,
-            CliCommand::Dict(DictSubcommand::ImportUser {
-                input: "u.txt".to_string(),
-                user_dict: "user.bin".to_string(),
-            })
-        );
-    }
-
-    #[test]
     fn test_parse_invalid_args_returns_error() {
         let err = CliCommand::parse(&to_args(&["waylan", "--nonexistent-arg"]))
             .expect_err("未知参数应报错");
         assert!(matches!(err, DaemonError::Cli(_)));
-
-        let err_dict = CliCommand::parse(&to_args(&["waylan", "dict", "build"]))
-            .expect_err("缺少必要参数应报错");
-        assert!(matches!(err_dict, DaemonError::Cli(_)));
     }
 }
