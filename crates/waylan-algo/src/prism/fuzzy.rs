@@ -130,6 +130,9 @@ fn check_fuzzy_finals(init: &str, rest: &str, slice: &str, fuzzy: &FuzzyConfig) 
 /// 拼音模糊音规则展开与等价键扩展模块
 pub struct PrismFuzzy;
 impl PrismFuzzy {
+    /// 按用户启用的模糊音规则展开单个拼音切片的全部等价变体
+    ///
+    /// 未启用任何模糊规则或切片为空时返回空集合，调用方可据此跳过模糊搜索分支。
     pub fn expand_fuzzy_syllables(slice: &str, fuzzy: &FuzzyConfig) -> Vec<String> {
         if !fuzzy.has_active_rules() || slice.is_empty() {
             return Vec::new();

@@ -38,6 +38,10 @@ impl AlgoEngine {
         selected.text.chars().all(is_cjk_character)
     }
 
+    /// 选择当前候选列表中的指定项并完成上屏提交，返回（上屏文本, 消费长度）
+    ///
+    /// # Errors
+    /// 索引越界时返回 `None`，调用方应保持候选状态不变。
     pub fn select_candidate(
         &mut self,
         index: usize,

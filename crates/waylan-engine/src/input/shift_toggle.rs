@@ -23,11 +23,16 @@ pub struct ShiftToggleStateMachine {
 }
 
 impl ShiftToggleStateMachine {
+    /// 左 Shift 的 evdev 扫描码
     pub const KEY_LEFTSHIFT: u32 = 42;
+    /// 右 Shift 的 evdev 扫描码
     pub const KEY_RIGHTSHIFT: u32 = 54;
+    /// 左 Ctrl 的 evdev 扫描码
     pub const KEY_LEFTCTRL: u32 = 29;
+    /// 右 Ctrl 的 evdev 扫描码
     pub const KEY_RIGHTCTRL: u32 = 97;
 
+    /// 创建使用默认切换键模式的状态机
     pub fn new() -> Self {
         Self::default()
     }

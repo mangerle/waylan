@@ -130,6 +130,10 @@ fn parse_log_level_filter() -> LevelFilter {
     }
 }
 
+/// 初始化文件日志系统并返回实际日志文件路径
+///
+/// # Errors
+/// 当日志目录创建失败或日志后端安装失败时返回 [`DaemonError`]。
 pub fn init_logger() -> Result<PathBuf, DaemonError> {
     let log_path = log_file_path();
     ensure_log_directory(&log_path);

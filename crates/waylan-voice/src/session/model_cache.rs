@@ -14,6 +14,10 @@ use super::types::IDLE_MODEL_UNLOAD_TIMEOUT;
 use crate::recognizer::{create_recognizer, PunctuationRestorer, VoiceRecognizer};
 use crate::vad::{create_vad, VadProcessor};
 
+/// 离线 ASR 识别器缓存键指纹
+///
+/// 由引擎类型、本地模型目录、云端服务配置与标点恢复模型路径共同构成；
+/// 任一要素变更即视为指纹不一致，需重建识别器。
 pub type AsrFingerprint = (
     waylan_core::VoiceEngineType,
     Option<String>,

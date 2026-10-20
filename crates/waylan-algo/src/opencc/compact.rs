@@ -1,5 +1,5 @@
+/// 简繁短语映射的紧凑存储表（字符串偏移 + 长度 + 连续字节池）
 #[derive(Debug, Clone, Default)]
-
 pub struct CompactPhraseTable {
     /// 紧凑短语条目列表：(simp_offset, simp_len, trad_offset, trad_len)
     pub records: Vec<(u32, u16, u32, u16)>,

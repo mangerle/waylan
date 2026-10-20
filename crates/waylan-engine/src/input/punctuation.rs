@@ -80,6 +80,7 @@ impl Default for PunctuationProcessor {
 }
 
 impl PunctuationProcessor {
+    /// 创建处于初始空状态的智能标点处理器（与 `Default` 等价，保留以匹配构造器命名规范）
     pub fn new() -> Self {
         Self::default()
     }

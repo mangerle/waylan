@@ -28,6 +28,7 @@ pub struct PopupPositionParams {
 }
 
 impl CursorRect {
+    /// 由焦点光标几何信息构造光标矩形
     pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
         Self {
             x,

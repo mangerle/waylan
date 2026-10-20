@@ -3,6 +3,9 @@
 //! 键码定义严格对标 `<linux/input-event-codes.h>`，供 Wayland 客户端、IBus 与各种输入法会话映射使用。
 
 /// Linux 常见按键键码常量（基于 linux/input-event-codes.h）
+///
+/// 以下键码名称与 `<linux/input-event-codes.h>` 中的 `KEY_*` 宏逐一对应，
+/// 数值为该头文件定义的 evdev 扫描码，不再逐项复述；修改必须以内核头文件为准。
 pub const KEY_ESC: u32 = 1;
 pub const KEY_MINUS: u32 = 12;
 pub const KEY_EQUAL: u32 = 13;
@@ -34,6 +37,7 @@ pub const KEY_T: u32 = 20;
 /// 字母 F 的 evdev 扫描码 (33)
 pub const KEY_F: u32 = 33;
 
+/// 主键盘数字键与左右修饰键扫描码常量（命名对标 linux/input-event-codes.h）
 pub const KEY_1: u32 = 2;
 pub const KEY_2: u32 = 3;
 pub const KEY_3: u32 = 4;

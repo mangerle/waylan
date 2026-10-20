@@ -71,25 +71,30 @@ pub struct ModifierState {
 }
 
 impl ModifierState {
+    /// 依据物理按键按下/释放事件更新修饰键状态位掩码
     pub fn update(&mut self, keycode: u32, is_press: bool) {
         update_modifier_masks(&mut self.depressed, &mut self.phys_mods, keycode, is_press);
     }
 
+    /// 查询 Shift 是否处于按下状态（左右任一侧均计入）
     #[inline]
     pub fn is_shift_active(&self) -> bool {
         (self.depressed & MOD_SHIFT) != 0
     }
 
+    /// 查询 CapsLock 是否处于锁定状态
     #[inline]
     pub fn is_caps_locked(&self) -> bool {
         (self.locked & MOD_CAPS) != 0
     }
 
+    /// 查询是否按下 Ctrl / Alt / Super 任一控制键（用于判定组合键直通）
     #[inline]
     pub fn has_ctrl_or_alt(&self) -> bool {
         (self.depressed & (MOD_CTRL | MOD_ALT | MOD_SUPER)) != 0
     }
 
+    /// 清空全部修饰键状态（用于会话激活、失焦或运行时重置）
     #[inline]
     pub fn reset(&mut self) {
         self.depressed = 0;
@@ -111,6 +116,7 @@ pub struct ConsumedKeyTracker {
 }
 
 impl ConsumedKeyTracker {
+    /// 创建空的按键消费追踪器
     pub fn new() -> Self {
         Self::default()
     }

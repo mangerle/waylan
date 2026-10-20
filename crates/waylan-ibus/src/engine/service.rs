@@ -278,13 +278,14 @@ impl IbusEngineService {
         (true,)
     }
 
+    // 以下均为 `org.freedesktop.IBus.Engine` 规范定义的 D-Bus 信号，
+    // 入参列表与顺序由协议契约固定，不适用参数对象收敛规则。
+
+    /// 发射已上屏文本提交信号 `CommitText(text)`
     #[zbus(signal)]
     pub async fn commit_text(ctxt: &SignalContext<'_>, text: Value<'_>) -> zbus::Result<()>;
 
-    /// 发射预编辑文本更新信号
-    ///
-    /// 入参由 `org.freedesktop.IBus.Engine` 的 `UpdatePreeditText(text, cursor_pos, visible, mode)`
-    /// 信号契约固定，不可收敛为参数对象。
+    /// 发射预编辑文本更新信号 `UpdatePreeditText(text, cursor_pos, visible, mode)`
     #[zbus(signal)]
     pub async fn update_preedit_text(
         ctxt: &SignalContext<'_>,
@@ -294,9 +295,11 @@ impl IbusEngineService {
         mode: u32,
     ) -> zbus::Result<()>;
 
+    /// 发射预编辑文本隐藏信号 `HidePreeditText`
     #[zbus(signal)]
     pub async fn hide_preedit_text(ctxt: &SignalContext<'_>) -> zbus::Result<()>;
 
+    /// 发射辅助文本（候选拼音提示）更新信号 `UpdateAuxiliaryText(text, visible)`
     #[zbus(signal)]
     pub async fn update_auxiliary_text(
         ctxt: &SignalContext<'_>,
@@ -304,6 +307,7 @@ impl IbusEngineService {
         visible: bool,
     ) -> zbus::Result<()>;
 
+    /// 发射候选词表更新信号 `UpdateLookupTable(table, visible)`
     #[zbus(signal)]
     pub async fn update_lookup_table(
         ctxt: &SignalContext<'_>,
@@ -311,18 +315,22 @@ impl IbusEngineService {
         visible: bool,
     ) -> zbus::Result<()>;
 
+    /// 发射候选词表隐藏信号 `HideLookupTable`
     #[zbus(signal)]
     pub async fn hide_lookup_table(ctxt: &SignalContext<'_>) -> zbus::Result<()>;
 
+    /// 发射引擎属性批量注册信号 `RegisterProperties(props)`，驱动 GNOME 状态栏指示器重建
     #[zbus(signal)]
     pub async fn register_properties(
         ctxt: &SignalContext<'_>,
         props: Value<'_>,
     ) -> zbus::Result<()>;
 
+    /// 发射单个引擎属性更新信号 `UpdateProperty(prop)`
     #[zbus(signal)]
     pub async fn update_property(ctxt: &SignalContext<'_>, prop: Value<'_>) -> zbus::Result<()>;
 
+    /// 发射按键回传信号 `ForwardKeyEvent(keyval, keycode, state)`，用于成对标点的光标补偿
     #[zbus(signal)]
     pub async fn forward_key_event(
         ctxt: &SignalContext<'_>,

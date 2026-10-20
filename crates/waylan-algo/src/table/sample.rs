@@ -1,5 +1,6 @@
 use crate::table::LexiconTable;
 
+/// 测试与自检用的最小样例词表（拼音键、词条文本、原始词频三元组）
 pub const SAMPLE_LEXICON_ENTRIES: &[(&str, &str, u32)] = &[
     ("ni'hao", "你好", 10_000),
     ("ni", "你", 9_500),

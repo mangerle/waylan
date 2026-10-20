@@ -207,6 +207,7 @@ impl HitRegion {
         }
     }
 
+    /// 判定给定点是否落在本命中矩形区域内（含边界）
     #[inline]
     pub fn contains(&self, px: f32, py: f32) -> bool {
         px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height

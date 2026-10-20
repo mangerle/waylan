@@ -31,6 +31,7 @@ pub trait NoiseSuppressor: Send {
 pub struct BypassSuppressor;
 
 impl BypassSuppressor {
+    /// 创建直通降噪器（原样透传输入帧，用于降噪关闭或模型缺失时的空操作实现）
     pub fn new() -> Self {
         Self
     }

@@ -32,6 +32,10 @@ struct ParsedTextSources {
 pub struct CompactDictBuilder;
 
 impl CompactDictBuilder {
+    /// 由多个文本词库源编译紧凑二进制词库
+    ///
+    /// # Errors
+    /// 当输入文件读取失败、词表解析异常或输出文件写入失败时返回 [`AlgoError`]。
     pub fn build_compact_binary_dict<P: AsRef<Path>, Q: AsRef<Path>>(
         input_paths: &[P],
         output_path: Q,

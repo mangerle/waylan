@@ -144,6 +144,9 @@ fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
 }
 
 impl StatusNotifierItem {
+    /// 构造 `StatusNotifierItem` 托盘服务对象
+    ///
+    /// 图标名与提示文案在构造期从配置一次性读取，运行期变更依赖配置热重载重新装配。
     pub(crate) fn new(
         shared_flags: SharedInputFlags,
         icon_update_tx: SyncSender<()>,

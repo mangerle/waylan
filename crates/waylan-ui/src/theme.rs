@@ -13,10 +13,12 @@ pub struct Color {
 }
 
 impl Color {
+    /// 由 0.0~1.0 浮点四通道值构造颜色
     pub const fn from_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
 
+    /// 由 24 位十六进制颜色与独立透明度通道构造颜色
     pub const fn from_hex(hex: u32, alpha: f32) -> Self {
         let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
         let g = ((hex >> 8) & 0xFF) as f32 / 255.0;

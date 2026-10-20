@@ -56,6 +56,7 @@ pub struct CandidateBoxRenderer {
 }
 
 impl CandidateBoxRenderer {
+    /// 使用指定主题与默认排版样式创建候选框渲染器
     pub fn new(theme: UiTheme) -> Self {
         Self::with_style(theme, RendererStyle::default())
     }

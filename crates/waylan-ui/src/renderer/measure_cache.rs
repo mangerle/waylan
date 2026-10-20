@@ -8,6 +8,7 @@
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+/// 文本塑形度量缓存表的槽位数量（必须为 2 的幂，供哈希低位直接取模）
 pub(crate) const MEASURE_CACHE_SIZE: usize = 128;
 
 /// 单个排版字形的物理光栅化定位参数

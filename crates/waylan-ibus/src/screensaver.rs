@@ -185,6 +185,10 @@ pub(crate) struct ScreenSaverListenerHandle {
 }
 
 impl ScreenSaverListenerHandle {
+    /// 停止后台锁屏信号监听线程并回收其句柄
+    ///
+    /// 监听线程阻塞在 D-Bus 消息迭代器上，故先广播一条状态变更信号将其唤醒后再 join，
+    /// 避免停机流程被无限期阻塞。
     pub(crate) fn stop(&mut self) {
         if let Some(handle) = self.join_handle.take() {
             // 向总线广播一条 ActiveChanged 信号以即时唤醒阻塞在 iter.next() 的监听线程

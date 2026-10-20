@@ -365,21 +365,25 @@ struct TailSplitParams<'a> {
 }
 
 impl PrismEngine {
+    /// 按模糊音规则展开单个拼音切片的全部等价变体
     #[inline]
     pub fn expand_fuzzy_syllables(slice: &str, fuzzy: &FuzzyConfig) -> Vec<String> {
         PrismFuzzy::expand_fuzzy_syllables(slice, fuzzy)
     }
 
+    /// 展开整条切分路径可参与词表查询的全部模糊音等价键
     #[inline]
     pub fn expand_fuzzy_keys(path: &SegmentPath, fuzzy: &FuzzyConfig) -> Vec<String> {
         PrismFuzzy::expand_fuzzy_keys(path, fuzzy)
     }
 
+    /// 判定音节是否为零声母音节（以 a/o/e 等元音直接起头）
     #[inline]
     pub fn is_zero_initial_syllable(syl: &str) -> bool {
         PrismFuzzy::is_zero_initial_syllable(syl)
     }
 
+    /// 判定相邻音节之间是否发生"前音节借用韵尾导致后音节退化为零声母"的碎切
     #[inline]
     pub fn is_zero_initial_borrowing_split(prev: &str, curr: &str) -> bool {
         PrismFuzzy::is_zero_initial_borrowing_split(prev, curr)

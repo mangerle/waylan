@@ -45,6 +45,7 @@ pub struct DBusMenu {
 }
 
 impl DBusMenu {
+    /// 由托盘菜单装配参数构造 `com.canonical.dbusmenu` 菜单服务对象
     pub(crate) fn new(opts: DBusMenuOptions) -> Self {
         let subprocess_manager = Arc::new(SubprocessManager::new(opts.coordinator.flag()));
         Self {

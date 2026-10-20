@@ -36,6 +36,7 @@ pub struct BuildStats {
 
 pub use crate::syllables::normalize_pinyin_tones;
 
+/// 离线词库构建器入口（仅在启用 `dict-builder` 特性时编译）
 #[derive(Debug, Default)]
 pub struct DictBuilder;
 
@@ -327,6 +328,10 @@ impl DictBuilder {
 }
 
 impl DictBuilder {
+    /// 由多个文本词库源编译紧凑二进制词库（转发至 [`compact::CompactDictBuilder`]）
+    ///
+    /// # Errors
+    /// 输入读取、词表解析或输出写入失败时返回 [`AlgoError`]。
     #[inline]
     pub fn build_compact_binary_dict<P: AsRef<Path>, Q: AsRef<Path>>(
         input_paths: &[P],
