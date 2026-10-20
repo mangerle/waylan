@@ -161,6 +161,22 @@ pub fn list_vad_models() -> Vec<ModelItem> {
     items
 }
 
+/// 构造内置标点模型展示项
+///
+/// 官方内置的 CT-Transformer 系列文件名多变（`ct-transformer` / 通用 `model` 命名），
+/// 统一映射为面向用户的固定展示名，避免向设置界面暴露内部文件名差异。
+fn build_builtin_punct_item(file_name: String, path: PathBuf) -> ModelItem {
+    let display_name = if file_name.contains("ct-transformer") || file_name.contains("model") {
+        "[内置] CT-Transformer 深度标点 (int8)".to_string()
+    } else {
+        format!("[内置] {}", file_name)
+    };
+    ModelItem {
+        display_name,
+        path: Some(path.to_string_lossy().to_string()),
+    }
+}
+
 /// 扫描系统内置标点模型目录并返回展示项列表
 fn scan_builtin_punct_models() -> Vec<ModelItem> {
     let Some(builtin_dir) = builtin_models_dir() else {
@@ -168,18 +184,7 @@ fn scan_builtin_punct_models() -> Vec<ModelItem> {
     };
     scan_onnx_files(&builtin_dir.join("punct"))
         .into_iter()
-        .map(|(file_name, path)| {
-            let display_name =
-                if file_name.contains("ct-transformer") || file_name.contains("model") {
-                    "[内置] CT-Transformer 深度标点 (int8)".to_string()
-                } else {
-                    format!("[内置] {}", file_name)
-                };
-            ModelItem {
-                display_name,
-                path: Some(path.to_string_lossy().to_string()),
-            }
-        })
+        .map(|(file_name, path)| build_builtin_punct_item(file_name, path))
         .collect()
 }
 

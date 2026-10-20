@@ -110,6 +110,27 @@ pub(crate) fn register_dict_import_callbacks(window: &SettingsWindow, aux_dict: 
     });
 }
 
+/// 在 UI 线程回填拼音词库文件选择结果并派发后台导入任务
+fn apply_pinyin_selection(
+    win_weak: slint::Weak<SettingsWindow>,
+    running_flag: Arc<AtomicBool>,
+    selected: Option<PathBuf>,
+) {
+    let Some(win) = win_weak.upgrade() else {
+        running_flag.store(false, Ordering::Release);
+        return;
+    };
+    let Some(path) = selected else {
+        win.set_pinyin_import_status(SharedString::from("已取消文件选择"));
+        running_flag.store(false, Ordering::Release);
+        return;
+    };
+    let path_str = path.to_string_lossy().to_string();
+    win.set_pinyin_import_path(SharedString::from(&path_str));
+    win.set_pinyin_import_status(SharedString::from("正在解析并合入词库，请稍候..."));
+    spawn_pinyin_import_task(win.as_weak(), path_str, running_flag);
+}
+
 /// 处理拼音词库文件选取与异步导入派发
 fn handle_pick_and_import_pinyin(win: &SettingsWindow, running_flag: &Arc<AtomicBool>) {
     if running_flag
@@ -131,23 +152,144 @@ fn handle_pick_and_import_pinyin(win: &SettingsWindow, running_flag: &Arc<Atomic
         "*.txt *.dict.yaml *.yaml *.yml *.scel",
         move |selected| {
             let _ = slint::invoke_from_event_loop(move || {
-                let Some(win) = win_weak.upgrade() else {
-                    running_flag.store(false, Ordering::Release);
-                    return;
-                };
-                if let Some(path) = selected {
-                    let path_str = path.to_string_lossy().to_string();
-                    win.set_pinyin_import_path(SharedString::from(&path_str));
-                    win.set_pinyin_import_status(SharedString::from(
-                        "正在解析并合入词库，请稍候...",
-                    ));
-                    spawn_pinyin_import_task(win.as_weak(), path_str, running_flag);
-                } else {
-                    win.set_pinyin_import_status(SharedString::from("已取消文件选择"));
-                    running_flag.store(false, Ordering::Release);
-                }
+                apply_pinyin_selection(win_weak, running_flag, selected);
             });
         },
+    );
+}
+
+/// 辅助词库后台导入任务派发函数签名
+type AuxDictSpawnTask =
+    fn(slint::Weak<SettingsWindow>, String, Arc<Mutex<AuxiliaryDict>>, Arc<AtomicBool>);
+
+/// 辅助词库（英文/符号）导入链路描述
+///
+/// # 设计原理
+/// - **实现初衷**：英文词库与特殊符号库的「防重入 -> 弹选择器 -> 回投 UI 回填 -> 派后台任务」
+///   四步流程逐字一致，仅界面属性写入器、对话框文案与后台任务函数不同。
+/// - **核心优势**：以声明式链路描述表消除两套回调闭包的重复，降级路径（窗口销毁/用户取消）单点实现。
+/// - **代价与局限**：新增辅助词库种类时需补充一张链路描述常量表。
+#[derive(Clone, Copy)]
+struct AuxDictImportFlow {
+    /// 导入状态属性写入器
+    status_setter: fn(&SettingsWindow, SharedString),
+    /// 已选文件路径属性写入器
+    path_setter: fn(&SettingsWindow, SharedString),
+    /// 文件选择对话框标题
+    dialog_title: &'static str,
+    /// 文件选择对话框类型说明
+    dialog_filter_label: &'static str,
+    /// 文件选择对话框匹配模式
+    dialog_patterns: &'static str,
+    /// 解析阶段提示文案
+    parsing_hint: &'static str,
+    /// 后台导入任务派发函数
+    spawn_task: AuxDictSpawnTask,
+}
+
+/// 英文辅助词库导入链路
+const ENGLISH_IMPORT_FLOW: AuxDictImportFlow = AuxDictImportFlow {
+    status_setter: SettingsWindow::set_english_import_status,
+    path_setter: SettingsWindow::set_english_import_path,
+    dialog_title: "请选择要导入的英文词库文件",
+    dialog_filter_label: "英文词汇与词频文件 (*.txt, *.dict.yaml, *.yaml)",
+    dialog_patterns: "*.txt *.dict.yaml *.yaml *.yml",
+    parsing_hint: "正在解析英文词库，请稍候...",
+    spawn_task: spawn_english_import_task,
+};
+
+/// 特殊符号辅助词库导入链路
+const SYMBOLS_IMPORT_FLOW: AuxDictImportFlow = AuxDictImportFlow {
+    status_setter: SettingsWindow::set_symbols_import_status,
+    path_setter: SettingsWindow::set_symbols_import_path,
+    dialog_title: "请选择要导入的特殊符号库文件",
+    dialog_filter_label: "符号定义文件 (*.txt, *.dict.yaml, *.yaml)",
+    dialog_patterns: "*.txt *.dict.yaml *.yaml *.yml",
+    parsing_hint: "正在解析特殊符号库，请稍候...",
+    spawn_task: spawn_symbols_import_task,
+};
+
+/// 辅助词库导入派发上下文
+///
+/// # 设计原理
+/// - **实现初衷**：文件对话框异步回调仅额外携带"用户选中的路径"这一项动态数据，
+///   链路描述、窗口句柄、词库锁与防重入标志在派发前即已确定。
+/// - **核心优势**：把稳定依赖收敛为按值移动的上下文，回调闭包退化为一次具名函数转发。
+/// - **代价与局限**：上下文一次性消费，派发后不可复用（本流程亦无复用需求）。
+#[derive(Clone)]
+struct AuxDictPickContext {
+    /// 所属导入链路描述
+    flow: AuxDictImportFlow,
+    /// 窗口弱引用
+    win_weak: slint::Weak<SettingsWindow>,
+    /// 辅助词库共享互斥锁
+    aux_dict: Arc<Mutex<AuxiliaryDict>>,
+    /// 防重入标志
+    running_flag: Arc<AtomicBool>,
+}
+
+/// 将辅助词库文件选择结果回投 Slint 主线程处理
+fn queue_aux_dict_selection(ctx: AuxDictPickContext, selected: Option<PathBuf>) {
+    let _ = slint::invoke_from_event_loop(move || apply_aux_dict_selection(ctx, selected));
+}
+
+/// 在 UI 线程回填辅助词库选择结果并派发后台导入任务
+///
+/// 窗口销毁与用户取消两条降级路径均在此释放防重入标志，杜绝标志悬挂导致后续导入永久被拒。
+fn apply_aux_dict_selection(ctx: AuxDictPickContext, selected: Option<PathBuf>) {
+    let AuxDictPickContext {
+        flow,
+        win_weak,
+        aux_dict,
+        running_flag,
+    } = ctx;
+    let Some(win) = win_weak.upgrade() else {
+        running_flag.store(false, Ordering::Release);
+        return;
+    };
+    let Some(path) = selected else {
+        (flow.status_setter)(&win, SharedString::from("已取消文件选择"));
+        running_flag.store(false, Ordering::Release);
+        return;
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+    (flow.path_setter)(&win, SharedString::from(&path_str));
+    (flow.status_setter)(&win, SharedString::from(flow.parsing_hint));
+    (flow.spawn_task)(win.as_weak(), path_str, aux_dict, running_flag);
+}
+
+/// 处理辅助词库文件选取与异步导入派发
+fn handle_pick_and_import_aux_dict(
+    win: &SettingsWindow,
+    aux_dict: &Arc<Mutex<AuxiliaryDict>>,
+    running_flag: &Arc<AtomicBool>,
+    flow: AuxDictImportFlow,
+) {
+    if running_flag
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        (flow.status_setter)(
+            win,
+            SharedString::from("已有辅助词库导入任务正在执行，请稍候..."),
+        );
+        return;
+    }
+    (flow.status_setter)(win, SharedString::from("正在等待选择文件..."));
+
+    let ctx = AuxDictPickContext {
+        flow,
+        win_weak: win.as_weak(),
+        aux_dict: aux_dict.clone(),
+        running_flag: running_flag.clone(),
+    };
+
+    pick_file_dialog_async(
+        flow.dialog_title,
+        flow.dialog_filter_label,
+        flow.dialog_patterns,
+        move |selected| queue_aux_dict_selection(ctx, selected),
     );
 }
 
@@ -157,44 +299,7 @@ fn handle_pick_and_import_english(
     aux_dict: &Arc<Mutex<AuxiliaryDict>>,
     running_flag: &Arc<AtomicBool>,
 ) {
-    if running_flag
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        win.set_english_import_status(SharedString::from(
-            "已有辅助词库导入任务正在执行，请稍候...",
-        ));
-        return;
-    }
-    win.set_english_import_status(SharedString::from("正在等待选择文件..."));
-    let win_weak = win.as_weak();
-    let aux_dict = aux_dict.clone();
-    let running_flag = running_flag.clone();
-
-    pick_file_dialog_async(
-        "请选择要导入的英文词库文件",
-        "英文词汇与词频文件 (*.txt, *.dict.yaml, *.yaml)",
-        "*.txt *.dict.yaml *.yaml *.yml",
-        move |selected| {
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(win) = win_weak.upgrade() else {
-                    running_flag.store(false, Ordering::Release);
-                    return;
-                };
-                if let Some(path) = selected {
-                    let path_str = path.to_string_lossy().to_string();
-                    win.set_english_import_path(SharedString::from(&path_str));
-                    win.set_english_import_status(SharedString::from(
-                        "正在解析英文词库，请稍候...",
-                    ));
-                    spawn_english_import_task(win.as_weak(), path_str, aux_dict, running_flag);
-                } else {
-                    win.set_english_import_status(SharedString::from("已取消文件选择"));
-                    running_flag.store(false, Ordering::Release);
-                }
-            });
-        },
-    );
+    handle_pick_and_import_aux_dict(win, aux_dict, running_flag, ENGLISH_IMPORT_FLOW);
 }
 
 /// 处理特殊符号库文件选取与异步导入派发
@@ -203,42 +308,5 @@ fn handle_pick_and_import_symbols(
     aux_dict: &Arc<Mutex<AuxiliaryDict>>,
     running_flag: &Arc<AtomicBool>,
 ) {
-    if running_flag
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        win.set_symbols_import_status(SharedString::from(
-            "已有辅助词库导入任务正在执行，请稍候...",
-        ));
-        return;
-    }
-    win.set_symbols_import_status(SharedString::from("正在等待选择文件..."));
-    let win_weak = win.as_weak();
-    let aux_dict = aux_dict.clone();
-    let running_flag = running_flag.clone();
-
-    pick_file_dialog_async(
-        "请选择要导入的特殊符号库文件",
-        "符号定义文件 (*.txt, *.dict.yaml, *.yaml)",
-        "*.txt *.dict.yaml *.yaml *.yml",
-        move |selected| {
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(win) = win_weak.upgrade() else {
-                    running_flag.store(false, Ordering::Release);
-                    return;
-                };
-                if let Some(path) = selected {
-                    let path_str = path.to_string_lossy().to_string();
-                    win.set_symbols_import_path(SharedString::from(&path_str));
-                    win.set_symbols_import_status(SharedString::from(
-                        "正在解析特殊符号库，请稍候...",
-                    ));
-                    spawn_symbols_import_task(win.as_weak(), path_str, aux_dict, running_flag);
-                } else {
-                    win.set_symbols_import_status(SharedString::from("已取消文件选择"));
-                    running_flag.store(false, Ordering::Release);
-                }
-            });
-        },
-    );
+    handle_pick_and_import_aux_dict(win, aux_dict, running_flag, SYMBOLS_IMPORT_FLOW);
 }

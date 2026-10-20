@@ -221,20 +221,31 @@ impl AlgoEngine {
 
     /// 解析跨词短语的二元文法亲和度：优先整词对命中，回退至前驱末字与尾部词的组合查询
     fn resolve_bigram_bonus(&self, head: &PhraseHead<'_>, tail: &AlgoCandidate) -> i64 {
-        self.resources
+        if let Some(affinity) = self
+            .resources
             .table
             .get_bigram_affinity(head.text, &tail.text)
-            .unwrap_or_else(|| {
-                let rule_score =
-                    BigramLanguageModel::estimate_bigram_affinity(head.text, &tail.text);
-                if rule_score > 0 {
-                    rule_score
-                } else {
-                    self.resources
-                        .table
-                        .get_bigram_affinity(&head.last_char, &tail.text)
-                        .unwrap_or(0)
-                }
-            })
+        {
+            return affinity;
+        }
+        self.estimate_bigram_fallback(head, tail)
+    }
+
+    /// 整词对未命中时的二元亲和度回退估算
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：回退链含"规则估算 -> 前驱末字二次查询"两级降级，
+    ///   内联在 `unwrap_or_else` 闭包内会让两级优先次序不易核对，故提取为具名函数。
+    /// - **核心优势**：规则估算命中即短路，避免对末字碎片的无意义词表查询。
+    /// - **代价与局限**：末字回退仅取前驱候选的最后一个字符，跨词边界为多字词时亲和度会偏保守。
+    fn estimate_bigram_fallback(&self, head: &PhraseHead<'_>, tail: &AlgoCandidate) -> i64 {
+        let rule_score = BigramLanguageModel::estimate_bigram_affinity(head.text, &tail.text);
+        if rule_score > 0 {
+            return rule_score;
+        }
+        self.resources
+            .table
+            .get_bigram_affinity(&head.last_char, &tail.text)
+            .unwrap_or(0)
     }
 }

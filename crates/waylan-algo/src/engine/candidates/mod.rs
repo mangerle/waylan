@@ -81,19 +81,32 @@ impl AlgoEngine {
         );
         let preedit_str = paths
             .first()
-            .map(|p| {
-                if p.is_broken_typo_fallback(&self.config.fuzzy) {
-                    paths
-                        .iter()
-                        .find(|tp| tp.is_typo && tp.remaining.is_empty())
-                        .and_then(|tp| tp.format_raw_with_spans(raw))
-                        .unwrap_or_else(|| p.to_key_string())
-                } else {
-                    p.to_key_string()
-                }
-            })
+            .map(|p| self.format_head_path_preedit(p, &paths, raw))
             .unwrap_or_else(|| raw.to_string());
         (paths, preedit_str)
+    }
+
+    /// 格式化首条切分路径为预编辑字符串
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：当首条路径为"碎切容错回退"结果时，其音节序列不可直接展示，
+    ///   必须改取第一条完整闭合的容错路径原始拼写，否则预编辑区会显示错误断句。
+    /// - **核心优势**：正常路径与碎切回退路径分别取用最适合的呈现形式，避免用户看到误导性分段。
+    /// - **代价与局限**：完整容错路径缺失时仍退回首条路径的键串呈现。
+    fn format_head_path_preedit(
+        &self,
+        head_path: &SegmentPath,
+        paths: &[SegmentPath],
+        raw: &str,
+    ) -> String {
+        if !head_path.is_broken_typo_fallback(&self.config.fuzzy) {
+            return head_path.to_key_string();
+        }
+        paths
+            .iter()
+            .find(|tp| tp.is_typo && tp.remaining.is_empty())
+            .and_then(|tp| tp.format_raw_with_spans(raw))
+            .unwrap_or_else(|| head_path.to_key_string())
     }
 
     /// 候选词流水线最终处理（去重、简繁、零页扩展、标记 consumed_len）并分页生效

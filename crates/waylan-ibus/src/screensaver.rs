@@ -258,6 +258,44 @@ pub(crate) fn spawn_screen_saver_listener(
     (screen_locked, handle)
 }
 
+/// 锁屏信号被动监听线程主体
+///
+/// # 设计原理
+/// - **实现初衷**：监听链路包含"建连重试 -> 注册规则 -> 状态对齐 -> 消费信号 -> 停机退出"五个阶段，
+///   内联在线程派生闭包内会让退出条件与重连策略难以逐段审阅，故提取为具名函数。
+/// - **核心优势**：停机判定与唤醒动作集中，连接异常时按固定间隔降级重连，杜绝忙等轮询。
+/// - **代价与局限**：`MessageIterator` 为阻塞式读取，停机信号最多需等待下一条锁屏事件或迭代器中断才能被感知。
+fn run_screen_saver_listener(screen_locked: Arc<AtomicBool>, coordinator: IbusShutdownCoordinator) {
+    while !coordinator.is_shutting_down() {
+        let Ok(conn) = Connection::session() else {
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
+        };
+        register_screen_saver_rules(&conn);
+        // 连接建立或重连后主动同步一次当前真实锁屏状态，避免休眠唤醒期间信号丢失
+        let active = query_initial_screen_saver_active(&conn);
+        if screen_locked.swap(active, Ordering::AcqRel) != active {
+            coordinator.wake();
+        }
+        let iter = MessageIterator::from(&conn);
+        for msg_res in iter {
+            if coordinator.is_shutting_down() {
+                break;
+            }
+            let Ok(msg) = msg_res else {
+                break;
+            };
+            if handle_screen_saver_signal(&msg, &screen_locked) {
+                coordinator.wake();
+            }
+        }
+        if coordinator.is_shutting_down() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 /// 基于指定原子锁屏状态标志启动后台常驻 D-Bus 锁屏信号被动监听器
 pub(crate) fn spawn_screen_saver_listener_with_flag(
     screen_locked_clone: Arc<AtomicBool>,
@@ -265,36 +303,7 @@ pub(crate) fn spawn_screen_saver_listener_with_flag(
 ) -> ScreenSaverListenerHandle {
     let handle = ThreadBuilder::new()
         .name("waylan-screen-saver-listener".to_string())
-        .spawn(move || {
-            while !coordinator.is_shutting_down() {
-                let Ok(conn) = Connection::session() else {
-                    std::thread::sleep(Duration::from_millis(500));
-                    continue;
-                };
-                register_screen_saver_rules(&conn);
-                // 连接建立或重连后主动同步一次当前真实锁屏状态，避免休眠唤醒期间信号丢失
-                let active = query_initial_screen_saver_active(&conn);
-                if screen_locked_clone.swap(active, Ordering::AcqRel) != active {
-                    coordinator.wake();
-                }
-                let iter = MessageIterator::from(&conn);
-                for msg_res in iter {
-                    if coordinator.is_shutting_down() {
-                        break;
-                    }
-                    let Ok(msg) = msg_res else {
-                        break;
-                    };
-                    if handle_screen_saver_signal(&msg, &screen_locked_clone) {
-                        coordinator.wake();
-                    }
-                }
-                if coordinator.is_shutting_down() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-        })
+        .spawn(move || run_screen_saver_listener(screen_locked_clone, coordinator))
         .map_err(|e| warn!("[微澜 IBus 警告] 创建锁屏信号监听线程失败: {}", e))
         .ok();
 

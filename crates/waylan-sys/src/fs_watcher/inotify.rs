@@ -25,6 +25,60 @@ use rustix::io::Errno;
 /// 针对同目录下关联文件变更的判定规则过滤器
 pub type DirEventFilter = Arc<dyn Fn(&Path, &OsStr, ReadFlags) -> Option<bool> + Send + Sync>;
 
+/// 时效防抖过滤器单次判定入参
+struct TimedFilterJudgement<'a> {
+    /// inotify 事件所涉文件名
+    file_name: &'a OsStr,
+    /// 需要盯防的目标文件名
+    target_filename: &'static str,
+    /// 外部写入时间戳原子追踪器（None 表示无追踪器，不做时效抑制）
+    tracker: Option<&'a Arc<AtomicU64>>,
+    /// 抑制防抖时间窗口（毫秒）
+    suppress_window_ms: u64,
+    /// inotify 事件标志位
+    flags: ReadFlags,
+}
+
+/// 判断目标文件的最近一次外部写入是否仍落在抑制窗口内
+fn is_within_suppress_window(tracker: Option<&Arc<AtomicU64>>, suppress_window_ms: u64) -> bool {
+    let Some(tracker) = tracker else {
+        return false;
+    };
+    let last = tracker.load(Ordering::Acquire);
+    if last == 0 {
+        return false;
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    now.saturating_sub(last) <= suppress_window_ms
+}
+
+/// 依据文件名匹配、时效抑制窗口与事件标志位判定单次目录事件是否应当触发回调
+///
+/// # 设计原理
+/// - **实现初衷**：判定链包含"名称匹配 -> 自写入抑制 -> 删除/移入放行"三段决策，
+///   内联在 `Arc<dyn Fn>` 闭包内会让降级分支难以逐段核对，故提取为具名函数。
+/// - **核心优势**：返回 `Option<bool>` 精确表达三态语义——`None` 表示与本过滤器无关，
+///   `Some(false)` 表示命中目标文件但处于自身写入抑制窗口，`Some(true)` 表示放行。
+/// - **代价与局限**：时间戳比对依赖系统时钟单调性，时钟回拨时抑制窗口会被缩短。
+fn evaluate_timed_file_event(judgement: &TimedFilterJudgement<'_>) -> Option<bool> {
+    if judgement.file_name != judgement.target_filename {
+        return None;
+    }
+    if is_within_suppress_window(judgement.tracker, judgement.suppress_window_ms) {
+        return Some(false);
+    }
+    if judgement
+        .flags
+        .intersects(ReadFlags::DELETE | ReadFlags::MOVED_TO)
+    {
+        return Some(true);
+    }
+    None
+}
+
 /// 构造针对指定文件名的时效防抖过滤器（纯通用机制，不绑定具体业务文件名）
 ///
 /// # 参数
@@ -37,30 +91,13 @@ pub fn create_timed_file_event_filter(
     suppress_window_ms: u64,
 ) -> DirEventFilter {
     Arc::new(move |_dir, file_name, flags| {
-        if file_name == target_filename {
-            let is_recent = if let Some(ref t) = tracker {
-                let last = t.load(Ordering::Acquire);
-                if last != 0 {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    now.saturating_sub(last) <= suppress_window_ms
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            if is_recent {
-                return Some(false);
-            }
-            if flags.intersects(ReadFlags::DELETE | ReadFlags::MOVED_TO) {
-                return Some(true);
-            }
-        }
-        None
+        evaluate_timed_file_event(&TimedFilterJudgement {
+            file_name,
+            target_filename,
+            tracker: tracker.as_ref(),
+            suppress_window_ms,
+            flags,
+        })
     })
 }
 

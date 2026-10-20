@@ -94,66 +94,49 @@ impl ModeDispatcher {
         let now = chrono::Local::now();
         let mut candidates = Vec::new();
 
-        match expr_lower.as_str() {
-            "sd" | "now" => {
-                let dt_list = DateTimeEvaluator::format_datetime_formats(now);
-                let date_list = DateTimeEvaluator::format_date_formats(now);
-                append_staggered_candidates(
-                    &mut candidates,
-                    StaggeredCandidateParams {
-                        items: dt_list,
-                        expr,
-                        base_score: 99_000,
-                        comment: "日期时间",
-                    },
-                );
-                append_staggered_candidates(
-                    &mut candidates,
-                    StaggeredCandidateParams {
-                        items: date_list,
-                        expr,
-                        base_score: 90_000,
-                        comment: "当前日期",
-                    },
-                );
-            }
-            "rq" | "date" => {
-                let date_list = DateTimeEvaluator::format_date_formats(now);
-                append_staggered_candidates(
-                    &mut candidates,
-                    StaggeredCandidateParams {
-                        items: date_list,
-                        expr,
-                        base_score: 99_000,
-                        comment: "当前日期",
-                    },
-                );
-            }
-            "sj" | "time" => {
-                let time_list = DateTimeEvaluator::format_time_formats(now);
-                append_staggered_candidates(
-                    &mut candidates,
-                    StaggeredCandidateParams {
-                        items: time_list,
-                        expr,
-                        base_score: 99_000,
-                        comment: "当前时间",
-                    },
-                );
-            }
-            "xq" => {
-                let weekday_list = DateTimeEvaluator::format_weekday_formats(now);
-                append_staggered_candidates(
-                    &mut candidates,
-                    StaggeredCandidateParams {
-                        items: weekday_list,
-                        expr,
-                        base_score: 99_000,
-                        comment: "星期",
-                    },
-                );
-            }
+        // 声明式分组表：每个快捷指令对应若干组「候选条目 -> 基准分值 -> 备注」，
+        // 由同一条阶梯降序追加逻辑统一消费，新增指令仅需补一行映射。
+        let groups: Vec<(Vec<String>, u32, &'static str)> = match expr_lower.as_str() {
+            "sd" | "now" => vec![
+                (
+                    DateTimeEvaluator::format_datetime_formats(now),
+                    99_000,
+                    "日期时间",
+                ),
+                (
+                    DateTimeEvaluator::format_date_formats(now),
+                    90_000,
+                    "当前日期",
+                ),
+            ],
+            "rq" | "date" => vec![(
+                DateTimeEvaluator::format_date_formats(now),
+                99_000,
+                "当前日期",
+            )],
+            "sj" | "time" => vec![(
+                DateTimeEvaluator::format_time_formats(now),
+                99_000,
+                "当前时间",
+            )],
+            "xq" => vec![(
+                DateTimeEvaluator::format_weekday_formats(now),
+                99_000,
+                "星期",
+            )],
             _ => return None,
+        };
+
+        for (items, base_score, comment) in groups {
+            append_staggered_candidates(
+                &mut candidates,
+                StaggeredCandidateParams {
+                    items,
+                    expr,
+                    base_score,
+                    comment,
+                },
+            );
         }
 
         if candidates.is_empty() {

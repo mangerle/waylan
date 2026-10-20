@@ -143,55 +143,61 @@ impl PrismEngine {
     /// 正常流程需同时满足：前驱音节均为完整标准音节或合法模糊音音节（无单字母辅音声母降级，
     /// 且无夹在中间的孤立单字母元音碎切），且末尾闭合（remaining 为空）或处于合法音节前缀键入中。
     fn is_normal_typing_flow(paths: &[SegmentPath], fuzzy: &FuzzyConfig) -> bool {
-        paths.iter().any(|p| {
-            let has_mid_single_vowel = p.syllables.len() >= 3
-                && p.syllables[1..]
-                    .iter()
-                    .any(|s| matches!(s.as_str(), "a" | "o" | "e"));
-            if has_mid_single_vowel {
-                return false;
-            }
-            let all_prev_valid = p.syllables.iter().all(|s| {
-                (is_valid_syllable(s) || PrismFuzzy::is_fuzzy_valid(s, fuzzy))
-                    && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e" | "n" | "ng" | "m"))
-            });
-            if !all_prev_valid {
-                return false;
-            }
-            if p.remaining.is_empty() {
-                true
-            } else {
-                has_syllable_prefix(&p.remaining)
-            }
-        })
+        paths
+            .iter()
+            .any(|p| Self::is_segment_path_normal_flow(p, fuzzy))
+    }
+
+    /// 判定单条切分路径是否满足正常全拼击键流程约束
+    fn is_segment_path_normal_flow(path: &SegmentPath, fuzzy: &FuzzyConfig) -> bool {
+        let has_mid_single_vowel = path.syllables.len() >= 3
+            && path.syllables[1..]
+                .iter()
+                .any(|s| matches!(s.as_str(), "a" | "o" | "e"));
+        if has_mid_single_vowel {
+            return false;
+        }
+
+        let all_prev_valid = path.syllables.iter().all(|s| {
+            (is_valid_syllable(s) || PrismFuzzy::is_fuzzy_valid(s, fuzzy))
+                && (s.len() >= 2 || matches!(s.as_str(), "a" | "o" | "e" | "n" | "ng" | "m"))
+        });
+        if !all_prev_valid {
+            return false;
+        }
+
+        path.remaining.is_empty() || has_syllable_prefix(&path.remaining)
+    }
+
+    /// 判定字符是否属于汉语拼音声母（含 y/w 半元音）字母集合
+    fn is_initial_consonant(c: char) -> bool {
+        matches!(
+            c,
+            'b' | 'p'
+                | 'm'
+                | 'f'
+                | 'd'
+                | 't'
+                | 'n'
+                | 'l'
+                | 'g'
+                | 'k'
+                | 'h'
+                | 'j'
+                | 'q'
+                | 'x'
+                | 'r'
+                | 'z'
+                | 'c'
+                | 's'
+                | 'y'
+                | 'w'
+        )
     }
 
     /// 判定输入序列是否由纯辅音声母字符构成（此类输入绝不触发拼音容错搜索）
     fn is_pure_initials_input(input: &str) -> bool {
-        input.chars().all(|c| {
-            matches!(
-                c,
-                'b' | 'p'
-                    | 'm'
-                    | 'f'
-                    | 'd'
-                    | 't'
-                    | 'n'
-                    | 'l'
-                    | 'g'
-                    | 'k'
-                    | 'h'
-                    | 'j'
-                    | 'q'
-                    | 'x'
-                    | 'r'
-                    | 'z'
-                    | 'c'
-                    | 's'
-                    | 'y'
-                    | 'w'
-            )
-        })
+        input.chars().all(Self::is_initial_consonant)
     }
 
     /// 路径排序与全局去重：正向非容错路径优先、代价值与音节数最小优先，相同 (syllables, remaining) 仅保留最优解

@@ -79,19 +79,29 @@ impl VoiceSessionController {
     /// 若系统资源紧张导致后台工作线程派生失败，记录错误日志并安全降级为禁用语音功能，
     /// 保证输入法核心守护进程不会意外崩溃。
     pub fn new() -> Self {
-        Self::try_new().unwrap_or_else(|e| {
-            log::error!(
-                "[微澜语音] 创建后台常驻语音工作线程失败，已安全降级为禁用语音功能: {}",
-                e
-            );
-            let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
-            Self {
-                is_active: Arc::new(AtomicBool::new(false)),
-                shutdown_requested: Arc::new(AtomicBool::new(true)),
-                cmd_tx,
-                worker_handle: None,
-            }
-        })
+        Self::try_new().unwrap_or_else(Self::without_worker)
+    }
+
+    /// 构造未拉起后台工作线程的语音控制器（线程资源耗尽时的安全降级形态）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：语音属于可选增强能力，线程派生失败绝不可拖垮输入法主进程，
+    ///   必须降级为一个"永不可用"的控制器实例而非返回 `Option` 让每个调用点各自判空。
+    /// - **核心优势**：`shutdown_requested` 预置为 true 且 `worker_handle` 为空，
+    ///   使所有录音与查询入口在既有守卫下自然短路，无需额外分支。
+    /// - **代价与局限**：保留一个仅用于类型一致的命令发送端，其后续发送会被立即丢弃。
+    fn without_worker(err: VoiceError) -> Self {
+        log::error!(
+            "[微澜语音] 创建后台常驻语音工作线程失败，已安全降级为禁用语音功能: {}",
+            err
+        );
+        let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
+        Self {
+            is_active: Arc::new(AtomicBool::new(false)),
+            shutdown_requested: Arc::new(AtomicBool::new(true)),
+            cmd_tx,
+            worker_handle: None,
+        }
     }
 
     /// 当前是否正处于录音识别中

@@ -58,6 +58,48 @@ pub fn register_settings_callbacks(window: &SettingsWindow, context: SettingsCal
     register_phrase_callbacks(window, phrases_model, phrase_path);
 }
 
+/// 保存当前界面表单到磁盘配置并回写界面状态
+///
+/// # 设计原理
+/// - **实现初衷**：保存链路含"表单回读 -> 原子写盘 -> 共享配置替换 -> GNOME 指示器模式同步 -> 状态回写"，
+///   内联在 Slint 事件闭包内会让写盘失败分支与共享状态替换难以核对，故提取为具名函数。
+/// - **核心优势**：仅在 `save_default()` 成功后才替换共享配置与同步托盘，失败时保留原配置避免半提交。
+/// - **代价与局限**：窗口已销毁时整条链路静默跳过。
+fn apply_save_settings(
+    window_weak: &slint::Weak<SettingsWindow>,
+    current_cfg_cell: &Arc<Mutex<AppConfig>>,
+) {
+    let Some(win) = window_weak.upgrade() else {
+        return;
+    };
+    let mut base_cfg = current_cfg_cell.lock().clone();
+    update_config_from_window(&win, &mut base_cfg);
+    match base_cfg.save_default() {
+        Ok(()) => {
+            let hide_ext = base_cfg.desktop.exclusive_input_source;
+            *current_cfg_cell.lock() = base_cfg;
+            sync_gnome_indicator_mode(hide_ext);
+            win.set_global_status_is_error(false);
+            win.set_global_status(SharedString::from("配置已成功保存并同步！"));
+        }
+        Err(e) => {
+            win.set_global_status_is_error(true);
+            win.set_global_status(SharedString::from(format!("保存失败: {}", e)));
+        }
+    }
+}
+
+/// 恢复默认配置到界面表单（不落盘，需用户随后点击保存）
+fn apply_reset_defaults(window_weak: &slint::Weak<SettingsWindow>) {
+    let Some(win) = window_weak.upgrade() else {
+        return;
+    };
+    let default_cfg = AppConfig::default();
+    sync_config_to_window(&win, &default_cfg);
+    win.set_global_status_is_error(false);
+    win.set_global_status(SharedString::from("已恢复为默认配置（点击保存后生效）"));
+}
+
 /// 注册配置持久化回调（保存设置、恢复默认设置）
 ///
 /// 设计意图：将「写盘落盘 + 界面状态回写」这两段具体业务逻辑从主装配函数中剥离，
@@ -67,33 +109,12 @@ fn register_persistence_callbacks(window: &SettingsWindow, loaded_config: Arc<Mu
     let window_weak = window.as_weak();
     let current_cfg_cell = loaded_config;
     window.on_save_settings(move || {
-        if let Some(win) = window_weak.upgrade() {
-            let mut base_cfg = current_cfg_cell.lock().clone();
-            update_config_from_window(&win, &mut base_cfg);
-            match base_cfg.save_default() {
-                Ok(()) => {
-                    let hide_ext = base_cfg.desktop.exclusive_input_source;
-                    *current_cfg_cell.lock() = base_cfg;
-                    sync_gnome_indicator_mode(hide_ext);
-                    win.set_global_status_is_error(false);
-                    win.set_global_status(SharedString::from("配置已成功保存并同步！"));
-                }
-                Err(e) => {
-                    win.set_global_status_is_error(true);
-                    win.set_global_status(SharedString::from(format!("保存失败: {}", e)));
-                }
-            }
-        }
+        apply_save_settings(&window_weak, &current_cfg_cell);
     });
 
     // 2. 恢复默认设置回调
     let window_weak = window.as_weak();
     window.on_reset_defaults(move || {
-        if let Some(win) = window_weak.upgrade() {
-            let default_cfg = AppConfig::default();
-            sync_config_to_window(&win, &default_cfg);
-            win.set_global_status_is_error(false);
-            win.set_global_status(SharedString::from("已恢复为默认配置（点击保存后生效）"));
-        }
+        apply_reset_defaults(&window_weak);
     });
 }

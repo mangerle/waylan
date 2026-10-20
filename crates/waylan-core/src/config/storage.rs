@@ -157,22 +157,7 @@ impl AppConfig {
         let serialized = toml::to_string_pretty(self)?;
         // 使用原子写入：写入同目录临时文件，刷盘后原子 rename 覆盖目标文件
         let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
-        let write_res: std::io::Result<()> = (|| {
-            use std::io::Write;
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&tmp_path)?;
-            file.write_all(serialized.as_bytes())?;
-            file.sync_all()?;
-            fs::rename(&tmp_path, path)?;
-            Ok(())
-        })();
-        if let Err(e) = write_res {
+        if let Err(e) = write_serialized_atomically(&tmp_path, path, &serialized) {
             let _ = fs::remove_file(&tmp_path);
             return Err(ConfigError::Io {
                 path: path.to_path_buf(),
@@ -181,4 +166,31 @@ impl AppConfig {
         }
         Ok(())
     }
+}
+
+/// 将已序列化文本原子写入目标路径（临时文件 -> 刷盘 -> rename 覆盖）
+///
+/// # 设计原理
+/// - **实现初衷**：配置文件承载用户全部偏好，必须保证任何时刻磁盘上都是完整可读的版本，
+///   严禁出现写入中断造成的半截文件。
+/// - **核心优势**：`sync_all` 确保数据落盘后才执行 `rename`，rename 在同目录内为原子操作；
+///   Unix 下临时文件与最终文件均以 0o600 创建，避免多用户主机上的偏好泄露。
+/// - **代价与局限**：跨文件系统重命名不在支持范围内，故临时文件必须与目标文件同目录。
+fn write_serialized_atomically(
+    tmp_path: &Path,
+    path: &Path,
+    serialized: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(tmp_path)?;
+    file.write_all(serialized.as_bytes())?;
+    file.sync_all()?;
+    fs::rename(tmp_path, path)
 }

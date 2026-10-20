@@ -180,6 +180,26 @@ struct ModelImportOptions<'a> {
     apply_fn: ApplyConfigFn,
 }
 
+/// 待派发的模型导入上下文
+///
+/// # 设计原理
+/// - **实现初衷**：模型导入链路需跨越"文件选择器异步回调 -> Slint 主线程派发 -> 后台复制线程 ->
+///   回投主线程回填"四个阶段传递窗口弱引用、配置单元、导入种类与落盘回调，
+///   逐阶段平铺传参会在每处留下五六个位置参数。
+/// - **核心优势**：以单一可克隆上下文承载稳定依赖，各阶段仅需追加本阶段新增的动态数据。
+/// - **代价与局限**：上下文需随每次跨线程投递克隆一份（均为轻量 Arc/Weak 句柄）。
+#[derive(Clone)]
+struct PendingModelImport {
+    /// 界面窗口弱引用（升级失败表示窗口已销毁，流程应静默终止）
+    win_weak: slint::Weak<SettingsWindow>,
+    /// 共享配置单元
+    cfg_cell: Arc<Mutex<AppConfig>>,
+    /// 导入种类
+    kind: ModelImportKind,
+    /// 导入成功后将目标路径写入配置的回调
+    apply_fn: ApplyConfigFn,
+}
+
 /// 执行本地模型导入任务（异步弹出选择器并在后台线程完成物理复制）
 fn handle_model_import(options: ModelImportOptions<'_>) {
     let ModelImportOptions {
@@ -196,20 +216,13 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
         label
     )));
 
-    let win_weak = win.as_weak();
-    let cfg_cell = current_cfg_cell.clone();
-
-    let on_selected = move |selected: Option<PathBuf>| {
-        let _ = slint::invoke_from_event_loop(move || {
-            dispatch_model_import(ModelImportDispatchParams {
-                win_weak,
-                cfg_cell,
-                kind,
-                apply_fn,
-                selected,
-            });
-        });
+    let pending = PendingModelImport {
+        win_weak: win.as_weak(),
+        cfg_cell: current_cfg_cell.clone(),
+        kind,
+        apply_fn,
     };
+    let on_selected = move |selected| queue_model_import_dispatch(pending, selected);
 
     match kind {
         ModelImportKind::AsrPackage => {
@@ -226,21 +239,65 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
     }
 }
 
-/// 模型导入事件派发参数
-///
-/// 承载用户在选择器中确认的模型源路径、导入种类、共享配置单元与配置写入回调。
-/// 采用参数对象聚合可避免长参数列表在调用处发生参数错位。
-struct ModelImportDispatchParams {
-    /// 界面窗口弱引用（升级失败表示窗口已销毁，导入流程应静默终止）
-    win_weak: slint::Weak<SettingsWindow>,
-    /// 共享配置单元
-    cfg_cell: Arc<Mutex<AppConfig>>,
-    /// 导入种类
-    kind: ModelImportKind,
-    /// 导入成功后将目标路径写入配置的回调
-    apply_fn: ApplyConfigFn,
-    /// 用户在选择器中选中的模型源路径（None 表示用户取消选择）
-    selected: Option<PathBuf>,
+/// 接收文件选择结果并回投 Slint 主线程派发模型导入后台任务
+fn queue_model_import_dispatch(pending: PendingModelImport, selected: Option<PathBuf>) {
+    let _ = slint::invoke_from_event_loop(move || {
+        dispatch_model_import(pending, selected);
+    });
+}
+
+/// 在 Slint 主线程中接收用户选择结果并派发后台导入任务
+fn dispatch_model_import(pending: PendingModelImport, selected: Option<PathBuf>) {
+    let Some(win) = pending.win_weak.upgrade() else {
+        return;
+    };
+    let Some(src_path) = selected else {
+        win.set_global_status(SharedString::from(format!(
+            "已取消选择 {} 模型",
+            pending.kind.label()
+        )));
+        return;
+    };
+    win.set_global_status_is_error(false);
+    win.set_global_status(SharedString::from(format!(
+        "正在后台导入 {} 模型，请稍候...",
+        pending.kind.label()
+    )));
+
+    let thread_name = format!("{}-model-importer", pending.kind.label().to_lowercase());
+    if let Err(e) = std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || run_model_import_worker(pending, src_path))
+    {
+        log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
+        win.set_global_status_is_error(true);
+        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
+    }
+}
+
+/// 后台线程体：按导入种类完成模型文件物理复制并回投主线程回填结果
+fn run_model_import_worker(pending: PendingModelImport, src_path: PathBuf) {
+    let imported_opt = match pending.kind {
+        ModelImportKind::AsrPackage => waylan_voice::import_asr_model_from_dir(&src_path),
+        ModelImportKind::Onnx(sub) => waylan_voice::import_onnx_model_from_file(sub, &src_path),
+    };
+    let _ = slint::invoke_from_event_loop(move || {
+        report_model_import_result(pending, imported_opt);
+    });
+}
+
+/// 在主线程升级窗口并把导入结果交由界面回填处理器消费
+fn report_model_import_result(pending: PendingModelImport, imported_opt: Option<PathBuf>) {
+    let Some(win) = pending.win_weak.upgrade() else {
+        return;
+    };
+    handle_imported_model_event(ImportedModelEventParams {
+        win: &win,
+        cfg_cell: &pending.cfg_cell,
+        kind: pending.kind,
+        imported_opt,
+        apply_fn: pending.apply_fn,
+    });
 }
 
 /// 模型导入结果事件处理参数
@@ -257,62 +314,6 @@ struct ImportedModelEventParams<'a> {
     imported_opt: Option<PathBuf>,
     /// 导入成功后将目标路径写入配置的回调
     apply_fn: ApplyConfigFn,
-}
-
-/// 在 Slint 主线程中接收用户选择结果并派发后台导入任务
-fn dispatch_model_import(params: ModelImportDispatchParams) {
-    let ModelImportDispatchParams {
-        win_weak,
-        cfg_cell,
-        kind,
-        apply_fn,
-        selected,
-    } = params;
-    let Some(win) = win_weak.upgrade() else {
-        return;
-    };
-    let Some(src_path) = selected else {
-        win.set_global_status(SharedString::from(format!(
-            "已取消选择 {} 模型",
-            kind.label()
-        )));
-        return;
-    };
-    win.set_global_status_is_error(false);
-    win.set_global_status(SharedString::from(format!(
-        "正在后台导入 {} 模型，请稍候...",
-        kind.label()
-    )));
-
-    let win_weak_inner = win.as_weak();
-    let cfg_cell_inner = cfg_cell.clone();
-    let thread_name = format!("{}-model-importer", kind.label().to_lowercase());
-    if let Err(e) = std::thread::Builder::new()
-        .name(thread_name)
-        .spawn(move || {
-            let imported_opt = match kind {
-                ModelImportKind::AsrPackage => waylan_voice::import_asr_model_from_dir(&src_path),
-                ModelImportKind::Onnx(sub) => {
-                    waylan_voice::import_onnx_model_from_file(sub, &src_path)
-                }
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = win_weak_inner.upgrade() {
-                    handle_imported_model_event(ImportedModelEventParams {
-                        win: &w,
-                        cfg_cell: &cfg_cell_inner,
-                        kind,
-                        imported_opt,
-                        apply_fn,
-                    });
-                }
-            });
-        })
-    {
-        log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
-        win.set_global_status_is_error(true);
-        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
-    }
 }
 
 /// 在 Slint 主线程中处理模型导入结果并原子更新配置与界面状态

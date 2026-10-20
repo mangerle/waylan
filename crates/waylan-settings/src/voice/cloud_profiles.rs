@@ -19,125 +19,131 @@ use crate::callbacks::TaskRunningGuard;
 use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::SettingsWindow;
 
+/// 云端服务回调共享上下文
+///
+/// # 设计原理
+/// - **实现初衷**：新增、编辑、取消、保存与删除五类回调都要同时持有窗口弱引用、共享配置单元
+///   与当前编辑条目标识，逐回调重复展开会让每个闭包体都退化成多参数转发行。
+/// - **核心优势**：以单一可克隆上下文承载稳定依赖，闭包仅需一次具名函数转发。
+/// - **代价与局限**：上下文随每个回调注册点克隆一份（均为 `Rc` / `Arc` 级轻量句柄）。
+#[derive(Clone)]
+struct CloudProfileCallbackContext {
+    /// 窗口弱引用（升级失败表示窗口已销毁，回调应静默跳过）
+    window_weak: slint::Weak<SettingsWindow>,
+    /// 共享配置单元
+    cfg_cell: Arc<Mutex<AppConfig>>,
+    /// 当前处于编辑态的云端服务条目 ID（None 表示新增态）
+    editing_id: Rc<RefCell<Option<String>>>,
+}
+
 /// 注册云端语音服务管理相关回调（新增、编辑、删除、保存、取消、连接测试）
 pub(crate) fn register_cloud_profile_callbacks(
     window: &SettingsWindow,
     loaded_config: Arc<Mutex<AppConfig>>,
 ) {
-    let editing_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let context = CloudProfileCallbackContext {
+        window_weak: window.as_weak(),
+        cfg_cell: loaded_config.clone(),
+        editing_id: Rc::new(RefCell::new(None)),
+    };
 
-    // 1. 开始新增
-    register_cloud_add_callback(window, editing_id.clone());
+    let add_ctx = context.clone();
+    window.on_start_add_cloud_profile(move || {
+        apply_start_add_cloud_profile(&add_ctx);
+    });
 
-    // 2. 开始编辑
-    register_cloud_edit_callback(window, loaded_config.clone(), editing_id.clone());
+    let edit_ctx = context.clone();
+    window.on_start_edit_cloud_profile(move |idx| {
+        apply_start_edit_cloud_profile(&edit_ctx, idx);
+    });
 
-    // 3. 取消编辑
-    register_cloud_cancel_callback(window, editing_id.clone());
+    let cancel_ctx = context.clone();
+    window.on_cancel_cloud_edit(move || {
+        apply_cancel_cloud_edit(&cancel_ctx);
+    });
 
-    // 4. 保存云端服务
-    register_cloud_save_and_delete(window, loaded_config.clone(), editing_id);
+    let save_ctx = context.clone();
+    window.on_save_cloud_profile(move |name, endpoint, key, model| {
+        let form = CloudProfileFormData {
+            name: &name,
+            endpoint: &endpoint,
+            key: &key,
+            model: &model,
+        };
+        apply_save_cloud_profile(&save_ctx, form);
+    });
 
-    // 5. 测试云端服务
+    window.on_delete_cloud_profile(move |idx| {
+        apply_delete_cloud_profile(&context, idx);
+    });
+
+    // 连通性测试具备独立的防重入标志与后台线程，保持单独注册
     register_cloud_test_callback(window, loaded_config);
 }
 
-/// 注册「开始新增云端服务」回调
+/// 装配新增态云端服务表单初值并进入编辑模式
 ///
-/// 设计意图：新增态的表单初值属于纯界面装配逻辑，与配置持久化无关，故独立成函数，
-/// 使主注册函数仅承担回调注册顺序的编排职责。
-fn register_cloud_add_callback(window: &SettingsWindow, editing_id: Rc<RefCell<Option<String>>>) {
-    let window_weak = window.as_weak();
-    window.on_start_add_cloud_profile(move || {
-        if let Some(win) = window_weak.upgrade() {
-            editing_id.borrow_mut().take();
-            win.set_edit_cloud_name(SharedString::from(""));
-            win.set_edit_cloud_endpoint(SharedString::from(
-                "https://api.openai.com/v1/audio/transcriptions",
-            ));
-            win.set_edit_cloud_key(SharedString::from(""));
-            win.set_edit_cloud_model(SharedString::from("whisper-1"));
-            win.set_is_editing_cloud(true);
-            win.set_global_status(SharedString::from("正在添加新的云端语音服务配置..."));
-        }
-    });
+/// 新增态的表单初值属于纯界面装配逻辑，与配置持久化无关，故不触碰共享配置单元。
+fn apply_start_add_cloud_profile(ctx: &CloudProfileCallbackContext) {
+    let Some(win) = ctx.window_weak.upgrade() else {
+        return;
+    };
+    ctx.editing_id.borrow_mut().take();
+    win.set_edit_cloud_name(SharedString::from(""));
+    win.set_edit_cloud_endpoint(SharedString::from(
+        "https://api.openai.com/v1/audio/transcriptions",
+    ));
+    win.set_edit_cloud_key(SharedString::from(""));
+    win.set_edit_cloud_model(SharedString::from("whisper-1"));
+    win.set_is_editing_cloud(true);
+    win.set_global_status(SharedString::from("正在添加新的云端语音服务配置..."));
 }
 
-/// 注册「开始编辑云端服务」回调
-///
-/// 设计意图：编辑态需要先从当前生效配置中回读目标条目，故必须持有配置锁的共享引用；
-/// 该依赖通过参数显式注入，避免依赖隐式的全局状态。
-fn register_cloud_edit_callback(
-    window: &SettingsWindow,
-    loaded_config: Arc<Mutex<AppConfig>>,
-    editing_id: Rc<RefCell<Option<String>>>,
-) {
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config;
-    window.on_start_edit_cloud_profile(move |idx| {
-        if let Some(win) = window_weak.upgrade() {
-            let index = idx as usize;
-            let cfg = current_cfg_cell.lock().clone();
-            if let Some(p) = cfg.voice.cloud_profiles.get(index) {
-                *editing_id.borrow_mut() = Some(p.id.clone());
-                win.set_edit_cloud_name(SharedString::from(&p.name));
-                win.set_edit_cloud_endpoint(SharedString::from(&p.endpoint));
-                win.set_edit_cloud_key(SharedString::from(p.api_key.as_deref().unwrap_or("")));
-                win.set_edit_cloud_model(SharedString::from(&p.model));
-                win.set_is_editing_cloud(true);
-                win.set_global_status(SharedString::from(format!("正在编辑云端服务: {}", p.name)));
-            }
-        }
-    });
+/// 从共享配置回读指定条目并装配编辑态表单
+fn apply_start_edit_cloud_profile(ctx: &CloudProfileCallbackContext, idx: i32) {
+    let Some(win) = ctx.window_weak.upgrade() else {
+        return;
+    };
+    let cfg = ctx.cfg_cell.lock().clone();
+    let Some(profile) = cfg.voice.cloud_profiles.get(idx as usize) else {
+        return;
+    };
+    *ctx.editing_id.borrow_mut() = Some(profile.id.clone());
+    win.set_edit_cloud_name(SharedString::from(&profile.name));
+    win.set_edit_cloud_endpoint(SharedString::from(&profile.endpoint));
+    win.set_edit_cloud_key(SharedString::from(profile.api_key.as_deref().unwrap_or("")));
+    win.set_edit_cloud_model(SharedString::from(&profile.model));
+    win.set_is_editing_cloud(true);
+    win.set_global_status(SharedString::from(format!(
+        "正在编辑云端服务: {}",
+        profile.name
+    )));
 }
 
-/// 注册「取消编辑云端服务」回调
-fn register_cloud_cancel_callback(
-    window: &SettingsWindow,
-    editing_id: Rc<RefCell<Option<String>>>,
-) {
-    let window_weak = window.as_weak();
-    window.on_cancel_cloud_edit(move || {
-        if let Some(win) = window_weak.upgrade() {
-            editing_id.borrow_mut().take();
-            win.set_is_editing_cloud(false);
-            win.set_global_status(SharedString::from("已取消云端服务编辑。"));
-        }
-    });
+/// 取消云端服务编辑并清空当前编辑标识
+fn apply_cancel_cloud_edit(ctx: &CloudProfileCallbackContext) {
+    let Some(win) = ctx.window_weak.upgrade() else {
+        return;
+    };
+    ctx.editing_id.borrow_mut().take();
+    win.set_is_editing_cloud(false);
+    win.set_global_status(SharedString::from("已取消云端服务编辑。"));
 }
 
-/// 注册云端服务保存与删除回调
-fn register_cloud_save_and_delete(
-    window: &SettingsWindow,
-    loaded_config: Arc<Mutex<AppConfig>>,
-    editing_id: Rc<RefCell<Option<String>>>,
-) {
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    let editing_id_save = editing_id.clone();
-    window.on_save_cloud_profile(move |name, endpoint, key, model| {
-        if let Some(win) = window_weak.upgrade() {
-            handle_save_cloud_profile(
-                &win,
-                &current_cfg_cell,
-                &editing_id_save,
-                CloudProfileFormData {
-                    name: &name,
-                    endpoint: &endpoint,
-                    key: &key,
-                    model: &model,
-                },
-            );
-        }
-    });
+/// 校验并落盘云端服务表单（新增或覆盖当前编辑条目）
+fn apply_save_cloud_profile(ctx: &CloudProfileCallbackContext, form: CloudProfileFormData<'_>) {
+    let Some(win) = ctx.window_weak.upgrade() else {
+        return;
+    };
+    handle_save_cloud_profile(&win, &ctx.cfg_cell, &ctx.editing_id, form);
+}
 
-    let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config;
-    window.on_delete_cloud_profile(move |idx| {
-        if let Some(win) = window_weak.upgrade() {
-            handle_delete_cloud_profile(&win, &current_cfg_cell, &editing_id, idx as usize);
-        }
-    });
+/// 删除指定索引的云端服务条目
+fn apply_delete_cloud_profile(ctx: &CloudProfileCallbackContext, idx: i32) {
+    let Some(win) = ctx.window_weak.upgrade() else {
+        return;
+    };
+    handle_delete_cloud_profile(&win, &ctx.cfg_cell, &ctx.editing_id, idx as usize);
 }
 
 /// 云端语音服务表单提交数据
