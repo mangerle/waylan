@@ -35,7 +35,11 @@ pub(crate) fn handle_digit_selection(
     shift_active: bool,
     now: u64,
 ) -> Option<ImeOutputAction> {
-    if shift_active || session.engine.raw_input().starts_with('v') {
+    if session.engine.raw_input().starts_with('v') {
+        return None;
+    }
+    // Shift+数字默认用于输入符号；仅在用户开启“Shift 选词”后拦截为候选选择
+    if shift_active && !session.shift_select_second {
         return None;
     }
 

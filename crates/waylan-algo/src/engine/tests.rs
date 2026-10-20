@@ -1,5 +1,77 @@
 use super::*;
+use crate::types::CandidateTier;
 use crate::user_adaptive::UserAdaptiveModel;
+
+#[test]
+fn test_acronym_candidates_respect_configuration() {
+    use crate::prism::PrismEngine;
+
+    let mut disabled = AlgoEngine::with_sample_data(AlgoConfig {
+        enable_acronym: false,
+        ..Default::default()
+    });
+    let paths = PrismEngine::build_paths("bj", &disabled.config.fuzzy);
+    let raw = disabled.collect_all_raw_candidates(&paths);
+    println!(
+        "disabled acronym raw: {:?}",
+        raw.iter().map(|c| (&c.text, c.tier)).collect::<Vec<_>>()
+    );
+    assert!(
+        !raw.iter()
+            .any(|c| c.tier == CandidateTier::Acronym && c.text == "北京"),
+        "关闭简拼后不应召回简拼候选"
+    );
+
+    let mut enabled = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let paths = PrismEngine::build_paths("bj", &enabled.config.fuzzy);
+    let raw = enabled.collect_all_raw_candidates(&paths);
+    assert!(
+        raw.iter()
+            .any(|c| c.tier == CandidateTier::Acronym && c.text == "北京"),
+        "开启简拼后应召回北京简拼候选"
+    );
+}
+
+#[test]
+fn test_dynamic_adjust_freq_configuration() {
+    let mut boosted = AlgoEngine::with_sample_data(AlgoConfig::default());
+    boosted
+        .adaptive
+        .model
+        .record_commit_count("你好", "ni'hao", 100, 100);
+    for ch in "nihao".chars() {
+        boosted.push_char(ch);
+    }
+    let boosted_score = boosted
+        .candidates()
+        .iter()
+        .find(|c| c.text == "你好")
+        .map(|c| c.score)
+        .expect("应召回你好");
+
+    let mut static_freq = AlgoEngine::with_sample_data(AlgoConfig {
+        dynamic_adjust_freq: false,
+        ..Default::default()
+    });
+    static_freq
+        .adaptive
+        .model
+        .record_commit_count("你好", "ni'hao", 100, 100);
+    for ch in "nihao".chars() {
+        static_freq.push_char(ch);
+    }
+    let static_score = static_freq
+        .candidates()
+        .iter()
+        .find(|c| c.text == "你好")
+        .map(|c| c.score)
+        .expect("应召回你好");
+
+    assert!(
+        boosted_score > static_score,
+        "开启动态调频后用户历史应提高候选得分: boosted={boosted_score}, static={static_score}"
+    );
+}
 
 #[test]
 fn test_pagination_truncate_and_last_page_guard() {

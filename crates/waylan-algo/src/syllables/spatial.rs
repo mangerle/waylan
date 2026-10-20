@@ -5,6 +5,7 @@
 //! - **核心优势**：通过预计算二维高斯替换代价矩阵与邻键表，在运行期实现纯整数 O(1) 查表。
 
 use super::standard::{is_valid_syllable, STANDARD_SYLLABLES};
+use waylan_core::config::TypoCorrectionRules;
 
 /// 获取标准 QWERTY 键盘字母的物理二维平面坐标 (x, y)
 ///
@@ -294,55 +295,165 @@ pub fn get_spatial_typo_corrections(slice: &str, max_cost: u32) -> Vec<(String, 
 /// 2. 鼻音与辅音快速键入倒置 (neg => eng, agn => ang, ign => ing, ogn => ong)；
 /// 3. 元音轻微丢失或错按 (uen => un)。
 pub fn get_typo_corrections(slice: &str) -> Vec<String> {
+    get_typo_corrections_with_rules(slice, &TypoCorrectionRules::default())
+}
+
+/// 在指定纠错规则下生成输入拼音片段的容错纠错音节列表
+///
+/// 每个细分规则只负责自己声明的变换；主开关关闭时直接返回空列表。
+pub fn get_typo_corrections_with_rules(slice: &str, rules: &TypoCorrectionRules) -> Vec<String> {
+    if !rules.enable || slice.is_empty() {
+        return Vec::new();
+    }
+
     let mut results = Vec::new();
 
-    // 1. ie <=> ei 双向互换 (如 mie <=> mei, tie <=> tei, die <=> dei, xei => xie)
+    // 1. 韵母易混颠倒属于通用拼写容错，受主开关控制
     if slice.contains("ie") {
-        let alt = slice.replace("ie", "ei");
-        if is_valid_syllable(&alt) {
-            results.push(alt);
-        }
+        push_valid_typo(&mut results, slice, slice.replace("ie", "ei"));
     } else if slice.contains("ei") {
-        let alt = slice.replace("ei", "ie");
-        if is_valid_syllable(&alt) {
-            results.push(alt);
-        }
+        push_valid_typo(&mut results, slice, slice.replace("ei", "ie"));
     }
-
-    // 2. ui <=> iu 易混颠倒 (如 gui <=> giu, dui <=> diu)
     if slice.contains("ui") {
-        let alt = slice.replace("ui", "iu");
-        if is_valid_syllable(&alt) {
-            results.push(alt);
-        }
+        push_valid_typo(&mut results, slice, slice.replace("ui", "iu"));
     } else if slice.contains("iu") {
-        let alt = slice.replace("iu", "ui");
-        if is_valid_syllable(&alt) {
-            results.push(alt);
+        push_valid_typo(&mut results, slice, slice.replace("iu", "ui"));
+    }
+
+    // 2. 鼻音与辅音快速键入倒置
+    if rules.gn_ng {
+        if let Some(prefix) = slice.strip_suffix("gn") {
+            push_valid_typo(&mut results, slice, format!("{}ng", prefix));
+        }
+        if let Some(prefix) = slice.strip_suffix("neg") {
+            push_valid_typo(&mut results, slice, format!("{}eng", prefix));
+        }
+    }
+    if rules.mg_ng {
+        if let Some(prefix) = slice.strip_suffix("mg") {
+            push_valid_typo(&mut results, slice, format!("{}ng", prefix));
         }
     }
 
-    // 3. 鼻音辅音结尾倒置与通用 gn 误输: *gn => *ng (如 liagn => liang, zhegn => zheng, shuagn => shuang), neg => eng
-    if let Some(prefix) = slice.strip_suffix("gn") {
-        let alt = format!("{}ng", prefix);
-        if is_valid_syllable(&alt) && !results.contains(&alt) {
-            results.push(alt);
+    // 3. 韵母缩写与 ü 系列输入习惯变换
+    if rules.iou_iu && slice.contains("iou") {
+        push_valid_typo(&mut results, slice, slice.replace("iou", "iu"));
+    }
+    if rules.uei_ui && slice.contains("uei") {
+        push_valid_typo(&mut results, slice, slice.replace("uei", "ui"));
+    }
+    if rules.uen_un && slice.contains("uen") {
+        push_valid_typo(&mut results, slice, slice.replace("uen", "un"));
+    }
+    if rules.ue_ve && slice.contains("ue") {
+        push_valid_typo(&mut results, slice, slice.replace("ue", "ve"));
+    }
+    if rules.v_u {
+        if slice.contains('v') {
+            push_valid_typo(&mut results, slice, slice.replace('v', "u"));
+        }
+        if slice.contains("ve") {
+            push_valid_typo(&mut results, slice, slice.replace("ve", "ue"));
+        }
+        if slice.contains("van") {
+            push_valid_typo(&mut results, slice, slice.replace("van", "uan"));
         }
     }
-    if let Some(prefix) = slice.strip_suffix("neg") {
-        let alt = format!("{}eng", prefix);
-        if is_valid_syllable(&alt) && !results.contains(&alt) {
-            results.push(alt);
-        }
-    }
-
-    // 4. 元音轻微丢失或错按 (uen => un)
-    if slice.contains("uen") {
-        let alt = slice.replace("uen", "un");
-        if is_valid_syllable(&alt) {
-            results.push(alt);
+    if rules.on_ong {
+        if let Some(prefix) = slice.strip_suffix("on") {
+            push_valid_typo(&mut results, slice, format!("{}ong", prefix));
         }
     }
 
     results
+}
+
+/// 将合法且不重复的纠错音节追加到结果列表
+fn push_valid_typo(results: &mut Vec<String>, slice: &str, alternative: String) {
+    if alternative != slice && is_valid_syllable(&alternative) && !results.contains(&alternative) {
+        results.push(alternative);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn corrections(slice: &str, rules: TypoCorrectionRules) -> Vec<String> {
+        get_typo_corrections_with_rules(slice, &rules)
+    }
+
+    #[test]
+    fn test_typo_rules_individual_switches() {
+        let enabled = TypoCorrectionRules::default();
+        assert!(corrections("liagn", enabled).iter().any(|s| s == "liang"));
+        assert!(corrections("liamg", enabled).iter().any(|s| s == "liang"));
+        assert!(corrections("niou", enabled).iter().any(|s| s == "niu"));
+        assert!(corrections("duei", enabled).iter().any(|s| s == "dui"));
+        assert!(corrections("luen", enabled).iter().any(|s| s == "lun"));
+        assert!(corrections("lue", enabled).iter().any(|s| s == "lve"));
+        assert!(corrections("lv", enabled).iter().any(|s| s == "lu"));
+        assert!(corrections("don", enabled).iter().any(|s| s == "dong"));
+    }
+
+    #[test]
+    fn test_typo_rules_can_be_disabled_individually() {
+        let gn_off = TypoCorrectionRules {
+            gn_ng: false,
+            ..Default::default()
+        };
+        assert!(!corrections("liagn", gn_off).iter().any(|s| s == "liang"));
+
+        let mg_off = TypoCorrectionRules {
+            mg_ng: false,
+            ..Default::default()
+        };
+        assert!(!corrections("liamg", mg_off).iter().any(|s| s == "liang"));
+
+        let iou_off = TypoCorrectionRules {
+            iou_iu: false,
+            ..Default::default()
+        };
+        assert!(!corrections("niou", iou_off).iter().any(|s| s == "niu"));
+
+        let uei_off = TypoCorrectionRules {
+            uei_ui: false,
+            ..Default::default()
+        };
+        assert!(!corrections("duei", uei_off).iter().any(|s| s == "dui"));
+
+        let uen_off = TypoCorrectionRules {
+            uen_un: false,
+            ..Default::default()
+        };
+        assert!(!corrections("luen", uen_off).iter().any(|s| s == "lun"));
+
+        let ue_off = TypoCorrectionRules {
+            ue_ve: false,
+            ..Default::default()
+        };
+        assert!(!corrections("lue", ue_off).iter().any(|s| s == "lve"));
+
+        let v_off = TypoCorrectionRules {
+            v_u: false,
+            ..Default::default()
+        };
+        assert!(!corrections("lv", v_off).iter().any(|s| s == "lu"));
+
+        let on_off = TypoCorrectionRules {
+            on_ong: false,
+            ..Default::default()
+        };
+        assert!(!corrections("don", on_off).iter().any(|s| s == "dong"));
+    }
+
+    #[test]
+    fn test_typo_rules_master_switch_disables_all() {
+        let rules = TypoCorrectionRules {
+            enable: false,
+            ..Default::default()
+        };
+        assert!(corrections("liagn", rules).is_empty());
+        assert!(corrections("lue", rules).is_empty());
+    }
 }

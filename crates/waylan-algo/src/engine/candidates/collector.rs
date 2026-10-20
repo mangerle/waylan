@@ -14,7 +14,7 @@ use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
 impl AlgoEngine {
     /// 聚合各维度候选词（专名实体、DAG 路径匹配、长句前缀合成、简拼降级与习惯加权）
-    pub(super) fn collect_all_raw_candidates(
+    pub(crate) fn collect_all_raw_candidates(
         &mut self,
         paths: &[SegmentPath],
     ) -> Vec<AlgoCandidate> {
@@ -201,11 +201,12 @@ impl AlgoEngine {
         let total_units =
             best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
         if total_units >= min_units {
-            if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context(
+            if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context_options(
                 &best_path.syllables,
                 &best_path.remaining,
                 &self.resources.table,
                 self.composition.last_commit_context(),
+                self.config.enable_acronym,
             ) {
                 sentence.score = sentence
                     .score
@@ -263,22 +264,24 @@ impl AlgoEngine {
         paths: &[SegmentPath],
         results: &mut Vec<AlgoCandidate>,
     ) {
-        // 简拼检索
-        let acronym_query = if raw_input.contains('\'') {
-            raw_input.replace('\'', "")
-        } else {
-            raw_input.to_string()
-        };
-        let mut acronym_matches = self
-            .resources
-            .table
-            .lookup_acronym_top_k(&acronym_query, 64);
-        if raw_input.contains('\'') {
-            for am in &mut acronym_matches {
-                am.consumed_len = Some(raw_input.len());
+        // 简拼检索（受用户配置 enable_acronym 控制）
+        if self.config.enable_acronym {
+            let acronym_query = if raw_input.contains('\'') {
+                raw_input.replace('\'', "")
+            } else {
+                raw_input.to_string()
+            };
+            let mut acronym_matches = self
+                .resources
+                .table
+                .lookup_acronym_top_k(&acronym_query, 64);
+            if raw_input.contains('\'') {
+                for am in &mut acronym_matches {
+                    am.consumed_len = Some(raw_input.len());
+                }
             }
+            results.append(&mut acronym_matches);
         }
-        results.append(&mut acronym_matches);
 
         // 首音节单字降级备选
         if let Some(first_path) = paths.first() {
@@ -327,7 +330,7 @@ impl AlgoEngine {
             .map(|prev| (prev, self.resources.table.get_word_id(prev)));
 
         for c in candidates {
-            if c.tier != CandidateTier::UserHistory {
+            if self.config.dynamic_adjust_freq && c.tier != CandidateTier::UserHistory {
                 self.adaptive.model.apply_boost(c, eval_ts);
             }
             if let Some((prev, prev_id_opt)) = prev_context_info {

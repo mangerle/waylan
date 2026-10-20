@@ -1,6 +1,7 @@
 use crate::entity::EntityProtectionManager;
 use crate::syllables::{has_strictly_longer_syllable, has_syllable_prefix, is_valid_syllable};
 use crate::types::FuzzyConfig;
+use waylan_core::config::TypoCorrectionRules;
 pub mod fsa;
 pub mod fuzzy;
 pub mod traversal;
@@ -36,6 +37,16 @@ impl PrismEngine {
         fuzzy: &FuzzyConfig,
         entity_mgr: Option<&EntityProtectionManager>,
     ) -> Vec<SegmentPath> {
+        Self::build_paths_with_options(input, fuzzy, &TypoCorrectionRules::default(), entity_mgr)
+    }
+
+    /// 构建拼写音节图并应用用户配置的拼音纠错规则
+    pub fn build_paths_with_options(
+        input: &str,
+        fuzzy: &FuzzyConfig,
+        typo_rules: &TypoCorrectionRules,
+        entity_mgr: Option<&EntityProtectionManager>,
+    ) -> Vec<SegmentPath> {
         if input.is_empty() {
             return Vec::new();
         }
@@ -66,6 +77,7 @@ impl PrismEngine {
             let mut ctx = DfsContext {
                 input,
                 fuzzy,
+                typo_rules,
                 enable_typo: false,
                 current: &mut current_syllables,
                 results: &mut paths,
@@ -125,10 +137,11 @@ impl PrismEngine {
         });
 
         // 第二阶段：若非纯声母缩写，且非正常全拼键入流（存在断流、孤立辅音声母或非法残余前缀），启动容错虚边补救搜索
-        if !is_pure_initials && !is_normal_typing {
+        if !is_pure_initials && !is_normal_typing && typo_rules.enable {
             let mut ctx = DfsContext {
                 input,
                 fuzzy,
+                typo_rules,
                 enable_typo: true,
                 current: &mut current_syllables,
                 results: &mut paths,

@@ -102,8 +102,8 @@ impl ImeCoreSession {
             _ => {}
         }
 
-        // 2. 数字键 1..=6 选词（Shift 状态下不作为数字选词）
-        if !self.is_shift_active() {
+        // 2. 数字键 1..=6 选词（Shift 状态下需显式开启 Shift 选词）
+        if !self.is_shift_active() || self.shift_select_second {
             if let Some(digit) = keycode_to_digit(key) {
                 if (1..=6).contains(&digit) {
                     let target_idx = row * GRID_COLS + (digit - 1);

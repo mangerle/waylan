@@ -199,9 +199,10 @@ impl AlgoEngine {
             return Cow::Borrowed(self.composition.cached_preedit());
         }
 
-        let paths = PrismEngine::build_paths_with_entities(
+        let paths = PrismEngine::build_paths_with_options(
             raw,
             &self.config.fuzzy,
+            &self.config.typo_rules,
             Some(&self.resources.entity_manager),
         );
         if let Some(first_path) = paths.first() {
@@ -254,9 +255,10 @@ impl AlgoEngine {
         }
 
         // 前缀切分场景：基于前缀切分路径长度计算字节偏移
-        let prefix_paths = PrismEngine::build_paths_with_entities(
+        let prefix_paths = PrismEngine::build_paths_with_options(
             raw_prefix,
             &self.config.fuzzy,
+            &self.config.typo_rules,
             Some(&self.resources.entity_manager),
         );
         if let Some(first) = prefix_paths.first() {

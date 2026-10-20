@@ -96,6 +96,17 @@ impl ViterbiDecoder {
         table: &LexiconTable,
         prev_context: Option<&str>,
     ) -> Option<AlgoCandidate> {
+        Self::decode_sentence_with_context_options(syllables, remaining, table, prev_context, true)
+    }
+
+    /// 对给定的音节序列进行整句动态规划求解，并可控制是否启用简拼尾部扩展
+    pub fn decode_sentence_with_context_options(
+        syllables: &[String],
+        remaining: &str,
+        table: &LexiconTable,
+        prev_context: Option<&str>,
+        enable_acronym: bool,
+    ) -> Option<AlgoCandidate> {
         let n = syllables.len();
         if n == 0 && remaining.is_empty() {
             return None;
@@ -141,6 +152,7 @@ impl ViterbiDecoder {
                     table,
                     has_bigram,
                     prev_context,
+                    enable_acronym,
                 },
                 &dp,
             ) {

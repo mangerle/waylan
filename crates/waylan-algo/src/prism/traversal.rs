@@ -10,13 +10,17 @@ use std::str;
 use crate::prism::fsa::PrismFsa;
 use crate::prism::fuzzy::PrismFuzzy;
 use crate::prism::types::{SegmentPath, STANDARD_INITIALS};
-use crate::syllables::{get_spatial_typo_corrections, get_typo_corrections, has_syllable_prefix};
+use crate::syllables::{
+    get_spatial_typo_corrections, get_typo_corrections_with_rules, has_syllable_prefix,
+};
 use crate::types::FuzzyConfig;
+use waylan_core::config::TypoCorrectionRules;
 
 /// 音节图深度优先搜索上下文（收敛递归参数）
 pub struct DfsContext<'a> {
     pub input: &'a str,
     pub fuzzy: &'a FuzzyConfig,
+    pub typo_rules: &'a TypoCorrectionRules,
     pub enable_typo: bool,
     pub current: &'a mut Vec<String>,
     pub results: &'a mut Vec<SegmentPath>,
@@ -76,7 +80,7 @@ fn explore_spatial_and_rule_typo(
         }
         let slice = &ctx.input[start..end];
         let mut corrections = get_spatial_typo_corrections(slice, 25);
-        for rule_alt in get_typo_corrections(slice) {
+        for rule_alt in get_typo_corrections_with_rules(slice, ctx.typo_rules) {
             if !corrections.iter().any(|(s, _)| s == &rule_alt) {
                 corrections.push((rule_alt, 16));
             }

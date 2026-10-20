@@ -290,3 +290,41 @@ fn test_ime_core_session_expanded_card_and_reset_context() {
     assert!(!session.is_grid_expanded());
     assert!(session.engine.raw_input().is_empty());
 }
+
+#[test]
+fn test_shift_digit_selection_toggle() {
+    let mut session = make_test_session();
+    for ch in "nihao".chars() {
+        session.engine.push_char(ch);
+    }
+
+    let disabled = handle_composition_key_with_params(
+        &mut session,
+        CompositionKeyParams {
+            key: KEY_1,
+            shift_active: true,
+            page_keys: PageKeyConfig::default(),
+            now: 100,
+        },
+    );
+    assert!(
+        disabled.is_none(),
+        "未开启 Shift 选词时 Shift+数字应保持透传"
+    );
+    assert_eq!(session.engine.raw_input(), "nihao");
+
+    session.shift_select_second = true;
+    let enabled = handle_composition_key_with_params(
+        &mut session,
+        CompositionKeyParams {
+            key: KEY_1,
+            shift_active: true,
+            page_keys: PageKeyConfig::default(),
+            now: 101,
+        },
+    );
+    assert!(
+        matches!(enabled, Some(ImeOutputAction::Commit(_))),
+        "开启 Shift 选词后 Shift+数字应选择对应候选"
+    );
+}

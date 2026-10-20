@@ -101,6 +101,9 @@ impl AlgoEngine {
                 .table
                 .lookup_prefix_extension(tail_syl, remaining)
         } else {
+            if !self.config.enable_acronym {
+                return Vec::new();
+            }
             let acronym_key = initial_chain.concat();
             self.resources.table.lookup_acronym(&acronym_key)
         }
@@ -111,11 +114,12 @@ impl AlgoEngine {
         let head_key = effective_head_syls.join("'");
         let mut head_options: Vec<(String, String, u32)> = Vec::with_capacity(2);
 
-        if let Some(sentence) = ViterbiDecoder::decode_sentence_with_context(
+        if let Some(sentence) = ViterbiDecoder::decode_sentence_with_context_options(
             effective_head_syls,
             "",
             &self.resources.table,
             self.composition.last_commit_context(),
+            self.config.enable_acronym,
         ) {
             head_options.push((sentence.text, head_key.clone(), sentence.score));
         }

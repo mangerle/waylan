@@ -71,9 +71,10 @@ impl AlgoEngine {
     /// 基于 Prism 构建音节切分 DAG 路径与预编辑字符串
     fn build_pinyin_paths_and_preedit(&self) -> (Vec<SegmentPath>, String) {
         let raw = self.composition.as_str();
-        let paths = PrismEngine::build_paths_with_entities(
+        let paths = PrismEngine::build_paths_with_options(
             raw,
             &self.config.fuzzy,
+            &self.config.typo_rules,
             Some(&self.resources.entity_manager),
         );
         let preedit_str = paths

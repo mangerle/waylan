@@ -36,6 +36,8 @@ pub struct ImeCoreSession {
     pub punctuation_processor: PunctuationProcessor,
     /// 翻页与选词热键配置
     pub page_keys: PageKeyConfig,
+    /// 是否允许使用 Shift+数字键选择对应候选词
+    pub shift_select_second: bool,
     /// 动态键盘物理扫描码到字符的映射表（适配 QWERTY、Dvorak 等）
     pub keymap_layout: KeymapLayout,
     /// 当前输入模式（中文 / 英文 / V模式）
@@ -82,6 +84,7 @@ impl ImeCoreSession {
             shift_sm: ShiftToggleStateMachine::new(),
             punctuation_processor,
             page_keys: PageKeyConfig::default(),
+            shift_select_second: false,
             keymap_layout: KeymapLayout::default(),
             mode: InputMode::Chinese,
             consumed_keys: ConsumedKeyTracker::new(),

@@ -1,5 +1,6 @@
 use super::*;
 use crate::types::FuzzyConfig;
+use waylan_core::config::TypoCorrectionRules;
 
 #[test]
 fn test_non_ascii_input_safe_degradation() {
@@ -100,4 +101,26 @@ fn test_dedup_best_paths_retains_optimal() {
     assert_eq!(paths[0].cost, 20);
     assert!(!paths[0].is_typo);
     assert_eq!(paths[1].remaining, "a");
+}
+
+#[test]
+fn test_typo_rules_master_switch() {
+    let fuzzy = FuzzyConfig::default();
+
+    let enabled = TypoCorrectionRules::default();
+    let paths = PrismEngine::build_paths_with_options("zhuagn", &fuzzy, &enabled, None);
+    assert!(
+        paths.iter().any(|p| p.is_typo),
+        "开启纠错规则时应生成容错路径"
+    );
+
+    let master_disabled = TypoCorrectionRules {
+        enable: false,
+        ..Default::default()
+    };
+    let paths = PrismEngine::build_paths_with_options("zhuagn", &fuzzy, &master_disabled, None);
+    assert!(
+        paths.iter().all(|p| !p.is_typo),
+        "纠错主开关关闭后不得生成任何容错路径"
+    );
 }

@@ -166,6 +166,7 @@ impl ImeRuntime {
         ));
         self.core.set_page_size(cfg.ui.page_size);
         self.core.page_keys = waylan_core::input::PageKeyConfig::from(cfg.shortcuts.page_keys);
+        self.core.shift_select_second = cfg.shortcuts.shift_select_second;
         self.core.traditional_shortcut = ParsedShortcut::parse(&cfg.shortcuts.traditional_shortcut);
         self.core.full_width_char_shortcut =
             ParsedShortcut::parse(&cfg.shortcuts.full_width_char_shortcut);

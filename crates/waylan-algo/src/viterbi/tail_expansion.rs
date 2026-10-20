@@ -20,6 +20,7 @@ pub(super) struct TailExpansionContext<'a> {
     pub table: &'a LexiconTable,
     pub has_bigram: bool,
     pub prev_context: Option<&'a str>,
+    pub enable_acronym: bool,
 }
 
 /// 候选分支扩展项 (回溯步索引, 束索引, 扩展词文本, 累计得分)
@@ -37,8 +38,10 @@ pub(super) fn expand_remaining_tail(
     let k = initial_chain.len();
 
     if k >= 2 {
-        // 策略 A1：多声母连续简拼链绑定
-        expand_acronym_chain(ctx, &initial_chain, split_idx, dp, &mut ext_candidates);
+        // 策略 A1：多声母连续简拼链绑定（受用户配置控制）
+        if ctx.enable_acronym {
+            expand_acronym_chain(ctx, &initial_chain, split_idx, dp, &mut ext_candidates);
+        }
     } else if split_idx >= 1 && !dp[split_idx - 1].is_empty() {
         // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词
         expand_compound_with_prefix(ctx, split_idx, dp, &mut ext_candidates);

@@ -142,7 +142,7 @@ pub struct ShortcutConfig {
     /// 标点全角/半角切换快捷键（如 "Ctrl + ."、"已禁用"）
     #[serde(deserialize_with = "deserialize_full_width_punct_shortcut")]
     pub full_width_punct_shortcut: String,
-    /// 是否允许使用 Shift 键选择次选词
+    /// 是否允许使用 Shift+数字键选择对应候选词
     pub shift_select_second: bool,
 }
 

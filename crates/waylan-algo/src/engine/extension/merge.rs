@@ -56,6 +56,9 @@ impl AlgoEngine {
         is_broken_typo: bool,
         candidates: &mut Vec<AlgoCandidate>,
     ) {
+        if !self.config.typo_rules.enable {
+            return;
+        }
         let has_exact_or_prefix_words = candidates.iter().any(|c| {
             c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity
         });
@@ -70,9 +73,12 @@ impl AlgoEngine {
             .cloned()
             .collect();
 
-        for mut spatial_cand in
-            SpatialTypoCorrector::generate_candidates(raw_input, &self.resources.table)
-        {
+        for mut spatial_cand in SpatialTypoCorrector::generate_candidates(
+            raw_input,
+            &self.resources.table,
+            &self.config.fuzzy,
+            &self.config.typo_rules,
+        ) {
             if self.config.traditional_chinese {
                 spatial_cand.text = self.resources.opencc_dict.convert_text(&spatial_cand.text);
             }
@@ -169,7 +175,7 @@ impl AlgoEngine {
                 found_exact_2 = true;
             }
         }
-        if !found_exact_2 {
+        if !found_exact_2 && self.config.enable_acronym {
             let acronym_2 = best_path.syllables[..2].concat();
             for mut cand in self.resources.table.lookup_acronym_top_k(&acronym_2, 2) {
                 cand.consumed_len = Some(Self::calculate_consumed_len(

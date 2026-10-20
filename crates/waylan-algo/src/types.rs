@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use waylan_core::config::FuzzyPinyinRules;
+use waylan_core::config::{FuzzyPinyinRules, TypoCorrectionRules};
 use waylan_core::AppConfig;
 
 /// 模糊音细粒度规则配置别名（统一收敛至 core::config::FuzzyPinyinRules，消除重复抽象）
@@ -30,8 +30,14 @@ pub struct AlgoConfig {
     pub show_pinyin_comment: bool,
     /// 是否开启多路候选词自动去重
     pub auto_dedup: bool,
+    /// 是否开启基于用户击键的自适应词频调整
+    pub dynamic_adjust_freq: bool,
+    /// 是否启用首字母简拼候选召回
+    pub enable_acronym: bool,
     /// 模糊音配置
     pub fuzzy: FuzzyConfig,
+    /// 拼音纠错规则配置
+    pub typo_rules: TypoCorrectionRules,
     /// 是否开启中西文智能空格（盘古之白，在中英文/数字交界处自动补齐半角空格）
     pub auto_pangu_spacing: bool,
 }
@@ -47,7 +53,10 @@ impl Default for AlgoConfig {
             filter_uncommon_charset: false,
             show_pinyin_comment: true,
             auto_dedup: true,
+            dynamic_adjust_freq: true,
+            enable_acronym: true,
             fuzzy: FuzzyConfig::default(),
+            typo_rules: TypoCorrectionRules::default(),
             auto_pangu_spacing: false,
         }
     }
@@ -64,11 +73,14 @@ impl From<&AppConfig> for AlgoConfig {
             filter_uncommon_charset: cfg.pinyin.filter_uncommon_charset,
             show_pinyin_comment: cfg.ui.show_pinyin_comment,
             auto_dedup: cfg.pinyin.auto_dedup,
+            dynamic_adjust_freq: cfg.pinyin.dynamic_adjust_freq,
+            enable_acronym: cfg.pinyin.enable_acronym,
             fuzzy: if cfg.pinyin.fuzzy_pinyin {
                 cfg.pinyin.fuzzy_rules
             } else {
                 FuzzyConfig::default()
             },
+            typo_rules: cfg.pinyin.typo_rules,
             auto_pangu_spacing: cfg.pinyin.auto_pangu_spacing,
         }
     }

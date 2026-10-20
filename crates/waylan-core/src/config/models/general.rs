@@ -181,7 +181,7 @@ impl FuzzyPinyinRules {
 }
 
 /// 拼音纠错细分规则配置（对应拼音模式页面拼音纠错开关）
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TypoCorrectionRules {
     /// 是否启用拼音纠错主开关
