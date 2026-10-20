@@ -17,6 +17,41 @@ const IBUS_PROP_TYPE_NORMAL: u32 = 0;
 /// IBus 属性状态：未选中 (`PROP_STATE_UNCHECKED`)
 const IBUS_PROP_STATE_UNCHECKED: u32 = 0;
 
+/// 可激活属性键：中英文输入模式切换
+pub const KEY_INPUT_MODE: &str = "InputMode";
+/// 可激活属性键：简繁切换
+pub const KEY_TRADITIONAL: &str = "TraditionalChinese";
+/// 可激活属性键：标点全半角切换
+pub const KEY_FULL_WIDTH_PUNCT: &str = "FullWidthPunct";
+/// 可激活属性键：英文字符全半角切换
+pub const KEY_FULL_WIDTH_CHAR: &str = "FullWidthChar";
+/// 可激活属性键：词库与配置热重载
+pub const KEY_RELOAD_CONFIG: &str = "ReloadConfig";
+/// 可激活属性键：打开偏好设置
+pub const KEY_SETUP: &str = "Setup";
+/// 可激活属性键：查看运行日志
+pub const KEY_VIEW_LOG: &str = "ViewLog";
+/// 可激活属性键：重启守护进程
+pub const KEY_RESTART: &str = "RestartWaylan";
+/// 可激活属性键：退出守护进程
+pub const KEY_EXIT: &str = "ExitWaylan";
+
+/// 原生状态栏可激活属性键全集
+///
+/// 面板端点击回传 `PropertyActivate(key)`，构建侧与分派侧必须共用这一组常量：
+/// 两侧各写一遍字面量时，新增菜单项忘记加分派分支会表现为"菜单项可见但点击无反应"的静默缺陷。
+pub const IBUS_ACTIVATABLE_KEYS: [&str; 9] = [
+    KEY_INPUT_MODE,
+    KEY_TRADITIONAL,
+    KEY_FULL_WIDTH_PUNCT,
+    KEY_FULL_WIDTH_CHAR,
+    KEY_RELOAD_CONFIG,
+    KEY_SETUP,
+    KEY_VIEW_LOG,
+    KEY_RESTART,
+    KEY_EXIT,
+];
+
 /// IBus 通用操作属性项构建参数包
 ///
 /// # 设计原理
@@ -100,7 +135,7 @@ pub fn build_input_mode_property(
     };
     let icon_path = resolve_mode_icon(mode, is_caps_locked);
     build_action_property(&ActionPropertyParams {
-        key: "InputMode",
+        key: KEY_INPUT_MODE,
         label: label_str,
         icon: &icon_path,
         tooltip: "点击或按切换键更改中英文输入状态",
@@ -116,7 +151,7 @@ pub fn build_traditional_property(traditional_chinese: bool) -> Result<OwnedValu
         "简繁切换: 简体"
     };
     build_action_property(&ActionPropertyParams {
-        key: "TraditionalChinese",
+        key: KEY_TRADITIONAL,
         label,
         icon: "character-set",
         tooltip: "点击切换简体或繁体输入模式",
@@ -132,7 +167,7 @@ pub fn build_full_width_punct_property(full_width_punct: bool) -> Result<OwnedVa
         "标点切换: 半角 (英文标点)"
     };
     build_action_property(&ActionPropertyParams {
-        key: "FullWidthPunct",
+        key: KEY_FULL_WIDTH_PUNCT,
         label,
         icon: "accessories-character-map",
         tooltip: "点击切换全角或半角标点符号",
@@ -148,7 +183,7 @@ pub fn build_full_width_char_property(full_width_char: bool) -> Result<OwnedValu
         "字符切换: 半角 (英文字母)"
     };
     build_action_property(&ActionPropertyParams {
-        key: "FullWidthChar",
+        key: KEY_FULL_WIDTH_CHAR,
         label,
         icon: "format-text-bold",
         tooltip: "点击切换全角或半角英文字母",
@@ -177,6 +212,11 @@ pub struct IbusPropListParams {
 
 /// 构造包含微澜状态与操作菜单的 `IBusPropList` 变体对象（用于 `RegisterProperties`），签名 `(sa{sv}av)`
 ///
+/// 共 9 项，与守护进程专属托盘的菜单项保持一一对应：四项状态切换（中英、简繁、标点全半角、
+/// 字符全半角）、三项功能动作（重载词库、偏好设置、查看日志）与两项生命周期（重启、退出）。
+/// IBus 面板端（`ibus-ui-gtk3` 与 GNOME Shell 键盘指示器）会把该属性树展平为托盘右键菜单，
+/// 点击回传 `PropertyActivate(key)`，故 key 必须与 `handle_property_activate` 的分派表严格一致。
+///
 /// # Errors
 /// 当属性列表序列化失败时返回错误。
 pub fn build_ibus_prop_list(params: &IbusPropListParams) -> Result<OwnedValue, VariantError> {
@@ -193,24 +233,38 @@ pub fn build_ibus_prop_list(params: &IbusPropListParams) -> Result<OwnedValue, V
         build_full_width_punct_property(full_width_punct)?,
         build_full_width_char_property(full_width_char)?,
         build_action_property(&ActionPropertyParams {
-            key: "ReloadConfig",
+            key: KEY_RELOAD_CONFIG,
             label: "重载词库与配置",
             icon: "view-refresh",
             tooltip: "立即热重载微澜配置文件与用户词库",
             symbol: "",
         })?,
         build_action_property(&ActionPropertyParams {
-            key: "Setup",
+            key: KEY_SETUP,
             label: "偏好设置",
             icon: "preferences-system",
             tooltip: "打开微澜图形化偏好设置中心",
             symbol: "",
         })?,
         build_action_property(&ActionPropertyParams {
-            key: "ViewLog",
+            key: KEY_VIEW_LOG,
             label: "查看运行日志",
             icon: "text-x-generic",
             tooltip: "使用系统默认程序打开微澜运行日志",
+            symbol: "",
+        })?,
+        build_action_property(&ActionPropertyParams {
+            key: KEY_RESTART,
+            label: "重启微澜输入法",
+            icon: "system-reboot",
+            tooltip: "等待旧实例完全释放后拉起新实例",
+            symbol: "",
+        })?,
+        build_action_property(&ActionPropertyParams {
+            key: KEY_EXIT,
+            label: "退出微澜输入法",
+            icon: "application-exit",
+            tooltip: "触发优雅停机与用户词库落盘后退出",
             symbol: "",
         })?,
     ];

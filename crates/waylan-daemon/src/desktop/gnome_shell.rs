@@ -14,11 +14,12 @@ pub use waylan_sys::desktop::{
 /// 由应用配置解析 GNOME 扩展启用意图
 ///
 /// 扩展的"隐藏原生指示器"与"接管候选框渲染"两职分别对应 `desktop.exclusive_input_source`
-/// 与 `ui.candidate_window_mode`，二者互不蕴含，故必须同时读取。
+/// 与 `ui.candidate_window_mode`，二者互不蕴含，故必须同时读取。独占意图走
+/// `effective_exclusive_source`，以便运维环境变量强制位与托盘形态保持一致。
 #[must_use]
 pub fn gnome_extension_intent(cfg: &AppConfig) -> GnomeExtensionIntent {
     GnomeExtensionIntent {
-        hide_indicator: cfg.desktop.exclusive_input_source,
+        hide_indicator: crate::system::effective_exclusive_source(cfg),
         custom_candidate_view: cfg.uses_custom_candidate_view(),
     }
 }

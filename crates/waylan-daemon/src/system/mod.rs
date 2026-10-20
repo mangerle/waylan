@@ -132,12 +132,12 @@ pub fn collect_watched_paths() -> (Vec<PathBuf>, Option<waylan_sys::FileSignatur
     (watched_paths, initial_sig)
 }
 
-/// 计算托盘展示形态与独占输入源配置
-pub fn determine_tray_and_exclusive(cfg: &AppConfig, use_ibus_backend: bool) -> (bool, bool) {
+/// 计算守护进程是否需要拉起专属彩色托盘
+pub fn determine_tray_should_spawn(cfg: &AppConfig, use_ibus_backend: bool) -> bool {
     let is_gnome = env::var("XDG_CURRENT_DESKTOP")
         .map(|d| d.to_uppercase().contains("GNOME"))
         .unwrap_or(false);
-    let should_spawn_tray = match cfg.desktop.enable_tray {
+    match cfg.desktop.enable_tray {
         waylan_core::TrayDisplayMode::Always => true,
         waylan_core::TrayDisplayMode::Never => false,
         waylan_core::TrayDisplayMode::Auto => {
@@ -146,12 +146,19 @@ pub fn determine_tray_and_exclusive(cfg: &AppConfig, use_ibus_backend: bool) -> 
                 .unwrap_or(false);
             env_force || (!use_ibus_backend && !is_gnome)
         }
-    };
-    let exclusive_source = cfg.desktop.exclusive_input_source
+    }
+}
+
+/// 解析生效的独占输入源意图：配置项与运维环境变量强制位取或
+///
+/// 环境变量通道供无人值守部署与故障排查使用，必须同时作用于托盘形态与 GNOME 扩展决策，
+/// 否则会出现"环境变量已置位但扩展状态未对齐"的分裂。
+#[must_use]
+pub fn effective_exclusive_source(cfg: &AppConfig) -> bool {
+    cfg.desktop.exclusive_input_source
         || env::var("WAYLAN_EXCLUSIVE_INPUT_SOURCE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-    (should_spawn_tray, exclusive_source)
+            .unwrap_or(false)
 }
 
 /// 唤起独立的微澜偏好设置中心图形界面

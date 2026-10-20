@@ -10,7 +10,7 @@ use waylan_daemon::session_bundle::{
     IbusDispatchOptions, WaylandDispatchOptions,
 };
 use waylan_daemon::system::{
-    check_another_instance_running, collect_watched_paths, determine_tray_and_exclusive,
+    check_another_instance_running, collect_watched_paths, determine_tray_should_spawn,
     launch_settings_gui, try_acquire_single_instance_lock, ShutdownCoordinator, SingleInstanceLock,
 };
 use waylan_daemon::{desktop, logger, tray};
@@ -160,7 +160,7 @@ fn dispatch_active_session(
     let caps = check_wayland_capabilities();
     let use_ibus = opts.ibus_backend || (!caps.has_input_method_v2 && !caps.has_input_method_v1);
     let (watched_paths, initial_mtime) = collect_watched_paths();
-    let (should_spawn_tray, exclusive_source) = determine_tray_and_exclusive(&cfg, use_ibus);
+    let should_spawn_tray = determine_tray_should_spawn(&cfg, use_ibus);
 
     let tray = if should_spawn_tray {
         Some(tray::TrayService::spawn(coordinator.clone()))
@@ -173,7 +173,6 @@ fn dispatch_active_session(
             engine,
             is_ibus_arg: opts.ibus_backend,
             should_spawn_tray,
-            exclusive_source,
             watched_paths,
             initial_mtime,
             tray: tray.as_ref(),

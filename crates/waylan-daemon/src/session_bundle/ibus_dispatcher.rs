@@ -31,7 +31,6 @@ pub struct IbusDispatchOptions<'a> {
     pub engine: AlgoEngine,
     pub is_ibus_arg: bool,
     pub should_spawn_tray: bool,
-    pub exclusive_source: bool,
     pub watched_paths: Vec<PathBuf>,
     pub initial_mtime: Option<waylan_sys::FileSignature>,
     pub tray: Option<&'a TrayService>,
@@ -41,6 +40,7 @@ pub struct IbusDispatchOptions<'a> {
 /// 宿主 IBus 菜单项外部动作处理器
 struct DaemonIbusMenuHandler {
     subprocess_manager: Arc<SubprocessManager>,
+    coordinator: ShutdownCoordinator,
 }
 
 impl IbusMenuActionHandler for DaemonIbusMenuHandler {
@@ -50,6 +50,18 @@ impl IbusMenuActionHandler for DaemonIbusMenuHandler {
 
     fn view_log(&self) {
         self.subprocess_manager.launch_view_log();
+    }
+
+    fn restart(&self) {
+        info!(
+            "[微澜守护进程] 收到 IBus 原生菜单重启指令，正在排队等待旧实例完全释放后拉起新实例..."
+        );
+        self.coordinator.trigger_graceful_restart();
+    }
+
+    fn quit(&self) {
+        info!("[微澜守护进程] 收到 IBus 原生菜单退出指令，正在触发优雅停机与数据落盘流程...");
+        self.coordinator.request_shutdown();
     }
 }
 
@@ -191,6 +203,7 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {
         subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),
+        coordinator: opts.coordinator.clone(),
     });
     let config_reloader = build_config_reloader(initial_intent);
     let ibus_coordinator = build_ibus_coordinator(&opts.coordinator);
@@ -202,7 +215,10 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
         initial_mtime: opts.initial_mtime,
         reload_requested: opts.tray.as_ref().map(|t| t.reload_flag()),
         coordinator: ibus_coordinator,
-        suppress_properties: opts.should_spawn_tray && opts.exclusive_source,
+        // 菜单承载权归"当家的托盘"：专属彩色托盘在跑时由它承载 9 项菜单，抑制引擎属性上报以免重复；
+        // 专属托盘未启用时（enable_tray=never 或非 GNOME 宿主）必须发出属性树，否则 IBus /
+        // GNOME 原生指示器菜单里只剩系统通用项，微澜功能无从触达。
+        suppress_properties: opts.should_spawn_tray,
         menu_handler: Some(menu_handler),
         config_reloader: Some(config_reloader),
     });

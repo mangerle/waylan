@@ -72,6 +72,62 @@ mod tests {
     }
 
     #[test]
+    fn test_ibus_prop_list_keys_match_activatable_set() {
+        let prop_list = build_ibus_prop_list(&IbusPropListParams {
+            mode: InputMode::Chinese,
+            is_caps_locked: false,
+            traditional_chinese: false,
+            full_width_punct: true,
+            full_width_char: false,
+        })
+        .expect("序列化 IBusPropList 失败");
+
+        let keys = extract_prop_keys(&prop_list).expect("属性列表结构解析失败");
+        assert_eq!(
+            keys,
+            IBUS_ACTIVATABLE_KEYS.to_vec(),
+            "属性树键集合必须与激活分派表共用同一常量，顺序与数量都需一致"
+        );
+    }
+
+    /// 逐层解开 zvariant 装箱，取出 `IBusProperty` 结构体的键名字段（第 3 个字段）
+    fn unwrap_structure<'a>(
+        val: &'a zbus::zvariant::Value<'a>,
+    ) -> Option<&'a [zbus::zvariant::Value<'a>]> {
+        let mut inner = val;
+        while let zbus::zvariant::Value::Value(v) = inner {
+            inner = v.as_ref();
+        }
+        match inner {
+            zbus::zvariant::Value::Structure(s) => Some(s.fields()),
+            _ => None,
+        }
+    }
+
+    /// 从 `IBusPropList` 变体中按序提取全部属性键名
+    fn extract_prop_keys(prop_list: &zbus::zvariant::OwnedValue) -> Option<Vec<String>> {
+        let fields = unwrap_structure(prop_list)?;
+        let props_value = &fields[2];
+        let mut inner = props_value;
+        while let zbus::zvariant::Value::Value(v) = inner {
+            inner = v.as_ref();
+        }
+        let array = match inner {
+            zbus::zvariant::Value::Array(arr) => arr,
+            _ => return None,
+        };
+        let mut keys = Vec::with_capacity(array.len());
+        for item in array.iter() {
+            let prop_fields = unwrap_structure(item)?;
+            match &prop_fields[2] {
+                zbus::zvariant::Value::Str(text) => keys.push(text.as_str().to_string()),
+                _ => return None,
+            }
+        }
+        Some(keys)
+    }
+
+    #[test]
     fn test_ibus_prop_and_component_signature() {
         let prop =
             build_input_mode_property(InputMode::Chinese, false).expect("序列化 IBusProperty 失败");

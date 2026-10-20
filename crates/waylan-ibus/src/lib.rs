@@ -37,6 +37,10 @@ pub trait IbusMenuActionHandler: Send + Sync {
     fn open_settings(&self, settings_running: &Arc<AtomicBool>);
     /// 打开系统运行日志查看器
     fn view_log(&self);
+    /// 重启输入法守护进程（等待旧实例释放后拉起新实例）
+    fn restart(&self);
+    /// 退出输入法守护进程（优雅停机并落盘用户词库）
+    fn quit(&self);
 }
 
 /// IBus 词库与运行配置热重载驱动接口
