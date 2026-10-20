@@ -61,6 +61,15 @@ pub enum DictImportError {
         reason: String,
     },
 
+    /// 读取现有用户词库失败，为避免覆盖历史数据而中止导入
+    #[error("读取现有用户词库失败，路径: {path}，原因: {reason}；已中止导入以保护历史数据")]
+    UserDictLoadFailed {
+        /// 用户词库路径
+        path: PathBuf,
+        /// 读取或解析失败原因
+        reason: String,
+    },
+
     /// 自适应词库模型更新或持久化保存失败
     #[error("保存用户词库失败，路径: {path}，原因: {reason}")]
     SaveFailed {

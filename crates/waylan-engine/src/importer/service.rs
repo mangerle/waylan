@@ -80,7 +80,12 @@ impl DictImportService {
         let imported_count = entries.len();
 
         let dst = user_dict_path.as_ref();
-        let mut user_model = UserAdaptiveModel::load_or_replay_wal(dst).unwrap_or_default();
+        let mut user_model = UserAdaptiveModel::load_or_replay_wal(dst).map_err(|e| {
+            DictImportError::UserDictLoadFailed {
+                path: dst.to_path_buf(),
+                reason: e.to_string(),
+            }
+        })?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -276,5 +281,33 @@ mod tests {
             DictImportService::import_symbols_dict(temp_sym.path(), &mut aux, None).unwrap();
         assert_eq!(res_sym.added_count, 2);
         assert_eq!(res_sym.total_count, 2);
+    }
+}
+
+#[cfg(test)]
+mod data_safety_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_import_does_not_overwrite_corrupt_user_dict() {
+        let dir = tempdir().expect("创建临时目录失败");
+        let src = dir.path().join("input.txt");
+        fs::write(&src, "测试\tce'shi\t100\n").expect("写入测试词库失败");
+        let user_dict = dir.path().join("user_dict.bin");
+        let corrupt = b"not-a-valid-waylan-wal-file";
+        fs::write(&user_dict, corrupt).expect("写入损坏词库失败");
+
+        let result = DictImportService::import_pinyin_dict(&src, &user_dict);
+        assert!(
+            matches!(result, Err(DictImportError::UserDictLoadFailed { .. })),
+            "损坏的用户词库必须中止导入并返回明确错误"
+        );
+        assert_eq!(
+            fs::read(&user_dict).expect("读取原文件失败"),
+            corrupt,
+            "导入失败时不得覆盖原始用户词库"
+        );
     }
 }

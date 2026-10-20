@@ -21,20 +21,20 @@ pub(crate) struct ProcessFileLock {
 
 impl ProcessFileLock {
     /// 获取跨进程排他锁（写锁，互斥阻塞）
-    pub(crate) fn acquire_exclusive(path: &Path) -> Option<Self> {
+    pub(crate) fn acquire_exclusive(path: &Path) -> std::io::Result<Self> {
         Self::acquire_internal(path, FlockOperation::LockExclusive)
     }
 
     /// 获取跨进程共享锁（读锁，允许多读，阻塞排他写）
-    pub(crate) fn acquire_shared(path: &Path) -> Option<Self> {
+    pub(crate) fn acquire_shared(path: &Path) -> std::io::Result<Self> {
         Self::acquire_internal(path, FlockOperation::LockShared)
     }
 
-    fn acquire_internal(path: &Path, op: FlockOperation) -> Option<Self> {
+    fn acquire_internal(path: &Path, op: FlockOperation) -> std::io::Result<Self> {
         let lock_path = Self::lock_path(path);
         if let Some(parent) = lock_path.parent() {
             if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
+                std::fs::create_dir_all(parent)?;
             }
         }
         let mut opts = OpenOptions::new();
@@ -44,9 +44,9 @@ impl ProcessFileLock {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let file = opts.open(&lock_path).ok()?;
-        flock(&file, op).ok()?;
-        Some(Self { file })
+        let file = opts.open(&lock_path)?;
+        flock(&file, op)?;
+        Ok(Self { file })
     }
 
     fn lock_path(path: &Path) -> PathBuf {
@@ -74,15 +74,15 @@ mod tests {
         // 测试获取排他锁与自动释放
         {
             let lock1 = ProcessFileLock::acquire_exclusive(&wal_path);
-            assert!(lock1.is_some(), "排他锁获取应当成功");
+            assert!(lock1.is_ok(), "排他锁获取应当成功");
         }
 
         // 测试获取共享锁
         {
             let lock_shared1 = ProcessFileLock::acquire_shared(&wal_path);
             let lock_shared2 = ProcessFileLock::acquire_shared(&wal_path);
-            assert!(lock_shared1.is_some(), "首个共享锁获取应当成功");
-            assert!(lock_shared2.is_some(), "并发共享锁获取应当成功");
+            assert!(lock_shared1.is_ok(), "首个共享锁获取应当成功");
+            assert!(lock_shared2.is_ok(), "并发共享锁获取应当成功");
         }
 
         let lock_path = ProcessFileLock::lock_path(&wal_path);

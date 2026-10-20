@@ -90,8 +90,19 @@ pub(crate) fn replay_wal_records(buf: &[u8], is_v2: bool) -> (UserAdaptiveModel,
 
 /// 在跨进程共享读锁保护下读取并解析 WAL 文件
 fn read_and_replay_file(path_ref: &Path) -> Result<(UserAdaptiveModel, bool), AlgoError> {
-    let _shared_lock = ProcessFileLock::acquire_shared(path_ref);
+    let _shared_lock =
+        ProcessFileLock::acquire_shared(path_ref).map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path_ref),
+            source: e,
+        })?;
 
+    read_and_replay_file_unlocked(path_ref)
+}
+
+/// 在调用方已持有排他锁的前提下读取并解析 WAL 文件
+fn read_and_replay_file_unlocked(
+    path_ref: &Path,
+) -> Result<(UserAdaptiveModel, bool), AlgoError> {
     let mut file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
         path: PathBuf::from(path_ref),
         source: e,
@@ -149,8 +160,21 @@ pub fn load_or_replay<P: AsRef<Path>>(path: P) -> Result<UserAdaptiveModel, Algo
 
     // 共享读锁在 read_and_replay_file 退出时已析构释放，此处若需要归并压缩则能安全获取排他写锁，杜绝自死锁
     if need_compact {
-        let _ = compact_model(&model, path_ref);
+        if let Err(e) = compact_model(&model, path_ref) {
+            warn!(
+                "[用户词库 WAL] 重放后自动归并失败，保留现有日志继续运行，路径: {:?}，原因: {}",
+                path_ref, e
+            );
+        }
     }
 
     Ok(model)
+}
+
+/// 在调用方已持有排他锁时重放 WAL，避免同一进程重复加锁造成自死锁
+pub(crate) fn load_or_replay_without_lock(path: &Path) -> Result<UserAdaptiveModel, AlgoError> {
+    if !path.exists() {
+        return Ok(UserAdaptiveModel::new());
+    }
+    read_and_replay_file_unlocked(path).map(|(model, _)| model)
 }

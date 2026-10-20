@@ -1,7 +1,7 @@
 //! 线上云端语音识别器（基于 OpenAI/Whisper 规范 API 与 HTTP 连接池）
 
 use log::info;
-use waylan_core::CloudAsrConfig;
+use waylan_core::{CloudAsrConfig, CloudProviderType};
 
 use super::traits::VoiceRecognizer;
 use crate::error::VoiceError;
@@ -122,6 +122,11 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
     }
 
     fn finish(&mut self) -> Result<String, VoiceError> {
+        if self.config.provider != CloudProviderType::OpenAiCompatible {
+            return Err(VoiceError::UnsupportedCloudProvider {
+                provider: format!("{:?}", self.config.provider),
+            });
+        }
         if self.pcm_buffer.is_empty() {
             return Ok(String::new());
         }
@@ -285,6 +290,19 @@ fn parse_cloud_response(resp: ureq::Response) -> Result<String, VoiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unsupported_cloud_provider_is_reported() {
+        let mut recognizer = CloudVoiceRecognizer::new(CloudAsrConfig {
+            provider: CloudProviderType::Aliyun,
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            recognizer.finish(),
+            Err(VoiceError::UnsupportedCloudProvider { .. })
+        ));
+    }
 
     #[test]
     fn test_cloud_pcm_buffer_limit() {

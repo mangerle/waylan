@@ -59,9 +59,18 @@ pub(crate) fn register_phrase_callbacks(
             if let Some(item) = phrases_model_for_del.row_data(index) {
                 let mut mgr = CustomPhraseManager::load_or_init(&phrase_path_for_del);
                 mgr.remove_entry(item.code.as_str(), item.text.as_str());
-                let _ = mgr.save_to_file(&phrase_path_for_del);
-                phrases_model_for_del.remove(index);
-                win.set_phrase_status(SharedString::from("已成功移除指定短语。"));
+                match mgr.save_to_file(&phrase_path_for_del) {
+                    Ok(()) => {
+                        phrases_model_for_del.remove(index);
+                        win.set_phrase_status(SharedString::from("已成功移除指定短语。"));
+                    }
+                    Err(e) => {
+                        win.set_phrase_status(SharedString::from(format!(
+                            "删除短语失败，词库未被修改: {}",
+                            e
+                        )));
+                    }
+                }
             }
         }
     });
@@ -71,12 +80,33 @@ pub(crate) fn register_phrase_callbacks(
     window.on_clear_user_model(move || {
         if let Some(win) = window_weak.upgrade() {
             let user_dict = AppConfig::user_dict_path();
-            let wal = user_dict.with_extension("bin.wal");
-            let _ = fs::remove_file(&user_dict);
-            let _ = fs::remove_file(&wal);
+            // 当前 WAL 文件就是 user_dict_path 本身；旧版本可能遗留 user_dict.bin.wal，一并清理
+            let legacy_wal = user_dict.with_extension("bin.wal");
+            let mut failed: Option<String> = None;
+            for path in [&user_dict, &legacy_wal] {
+                match fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        failed = Some(format!("删除 {} 失败: {}", path.display(), e));
+                        break;
+                    }
+                }
+            }
+
+            if let Some(error) = failed {
+                win.set_global_status_is_error(true);
+                win.set_global_status(SharedString::from(error));
+                return;
+            }
+
+            // 唤醒守护进程重载配置：守护进程检测到词库文件消失后会重置内存模型并重新绑定 WAL，
+            // 避免其在退出时把旧内存数据再次压缩写回磁盘。
+            AppConfig::touch_config_for_reload();
             win.set_user_model_info(SharedString::from(
                 "自适应个性化历史词模型: 0 条记忆 (已清空)",
             ));
+            win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from("用户历史自造词记忆已彻底清空。"));
         }
     });

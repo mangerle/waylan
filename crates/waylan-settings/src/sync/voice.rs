@@ -2,6 +2,16 @@ use crate::{CloudProfileItem, SettingsWindow};
 use waylan_core::config::AppConfig;
 use waylan_voice::{NsEngineType, VadModelType, VoiceEngineType, VoiceVisualEffect};
 
+/// 对敏感 API Key 做字符级脱敏，避免按字节截断多字节字符导致 panic
+fn mask_api_key(key: &str) -> String {
+    if key.chars().count() > 6 {
+        let prefix: String = key.chars().take(4).collect();
+        format!("{}******", prefix)
+    } else {
+        "******".to_string()
+    }
+}
+
 /// 同步语音输入配置与模型状态至 Slint 界面属性
 pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_voice_enabled(cfg.voice.enabled);
@@ -62,13 +72,7 @@ pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
             api_key: slint::SharedString::from(
                 p.api_key
                     .as_deref()
-                    .map(|k| {
-                        if k.len() > 6 {
-                            format!("{}******", &k[..4])
-                        } else {
-                            "******".to_string()
-                        }
-                    })
+                    .map(mask_api_key)
                     .unwrap_or_else(|| "未设置".to_string()),
             ),
             model: slint::SharedString::from(&p.model),
@@ -346,5 +350,18 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
             cfg.voice.afe.ns_engine = NsEngineType::Gtcrn;
             cfg.voice.afe.custom_ns_model_path = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_api_key;
+
+    #[test]
+    fn test_mask_api_key_is_char_boundary_safe() {
+        assert_eq!(mask_api_key("sk-1234567890"), "sk-1******");
+        assert_eq!(mask_api_key("密钥密钥密钥密"), "密钥密钥******");
+        assert_eq!(mask_api_key("short"), "******");
+        assert_eq!(mask_api_key(""), "******");
     }
 }

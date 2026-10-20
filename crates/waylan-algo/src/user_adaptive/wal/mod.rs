@@ -187,7 +187,7 @@ impl UserAdaptiveWal {
                     if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
                         drop(existing_file);
                         drop(guard);
-                        if let Ok(old_model) = Self::load_or_replay(path_ref) {
+                        if let Ok(old_model) = replay::load_or_replay_without_lock(path_ref) {
                             model.merge(&old_model);
                         }
                         compactor::compact_model_internal(model, path_ref, || {
@@ -274,7 +274,12 @@ impl UserAdaptiveWal {
         };
 
         // 跨进程排他锁保护：从检查打开文件到写入单条帧均受排他互斥保护
-        let _process_lock = ProcessFileLock::acquire_exclusive(path_ref);
+        let _process_lock = ProcessFileLock::acquire_exclusive(path_ref).map_err(|e| {
+            AlgoError::UserDictPersistFailed {
+                path: PathBuf::from(path_ref),
+                source: e,
+            }
+        })?;
 
         self.ensure_wal_file_opened(model, path_ref)?;
 

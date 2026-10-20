@@ -37,6 +37,10 @@ pub enum VoiceError {
     #[error("本地语音识别模型不可用，原因: {reason}")]
     RecognizerUnavailable { reason: String },
 
+    /// 云端识别协议尚未实现
+    #[error("当前云端识别仅支持 OpenAI 兼容协议，配置的协议类型: {provider}")]
+    UnsupportedCloudProvider { provider: String },
+
     /// 创建语音后台常驻工作线程失败
     #[error("创建语音后台工作线程失败，原因: {message}")]
     WorkerThreadSpawnFailed { message: String },
