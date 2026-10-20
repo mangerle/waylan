@@ -57,7 +57,9 @@ impl AlgoEngine {
         let mut cands = CandidatePipeline::process_all_with_opencc(
             dispatched,
             &self.config,
-            Some(&self.resources.opencc_dict),
+            self.config
+                .traditional_chinese
+                .then(|| self.resources.opencc_dict()),
         );
         for c in &mut cands {
             if c.consumed_len.is_none() {
@@ -112,7 +114,9 @@ impl AlgoEngine {
         let mut candidates = CandidatePipeline::process_all_with_opencc(
             raw_candidates,
             &self.config,
-            Some(&self.resources.opencc_dict),
+            self.config
+                .traditional_chinese
+                .then(|| self.resources.opencc_dict()),
         );
 
         self.inject_page_zero_extensions(raw_input, paths, &mut candidates);

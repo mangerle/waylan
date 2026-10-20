@@ -20,7 +20,6 @@ pub use providers::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::opencc::OpenCcDict;
     use crate::types::{AlgoCandidate, CandidateTier};
 
     struct MockCustomProvider;
@@ -37,7 +36,6 @@ mod tests {
 
     #[test]
     fn test_extension_pipeline_custom_registration() {
-        let opencc = OpenCcDict::global();
         let mut pipeline = ExtensionPipeline::new();
         pipeline.register(Box::new(MockCustomProvider));
 
@@ -45,8 +43,7 @@ mod tests {
         let ctx = ExtensionContext {
             raw_input: "test",
             existing_candidates: &candidates,
-            traditional_chinese: false,
-            opencc: &opencc,
+            opencc: None,
         };
 
         let result = pipeline.collect_extensions(&ctx);

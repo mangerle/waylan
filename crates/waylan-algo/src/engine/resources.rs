@@ -3,10 +3,11 @@
 //! # 设计原理
 //! - **实现初衷**：将只读词典表、简繁字典、辅助词库与实体保护管理器聚合为独立资源包，
 //!   解耦静态无状态资源与单次输入会话的动态状态机。
-//! - **核心优势**：职责清晰独立，为多会话共享只读词典或零拷贝加载打下类型基础。
-//! - **代价与局限**：外部更新辅助词库时需经由资源包中继。
+//! - **核心优势**：职责清晰独立，为多会话共享只读词典或零拷贝加载打下类型基础；
+//!   简繁转换词库采用按需懒加载，未启用繁体输出时不占用守护进程启动内存与解析耗时。
+//! - **代价与局限**：外部更新辅助词库时需经由资源包中继；首次触发繁体转换时存在一次性词库载入延迟。
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::custom_phrase::{
     AuxiliaryDict, CustomPhraseManager, EnglishSuggestionManager, SymbolSuggestionManager,
@@ -28,8 +29,8 @@ pub struct LexiconResources {
     pub symbol_suggester: Arc<SymbolSuggestionManager>,
     /// 专有名词与实体保护管理器
     pub entity_manager: EntityProtectionManager,
-    /// 简繁转换两级词库引擎（STPhrases + STCharacters）
-    pub opencc_dict: Arc<OpenCcDict>,
+    /// 简繁转换两级词库引擎（STPhrases + STCharacters，按需懒加载）
+    opencc_dict: OnceLock<Arc<OpenCcDict>>,
 }
 
 impl LexiconResources {
@@ -41,7 +42,7 @@ impl LexiconResources {
             english_suggester: EnglishSuggestionManager::default_global(),
             symbol_suggester: SymbolSuggestionManager::default_global(),
             entity_manager: EntityProtectionManager::new(),
-            opencc_dict: OpenCcDict::global(),
+            opencc_dict: OnceLock::new(),
         }
     }
 
@@ -66,9 +67,9 @@ impl LexiconResources {
         self.symbol_suggester = symbols;
     }
 
-    /// 载入外部简繁转换二进制词库（STPhrases + STCharacters）
-    pub fn load_opencc_dict(&mut self, dict: OpenCcDict) {
-        self.opencc_dict = Arc::new(dict);
+    /// 获取简繁转换词典（按需懒加载，未启用繁体输出时不占用启动内存与解析耗时）
+    pub fn opencc_dict(&self) -> &OpenCcDict {
+        self.opencc_dict.get_or_init(OpenCcDict::global)
     }
 
     /// 获取当前生效的高频英文混输词目数量

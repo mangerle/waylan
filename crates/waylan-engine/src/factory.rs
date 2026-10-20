@@ -149,15 +149,17 @@ pub fn create_engine_with_table(table: LexiconTable, cfg: &AppConfig) -> AlgoEng
     engine.resources_mut().english_suggester = english_suggester;
     engine.resources_mut().symbol_suggester = symbol_suggester;
 
-    info!(
-        "[简繁词库] 全局简繁转换两级词库就绪 (单字映射: {} 个, 消歧短语: {} 组)",
-        engine.resources().opencc_dict.chars.len(),
-        engine.resources().opencc_dict.phrases_len()
-    );
+    // 简繁转换词库按需懒加载，仅在启用繁体输出时于启动阶段触发载入并输出就绪日志
+    if cfg.pinyin.traditional_chinese {
+        info!(
+            "[简繁词库] 全局简繁转换两级词库就绪 (单字映射: {} 个, 消歧短语: {} 组)",
+            engine.resources().opencc_dict().chars.len(),
+            engine.resources().opencc_dict().phrases_len()
+        );
+    }
 
     engine
 }
-
 /// 统一创建装配全量词库、自定义短语与用户个性化学习库的标准拼音算法引擎
 pub fn create_standard_engine(cfg: &AppConfig) -> AlgoEngine {
     let table = load_lexicon_table();

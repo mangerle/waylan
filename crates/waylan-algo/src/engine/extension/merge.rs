@@ -39,8 +39,10 @@ impl AlgoEngine {
         let ctx = ExtensionContext {
             raw_input,
             existing_candidates: candidates,
-            traditional_chinese: self.config.traditional_chinese,
-            opencc: &self.resources.opencc_dict,
+            opencc: self
+                .config
+                .traditional_chinese
+                .then(|| self.resources.opencc_dict()),
         };
         let mut extensions = Vec::with_capacity(8);
         ExtensionPipeline::collect_default_extensions(&self.resources, &ctx, &mut extensions);
@@ -80,7 +82,10 @@ impl AlgoEngine {
             &self.config.typo_rules,
         ) {
             if self.config.traditional_chinese {
-                spatial_cand.text = self.resources.opencc_dict.convert_text(&spatial_cand.text);
+                spatial_cand.text = self
+                    .resources
+                    .opencc_dict()
+                    .convert_text(&spatial_cand.text);
             }
             if !merged_typos.iter().any(|c| c.text == spatial_cand.text) {
                 merged_typos.push(spatial_cand);
@@ -247,7 +252,7 @@ impl AlgoEngine {
     /// 归一化前缀分段候选词的简繁文本、拼音注释与层级标签
     fn format_prefix_candidate(&self, mut cand: AlgoCandidate) -> AlgoCandidate {
         if self.config.traditional_chinese {
-            cand.text = self.resources.opencc_dict.convert_text(&cand.text);
+            cand.text = self.resources.opencc_dict().convert_text(&cand.text);
         }
         if self.config.show_pinyin_comment && cand.comment.is_none() && !cand.pinyin.is_empty() {
             cand.comment = Some(format!("[{}]", cand.pinyin));

@@ -196,8 +196,6 @@ pub struct AudioFrontEndConfig {
     pub ns_engine: NsEngineType,
     /// 是否开启数字自动增益控制 (AGC)
     pub auto_gain_control: bool,
-    /// 自定义降噪模型文件路径（可选，支持从 models/ns/ 导入）
-    pub custom_ns_model_path: Option<String>,
 }
 
 impl Default for AudioFrontEndConfig {
@@ -208,7 +206,6 @@ impl Default for AudioFrontEndConfig {
             noise_suppression: true,
             ns_engine: NsEngineType::default(),
             auto_gain_control: true,
-            custom_ns_model_path: None,
         }
     }
 }
@@ -384,7 +381,6 @@ mod tests {
         assert!(default_afe.noise_suppression);
         assert_eq!(default_afe.ns_engine, NsEngineType::Rnnoise);
         assert!(default_afe.auto_gain_control);
-        assert!(default_afe.custom_ns_model_path.is_none());
 
         // 验证空 JSON 反序列化可自动使用全量默认值
         let json_empty = "{}";

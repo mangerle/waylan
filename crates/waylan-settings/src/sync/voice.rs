@@ -340,16 +340,11 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
         .collect();
     let ns_idx = window.get_ns_model_index() as usize;
     if let Some(m) = ns_filtered.get(ns_idx) {
-        if m.path.as_deref() == Some("__rnnoise__") {
-            cfg.voice.afe.ns_engine = NsEngineType::Rnnoise;
-            cfg.voice.afe.custom_ns_model_path = None;
-        } else if m.path.as_deref() == Some("__deepfilternet__") {
-            cfg.voice.afe.ns_engine = NsEngineType::DeepFilterNet;
-            cfg.voice.afe.custom_ns_model_path = None;
-        } else if m.path.as_deref() == Some("__gtcrn__") {
-            cfg.voice.afe.ns_engine = NsEngineType::Gtcrn;
-            cfg.voice.afe.custom_ns_model_path = None;
-        }
+        cfg.voice.afe.ns_engine = match m.path.as_deref() {
+            Some("__deepfilternet__") => NsEngineType::DeepFilterNet,
+            Some("__gtcrn__") => NsEngineType::Gtcrn,
+            _ => NsEngineType::Rnnoise,
+        };
     }
 }
 

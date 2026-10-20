@@ -18,10 +18,8 @@ pub struct ExtensionContext<'a> {
     pub raw_input: &'a str,
     /// 现有候选词列表引用（用于去重与互斥门禁检测）
     pub existing_candidates: &'a [AlgoCandidate],
-    /// 是否开启繁体中文转换
-    pub traditional_chinese: bool,
-    /// 简繁转换词典
-    pub opencc: &'a OpenCcDict,
+    /// 简繁转换词典（仅在启用繁体输出时存在，缺席即表示无需转换）
+    pub opencc: Option<&'a OpenCcDict>,
 }
 
 /// 候选扩展项提供者特型 (Candidate Extension Provider)
@@ -41,8 +39,8 @@ impl<'a> CandidateExtensionProvider for CustomPhraseProvider<'a> {
     fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
         let phrase_cands = self.custom_phrases.lookup(ctx.raw_input);
         for mut phrase in phrase_cands {
-            if ctx.traditional_chinese {
-                phrase.text = ctx.opencc.convert_text(&phrase.text);
+            if let Some(opencc) = ctx.opencc {
+                phrase.text = opencc.convert_text(&phrase.text);
             }
             phrase.tier = CandidateTier::ProtectedEntity;
             phrase.consumed_len = Some(ctx.raw_input.len());
@@ -57,10 +55,10 @@ pub struct DateTimeProvider;
 impl CandidateExtensionProvider for DateTimeProvider {
     fn append_candidates(&self, ctx: &ExtensionContext<'_>, out: &mut Vec<AlgoCandidate>) {
         if let Some(mut dynamic_cand) = DateTimeEvaluator::try_evaluate(ctx.raw_input) {
-            if ctx.traditional_chinese {
-                dynamic_cand.text = ctx.opencc.convert_text(&dynamic_cand.text);
+            if let Some(opencc) = ctx.opencc {
+                dynamic_cand.text = opencc.convert_text(&dynamic_cand.text);
                 for sub in &mut dynamic_cand.sub_candidates {
-                    *sub = ctx.opencc.convert_text(sub);
+                    *sub = opencc.convert_text(sub);
                 }
             }
             dynamic_cand.consumed_len = Some(ctx.raw_input.len());
