@@ -1,6 +1,6 @@
-use log::{debug, info};
-use waylan_core::{CandidateBoxState, InputMode};
-use waylan_engine::{AlgoEngine, ImeRuntime, InputMethodFrontend};
+use log::debug;
+use waylan_core::CandidateBoxState;
+use waylan_engine::{AlgoEngine, ImeRuntime};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::{
@@ -11,7 +11,6 @@ use crate::protocol_v1::input_method_v1::zwp_input_method_v1::{
 };
 
 use crate::session_common::*;
-pub use waylan_core::input::*;
 
 pub mod context;
 mod dispatch;
@@ -87,68 +86,9 @@ impl WaylanV1Session {
         }
     }
 
-    /// 同步外部系统托盘的中英文状态与热重载请求
-    pub(crate) fn sync_external_state(&mut self) {
-        let reload_flag = self.runtime.reload_requested.clone();
-        let should_reload = check_reload_requested_or_files_changed(
-            reload_flag.as_deref(),
-            &mut self.watcher.inotify_watcher,
-            &self.watcher.watched_paths,
-            &mut self.watcher.last_watched_mtime,
-        );
-
-        if should_reload {
-            if let Some(mut cb) = self.watcher.reload_callback.take() {
-                cb(self);
-                self.watcher.reload_callback = Some(cb);
-            } else {
-                apply_default_runtime_reload(&mut self.runtime);
-            }
-            info!("[微澜 Wayland V1] 已完成用户词库与运行配置热重载。");
-        }
-
-        self.sync_mode_from_shared_flag();
-    }
-
-    /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
-    pub(crate) fn init_inotify_watcher(&mut self) {
-        init_session_inotify_watcher_with_filter(
-            &self.watcher.watched_paths,
-            &mut self.watcher.inotify_watcher,
-            "Wayland V1",
-            Some(default_user_dict_filter()),
-        );
-    }
-
     /// 计算事件循环下一次 poll 的等待超时毫秒数
     pub(crate) fn next_poll_timeout_ms(&self, default_ms: i32) -> i32 {
         default_ms
-    }
-
-    /// 按键热路径轻量同步：仅检查原子标志位，避免每次敲击按键触发磁盘文件 metadata 系统调用
-    pub(crate) fn sync_atomic_state(&mut self) {
-        let reload_flag = self.runtime.reload_requested.clone();
-        if is_reload_requested(reload_flag.as_deref()) {
-            self.sync_external_state();
-            return;
-        }
-
-        self.sync_mode_from_shared_flag();
-    }
-
-    /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即清理残留预编辑与候选框
-    fn sync_mode_from_shared_flag(&mut self) {
-        let changed = self.runtime.sync_shared_mode();
-        if let Some(InputMode::English) = changed {
-            if !self.runtime.core.engine.raw_input().is_empty() {
-                self.runtime.core.engine.reset();
-                self.hide_candidate_surface();
-                if let Some(ref ctx) = self.protocol.active_context {
-                    ctx.preedit_cursor(0);
-                    ctx.preedit_string(self.protocol.commit_serial, String::new(), String::new());
-                }
-            }
-        }
     }
 
     /// 查询当前是否处于语音录音或语音浮条激活状态
@@ -255,6 +195,32 @@ impl WaylanV1Session {
     }
 }
 
+impl WaylandSessionLifecycle for WaylanV1Session {
+    #[inline]
+    fn runtime(&mut self) -> &mut ImeRuntime {
+        &mut self.runtime
+    }
+
+    #[inline]
+    fn watcher(&mut self) -> &mut WaylandWatcherContext<Self> {
+        &mut self.watcher
+    }
+
+    #[inline]
+    fn session_label(&self) -> &'static str {
+        "V1"
+    }
+
+    fn on_english_mode_switch(&mut self) {
+        self.runtime.core.engine.reset();
+        self.hide_candidate_surface();
+        if let Some(ref ctx) = self.protocol.active_context {
+            ctx.preedit_cursor(0);
+            ctx.preedit_string(self.protocol.commit_serial, String::new(), String::new());
+        }
+    }
+}
+
 // 为 zwp_input_method_v1 实现事件分发
 impl Dispatch<ZwpInputMethodV1, ()> for WaylanV1Session {
     fn event(
@@ -294,38 +260,6 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylanV1Session {
             }
             _ => {}
         }
-    }
-}
-
-impl InputMethodFrontend for WaylanV1Session {
-    fn commit_text(&mut self, text: &str) {
-        let mut frontend = self.frontend();
-        frontend.commit_text(text);
-    }
-
-    fn update_preedit(&mut self, text: &str, cursor_byte_idx: usize) {
-        let mut frontend = self.frontend();
-        frontend.update_preedit(text, cursor_byte_idx);
-    }
-
-    fn update_candidates(&mut self, state: &CandidateBoxState) {
-        let mut frontend = self.frontend();
-        frontend.update_candidates(state);
-    }
-
-    fn hide_candidates(&mut self) {
-        let mut frontend = self.frontend();
-        frontend.hide_candidates();
-    }
-
-    fn move_cursor(&mut self, offset: i32) {
-        let mut frontend = self.frontend();
-        frontend.move_cursor(offset);
-    }
-
-    fn sync_input_mode(&mut self, mode: InputMode) {
-        let mut frontend = self.frontend();
-        frontend.sync_input_mode(mode);
     }
 }
 

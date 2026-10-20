@@ -1,4 +1,5 @@
 use super::super::*;
+use waylan_core::InputMode;
 use waylan_engine::AlgoConfig;
 
 #[test]

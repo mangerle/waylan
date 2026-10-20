@@ -12,17 +12,12 @@ pub use frontend::WaylanV2Frontend;
 
 use log::{debug, warn};
 use waylan_core::CandidateBoxState;
-use waylan_engine::{
-    build_common_candidate_box_state, AlgoEngine, CandidateBoxBuildOptions, ImeRuntime,
-    InputMethodFrontend,
-};
+use waylan_engine::{AlgoEngine, ImeRuntime};
 use wayland_client::QueueHandle;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
 
 use crate::session_common::*;
 pub use surrounding::{calculate_delete_backward_range, calculate_delete_forward_range};
-pub use waylan_core::input::*;
-pub use waylan_core::InputMode;
 
 /// 配置与词库热重载回调函数类型
 pub type ReloadCallback = Box<dyn FnMut(&mut WaylanV2Session) + Send>;
@@ -134,21 +129,8 @@ impl WaylanV2Session {
 
     /// 根据当前算法引擎与输入模式构建候选框渲染状态
     pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
-        let voice_state = self
-            .runtime
-            .voice_manager
-            .as_ref()
-            .and_then(|vm| vm.render_state());
-
-        build_common_candidate_box_state(
-            &self.runtime.core.engine,
-            CandidateBoxBuildOptions::from_session(
-                &self.runtime.core,
-                self.focus.is_active,
-                true,
-                voice_state,
-            ),
-        )
+        self.runtime
+            .build_candidate_box_state(self.focus.is_active, true)
     }
 
     /// 触发候选框悬浮表面重绘并提交至 Wayland 表面
@@ -286,32 +268,6 @@ impl WaylanV2Session {
     /// 处理单个硬件按键按下/释放事件（返回本次直接上屏的文本，便于无合成器环境下单元测试验证）
     pub fn handle_key_event(&mut self, key: u32, is_press: bool) -> Option<String> {
         self.process_key_event(key, is_press).1
-    }
-}
-
-impl InputMethodFrontend for WaylanV2Session {
-    fn commit_text(&mut self, text: &str) {
-        self.frontend().commit_text(text);
-    }
-
-    fn update_preedit(&mut self, text: &str, cursor_byte_idx: usize) {
-        self.frontend().update_preedit(text, cursor_byte_idx);
-    }
-
-    fn update_candidates(&mut self, state: &CandidateBoxState) {
-        self.frontend().update_candidates(state);
-    }
-
-    fn hide_candidates(&mut self) {
-        self.frontend().hide_candidates();
-    }
-
-    fn move_cursor(&mut self, offset: i32) {
-        self.frontend().move_cursor(offset);
-    }
-
-    fn sync_input_mode(&mut self, mode: InputMode) {
-        self.frontend().sync_input_mode(mode);
     }
 }
 

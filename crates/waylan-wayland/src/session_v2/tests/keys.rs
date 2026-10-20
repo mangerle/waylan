@@ -1,6 +1,7 @@
 use super::super::*;
-use crate::session_v1::{KEY_1, KEY_4, KEY_9, KEY_APOSTROPHE, KEY_SLASH};
 use crate::session_v2::keys::process_key_event;
+use waylan_core::input::*;
+use waylan_core::InputMode;
 use waylan_engine::AlgoConfig;
 
 #[test]

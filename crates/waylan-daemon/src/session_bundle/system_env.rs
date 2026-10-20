@@ -7,7 +7,8 @@ use std::process::{self, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{info, warn};
-use waylan_wayland::{probe_wayland_environment, LoopWakeup, WaylandCapabilities};
+use waylan_sys::LoopWakeup;
+use waylan_wayland::{probe_wayland_environment, WaylandCapabilities};
 
 /// 检查 Wayland 合成器协议能力
 pub fn check_wayland_capabilities() -> WaylandCapabilities {

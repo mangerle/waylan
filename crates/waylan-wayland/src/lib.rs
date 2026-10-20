@@ -11,10 +11,6 @@ pub mod surface;
 pub use error::WaylandRunnerError;
 pub use runner::*;
 
-pub use waylan_core::input::*;
-pub use waylan_sys::fs_watcher::InotifyWatcher;
-pub use waylan_sys::loop_wakeup::LoopWakeup;
-
 use std::fmt;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};

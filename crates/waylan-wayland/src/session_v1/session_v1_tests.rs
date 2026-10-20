@@ -1,4 +1,6 @@
 use super::*;
+use waylan_core::input::*;
+use waylan_core::InputMode;
 use waylan_engine::{AlgoConfig, AlgoEngine};
 
 #[test]

@@ -1,10 +1,5 @@
-use log::info;
-use waylan_core::InputMode;
-
-use crate::session_common::{
-    apply_default_runtime_reload, check_reload_requested_or_files_changed,
-    default_user_dict_filter, init_session_inotify_watcher_with_filter, is_reload_requested,
-};
+use crate::session_common::{WaylandSessionLifecycle, WaylandWatcherContext};
+use waylan_engine::ImeRuntime;
 
 use super::WaylanV2Session;
 
@@ -84,58 +79,25 @@ impl WaylanV2Session {
         self.keyboard.mods_group = 0;
         self.hide_candidate_surface();
     }
+}
 
-    /// 同步外部系统托盘的中英文状态与热重载请求
-    pub(crate) fn sync_external_state(&mut self) {
-        let reload_flag = self.runtime.reload_requested.clone();
-        let should_reload = check_reload_requested_or_files_changed(
-            reload_flag.as_deref(),
-            &mut self.watcher.inotify_watcher,
-            &self.watcher.watched_paths,
-            &mut self.watcher.last_watched_mtime,
-        );
-
-        if should_reload {
-            if let Some(mut cb) = self.watcher.reload_callback.take() {
-                cb(self);
-                self.watcher.reload_callback = Some(cb);
-            } else {
-                apply_default_runtime_reload(&mut self.runtime);
-            }
-            info!("[微澜 Wayland V2] 已完成用户词库与运行配置热重载。");
-        }
-
-        self.sync_mode_from_shared_flag();
+impl WaylandSessionLifecycle for WaylanV2Session {
+    #[inline]
+    fn runtime(&mut self) -> &mut ImeRuntime {
+        &mut self.runtime
     }
 
-    /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
-    pub(crate) fn init_inotify_watcher(&mut self) {
-        init_session_inotify_watcher_with_filter(
-            &self.watcher.watched_paths,
-            &mut self.watcher.inotify_watcher,
-            "Wayland V2",
-            Some(default_user_dict_filter()),
-        );
+    #[inline]
+    fn watcher(&mut self) -> &mut WaylandWatcherContext<Self> {
+        &mut self.watcher
     }
 
-    /// 按键热路径轻量同步：仅检查原子标志位
-    pub(crate) fn sync_atomic_state(&mut self) {
-        let reload_flag = self.runtime.reload_requested.clone();
-        if is_reload_requested(reload_flag.as_deref()) {
-            self.sync_external_state();
-            return;
-        }
-
-        self.sync_mode_from_shared_flag();
+    #[inline]
+    fn session_label(&self) -> &'static str {
+        "V2"
     }
 
-    /// 从共享原子标志同步输入模式，若在拼音组合期间切至英文则立即取消输入并隐藏候选框
-    pub(crate) fn sync_mode_from_shared_flag(&mut self) {
-        let changed = self.runtime.sync_shared_mode();
-        if let Some(InputMode::English) = changed {
-            if !self.runtime.core.engine.raw_input().is_empty() {
-                self.cancel_input();
-            }
-        }
+    fn on_english_mode_switch(&mut self) {
+        self.cancel_input();
     }
 }

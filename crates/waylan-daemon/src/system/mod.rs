@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::os::unix::fs::MetadataExt;
 
 use waylan_algo::custom_phrase::CustomPhraseManager;
-use waylan_wayland::LoopWakeup;
+use waylan_sys::LoopWakeup;
 
 use crate::config::AppConfig;
 

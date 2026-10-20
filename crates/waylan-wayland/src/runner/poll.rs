@@ -103,8 +103,10 @@ pub(super) fn poll_and_read_events(
     }
 }
 
+use crate::session_common::WaylandSessionLifecycle;
+
 /// Wayland 会话事件驱动调度抽象特型
-pub(super) trait WaylandLoopSession: Sized {
+pub(super) trait WaylandLoopSession: WaylandSessionLifecycle + Sized {
     /// 检查是否收到外部优雅退出请求
     fn is_exit_requested(&self) -> bool;
 
@@ -122,9 +124,6 @@ pub(super) trait WaylandLoopSession: Sized {
 
     /// 执行每次 poll 结束后的驱动钩子（如语音周期、按键连击）
     fn on_poll_completed(&mut self);
-
-    /// 同步外部配置文件或输入法模式状态
-    fn sync_external_state(&mut self);
 
     /// 当前会话是否拥有活跃的 inotify 监听器
     fn has_inotify(&self) -> bool;
@@ -172,11 +171,6 @@ impl WaylandLoopSession for WaylanV1Session {
     #[inline]
     fn on_poll_completed(&mut self) {
         self.poll_voice_cycle();
-    }
-
-    #[inline]
-    fn sync_external_state(&mut self) {
-        self.sync_external_state();
     }
 
     #[inline]
@@ -228,11 +222,6 @@ impl WaylandLoopSession for WaylanV2Session {
     fn on_poll_completed(&mut self) {
         self.drive_key_repeat();
         self.poll_voice_cycle();
-    }
-
-    #[inline]
-    fn sync_external_state(&mut self) {
-        self.sync_external_state();
     }
 
     #[inline]

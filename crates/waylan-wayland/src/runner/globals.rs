@@ -22,6 +22,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
 use crate::error::WaylandRunnerError;
 use crate::protocol_v1::input_method_v1::zwp_input_method_v1::ZwpInputMethodV1;
 use crate::protocol_v1::input_method_v1::zwp_input_panel_v1::ZwpInputPanelV1;
+use crate::session_common::WaylandSessionLifecycle;
 use crate::session_v1::WaylanV1Session;
 use crate::session_v2::WaylanV2Session;
 

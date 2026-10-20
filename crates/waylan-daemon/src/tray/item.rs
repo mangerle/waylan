@@ -2,7 +2,7 @@ use crate::config::{env_var_non_empty, AppConfig};
 use log::{info, warn};
 use std::path::Path;
 use std::sync::mpsc::SyncSender;
-use waylan_wayland::LoopWakeup;
+use waylan_sys::LoopWakeup;
 use zbus::interface;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::OwnedObjectPath;

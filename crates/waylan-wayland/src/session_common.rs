@@ -10,8 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
+use log::info;
 use waylan_core::input::{update_modifier_masks, ModifierState, MOD_CAPS};
-use waylan_core::{AppConfig, SharedInputFlags, VoiceProvider};
+use waylan_core::{AppConfig, InputMode, SharedInputFlags, VoiceProvider};
 use waylan_engine::ImeRuntime;
 use waylan_sys::LoopWakeup;
 use waylan_ui::CandidateBoxRenderer;
@@ -86,6 +87,84 @@ pub fn apply_session_setup<S: 'static>(
     watcher.loop_wakeup = opts.loop_wakeup;
     watcher.reload_callback = Some(Box::new(reload_cb));
     runtime.apply_initial_config(opts.cfg);
+}
+
+/// Wayland V1/V2 共用会话生命周期契约
+///
+/// 统一处理热重载检测、原子状态同步、输入模式切换与 inotify 初始化，协议会话只负责
+/// 提供运行时/监控上下文访问器以及模式切换后的协议侧清理动作。
+pub trait WaylandSessionLifecycle: Sized {
+    /// 获取统一输入法运行时
+    fn runtime(&mut self) -> &mut ImeRuntime;
+
+    /// 获取外部环境监控上下文
+    fn watcher(&mut self) -> &mut WaylandWatcherContext<Self>;
+
+    /// 会话日志标签（V1 / V2）
+    fn session_label(&self) -> &'static str;
+
+    /// 拼音组合期间切换到英文模式时的协议侧清理动作
+    fn on_english_mode_switch(&mut self);
+
+    /// 同步外部系统托盘状态、配置热重载与文件变更
+    fn sync_external_state(&mut self) {
+        let label = self.session_label();
+        let should_reload = {
+            let reload_flag = self.runtime().reload_requested.clone();
+            let watcher = self.watcher();
+            check_reload_requested_or_files_changed(
+                reload_flag.as_deref(),
+                &mut watcher.inotify_watcher,
+                &watcher.watched_paths,
+                &mut watcher.last_watched_mtime,
+            )
+        };
+
+        if should_reload {
+            let callback = self.watcher().reload_callback.take();
+            if let Some(mut callback) = callback {
+                callback(self);
+                self.watcher().reload_callback = Some(callback);
+            } else {
+                apply_default_runtime_reload(self.runtime());
+            }
+            info!("[微澜 Wayland {}] 已完成用户词库与运行配置热重载。", label);
+        }
+
+        self.sync_mode_from_shared_flag();
+    }
+
+    /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
+    fn init_inotify_watcher(&mut self) {
+        let label = self.session_label();
+        let watcher = self.watcher();
+        init_session_inotify_watcher_with_filter(
+            &watcher.watched_paths,
+            &mut watcher.inotify_watcher,
+            label,
+            Some(default_user_dict_filter()),
+        );
+    }
+
+    /// 按键热路径轻量同步：仅检查原子标志位
+    fn sync_atomic_state(&mut self) {
+        let reload_flag = self.runtime().reload_requested.clone();
+        if is_reload_requested(reload_flag.as_deref()) {
+            self.sync_external_state();
+            return;
+        }
+        self.sync_mode_from_shared_flag();
+    }
+
+    /// 从共享原子标志同步输入模式
+    fn sync_mode_from_shared_flag(&mut self) {
+        let mode_changed = self.runtime().sync_shared_mode();
+        if let Some(InputMode::English) = mode_changed {
+            if !self.runtime().core.engine.raw_input().is_empty() {
+                self.on_english_mode_switch();
+            }
+        }
+    }
 }
 
 /// 构造默认的用户词库过滤回调（忽略短时间内的 WAL 内部写落盘事件）

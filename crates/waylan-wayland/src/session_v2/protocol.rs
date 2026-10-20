@@ -21,6 +21,7 @@ use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_popup_surface
     Event as PopupEvent, ZwpInputPopupSurfaceV2,
 };
 
+use crate::session_common::WaylandSessionLifecycle;
 use crate::session_v2::WaylanV2Session;
 
 /// 处理输入法激活状态确认（Done 事务）

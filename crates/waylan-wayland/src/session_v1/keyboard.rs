@@ -8,6 +8,7 @@ use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, Wl
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
+use crate::session_common::WaylandSessionLifecycle;
 use crate::session_v1::{WaylanV1Frontend, WaylanV1Session};
 
 /// 处理 XKB 键盘字符布局映射同步
