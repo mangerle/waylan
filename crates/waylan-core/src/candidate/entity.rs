@@ -11,19 +11,25 @@ use serde::{Deserialize, Serialize};
 pub enum CandidateTier {
     /// 部分前缀匹配或残余拼音
     PrefixPartial = 1,
-    /// 次位邻键容错纠错候选
+    /// 次位邻键容错纠错候选（概率性物理误触猜测：QWERTY 邻键替换、相邻字母倒置）
     TypoCorrection = 2,
     /// 首字母缩写简拼（如 bj 匹配 北京，yyds 匹配 永远的神）
     Acronym = 3,
     /// 整句预测（Viterbi 多音节长句拼接）
     SentenceViterbi = 4,
+    /// 拼音方案确定性归一候选（如 `niou`→`niu`、`guei`→`gui`、`zon`→`zong`）
+    ///
+    /// 分层原理：归一改写命中即为标准拼写，不存在 [`Self::TypoCorrection`] 的误触概率问题，
+    /// 故置于概率猜测与整句解码之上——两音节生造整句（如 `guei` 拼出的“股诶”）不应压住
+    /// 唯一合法读音（“贵”）；但它仍是对用户键入的二次解释，故低于用户自造词与原生成词。
+    RuleNormalization = 5,
     /// 用户自适应学习词或动态自造词
-    UserHistory = 5,
+    UserHistory = 6,
     /// 完整整词匹配（词库中完整匹配的成词，如“我们”、“中国”、“西安”、“先”）
     #[default]
-    ExactWord = 6,
+    ExactWord = 7,
     /// 专有名词与受保护实体（如技术专名、中英实体，享有最高置顶优先级）
-    ProtectedEntity = 7,
+    ProtectedEntity = 8,
 }
 
 /// 候选词信息（统一领域候选实体）

@@ -9,7 +9,7 @@ use std::str;
 
 use crate::prism::fsa::PrismFsa;
 use crate::prism::fuzzy::PrismFuzzy;
-use crate::prism::types::{SegmentPath, STANDARD_INITIALS};
+use crate::prism::types::{PathOrigin, SegmentPath, TypoExploration, STANDARD_INITIALS};
 use crate::syllables::{
     get_spatial_typo_corrections, get_typo_corrections_with_rules, has_syllable_prefix,
 };
@@ -21,7 +21,8 @@ pub struct DfsContext<'a> {
     pub input: &'a str,
     pub fuzzy: &'a FuzzyConfig,
     pub typo_rules: &'a TypoCorrectionRules,
-    pub enable_typo: bool,
+    /// 本轮搜索的容错虚边强度
+    pub exploration: TypoExploration,
     pub current: &'a mut Vec<String>,
     pub results: &'a mut Vec<SegmentPath>,
 }
@@ -52,34 +53,57 @@ fn explore_fuzzy_syllables(
                 }
             }
             ctx.current.push(slice.to_string());
-            dfs_dag(ctx, end, params.current_cost + step_cost, params.typo_count);
+            dfs_dag(ctx, end, params.current_cost + step_cost, params.origin);
             ctx.current.pop();
         }
     }
 }
 
-/// 探索物理键盘紧邻按键高斯误触与常见韵母规则纠错
-fn explore_spatial_and_rule_typo(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
-    if !ctx.enable_typo || params.fsa_matches.iter().any(|m| m.1 >= 4) || ctx.results.len() >= 48 {
+/// 按容错强度分档探索虚边：拼音方案确定性改写规则与物理键盘紧邻按键高斯误触
+///
+/// 两类虚边的可信度不对等，故由 [`TypoExploration`] 分离启用：确定性改写命中即正解，正常击键流
+/// 亦参与探索；邻键误触属概率猜测，仅在异常流全量容错阶段启用，避免污染正常打字结果。
+fn explore_typo_edges(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
+    if ctx.exploration == TypoExploration::Strict
+        || params.fsa_matches.iter().any(|m| m.1 >= 4)
+        || ctx.results.len() >= 48
+    {
         return;
     }
 
+    // 复制共享引用，使切片派生的借用不跨越对 ctx 的可变借用
+    let input = ctx.input;
+    let typo_rules = ctx.typo_rules;
+    let allows_spatial = ctx.exploration.allows_spatial();
+
     for len in (2..=params.max_len).rev() {
         let end = params.start + len;
-        if !ctx.input.is_char_boundary(end) {
+        if !input.is_char_boundary(end) {
             continue;
         }
-        let slice = &ctx.input[params.start..end];
-        let mut corrections = get_spatial_typo_corrections(slice, 25);
-        for rule_alt in get_typo_corrections_with_rules(slice, ctx.typo_rules) {
-            if !corrections.iter().any(|(s, _)| s == &rule_alt) {
-                corrections.push((rule_alt, 16));
+        let slice = &input[params.start..end];
+
+        let mut corrections: Vec<(String, u32, PathOrigin)> = Vec::with_capacity(6);
+        for rule_alt in get_typo_corrections_with_rules(slice, typo_rules) {
+            corrections.push((rule_alt, 16, PathOrigin::RuleNormalized));
+        }
+        if allows_spatial {
+            for (spatial_syl, spatial_cost) in get_spatial_typo_corrections(slice, 25) {
+                if !corrections.iter().any(|(s, _, _)| *s == spatial_syl) {
+                    corrections.push((spatial_syl, spatial_cost, PathOrigin::SpatialTypo));
+                }
             }
         }
-        for (std_syl, edit_cost) in corrections {
+
+        for (std_syl, edit_cost, edge_origin) in corrections {
             if !params.fsa_matches.iter().any(|m| m.0 == std_syl) {
                 ctx.current.push(std_syl);
-                dfs_dag(ctx, end, params.current_cost + 10 + edit_cost, 1);
+                dfs_dag(
+                    ctx,
+                    end,
+                    params.current_cost + 10 + edit_cost,
+                    params.origin.max(edge_origin),
+                );
                 ctx.current.pop();
             }
         }
@@ -91,31 +115,34 @@ fn explore_initials_transitions(
     ctx: &mut DfsContext<'_>,
     start: usize,
     current_cost: u32,
-    typo_count: u8,
+    origin: PathOrigin,
 ) {
     for &initial in STANDARD_INITIALS {
         if ctx.input[start..].starts_with(initial) {
             let len = initial.len();
             if start + len < ctx.input.len() {
                 ctx.current.push(initial.to_string());
-                dfs_dag(ctx, start + len, current_cost + 25, typo_count);
+                dfs_dag(ctx, start + len, current_cost + 25, origin);
                 ctx.current.pop();
             } else if !ctx.current.is_empty() {
                 ctx.results.push(SegmentPath {
                     syllables: ctx.current.clone(),
                     remaining: initial.to_string(),
                     cost: current_cost + 30,
-                    is_typo: typo_count > 0,
+                    origin,
                 });
             }
         }
     }
 }
 
-/// 深度优先搜索构建音节与声母混合 DAG 路径（保证 100% 原始击键字母保真）
-pub fn dfs_dag(ctx: &mut DfsContext<'_>, start: usize, current_cost: u32, typo_count: u8) {
+/// 深度优先搜索构建音节与声母混合 DAG 路径
+///
+/// `origin` 记录抵达当前节点所经虚边的来源性质：标准音节与声母转移边保持原值，
+/// 容错虚边按 [`PathOrigin`] 强弱序取较大者，故混用归一与邻键虚边的路径最终记为邻键档。
+pub fn dfs_dag(ctx: &mut DfsContext<'_>, start: usize, current_cost: u32, origin: PathOrigin) {
     if start >= ctx.input.len() {
-        push_completed_path(ctx, current_cost, typo_count);
+        push_completed_path(ctx, current_cost, origin);
         return;
     }
 
@@ -135,7 +162,7 @@ pub fn dfs_dag(ctx: &mut DfsContext<'_>, start: usize, current_cost: u32, typo_c
     let params = DfsExploreParams {
         start,
         current_cost,
-        typo_count,
+        origin,
         max_len,
         fsa_matches: &fsa_matches,
     };
@@ -153,8 +180,8 @@ struct DfsExploreParams<'a> {
     start: usize,
     /// 当前累计代价
     current_cost: u32,
-    /// 已累计的容错次数
-    typo_count: u8,
+    /// 抵达该节点所经虚边的来源性质（非严格档不再叠加容错虚边）
+    origin: PathOrigin,
     /// 当前剩余输入可匹配的最大音节长度
     max_len: usize,
     /// 编译型有限状态机给出的标准音节匹配结果
@@ -163,7 +190,8 @@ struct DfsExploreParams<'a> {
 
 /// 在当前搜索位置探索全部候选分支，返回本轮是否命中过完整音节
 ///
-/// 探索顺序固定为：标准完整音节 -> 模糊音音节 -> 相邻按键倒置容错 -> 紧邻误触与规则纠错 -> 声母简拼转移。
+/// 探索顺序固定为：标准完整音节 -> 模糊音音节 -> 相邻按键倒置容错 -> 容错虚边（按强度分档，
+/// 见 [`explore_typo_edges`]）-> 声母简拼转移。
 fn explore_all_branches(
     ctx: &mut DfsContext<'_>,
     params: &DfsExploreParams<'_>,
@@ -176,33 +204,33 @@ fn explore_all_branches(
     explore_fuzzy_syllables(ctx, params, &mut matched_full);
 
     // 1.3 容错虚边：相邻按键倒置（支持音节内 (0,1)..=(4,5) 交换与跨音节边界交换）
-    if ctx.enable_typo
-        && params.typo_count == 0
+    if ctx.exploration.allows_spatial()
+        && params.origin == PathOrigin::Exact
         && params.start + 1 < ctx.input.len()
         && ctx.results.len() < 48
     {
         explore_transpose_typo(ctx, params.start, params.current_cost, fsa);
     }
 
-    // 1.4 容错虚边：物理键盘紧邻按键高斯误触与常见韵母规则纠错
-    if params.typo_count == 0 {
-        explore_spatial_and_rule_typo(ctx, params);
+    // 1.4 容错虚边：拼音方案确定性改写规则与物理键盘紧邻按键高斯误触
+    if params.origin == PathOrigin::Exact {
+        explore_typo_edges(ctx, params);
     }
 
     // 2. 声母简拼混合转移边
-    explore_initials_transitions(ctx, params.start, params.current_cost, params.typo_count);
+    explore_initials_transitions(ctx, params.start, params.current_cost, params.origin);
 
     matched_full
 }
 
 /// 输入已完全消费时，将当前音节序列记录为一条完整切分路径
-fn push_completed_path(ctx: &mut DfsContext<'_>, current_cost: u32, typo_count: u8) {
+fn push_completed_path(ctx: &mut DfsContext<'_>, current_cost: u32, origin: PathOrigin) {
     if !ctx.current.is_empty() {
         ctx.results.push(SegmentPath {
             syllables: ctx.current.clone(),
             remaining: String::new(),
             cost: current_cost,
-            is_typo: typo_count > 0,
+            origin,
         });
     }
 }
@@ -222,7 +250,7 @@ fn push_remainder_path(
             syllables: ctx.current.clone(),
             remaining: remaining.to_string(),
             cost: params.current_cost + 50,
-            is_typo: params.typo_count > 0,
+            origin: params.origin,
         });
     }
 }
@@ -248,7 +276,7 @@ fn explore_exact_syllables(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'
             ctx,
             params.start + len,
             params.current_cost + step_cost,
-            params.typo_count,
+            params.origin,
         );
         ctx.current.pop();
     }
@@ -281,7 +309,12 @@ pub fn explore_transpose_typo(
         for &(std_syl, len) in swapped_matches.iter().rev() {
             if len > idx2 && ctx.input.is_char_boundary(start + len) {
                 ctx.current.push(std_syl.to_string());
-                dfs_dag(ctx, start + len, current_cost + 10 + 16, 1);
+                dfs_dag(
+                    ctx,
+                    start + len,
+                    current_cost + 10 + 16,
+                    PathOrigin::SpatialTypo,
+                );
                 ctx.current.pop();
             } else if len == idx2 {
                 let next_matches = fsa.match_syllables(swapped_str, len);
@@ -290,7 +323,12 @@ pub fn explore_transpose_typo(
                     if ctx.input.is_char_boundary(start + total_len) {
                         ctx.current.push(std_syl.to_string());
                         ctx.current.push(next_syl.to_string());
-                        dfs_dag(ctx, start + total_len, current_cost + 20 + 16, 1);
+                        dfs_dag(
+                            ctx,
+                            start + total_len,
+                            current_cost + 20 + 16,
+                            PathOrigin::SpatialTypo,
+                        );
                         ctx.current.pop();
                         ctx.current.pop();
                     }

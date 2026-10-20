@@ -104,7 +104,7 @@ impl AlgoEngine {
         }
         paths
             .iter()
-            .find(|tp| tp.is_typo && tp.remaining.is_empty())
+            .find(|tp| tp.is_typo() && tp.remaining.is_empty())
             .and_then(|tp| tp.format_raw_with_spans(raw))
             .unwrap_or_else(|| head_path.to_key_string())
     }

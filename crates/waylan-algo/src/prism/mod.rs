@@ -13,7 +13,7 @@ mod tests;
 pub use fsa::PrismFsa;
 pub use fuzzy::PrismFuzzy;
 pub use traversal::{dfs_dag, DfsContext};
-pub use types::{SegmentPath, STANDARD_INITIALS};
+pub use types::{PathOrigin, SegmentPath, TypoExploration, STANDARD_INITIALS};
 
 /// 棱镜拼写图引擎 (Prism / Syllable Graph)
 ///
@@ -70,7 +70,12 @@ impl PrismEngine {
         };
 
         // 第一阶段：正向严格搜索（不启用容错虚边，保证正常长句以微秒级极致性能直通）
-        Self::run_dfs_search(&params, false, &mut current_syllables, &mut paths);
+        Self::run_dfs_search(
+            &params,
+            TypoExploration::Strict,
+            &mut current_syllables,
+            &mut paths,
+        );
 
         // 判定是否属于正常击键流程
         let is_normal_typing = Self::is_normal_typing_flow(&paths, fuzzy);
@@ -78,9 +83,20 @@ impl PrismEngine {
         // 判定是否属于纯声母缩写（所有按键字符均为合法辅音声母）：纯声母缩写绝不触发拼音容错
         let is_pure_initials = Self::is_pure_initials_input(input);
 
-        // 第二阶段：若非纯声母缩写，且非正常全拼键入流（存在断流、孤立辅音声母或非法残余前缀），启动容错虚边补救搜索
-        if !is_pure_initials && !is_normal_typing && typo_rules.enable {
-            Self::run_dfs_search(&params, true, &mut current_syllables, &mut paths);
+        // 第二阶段：按击键流状态选择容错强度
+        // - 纯声母缩写与主开关关闭：完全不探索虚边
+        // - 正常全拼击键流：仅探索拼音方案确定性归一虚边，救回 `niou`/`guei`/`luen` 这类
+        //   能完整切分但写法非标准的输入，同时不引入邻键猜测噪声
+        // - 异常击键流（断流、孤立辅音声母或非法残余前缀）：启用全量容错虚边补救
+        let exploration = if is_pure_initials || !typo_rules.enable {
+            TypoExploration::Strict
+        } else if is_normal_typing {
+            TypoExploration::RuleOnly
+        } else {
+            TypoExploration::Full
+        };
+        if exploration != TypoExploration::Strict {
+            Self::run_dfs_search(&params, exploration, &mut current_syllables, &mut paths);
         }
 
         // 如果完全无法形成完整音节切分，尝试提取最长可能前缀
@@ -98,14 +114,14 @@ impl PrismEngine {
             syllables: Vec::new(),
             remaining: input.to_string(),
             cost: 100,
-            is_typo: false,
+            origin: PathOrigin::Exact,
         });
     }
 
-    /// 在 DAG 上执行一次深度优先路径搜索（`enable_typo` 决定是否启用容错虚边）
+    /// 在 DAG 上按指定容错强度执行一次深度优先路径搜索
     fn run_dfs_search(
         params: &DfsSearchParams<'_>,
-        enable_typo: bool,
+        exploration: TypoExploration,
         current: &mut Vec<String>,
         results: &mut Vec<SegmentPath>,
     ) {
@@ -113,11 +129,11 @@ impl PrismEngine {
             input: params.input,
             fuzzy: params.fuzzy,
             typo_rules: params.typo_rules,
-            enable_typo,
+            exploration,
             current,
             results,
         };
-        dfs_dag(&mut ctx, 0, 0, 0);
+        dfs_dag(&mut ctx, 0, 0, PathOrigin::Exact);
     }
 
     /// 若输入精确匹配受保护实体，直接生成零代价原子路径（专有名词与实体保护机制）
@@ -132,7 +148,7 @@ impl PrismEngine {
                     syllables: vec![entity],
                     remaining: String::new(),
                     cost: 0,
-                    is_typo: false,
+                    origin: PathOrigin::Exact,
                 });
             }
         }
@@ -200,11 +216,12 @@ impl PrismEngine {
         input.chars().all(Self::is_initial_consonant)
     }
 
-    /// 路径排序与全局去重：正向非容错路径优先、代价值与音节数最小优先，相同 (syllables, remaining) 仅保留最优解
+    /// 路径排序与全局去重：来源越严格越优先（正向切分 > 确定性归一 > 概率性容错），
+    /// 其次代价值与音节数最小优先，相同 (syllables, remaining) 仅保留最优解
     fn dedup_best_paths(paths: &mut Vec<SegmentPath>) {
         paths.sort_by(|a, b| {
-            a.is_typo
-                .cmp(&b.is_typo)
+            a.origin
+                .cmp(&b.origin)
                 .then_with(|| a.cost.cmp(&b.cost))
                 .then_with(|| a.syllables.len().cmp(&b.syllables.len()))
         });
@@ -256,7 +273,7 @@ impl PrismEngine {
                 syllables: parts.iter().map(|s| s.to_string()).collect(),
                 remaining: String::new(),
                 cost: parts.len() as u32,
-                is_typo: false,
+                origin: PathOrigin::Exact,
             });
         }
 
@@ -297,7 +314,7 @@ impl PrismEngine {
                 syllables: syls,
                 remaining: String::new(),
                 cost,
-                is_typo: false,
+                origin: PathOrigin::Exact,
             });
         } else {
             // 1.1 若末尾片段包含多个连续音节（如 "xi'anhui" 中的 "anhui"），调用内部切分逻辑拆解拼接
@@ -316,7 +333,7 @@ impl PrismEngine {
                         syllables: syls,
                         remaining,
                         cost,
-                        is_typo: sub.is_typo,
+                        origin: sub.origin,
                     });
                 }
             }
@@ -334,7 +351,7 @@ impl PrismEngine {
                 syllables: tail.base_syllables.to_vec(),
                 remaining: tail.last_part.to_string(),
                 cost,
-                is_typo: false,
+                origin: PathOrigin::Exact,
             });
         }
     }

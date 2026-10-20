@@ -438,3 +438,55 @@ fn test_select_candidate_zero_consumed_len_fallback() {
     assert!(engine.raw_input().is_empty(), "引擎拼音必须完全清空");
     assert!(engine.candidates().is_empty(), "候选词列表必须完全清空");
 }
+
+#[test]
+fn test_rule_normalized_candidate_outranks_broken_sentence() {
+    let mut table = LexiconTable::new();
+    table.insert("gu", "股", 9_000);
+    table.insert("ei", "诶", 8_000);
+    table.insert("gui", "贵", 7_000);
+    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+    for ch in "guei".chars() {
+        engine.push_char(ch);
+    }
+
+    let candidates = engine.all_candidates();
+    let rank = candidates
+        .iter()
+        .position(|c| c.text == "贵")
+        .expect("guei 应经 uei->ui 归一召回 贵");
+    assert_eq!(candidates[rank].tier, CandidateTier::RuleNormalization);
+    assert_eq!(
+        rank, 0,
+        "确定性归一候选必须压过两音节生造整句（股诶）占据首位"
+    );
+}
+
+#[test]
+fn test_rule_normalized_candidate_stays_below_exact_word() {
+    let mut table = LexiconTable::new();
+    table.insert("ni'ou", "尼欧", 9_000);
+    table.insert("ni", "你", 9_500);
+    table.insert("ou", "欧", 8_000);
+    table.insert("niu", "牛", 9_000);
+    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+    for ch in "niou".chars() {
+        engine.push_char(ch);
+    }
+
+    let candidates = engine.all_candidates();
+    let ni_ou = candidates
+        .iter()
+        .position(|c| c.text == "尼欧")
+        .expect("ni'ou 精确成词必须存在");
+    let niu = candidates
+        .iter()
+        .position(|c| c.text == "牛")
+        .expect("niou 应经 iou->iu 归一召回 牛");
+
+    // 有意保留的保守取舍：归一候选属对键入的二次解释，不得劫持原生成词的首位，
+    // 但必须进入首页可见区，避免用户误以为纠错完全失效。
+    assert!(ni_ou < niu, "精确成词应排在归一候选之前");
+    assert_eq!(candidates[niu].tier, CandidateTier::RuleNormalization);
+    assert!(niu < 7, "归一候选必须落在首页可翻页范围内");
+}

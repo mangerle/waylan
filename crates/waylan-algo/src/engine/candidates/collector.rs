@@ -7,7 +7,7 @@
 //! - **代价与局限**：方法间需共享 [`SegmentPath`] 音节切分上下文。
 
 use super::super::AlgoEngine;
-use crate::prism::{PrismEngine, PrismFuzzy, SegmentPath};
+use crate::prism::{PathOrigin, PrismEngine, PrismFuzzy, SegmentPath};
 use crate::table::LENGTH_BOOST_MULTIPLIER;
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, SentenceDecodeParams, ViterbiDecoder};
@@ -18,8 +18,8 @@ use crate::viterbi::{BigramLanguageModel, SentenceDecodeParams, ViterbiDecoder};
 struct PathMatchContext {
     /// 路径对应的词典查询键
     key: String,
-    /// 路径是否来自拼写容错切分
-    is_typo: bool,
+    /// 路径来源性质（严格切分 / 确定性归一 / 概率性容错）
+    origin: PathOrigin,
     /// 路径是否为相对最优路径的次优切分
     is_suboptimal: bool,
     /// 最优路径的音节数（用于剥离虚增的字长加成）
@@ -94,11 +94,11 @@ impl AlgoEngine {
         for path in paths {
             let key = path.to_key_string();
             let cost_penalty = path.cost.saturating_sub(best_cost).saturating_mul(100);
-            let is_suboptimal = !path.is_typo
+            let is_suboptimal = path.origin == PathOrigin::Exact
                 && (cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count);
             let path_ctx = PathMatchContext {
                 key,
-                is_typo: path.is_typo,
+                origin: path.origin,
                 is_suboptimal,
                 best_syl_count,
                 cost_penalty,
@@ -111,7 +111,7 @@ impl AlgoEngine {
             self.collect_user_path_matches(&path_ctx, eval_ts, results);
 
             // 模糊音等价查询键联合检索
-            if self.config.fuzzy.has_active_rules() && !path.is_typo {
+            if self.config.fuzzy.has_active_rules() && path.origin == PathOrigin::Exact {
                 self.collect_fuzzy_path_matches(
                     &FuzzyPathMatchParams {
                         path,
@@ -133,9 +133,9 @@ impl AlgoEngine {
     ) {
         let start_lex = results.len();
         self.resources.table.lookup_into(&ctx.key, results);
-        if ctx.is_typo {
+        if let Some(tier) = Self::typo_tier(ctx.origin) {
             for m in &mut results[start_lex..] {
-                m.tier = CandidateTier::TypoCorrection;
+                m.tier = tier;
                 m.comment = Some(format!("[纠错: {}]", ctx.key));
             }
         } else if ctx.is_suboptimal {
@@ -161,9 +161,9 @@ impl AlgoEngine {
         self.adaptive
             .model
             .lookup_user_words_into(&ctx.key, eval_ts, results);
-        if ctx.is_typo {
+        if let Some(tier) = Self::typo_tier(ctx.origin) {
             for m in &mut results[start_usr..] {
-                m.tier = CandidateTier::TypoCorrection;
+                m.tier = tier;
                 m.comment = Some(format!("[纠错: {}]", ctx.key));
             }
         } else if ctx.is_suboptimal {
@@ -213,6 +213,19 @@ impl AlgoEngine {
                     .saturating_sub(50)
                     .max(1);
             }
+        }
+    }
+
+    /// 将容错路径来源映射为候选排序层级；严格切分路径返回 `None` 表示沿用词库原生成词层级
+    ///
+    /// 确定性归一与概率性邻键猜测的可信度不对等，故分置于 [`CandidateTier`] 的两档：
+    /// 归一候选压过两音节生造整句，邻键猜测仍保持次位。
+    #[inline]
+    fn typo_tier(origin: PathOrigin) -> Option<CandidateTier> {
+        match origin {
+            PathOrigin::RuleNormalized => Some(CandidateTier::RuleNormalization),
+            PathOrigin::SpatialTypo => Some(CandidateTier::TypoCorrection),
+            PathOrigin::Exact => None,
         }
     }
 
