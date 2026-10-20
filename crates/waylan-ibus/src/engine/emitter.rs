@@ -12,10 +12,28 @@ use waylan_core::input::{KEY_LEFT, KEY_RIGHT};
 use super::super::keys::{IbusKeyOutcome, IBUS_KEYVAL_LEFT, IBUS_KEYVAL_RIGHT, IBUS_RELEASE_MASK};
 use super::super::types::{
     build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_text, build_input_mode_property,
-    IBUS_ENGINE_PREEDIT_CLEAR,
+    IbusLookupTableParams, IBUS_ENGINE_PREEDIT_CLEAR,
 };
 use super::service::IbusEngineService;
 use super::snapshot::UiSnapshot;
+
+/// 按键结果派发参数
+///
+/// # 设计原理
+/// - **实现初衷**：结果派发需同时携带"信号上下文、按键处理结果、界面快照与大写锁定状态"，
+///   平铺传参易造成快照与锁定状态顺序颠倒，导致输入模式属性与候选框状态不同步。
+/// - **核心优势**：以参数对象聚合派发上下文，调用点按名传参即可完成语义绑定。
+/// - **代价与局限**：多引入一个结构体类型。
+pub(crate) struct OutcomeDispatchParams<'a, 'b> {
+    /// D-Bus 信号发射上下文
+    pub ctxt: &'a SignalContext<'b>,
+    /// 按键处理结果
+    pub outcome: IbusKeyOutcome,
+    /// 界面状态快照（按键未触发界面刷新时为 None）
+    pub snap: Option<UiSnapshot>,
+    /// 当前大写锁定状态
+    pub is_caps_locked: bool,
+}
 
 impl IbusEngineService {
     /// 在锁作用域之外根据快照向 `ibus-daemon` 发射预编辑与候选词表更新信号
@@ -36,25 +54,25 @@ impl IbusEngineService {
 
         if snap.candidates.is_empty() {
             let _ = Self::hide_lookup_table(ctxt).await;
-        } else if let Ok(table_val) = build_ibus_lookup_table(
-            &snap.candidates,
-            snap.page_size,
-            snap.selected_index,
-            snap.orientation,
-            snap.index_style,
-        ) {
+        } else if let Ok(table_val) = build_ibus_lookup_table(&IbusLookupTableParams {
+            candidates: &snap.candidates,
+            page_size: snap.page_size,
+            selected_index: snap.selected_index,
+            orientation: snap.orientation,
+            index_style: snap.index_style,
+        }) {
             let _ = Self::update_lookup_table(ctxt, Value::from(table_val), true).await;
         }
     }
 
     /// 在锁作用域之外统一派发 `IbusKeyOutcome` 包含的所有 D-Bus 信号
-    pub(crate) async fn dispatch_outcome(
-        &self,
-        ctxt: &SignalContext<'_>,
-        outcome: IbusKeyOutcome,
-        snap: Option<UiSnapshot>,
-        is_caps_locked: bool,
-    ) {
+    pub(crate) async fn dispatch_outcome(&self, params: OutcomeDispatchParams<'_, '_>) {
+        let OutcomeDispatchParams {
+            ctxt,
+            outcome,
+            snap,
+            is_caps_locked,
+        } = params;
         if let Some(ref text) = outcome.commit_text {
             if let Ok(text_val) = build_ibus_text(text) {
                 let _ = Self::commit_text(ctxt, Value::from(text_val)).await;

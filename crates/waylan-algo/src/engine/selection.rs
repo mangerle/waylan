@@ -3,6 +3,20 @@ use crate::dispatcher::ModeDispatcher;
 use crate::types::{AlgoCandidate, CandidateTier};
 use waylan_core::{is_cjk_character, PanguSpacing};
 
+/// 分段选词记录收尾处理的参数对象
+///
+/// 承载分段选词收尾所需的候选文本、候选拼音、是否记录标志与提交时间戳。
+struct PartialSegmentFinalizeParams {
+    /// 本次选中的候选文本
+    selected_text: String,
+    /// 本次选中的候选拼音
+    selected_pinyin: String,
+    /// 是否需要记录到用户自适应词频模型
+    should_record: bool,
+    /// 本次提交动作的时间戳
+    current_timestamp: u64,
+}
+
 impl AlgoEngine {
     /// 判断当前选中的候选词是否应当被记录到用户自适应词频模型中
     pub(crate) fn should_record_to_user_dict(&self, selected: &AlgoCandidate) -> bool {
@@ -117,13 +131,14 @@ impl AlgoEngine {
     }
 
     /// 处理分段选词记录与多音节用户自造词自动合成
-    fn finalize_partial_segments(
-        &mut self,
-        selected_text: String,
-        selected_pinyin: String,
-        should_record: bool,
-        current_timestamp: u64,
-    ) {
+    fn finalize_partial_segments(&mut self, params: PartialSegmentFinalizeParams) {
+        let PartialSegmentFinalizeParams {
+            selected_text,
+            selected_pinyin,
+            should_record,
+            current_timestamp,
+        } = params;
+
         if should_record {
             self.composition
                 .record_partial_segment(selected_text, selected_pinyin);
@@ -174,12 +189,12 @@ impl AlgoEngine {
         let consumed_len = self.calculate_candidate_consumed_len(&selected);
 
         self.composition.consume_prefix(consumed_len);
-        self.finalize_partial_segments(
-            selected.text,
-            selected.pinyin,
+        self.finalize_partial_segments(PartialSegmentFinalizeParams {
+            selected_text: selected.text,
+            selected_pinyin: selected.pinyin,
             should_record,
             current_timestamp,
-        );
+        });
 
         if self.composition.is_empty() {
             self.candidates.clear();

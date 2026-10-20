@@ -1,6 +1,6 @@
 use super::*;
 use crate::types::CandidateTier;
-use crate::user_adaptive::UserAdaptiveModel;
+use crate::user_adaptive::{CommitCountParams, UserAdaptiveModel};
 
 #[test]
 fn test_acronym_candidates_respect_configuration() {
@@ -38,7 +38,12 @@ fn test_dynamic_adjust_freq_configuration() {
     boosted
         .adaptive
         .model
-        .record_commit_count("你好", "ni'hao", 100, 100);
+        .record_commit_count(&CommitCountParams {
+            text: "你好",
+            pinyin: "ni'hao",
+            current_timestamp: 100,
+            count: 100,
+        });
     for ch in "nihao".chars() {
         boosted.push_char(ch);
     }
@@ -56,7 +61,12 @@ fn test_dynamic_adjust_freq_configuration() {
     static_freq
         .adaptive
         .model
-        .record_commit_count("你好", "ni'hao", 100, 100);
+        .record_commit_count(&CommitCountParams {
+            text: "你好",
+            pinyin: "ni'hao",
+            current_timestamp: 100,
+            count: 100,
+        });
     for ch in "nihao".chars() {
         static_freq.push_char(ch);
     }

@@ -31,6 +31,26 @@ pub use compactor::compact_model;
 pub use constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1};
 pub use replay::load_or_replay;
 
+/// 单条用户上屏记录的 WAL 追加参数
+///
+/// # 设计原理
+/// - **实现初衷**：上屏记录追加需同时携带"日志路径、文本、拼音键与时间戳"四项同源信息，
+///   平铺传参易发生文本与拼音键顺序颠倒，导致写入不可解码的 WAL 帧。
+/// - **核心优势**：以参数对象聚合同源信息，调用点按名传参即可完成语义绑定；
+///   同时去除泛型路径参数，统一以 `&Path` 传入，杜绝类型推断歧义。
+/// - **代价与局限**：调用点需显式书写字段名。
+#[derive(Debug, Clone, Copy)]
+pub struct UserDictAppendParams<'a> {
+    /// WAL 日志文件路径
+    pub path: &'a Path,
+    /// 上屏文本
+    pub text: &'a str,
+    /// 上屏文本对应的拼音键
+    pub pinyin: &'a str,
+    /// 上屏时间戳（毫秒级 UNIX 时间）
+    pub timestamp: u64,
+}
+
 /// 用户词库预写日志（WAL）与磁盘文件持久化管理器
 #[derive(Debug)]
 pub struct UserAdaptiveWal {
@@ -282,19 +302,17 @@ impl UserAdaptiveWal {
     }
 
     /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
-    pub fn append<P: AsRef<Path>>(
+    pub fn append(
         &mut self,
         model: &mut UserAdaptiveModel,
-        path: P,
-        text: &str,
-        pinyin: &str,
-        timestamp: u64,
+        params: &UserDictAppendParams<'_>,
     ) -> Result<(), AlgoError> {
-        let path_ref = path.as_ref();
-        let frame_buf = match Self::serialize_wal_frame(text, pinyin, timestamp) {
-            Some(buf) => buf,
-            None => return Ok(()),
-        };
+        let path_ref = params.path;
+        let frame_buf =
+            match Self::serialize_wal_frame(params.text, params.pinyin, params.timestamp) {
+                Some(buf) => buf,
+                None => return Ok(()),
+            };
 
         // 跨进程排他锁保护：从检查打开文件到写入单条帧均受排他互斥保护
         let _process_lock = ProcessFileLock::acquire_exclusive(path_ref).map_err(|e| {
@@ -319,7 +337,7 @@ impl UserAdaptiveWal {
         drop(guard);
 
         // 同步更新内存模型状态机（遵循 WAL 先写日志后更新内存的设计原则）
-        model.record_commit(text, pinyin, timestamp);
+        model.record_commit(params.text, params.pinyin, params.timestamp);
 
         // 运行期累计写入流水计数（解耦打字按键热路径与重度磁盘 IO，由外部在失焦或退出时调用 maybe_compact）
         self.wal_append_counter += 1;

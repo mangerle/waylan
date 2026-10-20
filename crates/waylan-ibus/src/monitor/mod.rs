@@ -42,7 +42,9 @@ mod lifecycle;
 mod voice_stream;
 
 pub(crate) use lifecycle::{ensure_global_engine_active, handle_screen_saver_transition};
-pub(crate) use voice_stream::{handle_voice_stream_cycle, query_voice_active_and_path};
+pub(crate) use voice_stream::{
+    handle_voice_stream_cycle, query_voice_active_and_path, VoiceStreamCycleParams,
+};
 
 /// 处理词库与配置热重载事件，若触发指示器形态变更自重启则返回 true
 fn handle_config_reload_event(
@@ -95,26 +97,45 @@ fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSess
     }
 }
 
+/// 锁屏探活与状态迁移处理参数包
+///
+/// # 设计原理
+/// - **实现初衷**：锁屏探活需同时依赖总线连接、共享会话核心、锁屏共享标记以及两个跨轮次延续的可变槽位，
+///   平铺参数会让调用点难以辨识可变状态，故收敛为专用的参数结构体。
+/// - **核心优势**：跨轮次状态以 `&mut` 槽位形式显式承载，状态归属一目了然，杜绝位置错配导致的静默偏差。
+/// - **代价与局限**：调用点需显式构造结构体字面量，代码量略增但语义更清晰。
+struct ScreensaverProbeParams<'a> {
+    /// 到 `ibus-daemon` 的阻塞连接
+    conn: &'a Connection,
+    /// 共享的输入法会话核心
+    shared_core: &'a Arc<Mutex<IbusSessionCore>>,
+    /// 系统锁屏状态共享标记
+    screen_locked_flag: &'a AtomicBool,
+    /// 上一轮观测到的锁屏状态（跨轮次延续的可变槽位）
+    last_screen_locked: &'a mut bool,
+    /// 上次锁屏状态探活时刻（跨轮次延续的可变槽位）
+    last_lock_probe_instant: &'a mut Instant,
+}
+
 /// 处于锁屏保护期时的自愈探活与状态迁移处理
-fn probe_and_handle_screensaver(
-    conn: &Connection,
-    shared_core: &Arc<Mutex<IbusSessionCore>>,
-    screen_locked_flag: &AtomicBool,
-    last_screen_locked: &mut bool,
-    last_lock_probe_instant: &mut Instant,
-) -> bool {
-    let mut current_locked = screen_locked_flag.load(Ordering::Acquire);
-    if (current_locked || *last_screen_locked)
-        && last_lock_probe_instant.elapsed() >= Duration::from_secs(3)
+fn probe_and_handle_screensaver(params: &mut ScreensaverProbeParams<'_>) -> bool {
+    let mut current_locked = params.screen_locked_flag.load(Ordering::Acquire);
+    if (current_locked || *params.last_screen_locked)
+        && params.last_lock_probe_instant.elapsed() >= Duration::from_secs(3)
     {
-        *last_lock_probe_instant = Instant::now();
-        let real_locked = query_initial_screen_saver_active(conn);
-        if !real_locked && (current_locked || *last_screen_locked) {
-            screen_locked_flag.store(false, Ordering::Release);
+        *params.last_lock_probe_instant = Instant::now();
+        let real_locked = query_initial_screen_saver_active(params.conn);
+        if !real_locked && (current_locked || *params.last_screen_locked) {
+            params.screen_locked_flag.store(false, Ordering::Release);
             current_locked = false;
         }
     }
-    handle_screen_saver_transition(conn, shared_core, current_locked, last_screen_locked);
+    handle_screen_saver_transition(
+        params.conn,
+        params.shared_core,
+        current_locked,
+        &mut *params.last_screen_locked,
+    );
     current_locked
 }
 
@@ -257,13 +278,13 @@ fn monitor_poll_phase(
         ensure_global_engine_active(ctx.conn);
     }
 
-    let current_locked = probe_and_handle_screensaver(
-        ctx.conn,
-        ctx.shared_core,
-        &state.screen_locked_flag,
-        &mut state.last_screen_locked,
-        &mut state.last_lock_probe_instant,
-    );
+    let current_locked = probe_and_handle_screensaver(&mut ScreensaverProbeParams {
+        conn: ctx.conn,
+        shared_core: ctx.shared_core,
+        screen_locked_flag: &state.screen_locked_flag,
+        last_screen_locked: &mut state.last_screen_locked,
+        last_lock_probe_instant: &mut state.last_lock_probe_instant,
+    });
 
     let (is_voice_active, target_engine_path) = query_voice_active_and_path(ctx.shared_core);
     let poll_timeout_ms = compute_monitor_poll_timeout(
@@ -278,13 +299,13 @@ fn monitor_poll_phase(
         poll_timeout_ms,
     );
 
-    handle_voice_stream_cycle(
-        ctx.conn,
-        ctx.shared_core,
-        &target_engine_path,
+    handle_voice_stream_cycle(&mut VoiceStreamCycleParams {
+        conn: ctx.conn,
+        shared_core: ctx.shared_core,
+        target_engine_path: target_engine_path.as_str(),
         is_voice_active,
-        &mut state.last_voice_active,
-    );
+        last_voice_active: &mut state.last_voice_active,
+    });
 
     !is_shutdown_requested(&params.coordinator)
 }

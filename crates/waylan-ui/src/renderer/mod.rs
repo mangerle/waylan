@@ -3,6 +3,7 @@ pub mod draw;
 pub mod expanded;
 pub mod font;
 mod geometry;
+mod glyph_blend;
 pub mod grid;
 pub mod layout;
 pub mod measure_cache;
@@ -10,11 +11,11 @@ pub mod style;
 
 use crate::theme::{Color, UiTheme};
 use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache};
-use draw::blend_swash_image;
 use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 use font::FontManager;
+use glyph_blend::blend_swash_image;
 use layout::{CandidateHitTarget, HitRegion};
-use measure_cache::TextMeasureCache;
+use measure_cache::{TextMeasureCache, TextShapeParams};
 use std::path::Path;
 use style::RendererStyle;
 use tiny_skia::Pixmap;
@@ -174,8 +175,7 @@ impl CandidateBoxRenderer {
             .ensure_shaped(
                 &mut self.text_engine.buffer,
                 &mut self.text_engine.font_system,
-                text,
-                size,
+                &TextShapeParams { text, size },
             )
             .width
     }
@@ -192,8 +192,7 @@ impl CandidateBoxRenderer {
         let entry = self.text_engine.measure_cache.ensure_shaped(
             &mut self.text_engine.buffer,
             &mut self.text_engine.font_system,
-            text,
-            size,
+            &TextShapeParams { text, size },
         );
 
         let x_round = x.round() as i32;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::user_adaptive::UserDictAppendParams;
 
 #[test]
 fn test_record_and_boost() {
@@ -68,12 +69,36 @@ fn test_wal_append_replay_and_compaction() {
     // 1. 流式追加记录
     let mut model = UserAdaptiveModel::new();
     let mut wal = UserAdaptiveWal::new();
-    wal.append(&mut model, &wal_path, "微澜", "wei'lan", 1_700_000_000)
-        .expect("写入第1条WAL");
-    wal.append(&mut model, &wal_path, "微澜", "wei'lan", 1_700_000_100)
-        .expect("写入第2条WAL");
-    wal.append(&mut model, &wal_path, "输入法", "shu'ru'fa", 1_700_000_200)
-        .expect("写入第3条WAL");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "微澜",
+            pinyin: "wei'lan",
+            timestamp: 1_700_000_000,
+        },
+    )
+    .expect("写入第1条WAL");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "微澜",
+            pinyin: "wei'lan",
+            timestamp: 1_700_000_100,
+        },
+    )
+    .expect("写入第2条WAL");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "输入法",
+            pinyin: "shu'ru'fa",
+            timestamp: 1_700_000_200,
+        },
+    )
+    .expect("写入第3条WAL");
 
     // 2. 从 WAL 文件重放
     let restored = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("WAL重放");
@@ -119,14 +144,30 @@ fn test_wal_runtime_auto_compaction() {
     wal.set_compact_threshold(5);
 
     for i in 0..4 {
-        wal.append(&mut model, &wal_path, "测试", "ce'shi", 1_700_000_000 + i)
-            .expect("追加写入");
+        wal.append(
+            &mut model,
+            &UserDictAppendParams {
+                path: &wal_path,
+                text: "测试",
+                pinyin: "ce'shi",
+                timestamp: 1_700_000_000 + i,
+            },
+        )
+        .expect("追加写入");
     }
     assert_eq!(wal.wal_append_counter(), 4);
 
     // 第 5 次追加达到阈值，但不会在追加写热路径中同步触发阻塞式压缩，计数器保持递增
-    wal.append(&mut model, &wal_path, "测试", "ce'shi", 1_700_000_010)
-        .expect("追加写入");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "测试",
+            pinyin: "ce'shi",
+            timestamp: 1_700_000_010,
+        },
+    )
+    .expect("追加写入");
     assert_eq!(wal.wal_append_counter(), 5);
 
     // 在外部安全窗口（如会话失焦）调用 maybe_compact 成功执行条件压缩并清零计数器
@@ -156,10 +197,12 @@ fn test_wal_startup_auto_compaction() {
     for i in 0..60 {
         wal.append(
             &mut model,
-            &wal_path,
-            "高频词",
-            "gao'pin'ci",
-            1_700_000_000 + i,
+            &UserDictAppendParams {
+                path: &wal_path,
+                text: "高频词",
+                pinyin: "gao'pin'ci",
+                timestamp: 1_700_000_000 + i,
+            },
         )
         .expect("追加");
     }
@@ -191,10 +234,26 @@ fn test_wal_truncation_and_corrupt_resilience() {
 
     let mut model = UserAdaptiveModel::new();
     let mut wal = UserAdaptiveWal::new();
-    wal.append(&mut model, &wal_path, "完整词", "wan'zheng", 1_700_000_000)
-        .expect("写入正常第一条");
-    wal.append(&mut model, &wal_path, "被截断词", "jie'duan", 1_700_000_001)
-        .expect("写入将被截断的第二条");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "完整词",
+            pinyin: "wan'zheng",
+            timestamp: 1_700_000_000,
+        },
+    )
+    .expect("写入正常第一条");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "被截断词",
+            pinyin: "jie'duan",
+            timestamp: 1_700_000_001,
+        },
+    )
+    .expect("写入将被截断的第二条");
 
     // 模拟断电或进程崩溃：向文件末尾随机截断 5 个字节
     let mut data = std::fs::read(&wal_path).expect("读取WAL文件");
@@ -274,25 +333,43 @@ fn test_wal_append_reopens_on_inode_change() {
     let mut model = UserAdaptiveModel::new();
     let mut wal = UserAdaptiveWal::new();
     // 第一次写入，建立常驻句柄
-    wal.append(&mut model, &wal_path, "中国", "zhong'guo", 1_700_000_000)
-        .expect("首次追加写入成功");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "中国",
+            pinyin: "zhong'guo",
+            timestamp: 1_700_000_000,
+        },
+    )
+    .expect("首次追加写入成功");
 
     let mut new_model = UserAdaptiveModel::new();
     let mut new_wal = UserAdaptiveWal::new();
     new_wal
         .append(
             &mut new_model,
-            &temp_new_path,
-            "北京",
-            "bei'jing",
-            1_700_000_010,
+            &UserDictAppendParams {
+                path: &temp_new_path,
+                text: "北京",
+                pinyin: "bei'jing",
+                timestamp: 1_700_000_010,
+            },
         )
         .expect("向临时文件写入成功");
     std::fs::rename(&temp_new_path, &wal_path).expect("原子替换原文件");
 
     // 原 wal 再次写入，应当感知到 Inode 改变并重新打开新文件，而不是继续写向旧文件的孤儿句柄
-    wal.append(&mut model, &wal_path, "上海", "shang'hai", 1_700_000_020)
-        .expect("替换后追加写入成功");
+    wal.append(
+        &mut model,
+        &UserDictAppendParams {
+            path: &wal_path,
+            text: "上海",
+            pinyin: "shang'hai",
+            timestamp: 1_700_000_020,
+        },
+    )
+    .expect("替换后追加写入成功");
 
     // 重放磁盘文件，应同时包含“北京”与“上海”
     let replayed = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放新文件成功");

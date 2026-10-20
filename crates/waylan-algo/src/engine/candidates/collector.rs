@@ -10,7 +10,7 @@ use super::super::AlgoEngine;
 use crate::prism::{PrismEngine, PrismFuzzy, SegmentPath};
 use crate::table::LENGTH_BOOST_MULTIPLIER;
 use crate::types::{AlgoCandidate, CandidateTier};
-use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
+use crate::viterbi::{BigramLanguageModel, SentenceDecodeParams, ViterbiDecoder};
 
 /// 单条音节切分路径的容错状态与次优代价惩罚上下文参数对象
 ///
@@ -22,6 +22,20 @@ struct PathMatchContext {
     is_typo: bool,
     /// 路径是否为相对最优路径的次优切分
     is_suboptimal: bool,
+    /// 最优路径的音节数（用于剥离虚增的字长加成）
+    best_syl_count: u32,
+    /// 路径切分代价差值惩罚
+    cost_penalty: u32,
+}
+
+/// 单条非容错切分路径的模糊音扩展匹配参数对象
+///
+/// 用途：承载模糊音扩展召回所需的切分路径、评估时间戳与该路径相对最优路径的次优判定依据。
+struct FuzzyPathMatchParams<'a> {
+    /// 待扩展的切分路径
+    path: &'a SegmentPath,
+    /// 候选评估基准时间戳
+    eval_ts: u64,
     /// 最优路径的音节数（用于剥离虚增的字长加成）
     best_syl_count: u32,
     /// 路径切分代价差值惩罚
@@ -99,10 +113,12 @@ impl AlgoEngine {
             // 模糊音等价查询键联合检索
             if self.config.fuzzy.has_active_rules() && !path.is_typo {
                 self.collect_fuzzy_path_matches(
-                    path,
-                    eval_ts,
-                    best_syl_count,
-                    cost_penalty,
+                    &FuzzyPathMatchParams {
+                        path,
+                        eval_ts,
+                        best_syl_count,
+                        cost_penalty,
+                    },
                     results,
                 );
             }
@@ -160,16 +176,14 @@ impl AlgoEngine {
     /// 收集单条非容错切分路径在模糊音扩展下的词库与用户自造词候选
     fn collect_fuzzy_path_matches(
         &self,
-        path: &SegmentPath,
-        eval_ts: u64,
-        best_syl_count: u32,
-        cost_penalty: u32,
+        params: &FuzzyPathMatchParams<'_>,
         results: &mut Vec<AlgoCandidate>,
     ) {
-        let key_len = path.to_key_string().len();
-        let is_suboptimal = cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count;
+        let key_len = params.path.to_key_string().len();
+        let is_suboptimal =
+            params.cost_penalty > 0 || (params.path.syllables.len() as u32) > params.best_syl_count;
 
-        for fuzzy_key in PrismEngine::expand_fuzzy_keys(path, &self.config.fuzzy) {
+        for fuzzy_key in PrismEngine::expand_fuzzy_keys(params.path, &self.config.fuzzy) {
             let start_fz = results.len();
             self.resources.table.lookup_into(&fuzzy_key, results);
             for fm in &mut results[start_fz..] {
@@ -178,8 +192,8 @@ impl AlgoEngine {
                     Self::calibrate_lexicon_path_score(
                         fm.score,
                         &fm.text,
-                        best_syl_count,
-                        cost_penalty,
+                        params.best_syl_count,
+                        params.cost_penalty,
                     )
                 } else {
                     fm.score
@@ -190,12 +204,12 @@ impl AlgoEngine {
             let start_fzu = results.len();
             self.adaptive
                 .model
-                .lookup_user_words_into(&fuzzy_key, eval_ts, results);
+                .lookup_user_words_into(&fuzzy_key, params.eval_ts, results);
             for fum in &mut results[start_fzu..] {
                 fum.consumed_len = Some(key_len);
                 fum.score = fum
                     .score
-                    .saturating_sub(cost_penalty)
+                    .saturating_sub(params.cost_penalty)
                     .saturating_sub(50)
                     .max(1);
             }
@@ -260,13 +274,15 @@ impl AlgoEngine {
         best_path: &SegmentPath,
         results: &mut Vec<AlgoCandidate>,
     ) {
-        if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context_options(
-            &best_path.syllables,
-            &best_path.remaining,
-            &self.resources.table,
-            self.composition.last_commit_context(),
-            self.config.enable_acronym,
-        ) {
+        if let Some(mut sentence) =
+            ViterbiDecoder::decode_sentence_with_context_options(&SentenceDecodeParams {
+                syllables: &best_path.syllables,
+                remaining: &best_path.remaining,
+                table: &self.resources.table,
+                prev_context: self.composition.last_commit_context(),
+                enable_acronym: self.config.enable_acronym,
+            })
+        {
             sentence.score = sentence
                 .score
                 .saturating_sub(best_path.cost.saturating_mul(100));

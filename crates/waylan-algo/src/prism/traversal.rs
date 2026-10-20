@@ -29,23 +29,20 @@ pub struct DfsContext<'a> {
 /// 探索模糊音音节匹配扩展分支
 fn explore_fuzzy_syllables(
     ctx: &mut DfsContext<'_>,
-    start: usize,
-    current_cost: u32,
-    typo_count: u8,
-    max_len: usize,
-    fsa_matches: &[(&str, usize)],
+    params: &DfsExploreParams<'_>,
     matched_full: &mut bool,
 ) {
     if !ctx.fuzzy.has_active_rules() {
         return;
     }
-    for len in (1..=max_len).rev() {
-        let end = start + len;
+    for len in (1..=params.max_len).rev() {
+        let end = params.start + len;
         if !ctx.input.is_char_boundary(end) {
             continue;
         }
-        let slice = &ctx.input[start..end];
-        if PrismFuzzy::is_fuzzy_valid(slice, ctx.fuzzy) && !fsa_matches.iter().any(|m| m.0 == slice)
+        let slice = &ctx.input[params.start..end];
+        if PrismFuzzy::is_fuzzy_valid(slice, ctx.fuzzy)
+            && !params.fsa_matches.iter().any(|m| m.0 == slice)
         {
             *matched_full = true;
             let mut step_cost = 12;
@@ -55,30 +52,24 @@ fn explore_fuzzy_syllables(
                 }
             }
             ctx.current.push(slice.to_string());
-            dfs_dag(ctx, end, current_cost + step_cost, typo_count);
+            dfs_dag(ctx, end, params.current_cost + step_cost, params.typo_count);
             ctx.current.pop();
         }
     }
 }
 
 /// 探索物理键盘紧邻按键高斯误触与常见韵母规则纠错
-fn explore_spatial_and_rule_typo(
-    ctx: &mut DfsContext<'_>,
-    start: usize,
-    current_cost: u32,
-    max_len: usize,
-    fsa_matches: &[(&str, usize)],
-) {
-    if !ctx.enable_typo || fsa_matches.iter().any(|m| m.1 >= 4) || ctx.results.len() >= 48 {
+fn explore_spatial_and_rule_typo(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
+    if !ctx.enable_typo || params.fsa_matches.iter().any(|m| m.1 >= 4) || ctx.results.len() >= 48 {
         return;
     }
 
-    for len in (2..=max_len).rev() {
-        let end = start + len;
+    for len in (2..=params.max_len).rev() {
+        let end = params.start + len;
         if !ctx.input.is_char_boundary(end) {
             continue;
         }
-        let slice = &ctx.input[start..end];
+        let slice = &ctx.input[params.start..end];
         let mut corrections = get_spatial_typo_corrections(slice, 25);
         for rule_alt in get_typo_corrections_with_rules(slice, ctx.typo_rules) {
             if !corrections.iter().any(|(s, _)| s == &rule_alt) {
@@ -86,9 +77,9 @@ fn explore_spatial_and_rule_typo(
             }
         }
         for (std_syl, edit_cost) in corrections {
-            if !fsa_matches.iter().any(|m| m.0 == std_syl) {
+            if !params.fsa_matches.iter().any(|m| m.0 == std_syl) {
                 ctx.current.push(std_syl);
-                dfs_dag(ctx, end, current_cost + 10 + edit_cost, 1);
+                dfs_dag(ctx, end, params.current_cost + 10 + edit_cost, 1);
                 ctx.current.pop();
             }
         }
@@ -156,7 +147,7 @@ pub fn dfs_dag(ctx: &mut DfsContext<'_>, start: usize, current_cost: u32, typo_c
     push_remainder_path(ctx, &params, matched_full);
 }
 
-/// DAG 深度优先搜索的分支探索参数（收敛探索类辅助函数的入参数量）
+/// DAG 深度优先搜索的分支探索参数（收敛标准音节、模糊音、紧邻误触等探索类辅助函数的入参数量）
 struct DfsExploreParams<'a> {
     /// 当前搜索位置（输入串中的字符偏移）
     start: usize,
@@ -179,24 +170,10 @@ fn explore_all_branches(
     fsa: &PrismFsa,
 ) -> bool {
     // 1. 优先尝试标准完整音节
-    let mut matched_full = explore_exact_syllables(
-        ctx,
-        params.start,
-        params.current_cost,
-        params.typo_count,
-        params.fsa_matches,
-    );
+    let mut matched_full = explore_exact_syllables(ctx, params);
 
     // 1.2 模糊音音节匹配扩展
-    explore_fuzzy_syllables(
-        ctx,
-        params.start,
-        params.current_cost,
-        params.typo_count,
-        params.max_len,
-        params.fsa_matches,
-        &mut matched_full,
-    );
+    explore_fuzzy_syllables(ctx, params, &mut matched_full);
 
     // 1.3 容错虚边：相邻按键倒置（支持音节内 (0,1)..=(4,5) 交换与跨音节边界交换）
     if ctx.enable_typo
@@ -209,13 +186,7 @@ fn explore_all_branches(
 
     // 1.4 容错虚边：物理键盘紧邻按键高斯误触与常见韵母规则纠错
     if params.typo_count == 0 {
-        explore_spatial_and_rule_typo(
-            ctx,
-            params.start,
-            params.current_cost,
-            params.max_len,
-            params.fsa_matches,
-        );
+        explore_spatial_and_rule_typo(ctx, params);
     }
 
     // 2. 声母简拼混合转移边
@@ -257,15 +228,9 @@ fn push_remainder_path(
 }
 
 /// 探索标准完整音节路径并返回是否命中过完整音节
-fn explore_exact_syllables(
-    ctx: &mut DfsContext<'_>,
-    start: usize,
-    current_cost: u32,
-    typo_count: u8,
-    fsa_matches: &[(&'static str, usize)],
-) -> bool {
+fn explore_exact_syllables(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) -> bool {
     let mut matched_full = false;
-    for &(std_syl, len) in fsa_matches.iter().rev() {
+    for &(std_syl, len) in params.fsa_matches.iter().rev() {
         matched_full = true;
         let mut step_cost = 10;
         // 检查零声母借音碎切：当前音节若以 a, o, e 开头，且与前一个音节可合并成合法单音节，则判定为借音碎切并施加惩罚
@@ -279,7 +244,12 @@ fn explore_exact_syllables(
             }
         }
         ctx.current.push(std_syl.to_string());
-        dfs_dag(ctx, start + len, current_cost + step_cost, typo_count);
+        dfs_dag(
+            ctx,
+            params.start + len,
+            params.current_cost + step_cost,
+            params.typo_count,
+        );
         ctx.current.pop();
     }
     matched_full

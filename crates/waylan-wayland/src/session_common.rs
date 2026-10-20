@@ -68,14 +68,35 @@ pub struct SessionSetupOptions<'a> {
     pub voice_provider: Option<Box<dyn VoiceProvider>>,
 }
 
+/// 会话装配目标上下文（运行时、渲染器、监控上下文与热重载回调的可变借用集合）
+///
+/// # 设计原理
+/// - **实现初衷**：会话装配需要同时操作运行时、候选框渲染器与文件监控上下文三个可变目标，
+///   再叠加热重载回调后平铺传参易在 V1 与 V2 两处调用点发生顺序错配。
+/// - **核心优势**：以参数对象聚合装配目标，调用点按名绑定每个目标，杜绝位置传参歧义。
+/// - **代价与局限**：调用点需显式书写字段名。
+pub struct SessionSetupTargets<'a, S: 'static> {
+    /// 输入法核心运行时
+    pub runtime: &'a mut ImeRuntime,
+    /// 候选框渲染器
+    pub renderer: &'a mut CandidateBoxRenderer,
+    /// 外部环境监控上下文
+    pub watcher: &'a mut WaylandWatcherContext<S>,
+    /// 配置热重载回调
+    pub reload_cb: fn(&mut S),
+}
+
 /// 统一为会话上下文应用运行参数、配置与监控回调
 pub fn apply_session_setup<S: 'static>(
-    runtime: &mut ImeRuntime,
-    renderer: &mut CandidateBoxRenderer,
-    watcher: &mut WaylandWatcherContext<S>,
+    targets: SessionSetupTargets<'_, S>,
     opts: SessionSetupOptions<'_>,
-    reload_cb: fn(&mut S),
 ) {
+    let SessionSetupTargets {
+        runtime,
+        renderer,
+        watcher,
+        reload_cb,
+    } = targets;
     *renderer = opts.renderer;
     watcher.watched_paths = opts.watched_paths;
     watcher.last_watched_mtime = opts.initial_mtime;

@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::object_server::SignalContext;
 
 use super::super::keys::IbusKeyOutcome;
+use super::emitter::OutcomeDispatchParams;
 use super::service::IbusEngineService;
 use super::snapshot::UiSnapshot;
 
@@ -57,8 +58,13 @@ impl IbusEngineService {
             let snap = UiSnapshot::capture(&guard);
             (out, Some(snap), guard.is_caps_locked())
         };
-        self.dispatch_outcome(ctxt, outcome, snap, is_caps_locked)
-            .await;
+        self.dispatch_outcome(OutcomeDispatchParams {
+            ctxt,
+            outcome,
+            snap,
+            is_caps_locked,
+        })
+        .await;
     }
 
     /// 响应候选框上一页按钮事件

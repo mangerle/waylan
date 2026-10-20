@@ -1,3 +1,4 @@
+use super::cursor_rect::PopupPositionParams;
 use super::*;
 use std::os::fd::AsRawFd;
 
@@ -17,7 +18,12 @@ fn test_cursor_popup_position() {
 
     // 接近屏幕右边缘：自动向左平移留出安全间距，防止被右侧边缘截断
     let right_cursor = CursorRect::new(1800, 500, 2, 20);
-    let (rx, ry) = right_cursor.compute_popup_position_constrained(300, 40, 1920, 1080);
+    let (rx, ry) = right_cursor.compute_popup_position_constrained(&PopupPositionParams {
+        popup_width: 300,
+        popup_height: 40,
+        screen_width: 1920,
+        screen_height: 1080,
+    });
     assert_eq!(rx, 1920 - 300 - 4); // 1616
     assert_eq!(ry, 524);
 }

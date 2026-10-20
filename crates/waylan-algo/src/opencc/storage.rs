@@ -50,6 +50,61 @@ impl OpenCcStringPool {
     }
 }
 
+/// 简繁二进制词库写入参数对象
+///
+/// 承载写入紧凑二进制词库所需的全部上下文：二进制输出流、错误定位路径、单字与短语记录表以及字符串驻留池。
+///
+/// 设计原理：写入流程所需的入参天然构成一个整体，聚合为参数对象可避免长参数列表在调用处错位，
+/// 同时使各字段的语义边界一目了然。
+struct OpenccRecordWriteParams<'a, W: Write> {
+    /// 二进制输出流（输出槽位）
+    writer: &'a mut W,
+    /// 词库文件路径（用于构造带路径上下文的 IO 错误）
+    path_ref: &'a Path,
+    /// 单字记录表（码位、繁体串偏移与长度）
+    char_records: &'a [(u32, u32, u16)],
+    /// 短语记录表（简体串偏移与长度、繁体串偏移与长度）
+    phrase_records: &'a [(u32, u16, u32, u16)],
+    /// 字符串驻留池字节数据
+    string_pool: &'a [u8],
+    /// 字符串驻留池字节长度
+    pool_len: usize,
+}
+
+/// 简繁二进制词库单字记录解析参数对象
+///
+/// 承载解析单字记录表所需的缓冲区上下文、记录条数、字符串驻留池与待填充词典实例。
+struct OpenccCharParseParams<'a> {
+    /// 词库原始字节缓冲区
+    buf: &'a [u8],
+    /// 单字记录条数
+    char_count: usize,
+    /// 字符串驻留池字节数据
+    pool: &'a [u8],
+    /// 待填充的词典实例（输出槽位）
+    dict: &'a mut OpenCcDict,
+    /// 词库文件路径（用于构造带路径上下文的 IO 错误）
+    path_ref: &'a Path,
+}
+
+/// 简繁二进制词库短语记录解析参数对象
+///
+/// 承载解析短语记录表所需的缓冲区上下文、记录条数、解析游标、字符串驻留池与待填充词典实例。
+struct OpenccPhraseParseParams<'a> {
+    /// 词库原始字节缓冲区
+    buf: &'a [u8],
+    /// 短语记录条数
+    phrase_count: usize,
+    /// 记录区解析游标（单字记录表解析后的起始偏移）
+    cursor: usize,
+    /// 字符串驻留池字节数据
+    pool: &'a [u8],
+    /// 待填充的词典实例（输出槽位）
+    dict: &'a mut OpenCcDict,
+    /// 词库文件路径（用于构造带路径上下文的 IO 错误）
+    path_ref: &'a Path,
+}
+
 impl OpenCcDict {
     /// 整理有序单字记录条目
     fn build_char_records(&self, pool: &mut OpenCcStringPool) -> Vec<(u32, u32, u16)> {
@@ -107,14 +162,14 @@ impl OpenCcDict {
         let char_records = self.build_char_records(&mut string_pool);
         let phrase_records = self.build_phrase_records(&mut string_pool);
 
-        write_opencc_records(
-            &mut writer,
+        write_opencc_records(OpenccRecordWriteParams {
+            writer: &mut writer,
             path_ref,
-            &char_records,
-            &phrase_records,
-            string_pool.as_slice(),
-            string_pool.len(),
-        )
+            char_records: &char_records,
+            phrase_records: &phrase_records,
+            string_pool: string_pool.as_slice(),
+            pool_len: string_pool.len(),
+        })
     }
 
     /// 从紧凑二进制文件 (`WAYLAN_OPENCC001`) 加载简繁词典
@@ -141,22 +196,37 @@ impl OpenCcDict {
             first_char_max_len: HashMap::new(),
         };
 
-        let phrase_offset = parse_char_records(&buf, char_count, pool, &mut dict, path_ref)?;
-        parse_phrase_records(&buf, phrase_count, phrase_offset, pool, &mut dict, path_ref)?;
+        let phrase_offset = parse_char_records(OpenccCharParseParams {
+            buf: &buf,
+            char_count,
+            pool,
+            dict: &mut dict,
+            path_ref,
+        })?;
+        parse_phrase_records(OpenccPhraseParseParams {
+            buf: &buf,
+            phrase_count,
+            cursor: phrase_offset,
+            pool,
+            dict: &mut dict,
+            path_ref,
+        })?;
 
         Ok(dict)
     }
 }
 
 /// 写入头部与记录数组
-fn write_opencc_records<W: Write>(
-    writer: &mut W,
-    path_ref: &Path,
-    char_records: &[(u32, u32, u16)],
-    phrase_records: &[(u32, u16, u32, u16)],
-    string_pool: &[u8],
-    pool_len: usize,
-) -> Result<(), AlgoError> {
+fn write_opencc_records<W: Write>(params: OpenccRecordWriteParams<'_, W>) -> Result<(), AlgoError> {
+    let OpenccRecordWriteParams {
+        writer,
+        path_ref,
+        char_records,
+        phrase_records,
+        string_pool,
+        pool_len,
+    } = params;
+
     let io_err = |e| AlgoError::DictionaryIo {
         path: PathBuf::from(path_ref),
         source: e,
@@ -224,13 +294,15 @@ fn parse_opencc_header(
 }
 
 /// 解析单字记录表并填充词典映射
-fn parse_char_records(
-    buf: &[u8],
-    char_count: usize,
-    pool: &[u8],
-    dict: &mut OpenCcDict,
-    path_ref: &Path,
-) -> Result<usize, AlgoError> {
+fn parse_char_records(params: OpenccCharParseParams<'_>) -> Result<usize, AlgoError> {
+    let OpenccCharParseParams {
+        buf,
+        char_count,
+        pool,
+        dict,
+        path_ref,
+    } = params;
+
     let mut cursor = 28usize;
     for _ in 0..char_count {
         let code = u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap_or([0; 4]));
@@ -248,14 +320,16 @@ fn parse_char_records(
 }
 
 /// 解析短语记录表并填充 CompactPhraseTable
-fn parse_phrase_records(
-    buf: &[u8],
-    phrase_count: usize,
-    mut cursor: usize,
-    pool: &[u8],
-    dict: &mut OpenCcDict,
-    path_ref: &Path,
-) -> Result<(), AlgoError> {
+fn parse_phrase_records(params: OpenccPhraseParseParams<'_>) -> Result<(), AlgoError> {
+    let OpenccPhraseParseParams {
+        buf,
+        phrase_count,
+        mut cursor,
+        pool,
+        dict,
+        path_ref,
+    } = params;
+
     let mut phrase_records = Vec::with_capacity(phrase_count);
     for _ in 0..phrase_count {
         let s_off = u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap_or([0; 4]));

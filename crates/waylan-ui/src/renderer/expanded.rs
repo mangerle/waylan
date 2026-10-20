@@ -5,7 +5,7 @@
 use super::draw::{
     draw_card_background_at, draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
 };
-use super::layout::{CandidateHitTarget, HitRegion};
+use super::layout::{CandidateHitTarget, HitRegion, HitRegionParams};
 use super::{CandidateBoxRenderer, DrawTextOptions};
 use crate::theme::UiTheme;
 use tiny_skia::Pixmap;
@@ -73,13 +73,13 @@ pub fn render_expanded_popup_card(
             draw_expanded_sub_item_highlight(pixmap, &renderer.theme, &sub_params);
         }
 
-        regions.push(HitRegion::new(
-            item_x,
-            row_y,
-            item_w,
-            params.row_height,
-            CandidateHitTarget::Select(s_idx),
-        ));
+        regions.push(HitRegion::new(HitRegionParams {
+            x: item_x,
+            y: row_y,
+            width: item_w,
+            height: params.row_height,
+            target: CandidateHitTarget::Select(s_idx),
+        }));
 
         draw_expanded_sub_item_text(renderer, pixmap, &sub_params);
     }

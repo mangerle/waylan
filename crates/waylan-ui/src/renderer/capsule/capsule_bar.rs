@@ -4,9 +4,9 @@
 
 use super::super::draw::{
     draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow, draw_rounded_rect,
-    CardBackgroundParams, RoundedRectParams,
+    CalendarIconParams, CardBackgroundParams, DropdownArrowParams, RoundedRectParams,
 };
-use super::super::layout::{CandidateHitTarget, HitRegion, ItemMeasure};
+use super::super::layout::{CandidateHitTarget, HitRegion, HitRegionParams, ItemMeasure};
 use super::super::{CandidateBoxRenderer, DrawTextOptions};
 use crate::theme::{Color, UiTheme};
 use tiny_skia::Pixmap;
@@ -121,13 +121,13 @@ fn render_capsule_candidates(
             },
         );
 
-        regions.push(HitRegion::new(
-            item.start_x,
-            0.0,
-            item.total_item_width,
-            ctx.bar_height,
-            CandidateHitTarget::Select(idx),
-        ));
+        regions.push(HitRegion::new(HitRegionParams {
+            x: item.start_x,
+            y: 0.0,
+            width: item.total_item_width,
+            height: ctx.bar_height,
+            target: CandidateHitTarget::Select(idx),
+        }));
     }
 }
 
@@ -144,18 +144,20 @@ fn draw_capsule_dropdown(
     draw_dropdown_arrow(
         pixmap,
         theme,
-        arrow_x + 6.0 * params.scale,
-        arrow_center_y,
-        params.scale,
+        &DropdownArrowParams {
+            x: arrow_x + 6.0 * params.scale,
+            y: arrow_center_y,
+            scale: params.scale,
+        },
     );
 
-    regions.push(HitRegion::new(
-        arrow_x,
-        0.0,
-        action_area_width,
-        params.bar_height,
-        CandidateHitTarget::ToggleExpand,
-    ));
+    regions.push(HitRegion::new(HitRegionParams {
+        x: arrow_x,
+        y: 0.0,
+        width: action_area_width,
+        height: params.bar_height,
+        target: CandidateHitTarget::ToggleExpand,
+    }));
 }
 
 /// 胶囊前缀绘制参数
@@ -328,10 +330,12 @@ fn draw_selected_candidate_item(
         draw_calendar_icon(
             pixmap,
             &renderer.theme,
-            content_x,
-            badge_y + 8.5 * s,
-            true,
-            s,
+            &CalendarIconParams {
+                x: content_x,
+                y: badge_y + 8.5 * s,
+                is_selected: true,
+                scale: s,
+            },
         );
         content_x += item.icon_width;
     }
@@ -397,7 +401,16 @@ fn draw_plain_candidate_item(
     let mut content_x = item.start_x + item.index_width + 4.0 * s;
     if item.is_expandable {
         let icon_y = (params.bar_height - 11.0 * s) / 2.0;
-        draw_calendar_icon(pixmap, &renderer.theme, content_x, icon_y, false, s);
+        draw_calendar_icon(
+            pixmap,
+            &renderer.theme,
+            &CalendarIconParams {
+                x: content_x,
+                y: icon_y,
+                is_selected: false,
+                scale: s,
+            },
+        );
         content_x += item.icon_width;
     }
 

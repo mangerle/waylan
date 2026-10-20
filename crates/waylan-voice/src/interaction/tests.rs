@@ -120,12 +120,22 @@ fn test_dispatch_voice_key_tracks_consumed_keys() {
     let mut tracker = ConsumedKeyTracker::new();
 
     // 结算期间按下空格键被消费，tracker 应记账为按下
-    let action = mgr.dispatch_voice_key(KEY_SPACE, true, 0, &mut tracker);
+    let action = mgr.dispatch_voice_key(VoiceKeyDispatchParams {
+        key: KEY_SPACE,
+        is_press: true,
+        modifiers: 0,
+        consumed_keys: &mut tracker,
+    });
     assert_eq!(action, VoiceKeyAction::Consumed);
     assert!(tracker.is_consumed(KEY_SPACE));
 
     // 松开空格键被消费，tracker 应释放该键
-    let action_rel = mgr.dispatch_voice_key(KEY_SPACE, false, 0, &mut tracker);
+    let action_rel = mgr.dispatch_voice_key(VoiceKeyDispatchParams {
+        key: KEY_SPACE,
+        is_press: false,
+        modifiers: 0,
+        consumed_keys: &mut tracker,
+    });
     assert_eq!(action_rel, VoiceKeyAction::Consumed);
     assert!(!tracker.is_consumed(KEY_SPACE));
 }

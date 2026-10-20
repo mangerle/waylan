@@ -15,7 +15,10 @@ use zbus::zvariant::Value;
 
 use super::super::keys::IbusSessionCore;
 use super::super::screensaver::ScreenLockHealer;
-use super::super::types::{build_ibus_prop_list, extract_text_from_ibus_variant};
+use super::super::types::{
+    build_ibus_prop_list, extract_text_from_ibus_variant, IbusPropListParams,
+};
+use super::emitter::OutcomeDispatchParams;
 use super::snapshot::UiSnapshot;
 use crate::IbusMenuActionHandler;
 
@@ -41,6 +44,9 @@ pub struct IbusEngineService {
 #[interface(name = "org.freedesktop.IBus.Engine")]
 impl IbusEngineService {
     /// 处理硬件按键按下与释放事件
+    ///
+    /// 入参由 `org.freedesktop.IBus.Engine.ProcessKeyEvent(keyval, keycode, state)` 协议契约固定，
+    /// `ctxt` 为 zbus 信号上下文注入项，均不可收敛为参数对象。
     async fn process_key_event(
         &self,
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
@@ -78,12 +84,19 @@ impl IbusEngineService {
         };
 
         let consumed = outcome.consumed;
-        self.dispatch_outcome(&ctxt, outcome, snap, is_caps_locked)
-            .await;
+        self.dispatch_outcome(OutcomeDispatchParams {
+            ctxt: &ctxt,
+            outcome,
+            snap,
+            is_caps_locked,
+        })
+        .await;
         consumed
     }
 
     /// 更新光标屏幕几何坐标
+    ///
+    /// 入参由 `org.freedesktop.IBus.Engine.SetCursorLocation(x, y, w, h)` 协议契约固定，不可收敛为参数对象。
     fn set_cursor_location(&self, _x: i32, _y: i32, _w: i32, _h: i32) {}
 
     /// 手写输入坐标事件（保持空实现以兼容协议）
@@ -114,6 +127,9 @@ impl IbusEngineService {
     fn property_hide(&self, _name: &str) {}
 
     /// 响应用户在 GNOME 候选框上使用鼠标点击候选词事件
+    ///
+    /// 入参由 `org.freedesktop.IBus.Engine.CandidateClicked(index, button, state)` 协议契约固定，
+    /// 不可收敛为参数对象。
     async fn candidate_clicked(
         &self,
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
@@ -152,7 +168,13 @@ impl IbusEngineService {
             )
         };
         if !self.suppress_properties {
-            if let Ok(prop_list) = build_ibus_prop_list(mode, is_caps, trad, punct, char_full) {
+            if let Ok(prop_list) = build_ibus_prop_list(&IbusPropListParams {
+                mode,
+                is_caps_locked: is_caps,
+                traditional_chinese: trad,
+                full_width_punct: punct,
+                full_width_char: char_full,
+            }) {
                 let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
             }
         }
@@ -259,6 +281,10 @@ impl IbusEngineService {
     #[zbus(signal)]
     pub async fn commit_text(ctxt: &SignalContext<'_>, text: Value<'_>) -> zbus::Result<()>;
 
+    /// 发射预编辑文本更新信号
+    ///
+    /// 入参由 `org.freedesktop.IBus.Engine` 的 `UpdatePreeditText(text, cursor_pos, visible, mode)`
+    /// 信号契约固定，不可收敛为参数对象。
     #[zbus(signal)]
     pub async fn update_preedit_text(
         ctxt: &SignalContext<'_>,

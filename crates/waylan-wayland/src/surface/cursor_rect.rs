@@ -11,6 +11,22 @@ pub struct CursorRect {
     pub height: i32,
 }
 
+/// 候选框悬浮位置计算参数
+///
+/// 承载候选框自身尺寸与屏幕可用区域约束，供悬浮锚点坐标计算使用。
+/// 采用参数对象聚合可避免长参数列表在调用处发生参数错位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupPositionParams {
+    /// 候选框宽度（像素）
+    pub popup_width: u32,
+    /// 候选框高度（像素）
+    pub popup_height: u32,
+    /// 屏幕逻辑宽度（像素；非正值表示不约束水平方向）
+    pub screen_width: i32,
+    /// 屏幕逻辑高度（像素；非正值表示不约束垂直方向）
+    pub screen_height: i32,
+}
+
 impl CursorRect {
     pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
         Self {
@@ -28,17 +44,22 @@ impl CursorRect {
         popup_height: u32,
         screen_height: i32,
     ) -> (i32, i32) {
-        self.compute_popup_position_constrained(popup_width, popup_height, 0, screen_height)
+        self.compute_popup_position_constrained(&PopupPositionParams {
+            popup_width,
+            popup_height,
+            screen_width: 0,
+            screen_height,
+        })
     }
 
     /// 在指定屏幕宽度与高度约束下计算候选框悬浮坐标（自动执行水平右边缘防溢出平移与垂直下边缘向上翻转）
-    pub fn compute_popup_position_constrained(
-        &self,
-        popup_width: u32,
-        popup_height: u32,
-        screen_width: i32,
-        screen_height: i32,
-    ) -> (i32, i32) {
+    pub fn compute_popup_position_constrained(&self, params: &PopupPositionParams) -> (i32, i32) {
+        let PopupPositionParams {
+            popup_width,
+            popup_height,
+            screen_width,
+            screen_height,
+        } = *params;
         let popup_w = popup_width as i32;
         let popup_h = popup_height as i32;
 

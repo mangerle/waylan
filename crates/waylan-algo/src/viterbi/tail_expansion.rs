@@ -56,7 +56,15 @@ pub(super) fn expand_remaining_tail(
     if k >= 2 {
         // 策略 A1：多声母连续简拼链绑定（受用户配置控制）
         if ctx.enable_acronym {
-            expand_acronym_chain(ctx, &initial_chain, split_idx, dp, &mut ext_candidates);
+            expand_acronym_chain(
+                ctx,
+                AcronymChainExpansionParams {
+                    initial_chain: &initial_chain,
+                    split_idx,
+                    dp,
+                    out: &mut ext_candidates,
+                },
+            );
         }
     } else if split_idx >= 1 && !dp[split_idx - 1].is_empty() {
         // 策略 A2：k = 1 单声母未完成态，与倒数第 1 个完整音节结合扩展为双字词
@@ -88,19 +96,34 @@ fn extract_initial_chain(syllables: &[String], remaining: &str) -> (Vec<String>,
     (initial_chain, split_idx)
 }
 
-/// 策略 A1：多声母连续简拼链绑定与转移计算
-fn expand_acronym_chain(
-    ctx: &TailExpansionContext<'_>,
-    initial_chain: &[String],
+/// 多声母连续简拼链扩展的输入参数
+///
+/// # 设计原理
+/// - **实现初衷**：声母链绑定需同时访问"声母链内容、切分位置、已有路径束与输出容器"，
+///   平铺传参易导致输出容器与只读输入顺序颠倒。
+/// - **核心优势**：以参数对象聚合扩展上下文，只读输入与可变输出在类型层面清晰分离。
+/// - **代价与局限**：多引入一个结构体类型。
+struct AcronymChainExpansionParams<'a> {
+    /// 待绑定的连续声母链
+    initial_chain: &'a [String],
+    /// 声母链在音节序列中的起始切分位置
     split_idx: usize,
-    dp: &[Vec<ViterbiBeamNode>],
-    out: &mut Vec<ExtensionBranch>,
-) {
+    /// 已有的维特比路径束集合
+    dp: &'a [Vec<ViterbiBeamNode>],
+    /// 扩展分支输出容器
+    out: &'a mut Vec<ExtensionBranch>,
+}
+
+/// 策略 A1：多声母连续简拼链绑定与转移计算
+fn expand_acronym_chain(ctx: &TailExpansionContext<'_>, params: AcronymChainExpansionParams<'_>) {
+    let split_idx = params.split_idx;
+    let dp = params.dp;
+    let out = params.out;
     if dp[split_idx].is_empty() {
         return;
     }
 
-    let acronym_key = initial_chain.concat();
+    let acronym_key = params.initial_chain.concat();
     let acronym_cands = ctx.table.lookup_acronym(&acronym_key);
     for cand in acronym_cands.iter().take(3) {
         let freq_score = unigram_log_score(cand.score);

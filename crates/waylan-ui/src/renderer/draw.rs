@@ -1,8 +1,12 @@
+//! 候选框矢量路径绘制原语（圆角矩形、卡片背景、箭头与图标）
+//!
+//! # 设计原理
+//! - **实现初衷**：将基于 tiny-skia 路径构建的矢量图形绘制从渲染器主循环中剥离为可复用的原子绘图函数。
+//! - **核心优势**：所有绘图入口统一采用参数对象收敛几何与配色入参，绘制坐标运算集中且可独立验证。
+//! - **代价与局限**：字形位图的逐像素合成不属于矢量绘制，已拆分至 `glyph_blend` 独立模块。
+
 use crate::theme::{Color, UiTheme};
-use cosmic_text::{SwashContent, SwashImage};
-use tiny_skia::{
-    FillRule, Paint, Path, PathBuilder, Pixmap, PremultipliedColorU8, Stroke, Transform,
-};
+use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
 /// 圆角矩形几何参数
 pub struct RoundedRectParams {
@@ -123,8 +127,25 @@ pub fn draw_rounded_rect(pixmap: &mut Pixmap, params: RoundedRectParams, color: 
     }
 }
 
+/// 下拉小箭头绘制参数
+///
+/// 承载箭头尖端的锚点坐标与缩放系数，用于 `draw_dropdown_arrow` 以单次引用
+/// 传递几何参数，避免平铺多个标量入参。
+#[derive(Debug, Clone, Copy)]
+pub struct DropdownArrowParams {
+    /// 箭头尖端的横坐标
+    pub x: f32,
+    /// 箭头尖端的纵坐标
+    pub y: f32,
+    /// 箭头缩放系数（决定箭头整体尺寸与线宽）
+    pub scale: f32,
+}
+
 /// 绘制右侧下拉小箭头
-pub fn draw_dropdown_arrow(pixmap: &mut Pixmap, theme: &UiTheme, x: f32, y: f32, s: f32) {
+pub fn draw_dropdown_arrow(pixmap: &mut Pixmap, theme: &UiTheme, params: &DropdownArrowParams) {
+    let x = params.x;
+    let y = params.y;
+    let s = params.scale;
     let mut pb = PathBuilder::new();
     pb.move_to(x, y - 2.0 * s);
     pb.line_to(x + 4.0 * s, y + 2.0 * s);
@@ -143,36 +164,31 @@ pub fn draw_dropdown_arrow(pixmap: &mut Pixmap, theme: &UiTheme, x: f32, y: f32,
 }
 
 /// 日历图标绘制参数
-struct CalendarIconParams {
-    x: f32,
-    y: f32,
-    is_selected: bool,
-    scale: f32,
+///
+/// 承载微型日历图标的位置、选中态与缩放系数，供 `draw_calendar_icon` 及其
+/// 子绘制步骤共享同一份几何上下文，避免平铺多个标量入参。
+#[derive(Debug, Clone, Copy)]
+pub struct CalendarIconParams {
+    /// 图标左上角的横坐标
+    pub x: f32,
+    /// 图标左上角的纵坐标
+    pub y: f32,
+    /// 是否处于选中态（决定描边色与内芯底色）
+    pub is_selected: bool,
+    /// 图标缩放系数
+    pub scale: f32,
 }
 
 /// 绘制微型矢量日历图标（针对可展开功能项）
-pub fn draw_calendar_icon(
-    pixmap: &mut Pixmap,
-    theme: &UiTheme,
-    x: f32,
-    y: f32,
-    is_selected: bool,
-    s: f32,
-) {
-    let params = CalendarIconParams {
-        x,
-        y,
-        is_selected,
-        scale: s,
-    };
-    let stroke_color = if is_selected {
+pub fn draw_calendar_icon(pixmap: &mut Pixmap, theme: &UiTheme, params: &CalendarIconParams) {
+    let stroke_color = if params.is_selected {
         theme.highlight_text
     } else {
         theme.index_text
     };
 
-    draw_calendar_icon_body(pixmap, theme, &params, stroke_color);
-    draw_calendar_icon_binders(pixmap, &params, stroke_color);
+    draw_calendar_icon_body(pixmap, theme, params, stroke_color);
+    draw_calendar_icon_binders(pixmap, params, stroke_color);
 }
 
 /// 绘制日历图标的外框描边色块与内芯底色
@@ -240,194 +256,27 @@ fn draw_calendar_icon_binders(
     }
 }
 
-/// 混合字形位图（支持 8-bit 单通道灰度 Mask 与 32-bit 彩色 Emoji，采用定点整数 Porter-Duff Source-Over 优化）
-pub fn blend_swash_image(pixmap: &mut Pixmap, image: &SwashImage, pos: (i32, i32), color: Color) {
-    let width = image.placement.width as i32;
-    let height = image.placement.height as i32;
-    if width <= 0 || height <= 0 {
-        return;
-    }
-
-    let mut target = BlitTarget {
-        pixmap_w: pixmap.width() as i32,
-        pixmap_h: pixmap.height() as i32,
-        pixels: pixmap.pixels_mut(),
-    };
-
-    match image.content {
-        SwashContent::Mask | SwashContent::SubpixelMask => {
-            blend_mask_glyph(&mut target, image, pos, color);
-        }
-        SwashContent::Color => {
-            blend_color_emoji(&mut target, image, pos);
-        }
-    }
-}
-
-/// 绘图目标缓冲区上下文
-struct BlitTarget<'a> {
-    pixmap_w: i32,
-    pixmap_h: i32,
-    pixels: &'a mut [PremultipliedColorU8],
-}
-
-/// 灰度字形遮罩的源色分量（预乘前的 8 位通道值）
-#[derive(Clone, Copy)]
-struct MaskSourceColor {
-    r: u32,
-    g: u32,
-    b: u32,
-    a: u32,
-}
-
-impl MaskSourceColor {
-    /// 将浮点颜色量化为 8 位通道分量，颜色完全透明时返回 None
-    fn from_color(color: Color) -> Option<Self> {
-        let a = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
-        if a == 0 {
-            return None;
-        }
-        Some(Self {
-            r: (color.r * 255.0).round().clamp(0.0, 255.0) as u32,
-            g: (color.g * 255.0).round().clamp(0.0, 255.0) as u32,
-            b: (color.b * 255.0).round().clamp(0.0, 255.0) as u32,
-            a,
-        })
-    }
-}
-
-/// 计算灰度覆盖率对应的预乘源色分量（覆盖率过低导致完全透明时返回 None）
-fn premultiply_mask_color(source: MaskSourceColor, cov: u32) -> Option<(u32, u32, u32, u32)> {
-    let src_a = (source.a * cov + 127) / 255;
-    if src_a == 0 {
-        return None;
-    }
-    let src_r_premul = (source.r * src_a + 127) / 255;
-    let src_g_premul = (source.g * src_a + 127) / 255;
-    let src_b_premul = (source.b * src_a + 127) / 255;
-    Some((src_r_premul, src_g_premul, src_b_premul, src_a))
-}
-
-/// 混合单通道灰度字形遮罩
-fn blend_mask_glyph(
-    target: &mut BlitTarget<'_>,
-    image: &SwashImage,
-    pos: (i32, i32),
-    color: Color,
-) {
-    let Some(source) = MaskSourceColor::from_color(color) else {
-        return;
-    };
-
-    let (x, y) = pos;
-    let width = image.placement.width as i32;
-    let height = image.placement.height as i32;
-    let bitmap = &image.data;
-
-    for row in 0..height {
-        let py = y + row;
-        if py < 0 || py >= target.pixmap_h {
-            continue;
-        }
-        let row_offset = (row * width) as usize;
-        let py_offset = (py * target.pixmap_w) as usize;
-
-        for col in 0..width {
-            let px = x + col;
-            if px < 0 || px >= target.pixmap_w {
-                continue;
-            }
-
-            let cov = bitmap[row_offset + col as usize] as u32;
-            if cov <= 2 {
-                continue;
-            }
-
-            if let Some((src_r, src_g, src_b, src_a)) = premultiply_mask_color(source, cov) {
-                let pixel = &mut target.pixels[py_offset + px as usize];
-                blend_pixel_over(pixel, src_r, src_g, src_b, src_a);
-            }
-        }
-    }
-}
-
-/// 混合 32-bit 彩色 Emoji 位图
-fn blend_color_emoji(target: &mut BlitTarget<'_>, image: &SwashImage, pos: (i32, i32)) {
-    let (x, y) = pos;
-    let width = image.placement.width as i32;
-    let height = image.placement.height as i32;
-    let data = &image.data;
-
-    for row in 0..height {
-        let py = y + row;
-        if py < 0 || py >= target.pixmap_h {
-            continue;
-        }
-        let row_offset = (row * width * 4) as usize;
-        let py_offset = (py * target.pixmap_w) as usize;
-
-        for col in 0..width {
-            let px = x + col;
-            if px < 0 || px >= target.pixmap_w {
-                continue;
-            }
-
-            let idx = row_offset + (col as usize * 4);
-            if idx + 3 >= data.len() {
-                continue;
-            }
-            let sa = data[idx + 3] as u32;
-            if sa <= 2 {
-                continue;
-            }
-
-            let sr = data[idx] as u32;
-            let sg = data[idx + 1] as u32;
-            let sb = data[idx + 2] as u32;
-
-            let src_r_premul = (sr * sa + 127) / 255;
-            let src_g_premul = (sg * sa + 127) / 255;
-            let src_b_premul = (sb * sa + 127) / 255;
-
-            let pixel = &mut target.pixels[py_offset + px as usize];
-            blend_pixel_over(pixel, src_r_premul, src_g_premul, src_b_premul, sa);
-        }
-    }
-}
-
-/// 定点整数 Porter-Duff Source-Over 像素级原子混合
-#[inline(always)]
-fn blend_pixel_over(
-    target: &mut PremultipliedColorU8,
-    src_r_premul: u32,
-    src_g_premul: u32,
-    src_b_premul: u32,
-    src_a: u32,
-) {
-    let inv_sa = 255 - src_a;
-    let dst_a = target.alpha() as u32;
-    let dst_r = target.red() as u32;
-    let dst_g = target.green() as u32;
-    let dst_b = target.blue() as u32;
-
-    let out_a = (src_a + (dst_a * inv_sa + 127) / 255).min(255) as u8;
-    let out_r = (src_r_premul + (dst_r * inv_sa + 127) / 255).min(out_a as u32) as u8;
-    let out_g = (src_g_premul + (dst_g * inv_sa + 127) / 255).min(out_a as u32) as u8;
-    let out_b = (src_b_premul + (dst_b * inv_sa + 127) / 255).min(out_a as u32) as u8;
-
-    if let Some(blended) = PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a) {
-        *target = blended;
-    }
+/// 向上折叠箭头绘制参数
+///
+/// 承载箭头中心坐标、尺寸与填充色，供 `draw_collapse_arrow` 以单次引用传递
+/// 几何与配色参数，避免平铺多个标量入参。
+#[derive(Debug, Clone, Copy)]
+pub struct CollapseArrowParams {
+    /// 箭头中心的横坐标
+    pub center_x: f32,
+    /// 箭头中心的纵坐标
+    pub center_y: f32,
+    /// 箭头边长尺寸
+    pub size: f32,
+    /// 箭头填充颜色
+    pub color: Color,
 }
 
 /// 绘制向上折叠箭头（点击收回单行模式）
-pub fn draw_collapse_arrow(
-    pixmap: &mut Pixmap,
-    center_x: f32,
-    center_y: f32,
-    size: f32,
-    color: Color,
-) {
+pub fn draw_collapse_arrow(pixmap: &mut Pixmap, params: &CollapseArrowParams) {
+    let center_x = params.center_x;
+    let center_y = params.center_y;
+    let size = params.size;
     let half_w = size * 0.5;
     let half_h = size * 0.35;
     let mut pb = PathBuilder::new();
@@ -439,7 +288,7 @@ pub fn draw_collapse_arrow(
 
     if let Some(path) = pb.finish() {
         let mut paint = Paint::default();
-        paint.set_color(color.to_tiny_skia());
+        paint.set_color(params.color.to_tiny_skia());
         paint.anti_alias = true;
         pixmap.fill_path(
             &path,

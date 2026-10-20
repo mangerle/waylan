@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use log::info;
+use waylan_core::config::KeyModifiers;
 use waylan_core::input::*;
 
 use super::types::{VoiceKeyAction, VoiceSessionState};
@@ -95,10 +96,11 @@ impl VoiceInteractionManager {
         let ctrl = (mods_depressed & MOD_CTRL) != 0;
         let alt = (mods_depressed & MOD_ALT) != 0;
         let super_mod = (mods_depressed & MOD_SUPER) != 0;
+        let modifiers = KeyModifiers::new(ctrl, alt, shift, super_mod);
         let toggle_shortcut = self.toggle_shortcut;
         let is_toggle = toggle_shortcut
             .as_ref()
-            .is_some_and(|s| s.matches(evdev_key, shift, ctrl, alt, super_mod));
+            .is_some_and(|s| s.matches(evdev_key, &modifiers));
 
         if !is_toggle {
             return None;
@@ -154,14 +156,16 @@ impl VoiceInteractionManager {
 
     /// 空闲状态下匹配对讲机或开关连续听写快捷键
     fn handle_idle_key_press(&mut self, evdev_key: u32, mods_depressed: u32) -> VoiceKeyAction {
-        let shift = (mods_depressed & MOD_SHIFT) != 0;
-        let ctrl = (mods_depressed & MOD_CTRL) != 0;
-        let alt = (mods_depressed & MOD_ALT) != 0;
-        let super_mod = (mods_depressed & MOD_SUPER) != 0;
+        let modifiers = KeyModifiers::new(
+            (mods_depressed & MOD_CTRL) != 0,
+            (mods_depressed & MOD_ALT) != 0,
+            (mods_depressed & MOD_SHIFT) != 0,
+            (mods_depressed & MOD_SUPER) != 0,
+        );
 
         // 1. 尝试匹配对讲机模式 (Push-to-Talk)
         if let Some(ref ptt) = self.ptt_shortcut {
-            if ptt.matches(evdev_key, shift, ctrl, alt, super_mod) {
+            if ptt.matches(evdev_key, &modifiers) {
                 if !self.controller.is_recording() {
                     info!("[微澜语音] 触发对讲机快捷键，启动语音采集");
                     self.start_recording(true, Some(evdev_key));
@@ -172,7 +176,7 @@ impl VoiceInteractionManager {
 
         // 2. 尝试匹配开关模式开启录音 (Toggle)
         if let Some(ref toggle) = self.toggle_shortcut {
-            if toggle.matches(evdev_key, shift, ctrl, alt, super_mod) {
+            if toggle.matches(evdev_key, &modifiers) {
                 let now = Instant::now();
                 if now.duration_since(self.last_toggle_time) < Duration::from_millis(300) {
                     return VoiceKeyAction::Consumed;
@@ -189,26 +193,29 @@ impl VoiceInteractionManager {
     }
 
     /// 驱动语音按键事件并自动同步物理按键记账器状态
-    pub fn dispatch_voice_key(
-        &mut self,
-        evdev_key: u32,
-        is_press: bool,
-        effective_mods: u32,
-        consumed_keys: &mut ConsumedKeyTracker,
-    ) -> VoiceKeyAction {
-        let action = self.handle_key_event(evdev_key, is_press, effective_mods);
+    ///
+    /// 事件上下文统一由核心契约参数对象 `waylan_core::input::VoiceKeyDispatchParams` 承载，
+    /// 与 `VoiceProvider::dispatch_key` 共用同一份参数定义，避免两处字段语义漂移。
+    pub fn dispatch_voice_key(&mut self, params: VoiceKeyDispatchParams<'_>) -> VoiceKeyAction {
+        let VoiceKeyDispatchParams {
+            key,
+            is_press,
+            modifiers,
+            consumed_keys,
+        } = params;
+        let action = self.handle_key_event(key, is_press, modifiers);
         match action {
             VoiceKeyAction::Consumed | VoiceKeyAction::Commit(_) => {
                 if is_press {
-                    consumed_keys.record_press(evdev_key, true);
+                    consumed_keys.record_press(key, true);
                 } else {
-                    consumed_keys.take_release(evdev_key);
+                    consumed_keys.take_release(key);
                 }
                 action
             }
             VoiceKeyAction::PassThrough => {
                 // 若该按键在按下阶段已被消费，其释放事件必须同样被拦截消费以保持成对一致性并清理记账
-                if !is_press && consumed_keys.take_release(evdev_key) {
+                if !is_press && consumed_keys.take_release(key) {
                     VoiceKeyAction::Consumed
                 } else {
                     VoiceKeyAction::PassThrough

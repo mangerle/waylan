@@ -23,7 +23,7 @@ pub use types::*;
 use crate::input::{PunctuationProcessor, ShiftToggleStateMachine};
 use waylan_algo::AlgoEngine;
 use waylan_core::input::*;
-use waylan_core::{CandidateExpansion, InputMode, ParsedShortcut};
+use waylan_core::{CandidateExpansion, InputMode, KeyModifiers, ParsedShortcut};
 
 /// 微澜输入法核心会话上下文与按键驱动状态机 (IME Core Session)
 #[derive(Debug)]
@@ -349,33 +349,41 @@ impl ImeCoreSession {
 
     /// 匹配并执行用户配置的全局模式切换快捷键（简繁切换、字符全半角、标点全半角）
     pub fn handle_global_shortcuts(&mut self, keycode: u32) -> Option<ShortcutToggleAction> {
-        let shift_active = self.is_shift_active();
-        let ctrl_active = (self.modifiers.depressed & MOD_CTRL) != 0;
-        let alt_active = (self.modifiers.depressed & MOD_ALT) != 0;
-        let super_active = (self.modifiers.depressed & MOD_SUPER) != 0;
+        let modifiers = KeyModifiers::new(
+            (self.modifiers.depressed & MOD_CTRL) != 0,
+            (self.modifiers.depressed & MOD_ALT) != 0,
+            self.is_shift_active(),
+            (self.modifiers.depressed & MOD_SUPER) != 0,
+        );
 
         // 1. 尝试匹配简繁切换快捷键
-        if self.traditional_shortcut.as_ref().is_some_and(|s| {
-            s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
-        }) {
+        if self
+            .traditional_shortcut
+            .as_ref()
+            .is_some_and(|s| s.matches(keycode, &modifiers))
+        {
             let next_val = !self.is_traditional();
             self.set_traditional(next_val);
             return Some(ShortcutToggleAction::Traditional(next_val));
         }
 
         // 2. 尝试匹配字符全半角切换快捷键
-        if self.full_width_char_shortcut.as_ref().is_some_and(|s| {
-            s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
-        }) {
+        if self
+            .full_width_char_shortcut
+            .as_ref()
+            .is_some_and(|s| s.matches(keycode, &modifiers))
+        {
             let next_val = !self.is_full_width_char();
             self.set_full_width_char(next_val);
             return Some(ShortcutToggleAction::FullWidthChar(next_val));
         }
 
         // 3. 尝试匹配标点全半角切换快捷键
-        if self.full_width_punct_shortcut.as_ref().is_some_and(|s| {
-            s.matches(keycode, shift_active, ctrl_active, alt_active, super_active)
-        }) {
+        if self
+            .full_width_punct_shortcut
+            .as_ref()
+            .is_some_and(|s| s.matches(keycode, &modifiers))
+        {
             let next_val = !self.is_full_width_punct();
             self.set_full_width_punct(next_val);
             return Some(ShortcutToggleAction::FullWidthPunct(next_val));

@@ -50,6 +50,24 @@ struct CandidateCanvasSizeParams {
     scale: f32,
 }
 
+/// 展开浮层几何度量输入参数
+///
+/// # 设计原理
+/// - **实现初衷**：浮层尺寸依赖渲染样式派生的缩放、字号、内边距与候选项实测宽度，
+///   四项平铺传参易与调用点的顺序错配。
+/// - **核心优势**：以参数对象聚合同源度量输入，保证与候选条实测结果口径一致。
+/// - **代价与局限**：调用点需显式书写字段名。
+struct PopupMeasureParams<'a> {
+    /// 界面缩放因子
+    s: f32,
+    /// 候选词字号
+    font_size: f32,
+    /// 候选条水平内边距
+    padding_h: f32,
+    /// 已完成排版测量的候选项尺寸列表
+    measured_items: &'a [ItemMeasure],
+}
+
 impl CandidateBoxRenderer {
     /// 依据渲染器样式解析候选框的基础排版度量参数
     fn resolve_base_metrics(&self) -> CandidateBoxBaseMetrics {
@@ -81,11 +99,12 @@ impl CandidateBoxRenderer {
     fn measure_popup_dimensions<'a>(
         &mut self,
         state: &'a CandidateBoxState,
-        s: f32,
-        font_size: f32,
-        padding_h: f32,
-        measured_items: &[ItemMeasure],
+        params: &PopupMeasureParams<'_>,
     ) -> (bool, &'a [String], f32, f32, f32, f32) {
+        let s = params.s;
+        let font_size = params.font_size;
+        let padding_h = params.padding_h;
+        let measured_items = params.measured_items;
         let active_cand = state.candidates.get(state.selected_index);
         let has_active_sub = state.is_expanded()
             && active_cand
@@ -205,10 +224,12 @@ impl CandidateBoxRenderer {
         let (has_active_sub, sub_candidates, popup_x, popup_w, popup_h, row_height) = self
             .measure_popup_dimensions(
                 state,
-                metrics.scale,
-                metrics.font_size,
-                metrics.padding_h,
-                &measured_items,
+                &PopupMeasureParams {
+                    s: metrics.scale,
+                    font_size: metrics.font_size,
+                    padding_h: metrics.padding_h,
+                    measured_items: &measured_items,
+                },
             );
 
         let (canvas_w, canvas_h) = self.calculate_canvas_size(&CandidateCanvasSizeParams {

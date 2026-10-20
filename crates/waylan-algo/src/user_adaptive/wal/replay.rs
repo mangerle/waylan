@@ -15,7 +15,7 @@ use crate::error::AlgoError;
 use crate::user_adaptive::wal::compactor::compact_model;
 use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1};
 use crate::user_adaptive::wal::lock::ProcessFileLock;
-use crate::user_adaptive::UserAdaptiveModel;
+use crate::user_adaptive::{CommitCountParams, UserAdaptiveModel};
 
 /// 从二进制缓冲区重放 WAL 记录帧（公共重放逻辑）
 pub(crate) fn replay_wal_records(buf: &[u8], is_v2: bool) -> (UserAdaptiveModel, bool, usize) {
@@ -34,7 +34,12 @@ pub(crate) fn replay_wal_records(buf: &[u8], is_v2: bool) -> (UserAdaptiveModel,
                 text,
             } => {
                 if !py.is_empty() && !text.is_empty() {
-                    model.record_commit_count(text, py, timestamp, count);
+                    model.record_commit_count(&CommitCountParams {
+                        text,
+                        pinyin: py,
+                        current_timestamp: timestamp,
+                        count,
+                    });
                     record_count += 1;
                 }
             }

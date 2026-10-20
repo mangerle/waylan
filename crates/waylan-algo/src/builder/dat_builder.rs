@@ -36,7 +36,12 @@ pub fn build_dat(sorted_keys: &[String], values: &[u32]) -> DoubleArrayTrie {
 
         let b = builder.find_base_offset(&children);
         builder.set_base(node, b as i32);
-        builder.write_children(node, b, depth, &children);
+        builder.write_children(ChildWriteParams {
+            node,
+            base: b,
+            depth,
+            children: &children,
+        });
         builder.advance_free_pos();
     }
 
@@ -53,6 +58,24 @@ struct DatBuilder<'a> {
     max_node_pos: usize,
     free_pos: usize,
     queue: VecDeque<(usize, usize, usize, usize)>,
+}
+
+/// 子状态写入参数
+///
+/// # 设计原理
+/// - **实现初衷**：子状态写入需同时携带"父节点、基准偏移、键前缀深度与子键区间"四项构建上下文，
+///   平铺传参易与相邻的 `find_base_offset`、`set_base` 调用发生顺序错配。
+/// - **核心优势**：以参数对象聚合构建上下文，调用点按名传参即可完成语义绑定。
+/// - **代价与局限**：多引入一个结构体类型。
+struct ChildWriteParams<'a> {
+    /// 父节点在双数组中的位置
+    node: usize,
+    /// 父节点在 check 数组中的基准偏移
+    base: usize,
+    /// 当前已消费的键前缀深度
+    depth: usize,
+    /// 待写入的子键区间集合（起始下标、结束下标、字符编码）
+    children: &'a [(usize, usize, usize)],
 }
 
 impl<'a> DatBuilder<'a> {
@@ -161,15 +184,15 @@ impl<'a> DatBuilder<'a> {
     }
 
     /// 将所有子状态写入 check 校验并入队或写入 Tail
-    fn write_children(
-        &mut self,
-        node: usize,
-        b: usize,
-        depth: usize,
-        children: &[(usize, usize, usize)],
-    ) {
+    fn write_children(&mut self, params: ChildWriteParams<'_>) {
+        let ChildWriteParams {
+            node,
+            base,
+            depth,
+            children,
+        } = params;
         for &(code, c_start, c_end) in children {
-            let target = b + code;
+            let target = base + code;
             self.check[target] = node as u32;
             if target > self.max_node_pos {
                 self.max_node_pos = target;

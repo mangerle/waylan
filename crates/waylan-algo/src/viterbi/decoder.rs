@@ -5,6 +5,25 @@ use super::tail_expansion::{expand_remaining_tail, TailExpansionContext};
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 
+/// 整句动态规划求解的输入参数对象
+///
+/// 承载维特比整句解码所需的音节切分序列、末尾残存拼音、词典表、上屏历史上下文与简拼扩展开关。
+///
+/// 设计原理：整句解码的入参天然构成同一语义组，聚合为参数对象可避免调用处参数错位，
+/// 同时为后续扩展解码策略保留稳定的扩展点。
+pub struct SentenceDecodeParams<'a> {
+    /// 音节切分序列
+    pub syllables: &'a [String],
+    /// 末尾残存拼音（尚未输入完整的末尾片段）
+    pub remaining: &'a str,
+    /// 词典表（提供词条与二元转移权重）
+    pub table: &'a LexiconTable,
+    /// 上屏历史上下文（用于二元语言模型的上下文转移评分）
+    pub prev_context: Option<&'a str>,
+    /// 是否启用简拼尾部扩展
+    pub enable_acronym: bool,
+}
+
 /// 词格点求解推进上下文参数对象
 pub(super) struct LatticeSolveParams<'a> {
     pub(super) syllables: &'a [String],
@@ -144,17 +163,27 @@ impl ViterbiDecoder {
         table: &LexiconTable,
         prev_context: Option<&str>,
     ) -> Option<AlgoCandidate> {
-        Self::decode_sentence_with_context_options(syllables, remaining, table, prev_context, true)
+        Self::decode_sentence_with_context_options(&SentenceDecodeParams {
+            syllables,
+            remaining,
+            table,
+            prev_context,
+            enable_acronym: true,
+        })
     }
 
     /// 对给定的音节序列进行整句动态规划求解，并可控制是否启用简拼尾部扩展
     pub fn decode_sentence_with_context_options(
-        syllables: &[String],
-        remaining: &str,
-        table: &LexiconTable,
-        prev_context: Option<&str>,
-        enable_acronym: bool,
+        params: &SentenceDecodeParams<'_>,
     ) -> Option<AlgoCandidate> {
+        let SentenceDecodeParams {
+            syllables,
+            remaining,
+            table,
+            prev_context,
+            enable_acronym,
+        } = *params;
+
         let n = syllables.len();
         if n == 0 && remaining.is_empty() {
             return None;

@@ -15,7 +15,7 @@ pub use candidate::{
 pub use config::{
     format_key_combination, AppConfig, AudioFrontEndConfig, CandidateIndexStyle,
     CandidateOrientation, CloudAsrConfig, CloudProfile, CloudProviderType, ConfigError,
-    FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, NsEngineType,
+    FullWidthCharShortcut, FullWidthPunctShortcut, FuzzyPinyinRules, KeyModifiers, NsEngineType,
     OfflineAsrConfig, OfflineModelType, PageKeys, ParsedShortcut, SwitchKey, ThemeMode,
     TraditionalShortcut, TrayDisplayMode, TypoCorrectionRules, VadConfig, VadModelType,
     VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,

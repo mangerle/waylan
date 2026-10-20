@@ -8,7 +8,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use waylan_core::input::VoiceKeyAction;
+use waylan_core::input::{VoiceKeyAction, VoiceKeyDispatchParams};
 use waylan_core::InputMode;
 
 use super::types::ProcessKeyEventParams;
@@ -97,13 +97,14 @@ impl ImeRuntime {
         key: u32,
         is_press: bool,
     ) -> Option<(bool, Option<String>)> {
+        let modifiers = self.core.mods_depressed();
         let vm = self.voice_manager.as_mut()?;
-        match vm.dispatch_key(
+        match vm.dispatch_key(VoiceKeyDispatchParams {
             key,
             is_press,
-            self.core.mods_depressed(),
-            &mut self.core.consumed_keys,
-        ) {
+            modifiers,
+            consumed_keys: &mut self.core.consumed_keys,
+        }) {
             VoiceKeyAction::Consumed => {
                 self.refresh_frontend_ui(ctx.frontend, ctx.inline_preedit);
                 Some((true, None))

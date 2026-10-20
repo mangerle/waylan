@@ -202,6 +202,13 @@ impl DBusMenu {
     }
 
     /// 用户在右键菜单中点击特定项触发事件
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：本方法签名严格对应 `com.canonical.dbusmenu` 接口的 `Event` 方法
+    ///   （`id: i`、`event_id: s`、`data: v`、`timestamp: u`），由 D-Bus 协议契约强制约束。
+    /// - **核心优势**：保持与托盘菜单宿主（GNOME Shell / KDE 等）的协议兼容。
+    /// - **代价与局限**：入参个数由外部协议固定，无法收敛为参数对象；
+    ///   其中 `data` 与 `timestamp` 当前未被消费，仅为满足 D-Bus 签名而保留。
     pub(crate) fn event(&self, id: i32, event_id: String, _data: Value<'_>, _timestamp: u32) {
         if event_id != "clicked" {
             return;

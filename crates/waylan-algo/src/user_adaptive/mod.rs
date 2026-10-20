@@ -7,8 +7,22 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-pub use wal::{UserAdaptiveWal, WAL_MAGIC, WAL_MAGIC_V1};
+pub use wal::{UserAdaptiveWal, UserDictAppendParams, WAL_MAGIC, WAL_MAGIC_V1};
 pub use waylan_core::MAX_USER_DICT_BYTES;
+
+/// 用户词条上屏次数记录的参数对象
+///
+/// 承载记录用户词条上屏次数所需的词条文本、拼音键、记录时间戳与本次累计次数。
+pub struct CommitCountParams<'a> {
+    /// 词条文本
+    pub text: &'a str,
+    /// 拼音键序列（如 "ni'hao"）
+    pub pinyin: &'a str,
+    /// 记录时间戳（秒级 UNIX 时间）
+    pub current_timestamp: u64,
+    /// 本次累计的上屏次数
+    pub count: u32,
+}
 
 /// 用户词条使用记录
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,29 +62,35 @@ impl UserAdaptiveModel {
     pub fn merge(&mut self, other: &Self) {
         for (py, list) in &other.entries {
             for entry in list {
-                self.record_commit_count(
-                    &entry.text,
-                    py,
-                    entry.last_used_timestamp,
-                    entry.commit_count,
-                );
+                self.record_commit_count(&CommitCountParams {
+                    text: &entry.text,
+                    pinyin: py,
+                    current_timestamp: entry.last_used_timestamp,
+                    count: entry.commit_count,
+                });
             }
         }
     }
 
     /// 记录一次用户选词上屏动作
     pub fn record_commit(&mut self, text: &str, pinyin: &str, current_timestamp: u64) {
-        self.record_commit_count(text, pinyin, current_timestamp, 1);
+        self.record_commit_count(&CommitCountParams {
+            text,
+            pinyin,
+            current_timestamp,
+            count: 1,
+        });
     }
 
     /// 记录指定频次的用户选词上屏动作（用于 WAL 快照重放与频次还原）
-    pub fn record_commit_count(
-        &mut self,
-        text: &str,
-        pinyin: &str,
-        current_timestamp: u64,
-        count: u32,
-    ) {
+    pub fn record_commit_count(&mut self, params: &CommitCountParams<'_>) {
+        let CommitCountParams {
+            text,
+            pinyin,
+            current_timestamp,
+            count,
+        } = *params;
+
         self.max_timestamp = self.max_timestamp.max(current_timestamp);
         let key = pinyin.to_string();
         let list = self.entries.entry(key).or_default();

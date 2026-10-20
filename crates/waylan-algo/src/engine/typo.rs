@@ -4,6 +4,20 @@ use crate::table::LexiconTable;
 use crate::types::{self, AlgoCandidate, CandidateTier};
 use waylan_core::config::{FuzzyPinyinRules, TypoCorrectionRules};
 
+/// 方言软约束纠错的输入参数对象
+///
+/// 承载软约束纠错所需的原始输入串、词库引用、模糊音规则与拼音纠错规则四类上下文。
+struct RuleSoftCorrectionParams<'a> {
+    /// 待纠错的原始输入串
+    raw_input: &'a str,
+    /// 词库表引用（用于校验变异输入是否命中词条）
+    table: &'a LexiconTable,
+    /// 模糊音规则配置（控制平翘舌、鼻音边音与前后鼻音软约束）
+    fuzzy: &'a FuzzyPinyinRules,
+    /// 拼音纠错规则配置（控制 gn/mg 误输归一等通用纠错）
+    typo_rules: &'a TypoCorrectionRules,
+}
+
 /// 物理键盘空间邻键误触与相邻字符倒置容错纠错模块
 pub struct SpatialTypoCorrector;
 
@@ -39,7 +53,15 @@ impl SpatialTypoCorrector {
         Self::collect_adjacent_swap_candidates(raw_input, table, &mut candidates);
 
         // 3. 受模糊音与纠错规则控制的方言软约束纠错
-        Self::collect_rule_soft_corrections(raw_input, table, fuzzy, typo_rules, &mut candidates);
+        Self::collect_rule_soft_corrections(
+            &RuleSoftCorrectionParams {
+                raw_input,
+                table,
+                fuzzy,
+                typo_rules,
+            },
+            &mut candidates,
+        );
 
         // 4. 排序与去重：优先代价低，次优先词频高
         candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.score.cmp(&a.0.score)));
@@ -110,29 +132,34 @@ impl SpatialTypoCorrector {
     /// 处理流程依次为：通用 gn/mg 误输归一、平翘舌软约束互换、鼻音边音混淆、前后鼻音混淆，
     /// 各阶段产出的变异输入统一按代价权重推入候选列表。
     fn collect_rule_soft_corrections(
-        raw_input: &str,
-        table: &LexiconTable,
-        fuzzy: &FuzzyPinyinRules,
-        typo_rules: &TypoCorrectionRules,
+        params: &RuleSoftCorrectionParams<'_>,
         candidates: &mut Vec<(AlgoCandidate, u32)>,
     ) {
         let mut mutated_inputs = Vec::with_capacity(8);
 
         // 1. 通用 gn/mg 误输替换为 ng
-        Self::collect_gn_mg_corrections(raw_input, typo_rules, &mut mutated_inputs);
+        Self::collect_gn_mg_corrections(params.raw_input, params.typo_rules, &mut mutated_inputs);
 
         // 2. 平翘舌音软约束互换，分别受对应模糊音开关控制
-        Self::collect_retroflex_corrections(raw_input, fuzzy, &mut mutated_inputs);
+        Self::collect_retroflex_corrections(params.raw_input, params.fuzzy, &mut mutated_inputs);
 
         // 3. 鼻音边音软约束混淆
-        Self::collect_lateral_nasal_corrections(raw_input, fuzzy, &mut mutated_inputs);
+        Self::collect_lateral_nasal_corrections(
+            params.raw_input,
+            params.fuzzy,
+            &mut mutated_inputs,
+        );
 
         // 4. 前后鼻音软约束混淆，分别受对应模糊音开关控制
-        Self::collect_back_front_nasal_corrections(raw_input, fuzzy, &mut mutated_inputs);
+        Self::collect_back_front_nasal_corrections(
+            params.raw_input,
+            params.fuzzy,
+            &mut mutated_inputs,
+        );
 
         for (mutated, cost) in mutated_inputs {
-            if mutated != raw_input {
-                Self::try_push_valid_candidate(&mutated, cost, table, candidates);
+            if mutated != params.raw_input {
+                Self::try_push_valid_candidate(&mutated, cost, params.table, candidates);
             }
         }
     }

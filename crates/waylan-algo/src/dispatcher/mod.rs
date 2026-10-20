@@ -98,20 +98,60 @@ impl ModeDispatcher {
             "sd" | "now" => {
                 let dt_list = DateTimeEvaluator::format_datetime_formats(now);
                 let date_list = DateTimeEvaluator::format_date_formats(now);
-                append_staggered_candidates(&mut candidates, dt_list, expr, 99_000, "日期时间");
-                append_staggered_candidates(&mut candidates, date_list, expr, 90_000, "当前日期");
+                append_staggered_candidates(
+                    &mut candidates,
+                    StaggeredCandidateParams {
+                        items: dt_list,
+                        expr,
+                        base_score: 99_000,
+                        comment: "日期时间",
+                    },
+                );
+                append_staggered_candidates(
+                    &mut candidates,
+                    StaggeredCandidateParams {
+                        items: date_list,
+                        expr,
+                        base_score: 90_000,
+                        comment: "当前日期",
+                    },
+                );
             }
             "rq" | "date" => {
                 let date_list = DateTimeEvaluator::format_date_formats(now);
-                append_staggered_candidates(&mut candidates, date_list, expr, 99_000, "当前日期");
+                append_staggered_candidates(
+                    &mut candidates,
+                    StaggeredCandidateParams {
+                        items: date_list,
+                        expr,
+                        base_score: 99_000,
+                        comment: "当前日期",
+                    },
+                );
             }
             "sj" | "time" => {
                 let time_list = DateTimeEvaluator::format_time_formats(now);
-                append_staggered_candidates(&mut candidates, time_list, expr, 99_000, "当前时间");
+                append_staggered_candidates(
+                    &mut candidates,
+                    StaggeredCandidateParams {
+                        items: time_list,
+                        expr,
+                        base_score: 99_000,
+                        comment: "当前时间",
+                    },
+                );
             }
             "xq" => {
                 let weekday_list = DateTimeEvaluator::format_weekday_formats(now);
-                append_staggered_candidates(&mut candidates, weekday_list, expr, 99_000, "星期");
+                append_staggered_candidates(
+                    &mut candidates,
+                    StaggeredCandidateParams {
+                        items: weekday_list,
+                        expr,
+                        base_score: 99_000,
+                        comment: "星期",
+                    },
+                );
             }
             _ => return None,
         }
@@ -134,17 +174,34 @@ impl ModeDispatcher {
     }
 }
 
+/// 阶梯降序候选追加参数
+///
+/// # 设计原理
+/// - **实现初衷**：日期时间类候选由"条目列表 + 触发表达式 + 基准分值 + 备注"四要素共同决定，
+///   平铺传参易发生实参与形参错位。
+/// - **核心优势**：以参数对象聚合同源要素，调用点按名传参即可完成语义绑定。
+/// - **代价与局限**：多引入一个结构体类型。
+struct StaggeredCandidateParams<'a> {
+    /// 待追加的候选文本条目
+    items: Vec<String>,
+    /// 触发本次查询的原始表达式
+    expr: &'a str,
+    /// 首个条目的基准分值，后续条目按 100 分逐级递减
+    base_score: u32,
+    /// 候选备注文案
+    comment: &'static str,
+}
+
 /// 将文本条目按分值阶梯递减包装为算法候选列表
 fn append_staggered_candidates(
     candidates: &mut Vec<AlgoCandidate>,
-    items: Vec<String>,
-    expr: &str,
-    base_score: u32,
-    comment: &'static str,
+    params: StaggeredCandidateParams<'_>,
 ) {
-    for (idx, item) in items.into_iter().enumerate() {
-        let score = base_score.saturating_sub((idx as u32).saturating_mul(100));
-        candidates.push(AlgoCandidate::new(item, expr, score).with_comment(comment));
+    for (idx, item) in params.items.into_iter().enumerate() {
+        let score = params
+            .base_score
+            .saturating_sub((idx as u32).saturating_mul(100));
+        candidates.push(AlgoCandidate::new(item, params.expr, score).with_comment(params.comment));
     }
 }
 

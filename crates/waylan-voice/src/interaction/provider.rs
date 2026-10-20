@@ -7,7 +7,7 @@
 //!   2. 职责高度单一：本模块专门负责向打字引擎上下文（`ImeRuntime` 等）提供统一状态视图与按键代理；
 //!   3. 零额外运行时开销：所有特型方法均为 `#[inline]` 转发。
 
-use waylan_core::input::{ConsumedKeyTracker, VoiceKeyAction, VoiceProvider};
+use waylan_core::input::{VoiceKeyAction, VoiceKeyDispatchParams, VoiceProvider};
 use waylan_core::{VoiceBoxState, VoiceConfig};
 
 use super::VoiceInteractionManager;
@@ -59,14 +59,8 @@ impl VoiceProvider for VoiceInteractionManager {
     }
 
     #[inline]
-    fn dispatch_key(
-        &mut self,
-        key: u32,
-        is_press: bool,
-        modifiers: u32,
-        consumed_keys: &mut ConsumedKeyTracker,
-    ) -> VoiceKeyAction {
-        self.dispatch_voice_key(key, is_press, modifiers, consumed_keys)
+    fn dispatch_key(&mut self, params: VoiceKeyDispatchParams<'_>) -> VoiceKeyAction {
+        self.dispatch_voice_key(params)
     }
 
     #[inline]

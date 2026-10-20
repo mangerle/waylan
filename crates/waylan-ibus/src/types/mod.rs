@@ -60,13 +60,13 @@ mod tests {
             Candidate::new("微澜", "wei'lan", 1000),
             Candidate::new("未来", "wei'lai", 900),
         ];
-        let table = build_ibus_lookup_table(
-            &cands,
-            5,
-            0,
-            IBUS_ORIENTATION_HORIZONTAL,
-            CandidateIndexStyle::ModernSpace,
-        )
+        let table = build_ibus_lookup_table(&IbusLookupTableParams {
+            candidates: &cands,
+            page_size: 5,
+            selected_index: 0,
+            orientation: IBUS_ORIENTATION_HORIZONTAL,
+            index_style: CandidateIndexStyle::ModernSpace,
+        })
         .expect("序列化 IBusLookupTable 失败");
         assert_eq!(table.value_signature().as_str(), "(sa{sv}uubbiavav)");
     }
@@ -77,8 +77,14 @@ mod tests {
             build_input_mode_property(InputMode::Chinese, false).expect("序列化 IBusProperty 失败");
         assert_eq!(prop.value_signature().as_str(), "(sa{sv}suvsvbbuvv)");
 
-        let prop_list = build_ibus_prop_list(InputMode::Chinese, false, false, true, false)
-            .expect("序列化 IBusPropList 失败");
+        let prop_list = build_ibus_prop_list(&IbusPropListParams {
+            mode: InputMode::Chinese,
+            is_caps_locked: false,
+            traditional_chinese: false,
+            full_width_punct: true,
+            full_width_char: false,
+        })
+        .expect("序列化 IBusPropList 失败");
         assert_eq!(prop_list.value_signature().as_str(), "(sa{sv}av)");
 
         let comp =

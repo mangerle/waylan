@@ -1,3 +1,4 @@
+use crate::surface::interaction::CursorRectUpdateParams;
 use crate::surface::CursorRect;
 use log::{debug, info, trace};
 use std::fs::File;
@@ -127,7 +128,12 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
             state
                 .surface
                 .surface_manager
-                .update_cursor_rect(x, y, width, height);
+                .update_cursor_rect(&CursorRectUpdateParams {
+                    x,
+                    y,
+                    width,
+                    height,
+                });
         }
     }
 }
@@ -165,14 +171,32 @@ fn handle_grab_keymap(
     }
 }
 
-/// 处理键盘抓取修饰键状态同步与 CapsLock 通知
-fn handle_grab_modifiers(
-    state: &mut WaylanV2Session,
+/// 键盘抓取修饰键状态同步参数
+///
+/// # 设计原理
+/// - **实现初衷**：XKB 修饰键事件携带"按下、锁存、锁定、布局组"四组位掩码，
+///   平铺传参易与相邻的虚拟键盘同步调用发生顺序错位。
+/// - **核心优势**：以参数对象聚合同源位掩码，调用点按名绑定语义。
+/// - **代价与局限**：多引入一个结构体类型。
+struct GrabModifiersParams {
+    /// 当前按下的修饰键位掩码
     mods_depressed: u32,
+    /// 已锁存待生效的修饰键位掩码
     mods_latched: u32,
+    /// 已锁定的修饰键位掩码
     mods_locked: u32,
+    /// 当前键盘布局组索引
     group: u32,
-) {
+}
+
+/// 处理键盘抓取修饰键状态同步与 CapsLock 通知
+fn handle_grab_modifiers(state: &mut WaylanV2Session, params: GrabModifiersParams) {
+    let GrabModifiersParams {
+        mods_depressed,
+        mods_latched,
+        mods_locked,
+        group,
+    } = params;
     let prev_caps = state.runtime.core.is_caps_locked();
     state
         .runtime
@@ -237,7 +261,15 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for WaylanV2Session {
                 mods_locked,
                 group,
             } => {
-                handle_grab_modifiers(state, mods_depressed, mods_latched, mods_locked, group);
+                handle_grab_modifiers(
+                    state,
+                    GrabModifiersParams {
+                        mods_depressed,
+                        mods_latched,
+                        mods_locked,
+                        group,
+                    },
+                );
             }
             GrabEvent::RepeatInfo { rate, delay } => {
                 state.keyboard.repeat_info = (rate, delay);

@@ -346,6 +346,7 @@ impl VoiceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::models::KeyModifiers;
 
     #[test]
     fn test_voice_config_effective_dual_shortcuts() {
@@ -359,12 +360,12 @@ mod tests {
         let toggle = cfg
             .get_effective_toggle_shortcut()
             .expect("开启后默认开关按键必须生效");
-        assert!(toggle.matches(47, false, true, true, false));
+        assert!(toggle.matches(47, &KeyModifiers::new(true, true, false, false)));
 
         let ptt = cfg
             .get_effective_ptt_shortcut()
             .expect("开启后默认对讲机按键必须生效");
-        assert!(ptt.matches(66, false, false, false, false));
+        assert!(ptt.matches(66, &KeyModifiers::default()));
 
         cfg.toggle_shortcut = "已禁用".to_string();
         assert!(cfg.get_effective_toggle_shortcut().is_none());

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::AlgoError;
 use crate::types::ImportedDictEntry;
-use crate::user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};
+use crate::user_adaptive::{UserAdaptiveModel, UserAdaptiveWal, UserDictAppendParams};
 
 /// 用户自适应词频学习与预写日志持久化子模型
 #[derive(Debug, Default)]
@@ -46,9 +46,15 @@ impl UserAdaptiveState {
     pub fn record_commit(&mut self, text: &str, pinyin: &str, current_timestamp: u64) {
         self.last_timestamp = self.last_timestamp.max(current_timestamp);
         if let Some(ref path) = self.dict_path {
-            let _ = self
-                .wal
-                .append(&mut self.model, path, text, pinyin, self.last_timestamp);
+            let _ = self.wal.append(
+                &mut self.model,
+                &UserDictAppendParams {
+                    path,
+                    text,
+                    pinyin,
+                    timestamp: self.last_timestamp,
+                },
+            );
         } else {
             self.model.record_commit(text, pinyin, self.last_timestamp);
         }

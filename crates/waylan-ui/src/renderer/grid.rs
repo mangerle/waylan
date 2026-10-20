@@ -5,9 +5,9 @@
 
 use super::draw::{
     draw_card_background_at, draw_collapse_arrow, draw_rounded_rect, draw_scrollbar,
-    CardBackgroundParams, RoundedRectParams, ScrollbarParams,
+    CardBackgroundParams, CollapseArrowParams, RoundedRectParams, ScrollbarParams,
 };
-use super::layout::{CandidateHitTarget, HitRegion};
+use super::layout::{CandidateHitTarget, HitRegion, HitRegionParams};
 use super::{CandidateBoxRenderer, DrawTextOptions};
 use crate::theme::{Color, UiTheme};
 use tiny_skia::Pixmap;
@@ -233,13 +233,13 @@ fn render_grid_items(
             },
         );
 
-        ctx.regions.push(HitRegion::new(
-            item_x,
-            item_y,
-            item_w,
-            item_h,
-            CandidateHitTarget::Select(idx),
-        ));
+        ctx.regions.push(HitRegion::new(HitRegionParams {
+            x: item_x,
+            y: item_y,
+            width: item_w,
+            height: item_h,
+            target: CandidateHitTarget::Select(idx),
+        }));
     }
 }
 
@@ -408,18 +408,20 @@ fn draw_grid_collapse_button(
 ) {
     draw_collapse_arrow(
         pixmap,
-        params.center_x,
-        params.top_y,
-        10.0 * params.scale,
-        theme.index_text,
+        &CollapseArrowParams {
+            center_x: params.center_x,
+            center_y: params.top_y,
+            size: 10.0 * params.scale,
+            color: theme.index_text,
+        },
     );
-    regions.push(HitRegion::new(
-        params.center_x - 10.0 * params.scale,
-        params.top_y - 10.0 * params.scale,
-        20.0 * params.scale,
-        20.0 * params.scale,
-        CandidateHitTarget::ToggleExpand,
-    ));
+    regions.push(HitRegion::new(HitRegionParams {
+        x: params.center_x - 10.0 * params.scale,
+        y: params.top_y - 10.0 * params.scale,
+        width: 20.0 * params.scale,
+        height: 20.0 * params.scale,
+        target: CandidateHitTarget::ToggleExpand,
+    }));
 }
 
 /// 计算网格右侧滚动条滑块的几何参数
@@ -467,18 +469,18 @@ fn register_grid_scroll_regions(
     ctrl_center_x: f32,
 ) {
     let half_scroll_h = params.scroll_h * 0.5;
-    regions.push(HitRegion::new(
-        ctrl_center_x - 10.0 * params.scale,
-        params.scroll_y,
-        20.0 * params.scale,
-        half_scroll_h,
-        CandidateHitTarget::PrevPage,
-    ));
-    regions.push(HitRegion::new(
-        ctrl_center_x - 10.0 * params.scale,
-        params.scroll_y + half_scroll_h,
-        20.0 * params.scale,
-        half_scroll_h,
-        CandidateHitTarget::NextPage,
-    ));
+    regions.push(HitRegion::new(HitRegionParams {
+        x: ctrl_center_x - 10.0 * params.scale,
+        y: params.scroll_y,
+        width: 20.0 * params.scale,
+        height: half_scroll_h,
+        target: CandidateHitTarget::PrevPage,
+    }));
+    regions.push(HitRegion::new(HitRegionParams {
+        x: ctrl_center_x - 10.0 * params.scale,
+        y: params.scroll_y + half_scroll_h,
+        width: 20.0 * params.scale,
+        height: half_scroll_h,
+        target: CandidateHitTarget::NextPage,
+    }));
 }

@@ -1,14 +1,40 @@
+/// 键盘修饰键（Ctrl / Alt / Shift / Super）的实时按下状态
+///
+/// # 设计原理
+/// - **实现初衷**：将四个彼此独立、可同时按下的修饰键布尔量收敛为单一值类型，
+///   避免快捷键匹配与展示格式化接口退化为平铺布尔参数列表。
+/// - **核心优势**：调用点语义自解释，从类型层面杜绝实参错位
+///   （例如把 Ctrl 状态误填进 Alt 位），同时天然支持整体相等比较。
+/// - **代价与局限**：仅描述修饰键瞬时状态，不含主键信息，主键需另行传递。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct KeyModifiers {
+    /// Ctrl 键是否处于按下状态
+    pub ctrl: bool,
+    /// Alt 键是否处于按下状态
+    pub alt: bool,
+    /// Shift 键是否处于按下状态
+    pub shift: bool,
+    /// Super / Win 键是否处于按下状态
+    pub super_key: bool,
+}
+
+impl KeyModifiers {
+    /// 构造修饰键按下状态
+    pub fn new(ctrl: bool, alt: bool, shift: bool, super_key: bool) -> Self {
+        Self {
+            ctrl,
+            alt,
+            shift,
+            super_key,
+        }
+    }
+}
+
 /// 归一化解析后的快捷键数据
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ParsedShortcut {
-    /// 是否需要按住 Ctrl
-    pub ctrl: bool,
-    /// 是否需要按住 Alt
-    pub alt: bool,
-    /// 是否需要按住 Shift
-    pub shift: bool,
-    /// 是否需要按住 Super / Win
-    pub super_key: bool,
+    /// 主键所需搭配的修饰键状态
+    pub modifiers: KeyModifiers,
     /// 目标主键的 Linux evdev 扫描码
     pub evdev_key: u32,
 }
@@ -22,10 +48,7 @@ impl ParsedShortcut {
             return None;
         }
 
-        let mut ctrl = false;
-        let mut alt = false;
-        let mut shift = false;
-        let mut super_key = false;
+        let mut modifiers = KeyModifiers::default();
         let mut evdev_key = None;
 
         for part in trimmed
@@ -35,10 +58,10 @@ impl ParsedShortcut {
         {
             let lower = part.to_ascii_lowercase();
             match lower.as_str() {
-                "ctrl" | "control" => ctrl = true,
-                "alt" | "mod1" => alt = true,
-                "shift" => shift = true,
-                "super" | "win" | "meta" => super_key = true,
+                "ctrl" | "control" => modifiers.ctrl = true,
+                "alt" | "mod1" => modifiers.alt = true,
+                "shift" => modifiers.shift = true,
+                "super" | "win" | "meta" => modifiers.super_key = true,
                 _ => {
                     if let Some(code) = parse_key_name(&lower) {
                         evdev_key = Some(code);
@@ -48,28 +71,16 @@ impl ParsedShortcut {
         }
 
         evdev_key.map(|k| Self {
-            ctrl,
-            alt,
-            shift,
-            super_key,
+            modifiers,
             evdev_key: k,
         })
     }
 
     /// 校验当前输入事件是否精确匹配该快捷键
-    pub fn matches(
-        &self,
-        evdev_key: u32,
-        shift_active: bool,
-        ctrl_active: bool,
-        alt_active: bool,
-        super_active: bool,
-    ) -> bool {
-        self.evdev_key == evdev_key
-            && self.ctrl == ctrl_active
-            && self.alt == alt_active
-            && self.shift == shift_active
-            && self.super_key == super_active
+    ///
+    /// 主键扫描码与四个修饰键状态必须同时一致方视为命中。
+    pub fn matches(&self, evdev_key: u32, modifiers: &KeyModifiers) -> bool {
+        self.evdev_key == evdev_key && self.modifiers == *modifiers
     }
 }
 
@@ -173,94 +184,121 @@ fn parse_key_name(name: &str) -> Option<u32> {
         .map(|(_, code)| *code)
 }
 
+/// 主键文本到规范展示名的静态映射表
+///
+/// 覆盖具名功能键（Space / Enter / Tab / 方向键等）与标点符号主键。
+const KEY_DISPLAY_MAP: &[(&str, &str)] = &[
+    ("space", "Space"),
+    ("Space", "Space"),
+    ("Return", "Enter"),
+    ("Enter", "Enter"),
+    ("Tab", "Tab"),
+    ("PageUp", "PageUp"),
+    ("pageup", "PageUp"),
+    ("PageDown", "PageDown"),
+    ("pagedown", "PageDown"),
+    ("Up", "Up"),
+    ("up", "Up"),
+    ("UpArrow", "Up"),
+    ("Down", "Down"),
+    ("down", "Down"),
+    ("DownArrow", "Down"),
+    ("Left", "Left"),
+    ("left", "Left"),
+    ("LeftArrow", "Left"),
+    ("Right", "Right"),
+    ("right", "Right"),
+    ("RightArrow", "Right"),
+    ("句点", "."),
+    ("dot", "."),
+    ("period", "."),
+    (".", "."),
+    ("comma", ","),
+    (",", ","),
+    ("minus", "-"),
+    ("-", "-"),
+    ("equal", "="),
+    ("=", "="),
+    ("slash", "/"),
+    ("/", "/"),
+    ("semicolon", ";"),
+    (";", ";"),
+    ("grave", "`"),
+    ("`", "`"),
+    ("leftbracket", "["),
+    ("[", "["),
+    ("rightbracket", "]"),
+    ("]", "]"),
+    ("backslash", "\\"),
+    ("\\", "\\"),
+    ("apostrophe", "'"),
+    ("'", "'"),
+];
+
 /// 将键盘组合键格式化为规范的展示文本（如 "Ctrl + Shift + F"、"Shift + Space"、"Ctrl + ."）
 ///
 /// 若未按下有效主键或仅按下修饰键，则返回 `None`。
-pub fn format_key_combination(
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    super_key: bool,
-    text: &str,
-) -> Option<String> {
-    if text != " " && text.trim().is_empty() {
-        return None;
-    }
-
-    // 规整主键名称
-    let trimmed = text.trim();
-    let key_display = match text {
-        " " => "Space",
-        _ => match trimmed {
-            "space" | "Space" => "Space",
-            "\n" | "\r" | "Return" | "Enter" => "Enter",
-            "\t" | "Tab" => "Tab",
-            f if f.len() >= 2
-                && (f.starts_with('F') || f.starts_with('f'))
-                && f[1..].chars().all(|c| c.is_ascii_digit()) =>
-            {
-                let num = &f[1..];
-                return Some(format_with_modifiers(
-                    ctrl,
-                    alt,
-                    shift,
-                    super_key,
-                    &format!("F{}", num),
-                ));
-            }
-            "." | "dot" | "period" | "句点" => ".",
-            "," | "comma" => ",",
-            "-" | "minus" => "-",
-            "=" | "equal" => "=",
-            "/" | "slash" => "/",
-            ";" | "semicolon" => ";",
-            "`" | "grave" => "`",
-            "[" | "leftbracket" => "[",
-            "]" | "rightbracket" => "]",
-            "\\" | "backslash" => "\\",
-            "'" | "apostrophe" => "'",
-            ch if ch.len() == 1 && ch.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) => {
-                return Some(format_with_modifiers(
-                    ctrl,
-                    alt,
-                    shift,
-                    super_key,
-                    &ch.to_ascii_uppercase(),
-                ));
-            }
-            ch if ch.len() == 1 && ch.chars().next().is_some_and(|c| c.is_ascii_digit()) => ch,
-            "PageUp" | "pageup" => "PageUp",
-            "PageDown" | "pagedown" => "PageDown",
-            "Up" | "up" | "UpArrow" => "Up",
-            "Down" | "down" | "DownArrow" => "Down",
-            "Left" | "left" | "LeftArrow" => "Left",
-            "Right" | "right" | "RightArrow" => "Right",
-            _ if trimmed.chars().all(|c| c.is_ascii_control()) => return None,
-            _ => return None,
-        },
-    };
-
-    Some(format_with_modifiers(
-        ctrl,
-        alt,
-        shift,
-        super_key,
-        key_display,
-    ))
+pub fn format_key_combination(modifiers: &KeyModifiers, text: &str) -> Option<String> {
+    let key_display = resolve_key_display(text)?;
+    Some(format_with_modifiers(modifiers, &key_display))
 }
 
-fn format_with_modifiers(ctrl: bool, alt: bool, shift: bool, super_key: bool, key: &str) -> String {
+/// 解析主键文本为规范展示名，无法识别时返回 `None`
+fn resolve_key_display(text: &str) -> Option<String> {
+    // 空白与控制字符必须在裁剪前判定，否则会被 trim 吞掉而永远无法命中
+    match text {
+        " " => return Some("Space".to_string()),
+        "\n" | "\r" => return Some("Enter".to_string()),
+        "\t" => return Some("Tab".to_string()),
+        _ => {}
+    }
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(num) = strip_function_key_suffix(trimmed) {
+        return Some(format!("F{num}"));
+    }
+    if let Some(display) = KEY_DISPLAY_MAP
+        .iter()
+        .find(|(name, _)| *name == trimmed)
+        .map(|(_, display)| *display)
+    {
+        return Some(display.to_string());
+    }
+
+    // 单字符字母统一以大写展示，单字符数字原样保留
+    let mut chars = trimmed.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphabetic() => Some(c.to_ascii_uppercase().to_string()),
+        (Some(c), None) if c.is_ascii_digit() => Some(c.to_string()),
+        _ => None,
+    }
+}
+
+/// 解析功能键后缀数字（如 "F8" 中的 "8"），非功能键返回 `None`
+fn strip_function_key_suffix(trimmed: &str) -> Option<&str> {
+    let num = trimmed.strip_prefix(['F', 'f'])?;
+    if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(num)
+}
+
+/// 按 Ctrl、Alt、Shift、Super 的固定顺序拼接主键展示文本
+fn format_with_modifiers(modifiers: &KeyModifiers, key: &str) -> String {
     let mut parts = Vec::with_capacity(5);
-    if ctrl {
+    if modifiers.ctrl {
         parts.push("Ctrl");
     }
-    if alt {
+    if modifiers.alt {
         parts.push("Alt");
     }
-    if shift {
+    if modifiers.shift {
         parts.push("Shift");
     }
-    if super_key {
+    if modifiers.super_key {
         parts.push("Super");
     }
     parts.push(key);
@@ -274,57 +312,93 @@ mod tests {
     #[test]
     fn test_parsed_shortcut_parsing() {
         let p1 = ParsedShortcut::parse("Ctrl + Alt + V").expect("必须成功解析");
-        assert!(p1.ctrl);
-        assert!(p1.alt);
-        assert!(!p1.shift);
-        assert!(!p1.super_key);
+        assert!(p1.modifiers.ctrl);
+        assert!(p1.modifiers.alt);
+        assert!(!p1.modifiers.shift);
+        assert!(!p1.modifiers.super_key);
         assert_eq!(p1.evdev_key, 47);
 
         let p2 = ParsedShortcut::parse("F8").expect("单键必须成功解析");
-        assert!(!p2.ctrl);
-        assert!(!p2.alt);
+        assert!(!p2.modifiers.ctrl);
+        assert!(!p2.modifiers.alt);
         assert_eq!(p2.evdev_key, 66);
 
         let p3 = ParsedShortcut::parse("Super + Shift + V").expect("Super键解析");
-        assert!(p3.super_key);
-        assert!(p3.shift);
+        assert!(p3.modifiers.super_key);
+        assert!(p3.modifiers.shift);
         assert_eq!(p3.evdev_key, 47);
 
         assert!(ParsedShortcut::parse("已禁用").is_none());
         assert!(ParsedShortcut::parse("   ").is_none());
 
         let p4 = ParsedShortcut::parse("Ctrl + .").expect("标点快捷键解析");
-        assert!(p4.ctrl);
+        assert!(p4.modifiers.ctrl);
         assert_eq!(p4.evdev_key, 52);
 
         let p5 = ParsedShortcut::parse("Shift + Space").expect("空格快捷键解析");
-        assert!(p5.shift);
+        assert!(p5.modifiers.shift);
         assert_eq!(p5.evdev_key, 57);
     }
 
     #[test]
     fn test_format_key_combination() {
+        let ctrl_shift = KeyModifiers::new(true, false, true, false);
+        let shift_only = KeyModifiers::new(false, false, true, false);
+        let ctrl_only = KeyModifiers::new(true, false, false, false);
+        let super_only = KeyModifiers::new(false, false, false, true);
+        let no_modifier = KeyModifiers::default();
+
         assert_eq!(
-            format_key_combination(true, false, true, false, "f").as_deref(),
+            format_key_combination(&ctrl_shift, "f").as_deref(),
             Some("Ctrl + Shift + F")
         );
         assert_eq!(
-            format_key_combination(false, false, true, false, " ").as_deref(),
+            format_key_combination(&shift_only, " ").as_deref(),
             Some("Shift + Space")
         );
         assert_eq!(
-            format_key_combination(true, false, false, false, ".").as_deref(),
+            format_key_combination(&ctrl_only, ".").as_deref(),
             Some("Ctrl + .")
         );
         assert_eq!(
-            format_key_combination(false, false, false, true, "v").as_deref(),
+            format_key_combination(&super_only, "v").as_deref(),
             Some("Super + V")
         );
         assert_eq!(
-            format_key_combination(false, false, false, false, "F8").as_deref(),
+            format_key_combination(&no_modifier, "F8").as_deref(),
             Some("F8")
         );
-        assert!(format_key_combination(true, false, false, false, "").is_none());
-        assert!(format_key_combination(true, false, false, false, "\u{0001}").is_none());
+        assert!(format_key_combination(&ctrl_only, "").is_none());
+        assert!(format_key_combination(&ctrl_only, "\u{0001}").is_none());
+    }
+
+    #[test]
+    fn test_format_key_combination_control_keys() {
+        let no_modifier = KeyModifiers::default();
+
+        assert_eq!(
+            format_key_combination(&no_modifier, "\n").as_deref(),
+            Some("Enter")
+        );
+        assert_eq!(
+            format_key_combination(&no_modifier, "\t").as_deref(),
+            Some("Tab")
+        );
+        assert_eq!(
+            format_key_combination(&no_modifier, "Return").as_deref(),
+            Some("Enter")
+        );
+        assert_eq!(
+            format_key_combination(&no_modifier, "UpArrow").as_deref(),
+            Some("Up")
+        );
+    }
+
+    #[test]
+    fn test_parsed_shortcut_matches_with_modifier_state() {
+        let shortcut = ParsedShortcut::parse("Ctrl + Shift + V").expect("必须成功解析");
+        assert!(shortcut.matches(47, &KeyModifiers::new(true, false, true, false)));
+        assert!(!shortcut.matches(47, &KeyModifiers::new(true, false, false, false)));
+        assert!(!shortcut.matches(48, &KeyModifiers::new(true, false, true, false)));
     }
 }

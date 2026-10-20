@@ -63,13 +63,10 @@ pub fn run_settings_gui() -> Result<(), SettingsError> {
     // 注册全局快捷键按键捕获与格式化回调
     let shortcut_helper = window.global::<ShortcutHelper>();
     shortcut_helper.on_format_key(|ctrl, alt, shift, meta, text| {
-        let text_str = text.as_str();
-        if let Some(formatted) =
-            waylan_core::config::format_key_combination(ctrl, alt, shift, meta, text_str)
-        {
-            SharedString::from(formatted)
-        } else {
-            SharedString::from("")
+        let modifiers = waylan_core::config::KeyModifiers::new(ctrl, alt, shift, meta);
+        match waylan_core::config::format_key_combination(&modifiers, text.as_str()) {
+            Some(formatted) => SharedString::from(formatted),
+            None => SharedString::from(""),
         }
     });
 

@@ -16,6 +16,22 @@ pub struct Cleaner {
     re_chinese: Regex,
 }
 
+/// 语料词对收集参数
+///
+/// 承载待清洗的原始语料、词对权重、分词器实例与词对输出容器。
+/// 采用参数对象聚合可避免长参数列表在调用处发生参数错位；输出容器以可变引用
+/// 形式随结构体传入，保证词对在调用方容器中原地累加。
+pub struct TextPairsParams<'a> {
+    /// 待清洗的原始语料文本
+    pub text: &'a str,
+    /// 词对权重（用户轮次为 2，助手轮次为 1）
+    pub weight: u32,
+    /// 中文分词器实例
+    pub jieba: &'a Jieba,
+    /// 词对输出容器（追加写入）
+    pub out: &'a mut Vec<(String, String, u32)>,
+}
+
 impl Cleaner {
     /// 初始化清洗器正则表达式
     pub fn new() -> Self {
@@ -43,13 +59,13 @@ impl Cleaner {
     }
 
     /// 从单段文本中切分提取相邻二元词对并累加至输出容器
-    pub fn collect_text_pairs(
-        &self,
-        text: &str,
-        weight: u32,
-        jieba: &Jieba,
-        out: &mut Vec<(String, String, u32)>,
-    ) {
+    pub fn collect_text_pairs(&self, params: TextPairsParams<'_>) {
+        let TextPairsParams {
+            text,
+            weight,
+            jieba,
+            out,
+        } = params;
         for sent in self.clean_and_split(text) {
             let words = jieba.cut(&sent, false);
             for pair in words.windows(2) {
@@ -75,11 +91,21 @@ impl Cleaner {
                     let content = turn.get("content").and_then(|v| v.as_str()).unwrap_or("");
                     let role = turn.get("role").and_then(|v| v.as_str()).unwrap_or("");
                     let weight: u32 = if role == "user" { 2 } else { 1 };
-                    self.collect_text_pairs(content, weight, jieba, &mut local_res);
+                    self.collect_text_pairs(TextPairsParams {
+                        text: content,
+                        weight,
+                        jieba,
+                        out: &mut local_res,
+                    });
                 }
             }
         } else if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
-            self.collect_text_pairs(text, 1, jieba, &mut local_res);
+            self.collect_text_pairs(TextPairsParams {
+                text,
+                weight: 1,
+                jieba,
+                out: &mut local_res,
+            });
         }
         local_res
     }

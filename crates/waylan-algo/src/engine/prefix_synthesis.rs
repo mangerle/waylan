@@ -9,7 +9,25 @@ use super::AlgoEngine;
 use crate::syllables::is_valid_syllable;
 use crate::table::{calculate_length_boost, extract_raw_score};
 use crate::types::{AlgoCandidate, CandidateTier};
-use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
+use crate::viterbi::{BigramLanguageModel, SentenceDecodeParams, ViterbiDecoder};
+
+/// 尾部展开候选检索参数
+///
+/// # 设计原理
+/// - **实现初衷**：尾部候选检索依赖"声母链、音节序列、切分位置、待补全文本"四项同源上下文，
+///   平铺传参易发生顺序错位。
+/// - **核心优势**：以参数对象聚合检索上下文，调用点按名传参即可完成语义绑定。
+/// - **代价与局限**：多引入一个结构体类型。
+struct TailCandidateLookupParams<'a> {
+    /// 待展开的连续声母链
+    initial_chain: &'a [String],
+    /// 完整音节序列
+    syllables: &'a [String],
+    /// 声母链在音节序列中的起始切分位置
+    split_idx: usize,
+    /// 尚未补全的输入尾部文本
+    remaining: &'a str,
+}
 
 /// 跨词短语合成的前驱片段上下文参数对象
 ///
@@ -39,7 +57,12 @@ impl AlgoEngine {
             };
 
         // 1. 检索尾部展开候选词集合
-        let tail_cands = self.lookup_tail_cands(&initial_chain, syllables, split_idx, remaining);
+        let tail_cands = self.lookup_tail_cands(TailCandidateLookupParams {
+            initial_chain: &initial_chain,
+            syllables,
+            split_idx,
+            remaining,
+        });
         if tail_cands.is_empty() {
             return Vec::new();
         }
@@ -98,13 +121,11 @@ impl AlgoEngine {
     }
 
     /// 检索尾部展开候选词集合
-    fn lookup_tail_cands(
-        &self,
-        initial_chain: &[String],
-        syllables: &[String],
-        split_idx: usize,
-        remaining: &str,
-    ) -> Vec<AlgoCandidate> {
+    fn lookup_tail_cands(&self, params: TailCandidateLookupParams<'_>) -> Vec<AlgoCandidate> {
+        let initial_chain = params.initial_chain;
+        let syllables = params.syllables;
+        let split_idx = params.split_idx;
+        let remaining = params.remaining;
         if initial_chain.len() == 1 {
             if split_idx == 0 {
                 return Vec::new();
@@ -128,13 +149,15 @@ impl AlgoEngine {
         let head_key = effective_head_syls.join("'");
         let mut head_options: Vec<(String, String, u32)> = Vec::with_capacity(2);
 
-        if let Some(sentence) = ViterbiDecoder::decode_sentence_with_context_options(
-            effective_head_syls,
-            "",
-            &self.resources.table,
-            self.composition.last_commit_context(),
-            self.config.enable_acronym,
-        ) {
+        if let Some(sentence) =
+            ViterbiDecoder::decode_sentence_with_context_options(&SentenceDecodeParams {
+                syllables: effective_head_syls,
+                remaining: "",
+                table: &self.resources.table,
+                prev_context: self.composition.last_commit_context(),
+                enable_acronym: self.config.enable_acronym,
+            })
+        {
             head_options.push((sentence.text, head_key.clone(), sentence.score));
         }
 

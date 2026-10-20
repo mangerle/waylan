@@ -25,7 +25,7 @@ use wayland_client::Connection;
 use self::globals::{bind_session_v1_globals, bind_session_v2_globals};
 use self::poll::run_session_loop_step;
 use crate::error::WaylandRunnerError;
-use crate::session_common::{apply_session_setup, SessionSetupOptions};
+use crate::session_common::{apply_session_setup, SessionSetupOptions, SessionSetupTargets};
 use crate::session_v1::{WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext};
 use crate::session_v2::WaylanV2Session;
 
@@ -212,11 +212,13 @@ fn run_v2_session(
     info!("[微澜 Wayland] 启用现代 Wayland V2 协议会话。");
     let mut session_v2 = WaylanV2Session::new(engine);
     apply_session_setup(
-        &mut session_v2.runtime,
-        &mut session_v2.surface.surface_manager.renderer,
-        &mut session_v2.watcher,
+        SessionSetupTargets {
+            runtime: &mut session_v2.runtime,
+            renderer: &mut session_v2.surface.surface_manager.renderer,
+            watcher: &mut session_v2.watcher,
+            reload_cb: reload_wayland_session,
+        },
         setup_opts,
-        reload_wayland_session,
     );
 
     match run_session_v2_loop_fallible(session_v2) {
@@ -246,11 +248,13 @@ fn run_v1_session(
     info!("[微澜 Wayland] 启用兼容 Wayland V1 协议会话。");
     let mut session_v1 = WaylanV1Session::with_engine(engine);
     apply_session_setup(
-        &mut session_v1.runtime,
-        &mut session_v1.surface.surface_manager.renderer,
-        &mut session_v1.watcher,
+        SessionSetupTargets {
+            runtime: &mut session_v1.runtime,
+            renderer: &mut session_v1.surface.surface_manager.renderer,
+            watcher: &mut session_v1.watcher,
+            reload_cb: reload_wayland_session,
+        },
         setup_opts,
-        reload_wayland_session,
     );
     run_session_v1_loop(session_v1)
 }

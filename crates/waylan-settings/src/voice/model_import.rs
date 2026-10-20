@@ -66,25 +66,31 @@ pub(crate) fn register_model_import_callbacks(
     loaded_config: Arc<Mutex<AppConfig>>,
 ) {
     register_model_import(
-        window,
-        ModelImportKind::AsrPackage,
+        ModelImportRegistration {
+            window,
+            kind: ModelImportKind::AsrPackage,
+            loaded_config: loaded_config.clone(),
+            apply_fn: apply_asr_model_path,
+        },
         |win, cb| win.on_import_asr_model(cb),
-        loaded_config.clone(),
-        apply_asr_model_path,
     );
     register_model_import(
-        window,
-        ModelImportKind::Onnx(ModelSubdirectory::Vad),
+        ModelImportRegistration {
+            window,
+            kind: ModelImportKind::Onnx(ModelSubdirectory::Vad),
+            loaded_config: loaded_config.clone(),
+            apply_fn: apply_vad_model_path,
+        },
         |win, cb| win.on_import_vad_model(cb),
-        loaded_config.clone(),
-        apply_vad_model_path,
     );
     register_model_import(
-        window,
-        ModelImportKind::Onnx(ModelSubdirectory::Punct),
+        ModelImportRegistration {
+            window,
+            kind: ModelImportKind::Onnx(ModelSubdirectory::Punct),
+            loaded_config,
+            apply_fn: apply_punct_model_path,
+        },
         |win, cb| win.on_import_punct_model(cb),
-        loaded_config,
-        apply_punct_model_path,
     );
 
     let window_weak = window.as_weak();
@@ -101,14 +107,35 @@ pub(crate) fn register_model_import_callbacks(
     });
 }
 
+/// 模型导入回调注册参数
+///
+/// # 设计原理
+/// - **实现初衷**：每种模型导入都需要"窗口句柄、导入种类、共享配置、落盘回调"四要素，
+///   与注册方式闭包混在平铺参数列表中，易在多个注册点发生落盘回调错配。
+/// - **核心优势**：以参数对象聚合四要素，调用点按名传参，注册闭包单独保持在末位便于阅读。
+/// - **代价与局限**：多引入一个结构体类型。
+struct ModelImportRegistration<'a> {
+    /// 设置中心窗口句柄
+    window: &'a SettingsWindow,
+    /// 本次导入的模型种类
+    kind: ModelImportKind,
+    /// 与界面共享的持久化配置
+    loaded_config: Arc<Mutex<AppConfig>>,
+    /// 导入成功后写入配置的回调
+    apply_fn: ApplyConfigFn,
+}
+
 /// 注册模型导入事件（回调注册方式由调用方指定以适配不同界面入口）
 fn register_model_import(
-    window: &SettingsWindow,
-    kind: ModelImportKind,
+    params: ModelImportRegistration<'_>,
     register: impl FnOnce(&SettingsWindow, Box<dyn Fn() + Send + 'static>),
-    loaded_config: Arc<Mutex<AppConfig>>,
-    apply_fn: ApplyConfigFn,
 ) {
+    let ModelImportRegistration {
+        window,
+        kind,
+        loaded_config,
+        apply_fn,
+    } = params;
     let window_weak = window.as_weak();
     register(
         window,
@@ -174,7 +201,13 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
 
     let on_selected = move |selected: Option<PathBuf>| {
         let _ = slint::invoke_from_event_loop(move || {
-            dispatch_model_import(win_weak, cfg_cell, kind, apply_fn, selected);
+            dispatch_model_import(ModelImportDispatchParams {
+                win_weak,
+                cfg_cell,
+                kind,
+                apply_fn,
+                selected,
+            });
         });
     };
 
@@ -193,14 +226,48 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
     }
 }
 
-/// 在 Slint 主线程中接收用户选择结果并派发后台导入任务
-fn dispatch_model_import(
+/// 模型导入事件派发参数
+///
+/// 承载用户在选择器中确认的模型源路径、导入种类、共享配置单元与配置写入回调。
+/// 采用参数对象聚合可避免长参数列表在调用处发生参数错位。
+struct ModelImportDispatchParams {
+    /// 界面窗口弱引用（升级失败表示窗口已销毁，导入流程应静默终止）
     win_weak: slint::Weak<SettingsWindow>,
+    /// 共享配置单元
     cfg_cell: Arc<Mutex<AppConfig>>,
+    /// 导入种类
     kind: ModelImportKind,
+    /// 导入成功后将目标路径写入配置的回调
     apply_fn: ApplyConfigFn,
+    /// 用户在选择器中选中的模型源路径（None 表示用户取消选择）
     selected: Option<PathBuf>,
-) {
+}
+
+/// 模型导入结果事件处理参数
+///
+/// 承载后台导入线程回传的导入结果、导入种类、共享配置单元与配置写入回调。
+struct ImportedModelEventParams<'a> {
+    /// 界面窗口引用
+    win: &'a SettingsWindow,
+    /// 共享配置单元
+    cfg_cell: &'a Arc<Mutex<AppConfig>>,
+    /// 导入种类
+    kind: ModelImportKind,
+    /// 后台导入线程的处理结果（None 表示导入失败）
+    imported_opt: Option<PathBuf>,
+    /// 导入成功后将目标路径写入配置的回调
+    apply_fn: ApplyConfigFn,
+}
+
+/// 在 Slint 主线程中接收用户选择结果并派发后台导入任务
+fn dispatch_model_import(params: ModelImportDispatchParams) {
+    let ModelImportDispatchParams {
+        win_weak,
+        cfg_cell,
+        kind,
+        apply_fn,
+        selected,
+    } = params;
     let Some(win) = win_weak.upgrade() else {
         return;
     };
@@ -231,7 +298,13 @@ fn dispatch_model_import(
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = win_weak_inner.upgrade() {
-                    handle_imported_model_event(&w, &cfg_cell_inner, kind, imported_opt, apply_fn);
+                    handle_imported_model_event(ImportedModelEventParams {
+                        win: &w,
+                        cfg_cell: &cfg_cell_inner,
+                        kind,
+                        imported_opt,
+                        apply_fn,
+                    });
                 }
             });
         })
@@ -243,13 +316,14 @@ fn dispatch_model_import(
 }
 
 /// 在 Slint 主线程中处理模型导入结果并原子更新配置与界面状态
-fn handle_imported_model_event(
-    win: &SettingsWindow,
-    cfg_cell: &Arc<Mutex<AppConfig>>,
-    kind: ModelImportKind,
-    imported_opt: Option<PathBuf>,
-    apply_fn: ApplyConfigFn,
-) {
+fn handle_imported_model_event(params: ImportedModelEventParams<'_>) {
+    let ImportedModelEventParams {
+        win,
+        cfg_cell,
+        kind,
+        imported_opt,
+        apply_fn,
+    } = params;
     let label = kind.label();
     match imported_opt {
         Some(imported_path) => {

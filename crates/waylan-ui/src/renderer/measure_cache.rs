@@ -33,6 +33,20 @@ pub(crate) struct TextMeasureCache {
     entries: [ShapedTextEntry; MEASURE_CACHE_SIZE],
 }
 
+/// 单次文本塑形度量的输入参数
+///
+/// # 设计原理
+/// - **实现初衷**：塑形所需的"文本内容 + 字号"是同一语义单元，与塑形器句柄分开传递易错位。
+/// - **核心优势**：调用点按名传参，避免文本与字号顺序颠倒造成的静默错排。
+/// - **代价与局限**：多引入一个结构体类型。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextShapeParams<'a> {
+    /// 待塑形的文本内容
+    pub(crate) text: &'a str,
+    /// 塑形使用的字号（像素）
+    pub(crate) size: f32,
+}
+
 impl Default for TextMeasureCache {
     fn default() -> Self {
         Self {
@@ -60,9 +74,10 @@ impl TextMeasureCache {
         &'a mut self,
         buffer: &mut Buffer,
         font_system: &mut FontSystem,
-        text: &str,
-        size: f32,
+        params: &TextShapeParams<'_>,
     ) -> &'a ShapedTextEntry {
+        let text = params.text;
+        let size = params.size;
         let size_bits = size.to_bits();
         let hash = calculate_measure_hash(text, size_bits);
         let idx = (hash as usize) & (MEASURE_CACHE_SIZE - 1);

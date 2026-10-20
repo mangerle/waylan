@@ -24,6 +24,26 @@ const SCEL_HEADER_MAGIC: [u8; 4] = [0x40, 0x15, 0x00, 0x00];
 /// 搜狗细胞词库拼音表区 (0x1540) 4 字节魔数
 const SCEL_PY_MAGIC: [u8; 4] = [0x9D, 0x01, 0x00, 0x00];
 
+/// 搜狗细胞词库同音词组批量解析参数
+///
+/// # 设计原理
+/// - **实现初衷**：批量解析需同时持有"二进制数据、流游标、同音词条数、完整拼音与输出容器"，
+///   平铺传参易造成游标与输出容器顺序错位，进而写坏解析结果。
+/// - **核心优势**：以参数对象聚合解析上下文，只读输入与可变输出在类型层面清晰分离。
+/// - **代价与局限**：多引入一个结构体类型。
+struct ScelWordBatchParams<'a> {
+    /// 词库二进制数据
+    data: &'a [u8],
+    /// 数据流读取游标
+    cursor: &'a mut usize,
+    /// 当前拼音分组的同音词条数量
+    same_pinyin_count: usize,
+    /// 当前拼音分组的完整拼音键
+    full_pinyin: &'a str,
+    /// 解析结果词条输出容器
+    entries: &'a mut Vec<ImportedDictEntry>,
+}
+
 /// 第三方词库导入与转换器 (支持 Rime YAML / 搜狗细胞词库 .scel / 纯文本 .txt)
 pub struct DictImporter;
 
@@ -225,13 +245,14 @@ impl DictImporter {
     ///
     /// # 设计原理
     /// - 每个同音词条目独立解析，任一条目解析失败即整体中止，避免产出半截词库。
-    fn parse_scel_words_for_pinyin(
-        data: &[u8],
-        cursor: &mut usize,
-        same_pinyin_count: usize,
-        full_pinyin: &str,
-        entries: &mut Vec<ImportedDictEntry>,
-    ) -> bool {
+    fn parse_scel_words_for_pinyin(params: ScelWordBatchParams<'_>) -> bool {
+        let ScelWordBatchParams {
+            data,
+            cursor,
+            same_pinyin_count,
+            full_pinyin,
+            entries,
+        } = params;
         for _ in 0..same_pinyin_count {
             if !Self::parse_scel_single_word(data, cursor, full_pinyin, entries) {
                 return false;
@@ -311,13 +332,13 @@ impl DictImporter {
         while let Some((same_pinyin_count, full_pinyin)) =
             Self::parse_scel_pinyin_group(data, &mut cursor, &pinyin_table)
         {
-            if !Self::parse_scel_words_for_pinyin(
+            if !Self::parse_scel_words_for_pinyin(ScelWordBatchParams {
                 data,
-                &mut cursor,
+                cursor: &mut cursor,
                 same_pinyin_count,
-                &full_pinyin,
-                &mut entries,
-            ) {
+                full_pinyin: &full_pinyin,
+                entries: &mut entries,
+            }) {
                 break;
             }
         }

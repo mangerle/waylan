@@ -78,17 +78,40 @@ pub fn build_ibus_preedit_text(text: &str) -> Result<OwnedValue, VariantError> {
     OwnedValue::try_from(Value::from(s))
 }
 
+/// IBus 候选词查找表构建参数包
+///
+/// # 设计原理
+/// - **实现初衷**：查找表的构造需要同时依赖候选词集合、分页大小、选中位置、排列方向与序号样式，
+///   平铺参数极易在调用点发生位置错配，故收敛为专用的参数结构体。
+/// - **核心优势**：调用点语义自解释，字段含义一目了然，且后续扩展字段不会破坏既有调用契约。
+/// - **代价与局限**：新增字段需同步调整各调用点，但维护收益远大于成本。
+pub struct IbusLookupTableParams<'a> {
+    /// 待展示的候选词列表
+    pub candidates: &'a [Candidate],
+    /// 每页最多展示的候选词数量（内部会收敛到 `1..=10` 合法区间）
+    pub page_size: usize,
+    /// 当前选中的候选词索引（越界时会被收敛到合法边界）
+    pub selected_index: usize,
+    /// 候选框排列方向（水平或纵向）
+    pub orientation: i32,
+    /// 候选词序号展示风格
+    pub index_style: CandidateIndexStyle,
+}
+
 /// 构造包含当前页候选词列表的 `IBusLookupTable` 变体对象，签名 `(sa{sv}uubbiavav)`
 ///
 /// # Errors
 /// 当候选词文本或表格序列化失败时返回错误。
 pub fn build_ibus_lookup_table(
-    candidates: &[Candidate],
-    page_size: usize,
-    selected_index: usize,
-    orientation: i32,
-    index_style: CandidateIndexStyle,
+    params: &IbusLookupTableParams<'_>,
 ) -> Result<OwnedValue, VariantError> {
+    let IbusLookupTableParams {
+        candidates,
+        page_size,
+        selected_index,
+        orientation,
+        index_style,
+    } = *params;
     let mut cand_vec = Vec::with_capacity(candidates.len());
     let mut label_vec = Vec::with_capacity(candidates.len());
 

@@ -174,14 +174,36 @@ pub struct HitRegion {
     pub target: CandidateHitTarget,
 }
 
+/// 命中检测区域的构造参数
+///
+/// # 设计原理
+/// - **实现初衷**：命中区域由"矩形边界 + 交互目标"两类异质信息合成，
+///   平铺为五个入参会让调用点的实参与形参一一对应，易发生顺序错位。
+/// - **核心优势**：以参数对象聚合语义字段，调用点按名传参即可完成构造，杜绝位置传参歧义。
+/// - **代价与局限**：多引入一个结构体类型，调用点需显式书写字段名。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HitRegionParams {
+    /// 区域左上角横坐标
+    pub x: f32,
+    /// 区域左上角纵坐标
+    pub y: f32,
+    /// 区域宽度
+    pub width: f32,
+    /// 区域高度
+    pub height: f32,
+    /// 命中该区域后触发的交互动作
+    pub target: CandidateHitTarget,
+}
+
 impl HitRegion {
-    pub fn new(x: f32, y: f32, width: f32, height: f32, target: CandidateHitTarget) -> Self {
+    /// 依据命中检测区域参数构造命中区域
+    pub fn new(params: HitRegionParams) -> Self {
         Self {
-            x,
-            y,
-            width,
-            height,
-            target,
+            x: params.x,
+            y: params.y,
+            width: params.width,
+            height: params.height,
+            target: params.target,
         }
     }
 

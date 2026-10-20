@@ -13,6 +13,18 @@ use crate::engine::AlgoEngine;
 use crate::prism::SegmentPath;
 use crate::types::{AlgoCandidate, CandidateTier};
 
+/// 纠错候选插回主候选列表的参数对象
+///
+/// 承载纠错候选插回所需的消费长度、碎切容错标记与待插入的纠错候选集合。
+struct TypoCandidateInsertParams {
+    /// 原始输入串长度（作为纠错候选的消费长度）
+    raw_input_len: usize,
+    /// 当前最优路径是否为碎切容错回退路径（决定纠错项插入位置）
+    is_broken_typo: bool,
+    /// 待插入的纠错候选集合
+    merged_typos: Vec<AlgoCandidate>,
+}
+
 impl AlgoEngine {
     /// 注入首页扩展候选（物理空间纠错、动态日期时间、英文联想、符号表情、自定义短语与前缀分段短词）
     pub(crate) fn inject_page_zero_extensions(
@@ -77,7 +89,14 @@ impl AlgoEngine {
 
         self.merge_spatial_typo_candidates(raw_input, &mut merged_typos);
 
-        self.insert_typo_candidates(raw_input.len(), is_broken_typo, merged_typos, candidates);
+        self.insert_typo_candidates(
+            TypoCandidateInsertParams {
+                raw_input_len: raw_input.len(),
+                is_broken_typo,
+                merged_typos,
+            },
+            candidates,
+        );
     }
 
     /// 合并物理空间键盘纠错候选到纠错候选集合，并执行简繁归一与文本去重
@@ -107,11 +126,15 @@ impl AlgoEngine {
     /// 将纠错候选插回候选列表头部区域，保证纠错项优先于普通候选可见
     fn insert_typo_candidates(
         &self,
-        raw_input_len: usize,
-        is_broken_typo: bool,
-        merged_typos: Vec<AlgoCandidate>,
+        params: TypoCandidateInsertParams,
         candidates: &mut Vec<AlgoCandidate>,
     ) {
+        let TypoCandidateInsertParams {
+            raw_input_len,
+            is_broken_typo,
+            merged_typos,
+        } = params;
+
         for (i, mut typo_cand) in merged_typos.into_iter().take(2).enumerate() {
             typo_cand.consumed_len = Some(raw_input_len);
             candidates.retain(|c| c.text != typo_cand.text);

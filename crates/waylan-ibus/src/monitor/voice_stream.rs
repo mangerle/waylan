@@ -16,8 +16,8 @@ use zbus::zvariant::Value;
 use super::super::engine::{UiSnapshot, WAYLAN_ENGINE_OBJECT_PATH};
 use super::super::keys::IbusSessionCore;
 use super::super::types::{
-    build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_text, IBUS_ENGINE_PREEDIT_CLEAR,
-    IBUS_ORIENTATION_HORIZONTAL,
+    build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_text, IbusLookupTableParams,
+    IBUS_ENGINE_PREEDIT_CLEAR, IBUS_ORIENTATION_HORIZONTAL,
 };
 
 /// 获取当前语音活跃状态与目标 IBus 引擎对象路径
@@ -36,13 +36,13 @@ pub(crate) fn query_voice_active_and_path(
 /// 发送语音波形候选框与实时预编辑文本更新
 fn emit_voice_stream_update(conn: &Connection, target_engine_path: &str, voice_snap: &UiSnapshot) {
     let table_visible = !voice_snap.candidates.is_empty();
-    if let Ok(table_val) = build_ibus_lookup_table(
-        &voice_snap.candidates,
-        voice_snap.page_size,
-        voice_snap.selected_index,
-        voice_snap.orientation,
-        voice_snap.index_style,
-    ) {
+    if let Ok(table_val) = build_ibus_lookup_table(&IbusLookupTableParams {
+        candidates: &voice_snap.candidates,
+        page_size: voice_snap.page_size,
+        selected_index: voice_snap.selected_index,
+        orientation: voice_snap.orientation,
+        index_style: voice_snap.index_style,
+    }) {
         let _ = conn.emit_signal(
             None::<&str>,
             target_engine_path,
@@ -72,13 +72,13 @@ fn emit_voice_stream_update(conn: &Connection, target_engine_path: &str, voice_s
 
 /// 发射清空候选框与预编辑的信号
 fn emit_voice_stream_exit(conn: &Connection, target_engine_path: &str) {
-    if let Ok(empty_table) = build_ibus_lookup_table(
-        &[],
-        1,
-        0,
-        IBUS_ORIENTATION_HORIZONTAL,
-        CandidateIndexStyle::None,
-    ) {
+    if let Ok(empty_table) = build_ibus_lookup_table(&IbusLookupTableParams {
+        candidates: &[],
+        page_size: 1,
+        selected_index: 0,
+        orientation: IBUS_ORIENTATION_HORIZONTAL,
+        index_style: CandidateIndexStyle::None,
+    }) {
         let _ = conn.emit_signal(
             None::<&str>,
             target_engine_path,
@@ -124,27 +124,41 @@ fn commit_voice_text(conn: &Connection, target_engine_path: &str, commit_text: &
     }
 }
 
+/// 语音流式轮询单周期处理参数包
+///
+/// # 设计原理
+/// - **实现初衷**：单轮语音轮询需同时依赖总线连接、共享会话核心、目标引擎路径与跨轮次延续的语音激活标记，
+///   平铺参数会让调用点难以辨识可变槽位，故收敛为专用的参数结构体。
+/// - **核心优势**：可变状态以 `&mut` 槽位形式显式承载，跨轮次状态的归属一目了然，杜绝位置错配。
+/// - **代价与局限**：调用点需显式构造结构体字面量，代码量略增但语义更清晰。
+pub(crate) struct VoiceStreamCycleParams<'a> {
+    /// 到 `ibus-daemon` 的阻塞连接
+    pub(crate) conn: &'a Connection,
+    /// 共享的输入法会话核心
+    pub(crate) shared_core: &'a Arc<Mutex<IbusSessionCore>>,
+    /// 目标 IBus 引擎对象路径
+    pub(crate) target_engine_path: &'a str,
+    /// 本轮观测到的语音激活状态
+    pub(crate) is_voice_active: bool,
+    /// 上一轮观测到的语音激活状态（跨轮次延续的可变槽位）
+    pub(crate) last_voice_active: &'a mut bool,
+}
+
 /// 处理单轮语音事件轮询、流式更新与过渡退出
-pub(crate) fn handle_voice_stream_cycle(
-    conn: &Connection,
-    shared_core: &Arc<Mutex<IbusSessionCore>>,
-    target_engine_path: &str,
-    is_voice_active: bool,
-    last_voice_active: &mut bool,
-) {
-    if is_voice_active {
+pub(crate) fn handle_voice_stream_cycle(params: &mut VoiceStreamCycleParams<'_>) {
+    if params.is_voice_active {
         let (voice_snap, voice_commit) = {
-            let mut guard = shared_core.lock();
+            let mut guard = params.shared_core.lock();
             let commit = guard.poll_voice_events();
             let snap = UiSnapshot::capture(&guard);
             (snap, commit)
         };
-        emit_voice_stream_update(conn, target_engine_path, &voice_snap);
+        emit_voice_stream_update(params.conn, params.target_engine_path, &voice_snap);
         if let Some(ref commit_text) = voice_commit {
-            commit_voice_text(conn, target_engine_path, commit_text);
+            commit_voice_text(params.conn, params.target_engine_path, commit_text);
         }
-    } else if *last_voice_active {
-        emit_voice_stream_exit(conn, target_engine_path);
+    } else if *params.last_voice_active {
+        emit_voice_stream_exit(params.conn, params.target_engine_path);
     }
-    *last_voice_active = is_voice_active;
+    *params.last_voice_active = params.is_voice_active;
 }

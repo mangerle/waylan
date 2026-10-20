@@ -178,14 +178,28 @@ fn draw_voice_waveform_bars(pixmap: &mut Pixmap, params: WaveformBarsParams<'_>)
     current_x
 }
 
-/// 绘制呼吸光环圆点并返回结束 x 坐标
-fn draw_breathing_pulse(
-    pixmap: &mut Pixmap,
+/// 呼吸光环圆点绘制参数
+///
+/// 承载呼吸光效的起始横坐标、胶囊高度、缩放系数与配色，供 `draw_breathing_pulse`
+/// 以单次引用传递，避免平铺多个标量入参。
+#[derive(Debug, Clone, Copy)]
+struct BreathingPulseParams {
+    /// 光环绘制区域的起始横坐标
     start_x: f32,
+    /// 胶囊条高度（用于计算光环纵向中心）
     bar_height: f32,
+    /// 缩放系数
     scale: f32,
+    /// 光环主体颜色
     color: Color,
-) -> f32 {
+}
+
+/// 绘制呼吸光环圆点并返回结束 x 坐标
+fn draw_breathing_pulse(pixmap: &mut Pixmap, params: &BreathingPulseParams) -> f32 {
+    let start_x = params.start_x;
+    let bar_height = params.bar_height;
+    let scale = params.scale;
+    let color = params.color;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -244,10 +258,12 @@ fn draw_voice_leading_visual(pixmap: &mut Pixmap, params: &VoiceLeadingVisualPar
         VoiceVisualEffect::BreathingPulse => {
             draw_breathing_pulse(
                 pixmap,
-                params.start_x,
-                params.bar_height,
-                s,
-                params.badge_color,
+                &BreathingPulseParams {
+                    start_x: params.start_x,
+                    bar_height: params.bar_height,
+                    scale: s,
+                    color: params.badge_color,
+                },
             ) + 4.0 * s
         }
         VoiceVisualEffect::ClassicText => params.start_x,
