@@ -8,7 +8,6 @@
 use crate::error::DaemonError;
 use std::env;
 use std::path::PathBuf;
-use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -160,9 +159,6 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
             info!("[微澜守护进程] 收到退出信号，IBus 服务安全退场。");
             Ok(())
         }
-        Err(e) => {
-            log::error!("[微澜守护进程 错误] IBus 输入法会话异常退出: {}", e);
-            process::exit(1);
-        }
+        Err(e) => Err(e.into()),
     }
 }

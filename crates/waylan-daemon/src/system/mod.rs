@@ -171,13 +171,6 @@ pub fn launch_settings_gui() -> Result<(), DaemonError> {
 /// - **代价与局限**：必须在守护进程整个运行生命周期内持有该守护对象。
 pub struct SingleInstanceLock {
     _file: fs::File,
-    path: PathBuf,
-}
-
-impl Drop for SingleInstanceLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
 }
 
 /// 尝试获取微澜守护进程的全局单例锁
@@ -188,7 +181,7 @@ impl Drop for SingleInstanceLock {
 pub fn try_acquire_single_instance_lock() -> std::io::Result<Option<SingleInstanceLock>> {
     let lock_dir = env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir);
+        .unwrap_or_else(waylan_core::config::fallback_runtime_dir);
     let lock_path = lock_dir.join(format!(
         "waylan_{}.lock",
         rustix::process::getuid().as_raw()
@@ -212,10 +205,7 @@ pub fn try_acquire_lock_at_path(
             let mut file_clone = file.try_clone()?;
             let _ = file_clone.set_len(0);
             let _ = writeln!(file_clone, "{}", process::id());
-            Ok(Some(SingleInstanceLock {
-                _file: file,
-                path: lock_path.to_path_buf(),
-            }))
+            Ok(Some(SingleInstanceLock { _file: file }))
         }
         Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
         Err(e) => Err(std::io::Error::from(e)),
@@ -308,6 +298,8 @@ mod tests {
         let lock3 = try_acquire_lock_at_path(&lock_path)
             .expect("重新获取锁失败")
             .expect("释放后应当重新获取锁");
-        assert!(lock3.path.exists());
+        drop(lock3);
+        // 锁文件必须保留，删除锁文件会让并发进程分别锁住新旧 inode，破坏单实例语义
+        assert!(lock_path.exists(), "锁文件不应在释放锁时被删除");
     }
 }

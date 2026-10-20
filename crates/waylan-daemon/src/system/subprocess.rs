@@ -63,58 +63,70 @@ impl SubprocessManager {
         let children_clone = Arc::clone(&children);
         let shutdown_clone = Arc::clone(&shutdown);
 
-        let reaper_handle = thread::spawn(move || {
-            while !shutdown_clone.load(Ordering::Acquire) && !exit_requested.load(Ordering::Acquire)
-            {
-                thread::sleep(Duration::from_millis(200));
-                let mut lock = children_clone.lock();
-                lock.retain_mut(|tracked| match tracked.child.try_wait() {
-                    Ok(Some(status)) => {
-                        log::debug!(
-                            "[进程治理] 外部子进程 [{}] 已正常退出: {:?}",
-                            tracked.name,
-                            status
-                        );
-                        if let Some(ref guard) = tracked.running_guard {
-                            guard.store(false, Ordering::Release);
+        let reaper_handle = match thread::Builder::new()
+            .name("waylan-subprocess-reaper".to_string())
+            .spawn(move || {
+                while !shutdown_clone.load(Ordering::Acquire)
+                    && !exit_requested.load(Ordering::Acquire)
+                {
+                    thread::sleep(Duration::from_millis(200));
+                    let mut lock = children_clone.lock();
+                    lock.retain_mut(|tracked| match tracked.child.try_wait() {
+                        Ok(Some(status)) => {
+                            log::debug!(
+                                "[进程治理] 外部子进程 [{}] 已正常退出: {:?}",
+                                tracked.name,
+                                status
+                            );
+                            if let Some(ref guard) = tracked.running_guard {
+                                guard.store(false, Ordering::Release);
+                            }
+                            false
                         }
-                        false
-                    }
-                    Ok(None) => true,
-                    Err(e) => {
-                        log::warn!(
-                            "[进程治理] 查询外部子进程 [{}] 状态失败: {}",
-                            tracked.name,
-                            e
-                        );
-                        if let Some(ref guard) = tracked.running_guard {
-                            guard.store(false, Ordering::Release);
+                        Ok(None) => true,
+                        Err(e) => {
+                            log::warn!(
+                                "[进程治理] 查询外部子进程 [{}] 状态失败: {}",
+                                tracked.name,
+                                e
+                            );
+                            if let Some(ref guard) = tracked.running_guard {
+                                guard.store(false, Ordering::Release);
+                            }
+                            false
                         }
-                        false
-                    }
-                });
-            }
-
-            // 收到退出信号后，主动清理所有存活子进程并收割状态
-            let mut lock = children_clone.lock();
-            for tracked in lock.iter_mut() {
-                info!(
-                    "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
-                    tracked.name
-                );
-                let _ = tracked.child.kill();
-                let _ = tracked.child.wait();
-                if let Some(ref guard) = tracked.running_guard {
-                    guard.store(false, Ordering::Release);
+                    });
                 }
+
+                // 收到退出信号后，主动清理所有存活子进程并收割状态
+                let mut lock = children_clone.lock();
+                for tracked in lock.iter_mut() {
+                    info!(
+                        "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
+                        tracked.name
+                    );
+                    let _ = tracked.child.kill();
+                    let _ = tracked.child.wait();
+                    if let Some(ref guard) = tracked.running_guard {
+                        guard.store(false, Ordering::Release);
+                    }
+                }
+                lock.clear();
+            }) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                log::warn!(
+                    "[进程治理 警告] 创建子进程收割线程失败，外部子进程将无法自动回收: {}",
+                    e
+                );
+                None
             }
-            lock.clear();
-        });
+        };
 
         Self {
             children,
             shutdown,
-            reaper_handle: Some(reaper_handle),
+            reaper_handle,
         }
     }
 

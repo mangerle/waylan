@@ -1,31 +1,31 @@
-mod cli;
-mod desktop;
-mod error;
-mod logger;
-mod session_bundle;
-mod system;
-mod tray;
-
-use cli::{CliCommand, DaemonOptions};
-use error::DaemonError;
 use log::{info, warn};
-use session_bundle::{
+use std::env;
+use std::process;
+
+use waylan_core::config::{AppConfig, ThemeMode};
+use waylan_daemon::cli::{self, CliCommand, DaemonOptions};
+use waylan_daemon::error::DaemonError;
+use waylan_daemon::session_bundle::{
     build_algo_engine, check_wayland_capabilities, dispatch_ibus_session, dispatch_wayland_session,
     IbusDispatchOptions, WaylandDispatchOptions,
 };
-use std::env;
-use std::process;
-use system::{
+use waylan_daemon::system::{
     check_another_instance_running, collect_watched_paths, determine_tray_and_exclusive,
     launch_settings_gui, try_acquire_single_instance_lock, ShutdownCoordinator, SingleInstanceLock,
 };
-pub use waylan_core::config;
-use waylan_core::config::{AppConfig, ThemeMode};
+use waylan_daemon::{desktop, logger, tray};
 use waylan_ibus::{print_ibus_component_xml, print_ibus_engines_xml};
 use waylan_sys::LoopWakeup;
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 
-fn main() -> Result<(), DaemonError> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("错误: {}", e);
+        process::exit(1);
+    }
+}
+
+fn run() -> Result<(), DaemonError> {
     let args: Vec<String> = env::args().collect();
     let command = match CliCommand::parse(&args) {
         Ok(cmd) => cmd,

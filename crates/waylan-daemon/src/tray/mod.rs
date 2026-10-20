@@ -66,16 +66,27 @@ impl TrayService {
             icon_update_rx,
         };
 
-        let handle = thread::spawn(move || {
-            Self::run_dbus_loop(params);
-        });
+        let join_handle = match thread::Builder::new()
+            .name("waylan-tray".to_string())
+            .spawn(move || {
+                Self::run_dbus_loop(params);
+            }) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                warn!(
+                    "[系统托盘 警告] 创建托盘后台线程失败，已降级为无托盘模式: {}",
+                    e
+                );
+                None
+            }
+        };
 
         Self {
             shared_flags,
             reload_requested,
             coordinator,
             icon_update_tx,
-            join_handle: Some(handle),
+            join_handle,
         }
     }
 
