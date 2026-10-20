@@ -17,8 +17,8 @@ pub mod process;
 
 pub use assets::{detect_default_assets_path, resolve_icon_path_or_name};
 pub use desktop::{
-    ensure_gnome_input_source_registered, install_gnome_hide_indicator_extension, is_gnome_desktop,
-    prioritize_waylan_in_gsettings_sources, safe_sync_desktop_input_sources,
+    ensure_gnome_hide_indicator_extension_files, ensure_gnome_input_source_registered,
+    is_gnome_desktop, prioritize_waylan_in_gsettings_sources, safe_sync_desktop_input_sources,
     set_gnome_extension_enabled, set_waylan_as_exclusive_input_source,
     sync_gnome_extension_state_async, sync_gnome_hide_indicator_extension, GnomeExtensionIntent,
 };

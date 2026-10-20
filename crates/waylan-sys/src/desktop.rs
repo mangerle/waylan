@@ -11,6 +11,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{debug, info, warn};
 
@@ -57,40 +58,127 @@ impl GnomeExtensionIntent {
     }
 }
 
+/// 系统级 GNOME Shell 扩展目录（由发行版包管理器负责写入）
+const GNOME_SYSTEM_EXTENSIONS_DIR: &str = "/usr/share/gnome-shell/extensions";
+
+/// 扩展元数据文件读取体积上限（metadata.json 为数百字节量级，超限视为异常文件拒绝读入）
+const MAX_EXTENSION_METADATA_BYTES: u64 = 64 * 1024;
+
 /// 定位扩展源文件目录：兼容开发仓库布局（`<repo>/assets/gnome-extension`）与
 /// 历史打包布局（`<share>/gnome-extension`），两者均不存在时返回 `None`
 fn locate_extension_src_dir(assets: &str) -> Option<PathBuf> {
     let assets_dir = Path::new(assets);
-    let candidates = [assets_dir.join("gnome-extension"), {
+    let candidates = [
+        assets_dir.join("gnome-extension"),
         assets_dir
             .parent()
             .unwrap_or(assets_dir)
-            .join("gnome-extension")
-    }];
+            .join("gnome-extension"),
+    ];
     candidates.into_iter().find(|dir| dir.is_dir())
 }
 
-/// 安装或更新 GNOME Shell 隐藏原生指示器扩展文件至用户扩展目录
-pub fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
-    let user_dir = env_var_non_empty("HOME").map(|h| {
-        PathBuf::from(h)
-            .join(".local/share/gnome-shell/extensions")
-            .join(extension_uuid)
-    });
+/// 从扩展目录的 `metadata.json` 中读取整数 `version` 字段
+///
+/// 仅做定向扫描而不引入 JSON 解析依赖：该字段由本项目自行维护，格式稳定，
+/// 且本 crate 定位为无应用层依赖的底层系统抽象。
+fn read_extension_version(ext_dir: &Path) -> Option<u64> {
+    let meta_path = ext_dir.join("metadata.json");
+    let size = fs::metadata(&meta_path).ok()?.len();
+    if size == 0 || size > MAX_EXTENSION_METADATA_BYTES {
+        return None;
+    }
+    let text = fs::read_to_string(&meta_path).ok()?;
+    let after_key = text.split_once("\"version\"")?.1;
+    let digits = after_key
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    digits.parse::<u64>().ok()
+}
 
+/// 判定用户目录副本是否应让位给系统目录副本
+///
+/// 版本读取失败时保守返回 `false`：宁可继续加载旧的用户副本，也不能把用户手工安装的
+/// 扩展移走（那会让输入法的候选框渲染彻底消失）。
+#[must_use]
+fn should_retire_user_copy(user: Option<u64>, system: Option<u64>) -> bool {
+    matches!((user, system), (Some(u), Some(s)) if u < s)
+}
+
+/// 若用户目录副本版本落后于系统目录副本，则将其移出 GNOME 扩展扫描目录让位
+fn retire_stale_user_copy(user_dir: &Path, system_dir: &Path) {
+    if !user_dir.is_dir() {
+        return;
+    }
+
+    let user_version = read_extension_version(user_dir);
+    let system_version = read_extension_version(system_dir);
+    if !should_retire_user_copy(user_version, system_version) {
+        debug!(
+            "[桌面集成] 用户目录扩展副本 (版本 {:?}) 无需让位于系统副本 (版本 {:?})",
+            user_version, system_version
+        );
+        return;
+    }
+
+    // 移入扩展扫描目录之外：GNOME 按目录内 metadata.json 的 uuid 注册扩展，
+    // 若仅在本目录内改名，同 uuid 会出现两份而被重复加载。
+    let Some(staging_root) = env_var_non_empty("HOME")
+        .map(|h| PathBuf::from(h).join(".local/share/waylan/extension-stale"))
+    else {
+        return;
+    };
+    if fs::create_dir_all(&staging_root).is_err() {
+        warn!(
+            "[桌面集成] 无法创建陈旧扩展副本归档目录 {:?}，用户副本将继续遮蔽系统新版",
+            staging_root
+        );
+        return;
+    }
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dir_name = user_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "waylan-extension".to_string());
+    let dst = staging_root.join(format!(
+        "{}-v{}-{}",
+        dir_name,
+        user_version.unwrap_or(0),
+        stamp
+    ));
+
+    match fs::rename(user_dir, &dst) {
+        Ok(()) => warn!(
+            "[桌面集成] 用户目录扩展副本 (版本 {:?}) 落后于系统副本 (版本 {:?})，已归档至 {:?}；\
+             重启 GNOME Shell 后将加载系统版本扩展。",
+            user_version, system_version, dst
+        ),
+        Err(e) => warn!(
+            "[桌面集成] 移走陈旧用户扩展副本 {:?} 失败: {}，扩展行为仍将是旧版本",
+            user_dir, e
+        ),
+    }
+}
+
+/// 从资源目录把扩展文件同步进指定用户目录（仅在系统目录缺失时作为回退通道使用）
+fn install_extension_to_user_dir(target: &Path) {
     let Some(assets) = detect_default_assets_path() else {
         return;
     };
     let Some(src_dir) = locate_extension_src_dir(&assets) else {
-        // 扩展文件由系统包直接安装至 /usr/share/gnome-shell/extensions 时属正常情形，
-        // 此处仅跳过用户目录同步；记为 debug 以便排查"改了扩展代码但界面没变"的问题。
-        debug!(
-            "[桌面集成] 未找到微澜 GNOME 扩展源目录 (基于资源路径 {:?})，跳过用户目录同步",
+        // 既无系统目录副本又找不到源码资源，属安装不完整的异常环境，需可检索的告警。
+        warn!(
+            "[桌面集成] 未找到微澜 GNOME 扩展源：系统目录缺失且资源路径 {:?} 下无 gnome-extension 目录",
             assets
         );
-        return;
-    };
-    let Some(ref target) = user_dir else {
         return;
     };
     if fs::create_dir_all(target).is_err() {
@@ -114,6 +202,33 @@ pub fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
             }
         }
     }
+}
+
+/// 保障 GNOME Shell 扩展文件就绪：系统目录可用时让位给它，否则回退安装到用户目录
+///
+/// # 设计原理
+/// - **实现初衷**：扩展文件的安装权属于包管理器（deb 直接装到 `/usr/share/gnome-shell/extensions`）。
+///   原实现无条件把扩展复制进 `~/.local/share/gnome-shell/extensions`，而 GNOME 对同一 uuid
+///   **优先加载用户目录副本**，于是包升级只刷新系统副本、用户副本永久遮蔽新版，表现为
+///   "升级后扩展行为仍是旧的"，且复制源路径在打包布局下本就解析不到，连刷新都做不到。
+/// - **核心优势**：打包环境不再产生双副本；历史遗留的落后副本在启动期自动归档让位（可回滚、
+///   不删除）；源码运行环境仍保留回退安装通道。
+/// - **代价与局限**：让位后需重启 GNOME Shell 才会加载系统副本（扩展仅在 shell 启动时枚举一次）；
+///   版本无法判读时保守保留用户副本，不冒险移除。
+pub fn ensure_gnome_hide_indicator_extension_files(extension_uuid: &str) {
+    let Some(home) = env_var_non_empty("HOME") else {
+        return;
+    };
+    let user_dir = PathBuf::from(&home)
+        .join(".local/share/gnome-shell/extensions")
+        .join(extension_uuid);
+    let system_dir = Path::new(GNOME_SYSTEM_EXTENSIONS_DIR).join(extension_uuid);
+
+    if system_dir.is_dir() {
+        retire_stale_user_copy(&user_dir, &system_dir);
+        return;
+    }
+    install_extension_to_user_dir(&user_dir);
 }
 
 /// 通过 `gnome-extensions` CLI 与 `gsettings` 设置扩展的启用或禁用状态
@@ -150,7 +265,7 @@ pub fn sync_gnome_hide_indicator_extension(intent: GnomeExtensionIntent) {
     }
 
     let extension_uuid = "waylan-hide-input-source@waylan.org";
-    install_gnome_hide_indicator_extension(extension_uuid);
+    ensure_gnome_hide_indicator_extension_files(extension_uuid);
     set_gnome_extension_enabled(extension_uuid, intent.should_enable());
 }
 
@@ -417,6 +532,80 @@ mod tests {
         assert_eq!(
             prioritize_waylan_in_gsettings_sources("[('ibus', 'waylan')]").as_deref(),
             Some("[('ibus', 'waylan'), ('xkb', 'us')]")
+        );
+    }
+
+    /// 在临时目录下构造一个带指定 metadata 内容的扩展目录
+    fn make_extension_dir(root: &Path, uuid: &str, metadata: &str) -> PathBuf {
+        let dir = root.join(uuid);
+        fs::create_dir_all(&dir).expect("创建临时扩展目录失败");
+        fs::write(dir.join("metadata.json"), metadata).expect("写入 metadata.json 失败");
+        dir
+    }
+
+    #[test]
+    fn test_read_extension_version_parses_metadata_version() {
+        let tmp = tempfile::tempdir().expect("创建临时目录失败");
+        let dir = make_extension_dir(
+            tmp.path(),
+            "x@y.org",
+            "{\n  \"uuid\": \"x@y.org\",\n  \"version\": 3\n}\n",
+        );
+        assert_eq!(read_extension_version(&dir), Some(3));
+    }
+
+    #[test]
+    fn test_read_extension_version_rejects_missing_and_malformed() {
+        let tmp = tempfile::tempdir().expect("创建临时目录失败");
+
+        // 目录不存在：读取失败必须返回 None 而非 panic
+        assert_eq!(
+            read_extension_version(&tmp.path().join("absent@x.org")),
+            None
+        );
+
+        // 无 version 字段与非数字取值：均视为不可判读
+        let no_field = make_extension_dir(tmp.path(), "nofield@x.org", "{\"name\": \"WayLan\"}");
+        assert_eq!(read_extension_version(&no_field), None);
+        let bad_value = make_extension_dir(tmp.path(), "bad@x.org", "{\"version\": \"three\"}");
+        assert_eq!(read_extension_version(&bad_value), None);
+    }
+
+    #[test]
+    fn test_read_extension_version_rejects_oversized_metadata() {
+        let tmp = tempfile::tempdir().expect("创建临时目录失败");
+        let dir = tmp.path().join("big@x.org");
+        fs::create_dir_all(&dir).expect("创建临时扩展目录失败");
+        // 用户可写的家目录文件，超限必须拒读以防被撑爆内存
+        let padded = format!(
+            "{{\"version\": 7, \"pad\": \"{}\"}}",
+            "a".repeat(MAX_EXTENSION_METADATA_BYTES as usize)
+        );
+        fs::write(dir.join("metadata.json"), padded).expect("写入超大 metadata 失败");
+        assert_eq!(read_extension_version(&dir), None);
+    }
+
+    #[test]
+    fn test_should_retire_user_copy_only_when_strictly_older() {
+        assert!(
+            should_retire_user_copy(Some(1), Some(3)),
+            "用户副本版本更低时应让位于系统副本"
+        );
+        assert!(
+            !should_retire_user_copy(Some(3), Some(3)),
+            "版本相同不让位，避免每次启动反复搬移"
+        );
+        assert!(
+            !should_retire_user_copy(Some(5), Some(3)),
+            "用户副本更新时不得被系统旧副本覆盖"
+        );
+        assert!(
+            !should_retire_user_copy(None, Some(3)),
+            "版本不可判读时保守保留用户副本"
+        );
+        assert!(
+            !should_retire_user_copy(Some(1), None),
+            "系统副本版本不可判读时不让位"
         );
     }
 }
