@@ -95,7 +95,9 @@ impl MathEvaluator {
                         }
                         lhs % rhs
                     }
-                    _ => unreachable!(),
+                    // 外层守卫已将运算符限定为 '*' | 'x' | 'X' | '/' | '%'，
+                    // 此处仅作兜底，按解析失败处理而非 panic，避免异常输入击穿求值管线
+                    _ => return None,
                 };
             } else {
                 break;

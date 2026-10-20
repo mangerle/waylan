@@ -66,16 +66,24 @@ fn build_row_offsets(vocab_size: usize, selected: &[(u32, u32, i32, u32)]) -> Ve
 }
 
 /// 将词对打包为 24 位后继词 ID 与 8 位量化索引的紧凑列数据
-fn build_cols_data(selected: &[(u32, u32, i32, u32)]) -> Vec<u32> {
+///
+/// # Errors
+/// 当后继词 ID 超过 24 位编码上限时返回 `InvalidData` 错误。
+fn build_cols_data(selected: &[(u32, u32, i32, u32)]) -> io::Result<Vec<u32>> {
     let mut cols_data = Vec::with_capacity(selected.len());
     for &(_, w2, aff, _) in selected {
-        assert!(w2 <= 0x00FF_FFFF, "后继词 ID 超过 24 位上限");
+        if w2 > 0x00FF_FFFF {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("后继词 ID {w2} 超过 24 位编码上限"),
+            ));
+        }
         let clamped_aff = aff.clamp(SCORE_MIN, SCORE_MAX);
         let q_score = (((clamped_aff - SCORE_MIN) as f64 / (SCORE_MAX - SCORE_MIN) as f64) * 255.0)
             .round() as u8;
         cols_data.push((w2 & 0x00FF_FFFF) | ((q_score as u32) << 24));
     }
-    cols_data
+    Ok(cols_data)
 }
 
 /// 将模型头部、量化码本、行偏移表与紧凑列数据顺序写入目标二进制文件
@@ -108,6 +116,9 @@ fn write_csr_model_file(params: CsrWriteParams<'_>) -> io::Result<()> {
 }
 
 /// 写入 CSR 紧凑二进制格式模型文件
+///
+/// # Errors
+/// 当词表规模超过 24 位编码上限，或目标文件写入失败时返回底层错误。
 pub fn export_csr_model(
     output_path: &Path,
     vocab_size: usize,
@@ -125,11 +136,16 @@ pub fn export_csr_model(
         file_label
     );
 
+    if vocab_size > 0x00FF_FFFF {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("词表规模 {vocab_size} 超过 24 位编码上限"),
+        ));
+    }
     let codebook = build_quantization_codebook();
     let row_offsets = build_row_offsets(vocab_size, selected);
 
-    assert!(vocab_size <= 0x00FF_FFFF, "词表规模超过 24 位上限");
-    let cols_data = build_cols_data(selected);
+    let cols_data = build_cols_data(selected)?;
 
     write_csr_model_file(CsrWriteParams {
         output_path,

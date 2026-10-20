@@ -7,6 +7,7 @@
 use jieba_rs::Jieba;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -50,7 +51,10 @@ impl CorpusAccumulator {
     }
 
     /// 检查并按需将内存中的分片刷写至磁盘
-    pub fn maybe_flush_chunk(&mut self, temp_chunk_dir: &Path, limit: usize) {
+    ///
+    /// # Errors
+    /// 当临时分片文件创建或写入失败时返回底层 IO 错误，调用方应终止构建流程。
+    pub fn maybe_flush_chunk(&mut self, temp_chunk_dir: &Path, limit: usize) -> io::Result<()> {
         if self.current_chunk_map.len() >= limit {
             println!(
                 "\n   -> [内存控制] 触发局部剪枝与分片刷盘 (分片 #{}) ...",
@@ -60,10 +64,10 @@ impl CorpusAccumulator {
                 temp_chunk_dir,
                 self.chunk_index,
                 &mut self.current_chunk_map,
-            )
-            .expect("刷写临时分片文件失败");
+            )?;
             self.chunk_index = self.chunk_index.saturating_add(1);
             self.chunk_files.push(chunk_path);
         }
+        Ok(())
     }
 }
