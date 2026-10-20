@@ -1,11 +1,10 @@
-use waylan_core::Candidate;
+use std::borrow::Cow;
 
-/// 常用候选序号预缓存字符串，杜绝逐帧 format 堆分配
-pub const PRECACHED_INDEX_STRINGS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+use waylan_core::{format_candidate_index, Candidate, CandidateIndexStyle};
 
 /// 单个候选条测量计算结果
-pub struct ItemMeasure<'a> {
-    pub index_str: &'a str,
+pub struct ItemMeasure {
+    pub index_str: String,
     pub index_width: f32,
     pub text_width: f32,
     pub is_expandable: bool,
@@ -20,6 +19,8 @@ pub struct LayoutParams<'a> {
     pub selected_index: usize,
     pub preedit: &'a str,
     pub mode_badge: &'a str,
+    pub index_style: CandidateIndexStyle,
+    pub show_comment: bool,
     pub s: f32,
     pub padding_h: f32,
     pub item_gap: f32,
@@ -30,7 +31,7 @@ pub struct LayoutParams<'a> {
 pub fn measure_candidates_bar<'a, F>(
     params: LayoutParams<'a>,
     mut measure_fn: F,
-) -> (Vec<ItemMeasure<'a>>, f32)
+) -> (Vec<ItemMeasure>, f32)
 where
     F: FnMut(&str, f32) -> f32,
 {
@@ -50,14 +51,23 @@ where
     }
 
     for (idx, cand) in params.candidates.iter().enumerate() {
-        let index_str = if idx < PRECACHED_INDEX_STRINGS.len() {
-            PRECACHED_INDEX_STRINGS[idx]
+        let index_str = format_candidate_index(params.index_style, idx);
+        let index_width = if index_str.is_empty() {
+            0.0
         } else {
-            "•"
+            measure_fn(&index_str, params.font_size * 0.85)
         };
-
-        let index_width = measure_fn(index_str, params.font_size * 0.85);
-        let text_width = measure_fn(&cand.text, params.font_size);
+        let display_text: Cow<'_, str> = if params.show_comment {
+            match cand.comment.as_deref() {
+                Some(comment) if !comment.is_empty() => {
+                    Cow::Owned(format!("{} {}", cand.text, comment))
+                }
+                _ => Cow::Borrowed(cand.text.as_str()),
+            }
+        } else {
+            Cow::Borrowed(cand.text.as_str())
+        };
+        let text_width = measure_fn(&display_text, params.font_size);
         let icon_width = if cand.is_expandable {
             16.0 * params.s
         } else {

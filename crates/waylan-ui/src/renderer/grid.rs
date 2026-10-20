@@ -7,7 +7,7 @@ use super::draw::{
     draw_card_background_at, draw_collapse_arrow, draw_rounded_rect, draw_scrollbar,
     CardBackgroundParams, RoundedRectParams, ScrollbarParams,
 };
-use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
+use super::layout::{CandidateHitTarget, HitRegion};
 use super::{CandidateBoxRenderer, DrawTextOptions};
 use tiny_skia::Pixmap;
 use waylan_core::Candidate;
@@ -44,12 +44,12 @@ fn compute_grid_dimensions(
     for (idx, cand) in candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
         let col = idx % GRID_COLS;
         let text_w = renderer.measure_text(&cand.text, font_size);
-        let num_str = if col < PRECACHED_INDEX_STRINGS.len() {
-            PRECACHED_INDEX_STRINGS[col]
+        let num_str = renderer.index_label(col);
+        let num_w = if num_str.is_empty() {
+            0.0
         } else {
-            "•"
+            renderer.measure_text(&num_str, index_font_size)
         };
-        let num_w = renderer.measure_text(num_str, index_font_size);
         let item_w = num_w + 6.0 * s + text_w + 14.0 * s;
         if item_w > col_widths[col] {
             col_widths[col] = item_w;
@@ -184,28 +184,26 @@ fn render_grid_items(
         let mut cur_x = item_x + 4.0 * s;
 
         if row == ctx.dims.selected_row {
-            let num_str = if col < PRECACHED_INDEX_STRINGS.len() {
-                PRECACHED_INDEX_STRINGS[col]
-            } else {
-                "•"
-            };
-            let num_color = if is_selected {
-                renderer.theme.highlight_text
-            } else {
-                renderer.theme.index_text
-            };
-            let num_w = renderer.measure_text(num_str, font_size * 0.85);
-            renderer.draw_text(
-                pixmap,
-                DrawTextOptions {
-                    text: num_str,
-                    x: cur_x,
-                    y: baseline_y,
-                    size: font_size * 0.85,
-                    color: num_color,
-                },
-            );
-            cur_x += num_w + 4.0 * s;
+            let num_str = renderer.index_label(col);
+            if !num_str.is_empty() {
+                let num_color = if is_selected {
+                    renderer.theme.highlight_text
+                } else {
+                    renderer.theme.index_text
+                };
+                let num_w = renderer.measure_text(&num_str, font_size * 0.85);
+                renderer.draw_text(
+                    pixmap,
+                    DrawTextOptions {
+                        text: &num_str,
+                        x: cur_x,
+                        y: baseline_y,
+                        size: font_size * 0.85,
+                        color: num_color,
+                    },
+                );
+                cur_x += num_w + 4.0 * s;
+            }
         }
 
         let text_color = if is_selected {
@@ -213,10 +211,11 @@ fn render_grid_items(
         } else {
             renderer.theme.candidate_text
         };
+        let display_text = renderer.display_text(cand);
         renderer.draw_text(
             pixmap,
             DrawTextOptions {
-                text: &cand.text,
+                text: &display_text,
                 x: cur_x,
                 y: baseline_y,
                 size: font_size,

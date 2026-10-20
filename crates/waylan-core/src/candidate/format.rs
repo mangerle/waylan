@@ -16,6 +16,32 @@ use crate::config::CandidateIndexStyle;
 /// 常用圆圈序号字符常量映射（1..=10）
 pub const CIRCLED_NUMBERS: [&str; 10] = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
 
+/// 根据序号风格生成不含候选文本的序号前缀（已包含与文本之间的分隔空格）
+///
+/// 返回空字符串表示该候选不应显示序号（如 `None` 风格或 `MinimalFirstDot` 的非首选词）。
+pub fn format_candidate_index(style: CandidateIndexStyle, index: usize) -> String {
+    // 默认数字键选词指示：第 1~9 项显示 1~9，第 10 项显示 0
+    let key_num = (index + 1) % 10;
+    match style {
+        CandidateIndexStyle::ModernSpace => format!("{key_num} "),
+        CandidateIndexStyle::ClassicDot => format!("{key_num}. "),
+        CandidateIndexStyle::Circled => {
+            let sym = CIRCLED_NUMBERS.get(index).copied().unwrap_or("•");
+            format!("{sym}\u{2009}")
+        }
+        CandidateIndexStyle::SquareBracket => format!("[{key_num}] "),
+        CandidateIndexStyle::Parenthesis => format!("({key_num}) "),
+        CandidateIndexStyle::MinimalFirstDot => {
+            if index == 0 {
+                "•\u{2009}".to_string()
+            } else {
+                String::new()
+            }
+        }
+        CandidateIndexStyle::None => String::new(),
+    }
+}
+
 /// 根据设定的序号展示风格与页内相对索引，将候选词文本一体化格式化为整行展示字符串
 ///
 /// # 参数
@@ -36,32 +62,5 @@ pub fn format_candidate_display(
         }
     }
 
-    // 默认数字键选词指示：第 1~9 项显示 1~9，第 10 项显示 0
-    let key_num = (index + 1) % 10;
-
-    match style {
-        // 现代空白风：纯数字 + 半角空格，干净清爽无噪点
-        CandidateIndexStyle::ModernSpace => format!("{key_num} {text}"),
-        // 经典点号风：传统输入法习惯（1. ~ 9.，0.）
-        CandidateIndexStyle::ClassicDot => format!("{key_num}. {text}"),
-        // 圆圈序号风：① ~ ⑩，紧凑优雅，后接四分之一窄空格
-        CandidateIndexStyle::Circled => {
-            let sym = CIRCLED_NUMBERS.get(index).copied().unwrap_or("•");
-            format!("{sym}\u{2009}{text}")
-        }
-        // 方括号提示风：[1] ~ [9]，[0]
-        CandidateIndexStyle::SquareBracket => format!("[{key_num}] {text}"),
-        // 圆括号提示风：(1) ~ (9)，(0)
-        CandidateIndexStyle::Parenthesis => format!("({key_num}) {text}"),
-        // 全极简无序号：仅在首选词加小圆点前缀，后续候选词保持纯文本
-        CandidateIndexStyle::MinimalFirstDot => {
-            if index == 0 {
-                format!("•\u{2009}{text}")
-            } else {
-                text.to_string()
-            }
-        }
-        // 纯文本完全无序号
-        CandidateIndexStyle::None => text.to_string(),
-    }
+    format!("{}{}", format_candidate_index(style, index), text)
 }

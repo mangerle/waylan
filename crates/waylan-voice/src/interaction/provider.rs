@@ -124,6 +124,7 @@ impl VoiceProvider for VoiceInteractionManager {
             waveform: self.waveform.clone().unwrap_or_default(),
             display_text: self.display_text.clone(),
             is_listening: true,
+            visual_effect: self.config.interaction.visual_effect,
         })
     }
 }

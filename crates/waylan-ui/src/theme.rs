@@ -1,3 +1,8 @@
+//! 候选框主题颜色与圆角内边距定义
+
+use waylan_core::config::CandidateThemePreset;
+use waylan_core::ThemeMode;
+
 /// 颜色定义 (RGBA，每个分量为 0.0 ~ 1.0)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
@@ -78,5 +83,44 @@ impl UiTheme {
             corner_radius: 10.0,
             padding: 10.0,
         }
+    }
+
+    /// 根据主题模式与色彩预设构造主题
+    pub fn from_config(mode: ThemeMode, preset: CandidateThemePreset) -> Self {
+        let mut theme = match mode {
+            ThemeMode::Light => Self::light(),
+            ThemeMode::Dark => Self::dark(),
+        };
+        let dark = matches!(mode, ThemeMode::Dark);
+        match preset {
+            CandidateThemePreset::Emerald => {}
+            CandidateThemePreset::Monochrome => {
+                theme.highlight_badge = if dark {
+                    Color::from_hex(0xF4F4F5, 1.0)
+                } else {
+                    Color::from_hex(0x18181B, 1.0)
+                };
+                theme.highlight_text = if dark {
+                    Color::from_hex(0x18181B, 1.0)
+                } else {
+                    Color::from_hex(0xFFFFFF, 1.0)
+                };
+            }
+            CandidateThemePreset::IceBlue => {
+                theme.highlight_badge = if dark {
+                    Color::from_hex(0x0369A1, 1.0)
+                } else {
+                    Color::from_hex(0x0284C7, 1.0)
+                };
+            }
+            CandidateThemePreset::WarmLatte => {
+                theme.highlight_badge = if dark {
+                    Color::from_hex(0xB45309, 1.0)
+                } else {
+                    Color::from_hex(0xD97706, 1.0)
+                };
+            }
+        }
+        theme
     }
 }

@@ -4,7 +4,9 @@
 //! - **实现初衷**：候选词序号排版与格式化属于领域纯文本排版逻辑，核心权威实现已下沉至 `waylan-core`。
 //! - **核心优势**：本模块作为外观表现层保持兼容性重导出，切断非 GUI 协议端对 UI 库的循环与污染依赖。
 
-pub use waylan_core::candidate::{format_candidate_display, CIRCLED_NUMBERS};
+pub use waylan_core::candidate::{
+    format_candidate_display, format_candidate_index, CIRCLED_NUMBERS,
+};
 
 #[cfg(test)]
 mod tests {

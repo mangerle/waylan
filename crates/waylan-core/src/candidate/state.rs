@@ -13,6 +13,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::VoiceVisualEffect;
+
 use super::entity::Candidate;
 use super::view::{CandidateBoxView, CandidateViewMode};
 
@@ -27,6 +29,9 @@ pub struct VoiceBoxState {
     pub display_text: Option<String>,
     /// 是否正处于录音聆听激活状态
     pub is_listening: bool,
+    /// 语音浮条视觉风格
+    #[serde(default)]
+    pub visual_effect: VoiceVisualEffect,
 }
 
 /// 候选框展开交互状态枚举（二级大卡片与多行大网格在类型层面严格互斥）

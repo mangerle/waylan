@@ -8,7 +8,7 @@ use super::super::draw::{
 use super::super::layout::{CandidateHitTarget, HitRegion};
 use super::super::{CandidateBoxRenderer, DrawTextOptions};
 use tiny_skia::Pixmap;
-use waylan_core::VoiceBoxState;
+use waylan_core::{VoiceBoxState, VoiceVisualEffect};
 
 use crate::theme::Color;
 
@@ -86,6 +86,53 @@ fn draw_voice_waveform_bars(pixmap: &mut Pixmap, params: WaveformBarsParams<'_>)
     current_x
 }
 
+/// 绘制呼吸光环圆点并返回结束 x 坐标
+fn draw_breathing_pulse(
+    pixmap: &mut Pixmap,
+    start_x: f32,
+    bar_height: f32,
+    scale: f32,
+    color: Color,
+) -> f32 {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let phase = (now_ms % 1600) as f32 / 1600.0 * std::f32::consts::TAU;
+    let breathe = phase.sin() * 0.5 + 0.5;
+    let outer_r = (7.0 + 3.0 * breathe) * scale;
+    let center_x = start_x + 8.0 * scale;
+    let center_y = bar_height / 2.0;
+
+    let mut halo = color;
+    halo.a = 0.22 + 0.12 * breathe;
+    draw_rounded_rect(
+        pixmap,
+        RoundedRectParams {
+            x: center_x - outer_r,
+            y: center_y - outer_r,
+            w: outer_r * 2.0,
+            h: outer_r * 2.0,
+            r: outer_r,
+        },
+        halo,
+    );
+
+    let inner_r = 4.5 * scale;
+    draw_rounded_rect(
+        pixmap,
+        RoundedRectParams {
+            x: center_x - inner_r,
+            y: center_y - inner_r,
+            w: inner_r * 2.0,
+            h: inner_r * 2.0,
+            r: inner_r,
+        },
+        color,
+    );
+    start_x + 18.0 * scale
+}
+
 /// 渲染处于语音听写状态下的动态声波胶囊栏
 pub fn render_voice_capsule_bar(
     renderer: &mut CandidateBoxRenderer,
@@ -93,9 +140,9 @@ pub fn render_voice_capsule_bar(
     hit_regions: &mut Vec<HitRegion>,
 ) -> Option<Pixmap> {
     let s = renderer.scale.max(0.5);
-    let bar_height: f32 = 38.0 * s;
-    let padding_h: f32 = renderer.theme.padding.max(6.0) * s;
-    let corner_radius: f32 = renderer.theme.corner_radius.max(2.0) * s;
+    let bar_height: f32 = renderer.style.bar_height * s;
+    let padding_h: f32 = renderer.style.padding_h.max(6.0) * s;
+    let corner_radius: f32 = renderer.style.corner_radius.max(2.0) * s;
     let font_size = renderer.font_size * s;
 
     let voice_text = resolve_voice_text(voice);
@@ -107,8 +154,13 @@ pub fn render_voice_capsule_bar(
     let wave_total_w =
         bar_count as f32 * wave_bar_w + (bar_count.saturating_sub(1) as f32) * wave_gap;
 
+    let leading_width = match voice.visual_effect {
+        VoiceVisualEffect::DynamicWaveform => wave_total_w + 10.0 * s,
+        VoiceVisualEffect::BreathingPulse => 18.0 * s + 4.0 * s,
+        VoiceVisualEffect::ClassicText => 0.0,
+    };
     let text_w = renderer.measure_text(voice_text, font_size);
-    let total_bar_width = (padding_h * 2.0 + wave_total_w + 10.0 * s + text_w).max(140.0 * s);
+    let total_bar_width = (padding_h * 2.0 + leading_width + text_w).max(140.0 * s);
 
     let canvas_w = total_bar_width.ceil() as u32;
     let canvas_h = bar_height.ceil() as u32;
@@ -132,16 +184,30 @@ pub fn render_voice_capsule_bar(
     );
 
     let start_x = padding_h + 2.0 * s;
-    let current_x = draw_voice_waveform_bars(
-        &mut pixmap,
-        WaveformBarsParams {
-            start_x,
-            ratios: &ratios,
-            scale: s,
-            bar_height,
-            badge_color: renderer.theme.highlight_badge,
-        },
-    ) + 10.0 * s;
+    let current_x = match voice.visual_effect {
+        VoiceVisualEffect::DynamicWaveform => {
+            draw_voice_waveform_bars(
+                &mut pixmap,
+                WaveformBarsParams {
+                    start_x,
+                    ratios: &ratios,
+                    scale: s,
+                    bar_height,
+                    badge_color: renderer.theme.highlight_badge,
+                },
+            ) + 10.0 * s
+        }
+        VoiceVisualEffect::BreathingPulse => {
+            draw_breathing_pulse(
+                &mut pixmap,
+                start_x,
+                bar_height,
+                s,
+                renderer.theme.highlight_badge,
+            ) + 4.0 * s
+        }
+        VoiceVisualEffect::ClassicText => start_x,
+    };
 
     let baseline_y = (bar_height + font_size * 0.72) / 2.0;
     renderer.draw_text(

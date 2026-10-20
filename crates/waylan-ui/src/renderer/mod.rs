@@ -5,6 +5,7 @@ pub mod font;
 pub mod grid;
 pub mod layout;
 pub mod measure_cache;
+pub mod style;
 
 use crate::theme::{Color, UiTheme};
 use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache};
@@ -14,8 +15,10 @@ use font::FontManager;
 use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, ItemMeasure, LayoutParams};
 use measure_cache::TextMeasureCache;
 use std::path::Path;
+use style::RendererStyle;
 use tiny_skia::Pixmap;
-use waylan_core::{CandidateBoxState, CandidateBoxView};
+use waylan_core::config::UiConfig;
+use waylan_core::{Candidate, CandidateBoxState, CandidateBoxView, ThemeMode};
 
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
@@ -37,7 +40,7 @@ pub(crate) struct DrawTextOptions<'a> {
 
 /// 胶囊候选栏与展开浮层卡片几何布局度量结果
 struct CandidateBoxGeometry<'a> {
-    measured_items: Vec<ItemMeasure<'a>>,
+    measured_items: Vec<ItemMeasure>,
     total_bar_width: f32,
     bar_height: f32,
     padding_h: f32,
@@ -61,6 +64,8 @@ pub struct CandidateBoxRenderer {
     pub font_size: f32,
     /// 屏幕缩放因子（HiDPI 支持，默认 1.0）
     pub scale: f32,
+    /// 用户配置驱动的排版、主题与序号样式
+    pub style: RendererStyle,
     /// cosmic-text 文本排版与渲染引擎状态机
     text_engine: TextEngineState,
     /// 最近一次渲染生成的鼠标可点击命中测试区域列表
@@ -69,6 +74,11 @@ pub struct CandidateBoxRenderer {
 
 impl CandidateBoxRenderer {
     pub fn new(theme: UiTheme) -> Self {
+        Self::with_style(theme, RendererStyle::default())
+    }
+
+    /// 使用外部样式参数创建渲染器
+    pub fn with_style(theme: UiTheme, style: RendererStyle) -> Self {
         let mut font_system = FontManager::create_font_system();
         let swash_cache = SwashCache::new();
         let buffer = Buffer::new(&mut font_system, Metrics::new(15.0, 18.0));
@@ -77,6 +87,7 @@ impl CandidateBoxRenderer {
             theme,
             font_size: 15.0,
             scale: 1.0,
+            style,
             text_engine: TextEngineState {
                 font_system,
                 swash_cache,
@@ -84,6 +95,34 @@ impl CandidateBoxRenderer {
                 measure_cache: TextMeasureCache::new(),
             },
             hit_regions: Vec::with_capacity(36),
+        }
+    }
+
+    /// 应用用户界面配置（主题模式、色彩预设、字体、密度、间距、圆角、透明度与序号风格）
+    pub fn apply_ui_config(&mut self, ui: &UiConfig, theme_mode: ThemeMode) {
+        let font_size_changed = (self.font_size - ui.font_size).abs() > 0.001;
+        self.font_size = ui.font_size;
+        self.style = RendererStyle::from(ui);
+        self.theme = UiTheme::from_config(theme_mode, ui.candidate_theme);
+        let opacity = (self.style.opacity.clamp(70, 100) as f32) / 100.0;
+        self.theme.background.a = (self.theme.background.a * opacity).clamp(0.0, 1.0);
+        if font_size_changed {
+            self.clear_glyph_cache();
+        }
+    }
+
+    /// 根据当前序号风格生成候选序号前缀
+    pub fn index_label(&self, index: usize) -> String {
+        waylan_core::format_candidate_index(self.style.index_style, index)
+    }
+
+    /// 生成候选词的最终展示文本（按配置决定是否附加注释）
+    pub(crate) fn display_text<'a>(&self, candidate: &'a Candidate) -> std::borrow::Cow<'a, str> {
+        match candidate.comment.as_deref() {
+            Some(comment) if self.style.show_pinyin_comment && !comment.is_empty() => {
+                std::borrow::Cow::Owned(format!("{} {}", candidate.text, comment))
+            }
+            _ => std::borrow::Cow::Borrowed(candidate.text.as_str()),
         }
     }
 
@@ -202,7 +241,7 @@ impl CandidateBoxRenderer {
         s: f32,
         font_size: f32,
         padding_h: f32,
-        measured_items: &[ItemMeasure<'a>],
+        measured_items: &[ItemMeasure],
     ) -> (bool, &'a [String], f32, f32, f32, f32) {
         let active_cand = state.candidates.get(state.selected_index);
         let has_active_sub = state.is_expanded()
@@ -280,10 +319,10 @@ impl CandidateBoxRenderer {
         state: &'a CandidateBoxState,
     ) -> Option<CandidateBoxGeometry<'a>> {
         let s = self.scale.max(0.5);
-        let bar_height: f32 = 38.0 * s;
-        let padding_h: f32 = self.theme.padding.max(4.0) * s;
-        let corner_radius: f32 = self.theme.corner_radius.max(2.0) * s;
-        let item_gap: f32 = 14.0 * s;
+        let bar_height: f32 = self.style.bar_height * s;
+        let padding_h: f32 = self.style.padding_h.max(4.0) * s;
+        let corner_radius: f32 = self.style.corner_radius.max(2.0) * s;
+        let item_gap: f32 = self.style.item_gap.max(2.0) * s;
         let font_size = self.font_size * s;
 
         let (measured_items, total_bar_width) = measure_candidates_bar(
@@ -292,6 +331,8 @@ impl CandidateBoxRenderer {
                 selected_index: state.selected_index,
                 preedit: &state.preedit,
                 mode_badge: &state.mode_badge,
+                index_style: self.style.index_style,
+                show_comment: self.style.show_pinyin_comment,
                 s,
                 padding_h,
                 item_gap,

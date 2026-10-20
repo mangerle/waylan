@@ -15,10 +15,10 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use log::{info, warn};
-use waylan_core::{AppConfig, SharedInputFlags, ThemeMode, VoiceProvider};
+use waylan_core::{AppConfig, SharedInputFlags, VoiceProvider};
 use waylan_engine::{AlgoEngine, ImeRuntime};
 use waylan_sys::{FileSignature, LoopWakeup};
-use waylan_ui::{CandidateBoxRenderer, UiTheme};
+use waylan_ui::CandidateBoxRenderer;
 use wayland_client::globals::registry_queue_init;
 use wayland_client::Connection;
 
@@ -152,12 +152,9 @@ impl ReloadableWaylandSession for WaylanV2Session {
 /// 执行通用的 Wayland 会话运行配置与词库热重载
 pub fn reload_wayland_session<S: ReloadableWaylandSession>(session: &mut S) {
     let cfg = AppConfig::load_or_create();
-    let theme = match cfg.ui.theme {
-        ThemeMode::Light => UiTheme::light(),
-        ThemeMode::Dark => UiTheme::dark(),
-    };
-    session.renderer_mut().theme = theme;
-    session.renderer_mut().font_size = cfg.ui.font_size;
+    session
+        .renderer_mut()
+        .apply_ui_config(&cfg.ui, cfg.ui.theme);
     session.runtime_mut().reload_config(&cfg);
     if !session.runtime_mut().core.engine.raw_input().is_empty() {
         session.refresh_surface();

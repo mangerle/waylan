@@ -13,7 +13,7 @@ use waylan_core::{Candidate, CandidateBoxState};
 
 /// 单行胶囊候选栏渲染布局参数
 pub struct CapsuleBarParams<'a> {
-    pub measured_items: &'a [ItemMeasure<'a>],
+    pub measured_items: &'a [ItemMeasure],
     pub total_bar_width: f32,
     pub bar_height: f32,
     pub padding_h: f32,
@@ -177,7 +177,7 @@ fn render_capsule_prefix(
 /// 单个候选条目绘制参数
 struct CandidateItemParams<'a> {
     cand: &'a Candidate,
-    item: &'a ItemMeasure<'a>,
+    item: &'a ItemMeasure,
     is_selected: bool,
     bar_height: f32,
     baseline_y: f32,
@@ -211,16 +211,18 @@ fn render_candidate_item(
         );
 
         let text_x = item.start_x + 8.0 * s;
-        renderer.draw_text(
-            pixmap,
-            DrawTextOptions {
-                text: item.index_str,
-                x: text_x,
-                y: params.baseline_y,
-                size: params.font_size * 0.85,
-                color: renderer.theme.highlight_text,
-            },
-        );
+        if !item.index_str.is_empty() {
+            renderer.draw_text(
+                pixmap,
+                DrawTextOptions {
+                    text: &item.index_str,
+                    x: text_x,
+                    y: params.baseline_y,
+                    size: params.font_size * 0.85,
+                    color: renderer.theme.highlight_text,
+                },
+            );
+        }
 
         let mut content_x = text_x + item.index_width + 3.0 * s;
         if item.is_expandable {
@@ -235,10 +237,11 @@ fn render_candidate_item(
             content_x += item.icon_width;
         }
 
+        let display_text = renderer.display_text(cand);
         renderer.draw_text(
             pixmap,
             DrawTextOptions {
-                text: &cand.text,
+                text: &display_text,
                 x: content_x,
                 y: params.baseline_y,
                 size: params.font_size,
@@ -246,16 +249,18 @@ fn render_candidate_item(
             },
         );
     } else {
-        renderer.draw_text(
-            pixmap,
-            DrawTextOptions {
-                text: item.index_str,
-                x: item.start_x,
-                y: params.baseline_y,
-                size: params.font_size * 0.85,
-                color: renderer.theme.index_text,
-            },
-        );
+        if !item.index_str.is_empty() {
+            renderer.draw_text(
+                pixmap,
+                DrawTextOptions {
+                    text: &item.index_str,
+                    x: item.start_x,
+                    y: params.baseline_y,
+                    size: params.font_size * 0.85,
+                    color: renderer.theme.index_text,
+                },
+            );
+        }
 
         let mut content_x = item.start_x + item.index_width + 4.0 * s;
         if item.is_expandable {
@@ -264,10 +269,11 @@ fn render_candidate_item(
             content_x += item.icon_width;
         }
 
+        let display_text = renderer.display_text(cand);
         renderer.draw_text(
             pixmap,
             DrawTextOptions {
-                text: &cand.text,
+                text: &display_text,
                 x: content_x,
                 y: params.baseline_y,
                 size: params.font_size,

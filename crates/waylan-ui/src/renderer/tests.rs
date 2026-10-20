@@ -240,6 +240,7 @@ fn test_render_voice_capsule_bar() {
             waveform: " ▃▅▇█▇▅▃ ".to_string(),
             display_text: None,
             is_listening: true,
+            ..Default::default()
         }),
     };
 
@@ -252,4 +253,70 @@ fn test_render_voice_capsule_bar() {
     let pixmap = pixmap.expect("语音胶囊位图不可为空");
     assert!(pixmap.width() >= 140, "语音胶囊卡片宽度应满足最小阈值");
     assert_eq!(pixmap.height(), 38, "默认 1x 下语音胶囊高度为 38 像素");
+}
+
+#[test]
+fn test_renderer_applies_ui_config_and_index_style() {
+    use waylan_core::config::{
+        CandidateDensity, CandidateIndexStyle, CandidateThemePreset, UiConfig,
+    };
+    use waylan_core::ThemeMode;
+
+    let ui = UiConfig {
+        candidate_density: CandidateDensity::Compact,
+        candidate_theme: CandidateThemePreset::IceBlue,
+        candidate_index_style: CandidateIndexStyle::Circled,
+        candidate_item_spacing: 12.0,
+        candidate_padding_h: 14.0,
+        candidate_corner_radius: 10.0,
+        candidate_opacity: 90,
+        font_size: 18.0,
+        ..Default::default()
+    };
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
+    renderer.apply_ui_config(&ui, ThemeMode::Dark);
+
+    assert_eq!(renderer.font_size, 18.0);
+    assert_eq!(renderer.style.item_gap, 12.0);
+    assert_eq!(renderer.style.padding_h, 14.0);
+    assert_eq!(renderer.index_label(0), "①\u{2009}");
+    assert!(renderer.theme.background.a <= 0.96 * 0.9 + f32::EPSILON);
+
+    renderer.style.show_pinyin_comment = true;
+    let candidate = Candidate::new("你好", "ni'hao", 100).with_comment("[ni'hao]");
+    assert_eq!(renderer.display_text(&candidate), "你好 [ni'hao]");
+}
+
+#[test]
+fn test_voice_visual_effect_variants_render() {
+    use waylan_core::VoiceVisualEffect;
+
+    for effect in [
+        VoiceVisualEffect::DynamicWaveform,
+        VoiceVisualEffect::BreathingPulse,
+        VoiceVisualEffect::ClassicText,
+    ] {
+        let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
+        let state = CandidateBoxState {
+            visible: true,
+            preedit: String::new(),
+            candidates: Vec::new(),
+            selected_index: 0,
+            expansion: CandidateExpansion::None,
+            mode_badge: String::new(),
+            grid_candidates: Vec::new(),
+            voice: Some(waylan_core::VoiceBoxState {
+                partial_text: "正在识别中".to_string(),
+                waveform: " ▃▅▇ ".to_string(),
+                display_text: None,
+                is_listening: true,
+                visual_effect: effect,
+            }),
+        };
+        assert!(
+            renderer.render(&state).is_some(),
+            "语音视觉风格 {:?} 应成功渲染",
+            effect
+        );
+    }
 }

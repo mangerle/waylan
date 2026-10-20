@@ -2,7 +2,7 @@ use log::{info, warn};
 use std::env;
 use std::process;
 
-use waylan_core::config::{AppConfig, ThemeMode};
+use waylan_core::config::AppConfig;
 use waylan_daemon::cli::{self, CliCommand, DaemonOptions};
 use waylan_daemon::error::DaemonError;
 use waylan_daemon::session_bundle::{
@@ -181,12 +181,8 @@ fn dispatch_active_session(
             coordinator,
         })
     } else {
-        let theme = match cfg.ui.theme {
-            ThemeMode::Light => UiTheme::light(),
-            ThemeMode::Dark => UiTheme::dark(),
-        };
-        let mut renderer = CandidateBoxRenderer::new(theme);
-        renderer.font_size = cfg.ui.font_size;
+        let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
+        renderer.apply_ui_config(&cfg.ui, cfg.ui.theme);
 
         dispatch_wayland_session(WaylandDispatchOptions {
             engine,

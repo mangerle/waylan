@@ -5,7 +5,7 @@
 use super::draw::{
     draw_card_background_at, draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
 };
-use super::layout::{CandidateHitTarget, HitRegion, PRECACHED_INDEX_STRINGS};
+use super::layout::{CandidateHitTarget, HitRegion};
 use super::{CandidateBoxRenderer, DrawTextOptions};
 use tiny_skia::Pixmap;
 use waylan_core::CandidateBoxState;
@@ -51,11 +51,7 @@ pub fn render_expanded_popup_card(
     for (s_idx, sub_str) in params.sub_candidates.iter().enumerate() {
         let row_y = params.popup_top_y + 6.0 * s + s_idx as f32 * params.row_height;
         let is_sub_selected = s_idx == params.state.expanded_selected_index();
-        let sub_num_str = if s_idx < PRECACHED_INDEX_STRINGS.len() {
-            PRECACHED_INDEX_STRINGS[s_idx]
-        } else {
-            "•"
-        };
+        let sub_num_str = renderer.index_label(s_idx);
 
         if is_sub_selected {
             draw_rounded_rect(
@@ -86,16 +82,18 @@ pub fn render_expanded_popup_card(
         } else {
             renderer.theme.index_text
         };
-        renderer.draw_text(
-            pixmap,
-            DrawTextOptions {
-                text: sub_num_str,
-                x: sub_num_x,
-                y: sub_baseline_y,
-                size: params.font_size * 0.85,
-                color: num_color,
-            },
-        );
+        if !sub_num_str.is_empty() {
+            renderer.draw_text(
+                pixmap,
+                DrawTextOptions {
+                    text: &sub_num_str,
+                    x: sub_num_x,
+                    y: sub_baseline_y,
+                    size: params.font_size * 0.85,
+                    color: num_color,
+                },
+            );
+        }
 
         let sub_text_x = sub_num_x + 14.0 * s;
         let text_color = if is_sub_selected {
