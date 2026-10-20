@@ -20,7 +20,10 @@ pub use config::{
     TraditionalShortcut, TrayDisplayMode, TypoCorrectionRules, VadConfig, VadModelType,
     VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
 };
-pub use constants::{MAX_IMPORT_FILE_BYTES, MAX_USER_DICT_BYTES};
+pub use constants::{
+    MAX_CONFIG_FILE_BYTES, MAX_CONVERT_DICT_BYTES, MAX_IMPORT_FILE_BYTES, MAX_PHRASE_FILE_BYTES,
+    MAX_USER_DICT_BYTES,
+};
 pub use input::*;
 pub use state::{InputStateSnapshot, SharedInputFlags};
 pub use text::pangu::{apply_pangu_spacing, should_insert_pangu_space, PanguSpacing};

@@ -18,6 +18,16 @@ pub enum AlgoError {
         source: std::io::Error,
     },
 
+    /// 词库文件体积超出安全读取上限
+    #[error(
+        "词库文件体积超过安全上限，路径: {path}，实际字节: {actual_bytes}，上限字节: {limit_bytes}"
+    )]
+    FileTooLarge {
+        path: PathBuf,
+        actual_bytes: u64,
+        limit_bytes: u64,
+    },
+
     /// 二进制反序列化解析错误
     #[error("二进制词库反序列化解析失败，路径: {path}，原因: {reason}")]
     DeserializeFailed { path: PathBuf, reason: String },

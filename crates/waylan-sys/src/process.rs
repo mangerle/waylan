@@ -17,10 +17,30 @@ use std::time::{Duration, Instant};
 /// 默认外部系统命令执行超时时限（2 秒）
 pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// 单个输出管道允许读取的最大字节数（1 MB）
+///
+/// # 设计原理
+/// - **实现初衷**：子进程 stdout/stderr 属于未知体量的外部数据流，失控或冗音的输出
+///   若被 `read_to_end` 无上限搬入内存会造成 OOM。
+/// - **核心优势**：读取侧设上限后，管道缓冲区很快写满并反向阻塞子进程写入，
+///   配合执行超时机制将其强制回收，形成有界内存占用。
+/// - **代价与局限**：超出上限的尾部输出被静默截断，因此仅适用于取回短小的
+///   D-Bus / GSettings 查询结果，不得用于大体积数据传输。
+pub const MAX_PIPE_OUTPUT_BYTES: u64 = 1024 * 1024;
+
 /// 管道读取工作线程句柄对
 struct PipeReaderHandles {
     stdout_join: JoinHandle<Vec<u8>>,
     stderr_join: JoinHandle<Vec<u8>>,
+}
+
+/// 以有界方式读完一条管道，避免未知体量输出打满内存
+fn read_pipe_bounded(pipe: Option<impl Read>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    if let Some(pipe) = pipe {
+        let _ = pipe.take(MAX_PIPE_OUTPUT_BYTES).read_to_end(&mut buf);
+    }
+    buf
 }
 
 /// 启动并发管道读取线程以防管道缓冲区打满死锁
@@ -28,21 +48,8 @@ fn spawn_pipe_readers(child: &mut Child) -> PipeReaderHandles {
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
-    let stdout_join = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut r) = stdout_pipe {
-            let _ = r.read_to_end(&mut buf);
-        }
-        buf
-    });
-
-    let stderr_join = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut r) = stderr_pipe {
-            let _ = r.read_to_end(&mut buf);
-        }
-        buf
-    });
+    let stdout_join = thread::spawn(move || read_pipe_bounded(stdout_pipe));
+    let stderr_join = thread::spawn(move || read_pipe_bounded(stderr_pipe));
 
     PipeReaderHandles {
         stdout_join,

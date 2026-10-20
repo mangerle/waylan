@@ -10,3 +10,15 @@ pub const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 用户自适应历史词库持久化文件最大允许读取上限（64 MB）
 pub const MAX_USER_DICT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 主配置文件 (`config.toml`) 最大允许读取上限（4 MB）
+///
+/// 配置文件为纯人工书写的偏好声明，正常体积在数十 KB 量级；
+/// 超出该上限即视为异常膨胀或损坏，必须拒绝整体读入内存。
+pub const MAX_CONFIG_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 用户自定义短语文件 (`phrases.txt`) 最大允许读取上限（8 MB）
+pub const MAX_PHRASE_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// 简繁转换词库（紧凑二进制与 OpenCC 标准 TSV 源）最大允许读取上限（64 MB）
+pub const MAX_CONVERT_DICT_BYTES: u64 = 64 * 1024 * 1024;

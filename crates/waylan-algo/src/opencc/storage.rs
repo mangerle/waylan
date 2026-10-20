@@ -175,6 +175,8 @@ impl OpenCcDict {
     /// 从紧凑二进制文件 (`WAYLAN_OPENCC001`) 加载简繁词典
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, AlgoError> {
         let path_ref = path.as_ref();
+        // 体积守卫必须先于整读：损坏或异常膨胀的词库文件不得被全量搬入内存
+        crate::fs_guard::ensure_within_limit(path_ref, waylan_core::MAX_CONVERT_DICT_BYTES)?;
         let mut file = fs::File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
             path: PathBuf::from(path_ref),
             source: e,

@@ -9,6 +9,7 @@ pub mod engine;
 pub mod entity;
 pub mod error;
 pub mod evaluator;
+mod fs_guard;
 pub mod opencc;
 pub mod pipeline;
 pub mod prism;

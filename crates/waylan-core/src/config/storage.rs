@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::error::ConfigError;
 use super::AppConfig;
@@ -35,6 +36,19 @@ impl AppConfig {
         broken_files.sort();
         // 取最新的一份备份尝试拯救
         for broken_path in broken_files.into_iter().rev() {
+            // 备份文件同样是非受信任的历史磁盘数据，必须沿用同一体积护盾，
+            // 否则超限主配置被改名备份后仍会在救援阶段被全量读入，守卫形同虚设。
+            let within_limit = broken_path
+                .metadata()
+                .map(|meta| meta.len() <= crate::constants::MAX_CONFIG_FILE_BYTES)
+                .unwrap_or(false);
+            if !within_limit {
+                log::warn!(
+                    "[配置系统] 历史备份文件 {:?} 体积超过安全上限，跳过该备份的救援尝试。",
+                    broken_path
+                );
+                continue;
+            }
             if let Ok(content) = fs::read_to_string(&broken_path) {
                 if let Ok(rescued_cfg) = Self::parse_tolerant(&content) {
                     log::info!(
@@ -65,30 +79,22 @@ impl AppConfig {
 
     /// 读取并解析已存在的配置文件，解析失败时备份损坏文件并尝试从历史备份中救援
     ///
-    /// 设计意图：将「读取 -> 宽容解析 -> 损坏备份 -> 历史救援」这条容错链与主加载流程分离，
-    /// 使主流程仅保留「文件存在与否」的分支判定，容错细节的演进不影响调用方契约。
+    /// 设计意图：将「体积守卫 -> 读取 -> 宽容解析 -> 损坏备份 -> 历史救援」这条容错链与主加载流程分离，
+    /// 使主流程仅保留分支判定，容错细节的演进不影响调用方契约。
     fn load_existing_config(path: &Path) -> Self {
+        // 体积守卫必须先于整读：异常膨胀的配置文件不得被全量读入内存
+        let oversized = path
+            .metadata()
+            .map(|meta| meta.len() > crate::constants::MAX_CONFIG_FILE_BYTES)
+            .unwrap_or(false);
+        if oversized {
+            return Self::recover_broken_config(path, "配置文件体积超过安全上限");
+        }
+
         match fs::read_to_string(path) {
             Ok(content) => match Self::parse_tolerant(&content) {
                 Ok(cfg) => cfg,
-                Err(e) => {
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    let broken_path = path.with_extension(format!("toml.broken.{}", ts));
-                    let _ = fs::rename(path, &broken_path);
-                    log::warn!(
-                        "[配置系统] 严重解析错误 ({})，已备份损坏配置至 {:?}，将尝试救援或回退默认配置。",
-                        e,
-                        broken_path
-                    );
-                    if let Some(rescued) = Self::try_rescue_from_broken_backups(path) {
-                        let _ = rescued.save_to_file(path);
-                        return rescued;
-                    }
-                    Self::default()
-                }
+                Err(e) => Self::recover_broken_config(path, &format!("严重解析错误 ({})", e)),
             },
             Err(e) => {
                 log::warn!(
@@ -99,6 +105,26 @@ impl AppConfig {
                 Self::default()
             }
         }
+    }
+
+    /// 将损坏配置文件改名备份，并优先尝试从历史备份救援，全部失败时回退默认配置
+    fn recover_broken_config(path: &Path, reason: &str) -> Self {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let broken_path = path.with_extension(format!("toml.broken.{}", ts));
+        let _ = fs::rename(path, &broken_path);
+        log::warn!(
+            "[配置系统] {}，已备份损坏配置至 {:?}，将尝试救援或回退默认配置。",
+            reason,
+            broken_path
+        );
+        if let Some(rescued) = Self::try_rescue_from_broken_backups(path) {
+            let _ = rescued.save_to_file(path);
+            return rescued;
+        }
+        Self::default()
     }
 
     /// 在配置文件尚不存在时初始化默认配置，并优先尝试从历史损坏备份中救援
@@ -193,4 +219,52 @@ fn write_serialized_atomically(
     file.write_all(serialized.as_bytes())?;
     file.sync_all()?;
     fs::rename(tmp_path, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::MAX_CONFIG_FILE_BYTES;
+
+    #[test]
+    fn test_oversized_config_is_backed_up_and_defaults() {
+        let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
+        let config_path = temp_dir.path().join("config.toml");
+        // 写入超过安全上限的畸形配置文件，验证其被拒绝读入并转入损坏救援分支
+        let oversized = format!(
+            "[ui]\npage_size = 9\n# {}{}",
+            "填充".repeat(2_000),
+            "x".repeat(MAX_CONFIG_FILE_BYTES as usize)
+        );
+        fs::write(&config_path, oversized).expect("写入超限配置文件失败");
+
+        let cfg = AppConfig::load_existing_config(&config_path);
+        assert_eq!(cfg, AppConfig::default(), "超限配置必须回退为默认配置");
+        assert!(
+            !config_path.exists(),
+            "超限配置应已被改名备份，不得继续留在原路径"
+        );
+
+        let backed_up = std::fs::read_dir(temp_dir.path())
+            .expect("读取临时目录失败")
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("config.toml.broken.")
+            });
+        assert!(backed_up, "应存在 config.toml.broken.* 备份文件");
+    }
+
+    #[test]
+    fn test_normal_config_within_limit_is_parsed() {
+        let temp_dir = tempfile::tempdir().expect("创建临时测试目录失败");
+        let config_path = temp_dir.path().join("config.toml");
+        fs::write(&config_path, "[ui]\npage_size = 7\n").expect("写入配置文件失败");
+
+        let cfg = AppConfig::load_existing_config(&config_path);
+        assert_eq!(cfg.ui.page_size, 7);
+        assert!(config_path.exists(), "正常配置不得被备份移走");
+    }
 }

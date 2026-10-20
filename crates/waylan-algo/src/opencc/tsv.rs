@@ -15,6 +15,10 @@ impl OpenCcTsvParser {
         let chars_ref = chars_path.as_ref();
         let phrases_ref = phrases_path.as_ref();
 
+        // 体积守卫必须先于整读：异常膨胀的 TSV 源不得被全量搬入内存
+        crate::fs_guard::ensure_within_limit(chars_ref, waylan_core::MAX_CONVERT_DICT_BYTES)?;
+        crate::fs_guard::ensure_within_limit(phrases_ref, waylan_core::MAX_CONVERT_DICT_BYTES)?;
+
         let chars_content = fs::read_to_string(chars_ref).map_err(|e| AlgoError::DictionaryIo {
             path: PathBuf::from(chars_ref),
             source: e,

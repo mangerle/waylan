@@ -22,6 +22,7 @@ pub struct CustomPhraseManager {
 }
 
 impl CustomPhraseManager {
+    /// 创建空的自定义短语管理器
     pub fn new() -> Self {
         Self {
             phrases: HashMap::new(),
@@ -41,11 +42,27 @@ impl CustomPhraseManager {
     }
 
     /// 从文件加载自定义短语，若不存在可自动创建模板
+    ///
+    /// 体积超出安全上限或读取失败时降级为空短语表并记录告警，
+    /// 保证输入法仍可正常打字，不因单个用户数据文件异常而中断会话。
     pub fn load_or_init(path: &Path) -> Self {
         let mut manager = Self::new();
         if path.exists() {
-            if let Ok(content) = fs::read_to_string(path) {
-                manager.parse_content(&content);
+            if let Err(e) =
+                crate::fs_guard::ensure_within_limit(path, waylan_core::MAX_PHRASE_FILE_BYTES)
+            {
+                log::warn!("[算法引擎] 跳过加载异常体积的自定义短语文件: {}", e);
+                return manager;
+            }
+            match fs::read_to_string(path) {
+                Ok(content) => manager.parse_content(&content),
+                Err(e) => {
+                    log::warn!(
+                        "[算法引擎] 读取自定义短语文件失败，按空短语表继续，路径: {:?}，原因: {}",
+                        path,
+                        e
+                    );
+                }
             }
         } else {
             // 初始化带有常用示例的模板文件
