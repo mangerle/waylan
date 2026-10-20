@@ -12,8 +12,8 @@ fn mask_api_key(key: &str) -> String {
     }
 }
 
-/// 同步语音输入配置与模型状态至 Slint 界面属性
-pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
+/// 同步语音输入开关、快捷键与各处理阶段开关至 Slint 界面属性
+fn sync_voice_switches_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_voice_enabled(cfg.voice.enabled);
 
     // 连续听写开关快捷键 (Toggle)
@@ -54,8 +54,10 @@ pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         VoiceVisualEffect::BreathingPulse => 1,
         VoiceVisualEffect::ClassicText => 2,
     });
+}
 
-    // 云端服务 Profile 列表装载
+/// 同步云端服务 Profile 列表至 Slint 界面属性
+fn sync_cloud_profiles_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     let active_cloud_id = if let Some(ref sel) = cfg.voice.selected_asr {
         sel.strip_prefix("cloud:")
     } else {
@@ -82,7 +84,12 @@ pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     window.set_cloud_profiles(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(cloud_items),
     )));
+}
 
+/// 同步语音输入配置与模型状态至 Slint 界面属性
+pub(super) fn sync_voice_to_window(window: &SettingsWindow, cfg: &AppConfig) {
+    sync_voice_switches_to_window(window, cfg);
+    sync_cloud_profiles_to_window(window, cfg);
     sync_voice_models_to_window(window, cfg);
 }
 
@@ -237,25 +244,10 @@ pub(super) fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppCon
     cfg.voice.enabled = window.get_voice_enabled();
 
     // 连续听写开关快捷键 (Toggle)
-    let toggle_str = window.get_toggle_shortcut().trim().to_string();
-    cfg.voice.toggle_shortcut = if toggle_str.is_empty()
-        || toggle_str.eq_ignore_ascii_case("disabled")
-        || toggle_str == "已禁用"
-    {
-        "已禁用".to_string()
-    } else {
-        toggle_str
-    };
+    cfg.voice.toggle_shortcut = normalize_shortcut_value(&window.get_toggle_shortcut());
 
     // 长按对讲机快捷键 (Push-to-Talk)
-    let ptt_str = window.get_push_to_talk_shortcut().trim().to_string();
-    cfg.voice.push_to_talk_shortcut =
-        if ptt_str.is_empty() || ptt_str.eq_ignore_ascii_case("disabled") || ptt_str == "已禁用"
-        {
-            "已禁用".to_string()
-        } else {
-            ptt_str
-        };
+    cfg.voice.push_to_talk_shortcut = normalize_shortcut_value(&window.get_push_to_talk_shortcut());
 
     // 阶段一 AFE 前端增强
     cfg.voice.afe.enabled = window.get_afe_enabled();
@@ -291,8 +283,32 @@ pub(super) fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppCon
     update_voice_models_from_window(window, cfg);
 }
 
+/// 将界面上的快捷键文本归一化为配置可存储的标准取值
+///
+/// 设计意图：空值与 `disabled` 两种「未启用」的表述在界面与配置中并不统一，
+/// 此处集中收敛为唯一哨兵值「已禁用」，避免同一判定规则散落在多个读取点而产生漂移。
+fn normalize_shortcut_value(raw: &str) -> String {
+    let trimmed = raw.trim().to_string();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("disabled") || trimmed == "已禁用" {
+        "已禁用".to_string()
+    } else {
+        trimmed
+    }
+}
+
 /// 从 Slint 界面属性读取模型选择并持久化至配置
 fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
+    update_asr_model_from_window(window, cfg);
+    update_vad_model_from_window(window, cfg);
+    update_punct_model_from_window(window, cfg);
+    update_ns_model_from_window(window, cfg);
+}
+
+/// 依据界面下拉索引同步 ASR 引擎类型与当前生效的本地模型或云端 Profile
+///
+/// 设计意图：本地模型与云端 Profile 共享同一份下拉列表，索引区间的语义分派必须与
+/// 列表装载顺序严格对应，故将区段判定与字段回写集中于本函数内闭环。
+fn update_asr_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     let local_asrs = waylan_voice::list_asr_models();
     let asr_idx = window.get_asr_model_index() as usize;
 
@@ -314,7 +330,10 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
             cfg.voice.cloud.model = profile.model.clone();
         }
     }
+}
 
+/// 依据界面下拉索引同步 VAD 端点检测模型类型与模型路径
+fn update_vad_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     let vad_models = waylan_voice::list_vad_models();
     let vad_idx = window.get_vad_model_index() as usize;
     if let Some(m) = vad_models.get(vad_idx) {
@@ -326,13 +345,19 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
             cfg.voice.vad.model_path = m.path.clone();
         }
     }
+}
 
+/// 依据界面下拉索引同步标点符号预测模型路径
+fn update_punct_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     let punct_models = waylan_voice::list_punct_models();
     let punct_idx = window.get_punct_model_index() as usize;
     if let Some(m) = punct_models.get(punct_idx) {
         cfg.voice.punct_model_path = m.path.clone();
     }
+}
 
+/// 依据界面下拉索引同步人声智能降噪 (NS) 引擎类型
+fn update_ns_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     let ns_models = waylan_voice::list_ns_models();
     let ns_filtered: Vec<_> = ns_models
         .into_iter()

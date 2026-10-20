@@ -66,6 +66,67 @@ fn run() -> Result<(), DictToolError> {
     execute(command)
 }
 
+/// 解析 `build` 子命令参数：末位为输出二进制路径，其余为输入文本词库
+fn parse_build_command(args: &[String]) -> Result<ToolCommand, DictToolError> {
+    if args.len() < 2 {
+        return Err(DictToolError::Usage(
+            "dict build 命令需要至少一个输入文本词库和一个输出路径".into(),
+        ));
+    }
+    let output = args[args.len() - 1].clone();
+    let inputs = args[..args.len() - 1].to_vec();
+    Ok(ToolCommand::Build { inputs, output })
+}
+
+/// 解析 `build-opencc` 子命令参数：完全留空时回退至系统默认 OpenCC 词表路径
+fn parse_build_opencc_command(args: &[String]) -> Result<ToolCommand, DictToolError> {
+    let (chars, phrases, output) = if args.is_empty() {
+        (
+            "/usr/share/opencc/STCharacters.txt".to_string(),
+            "/usr/share/opencc/STPhrases.txt".to_string(),
+            "opencc.dict.bin".to_string(),
+        )
+    } else if args.len() == 3 {
+        (args[0].clone(), args[1].clone(), args[2].clone())
+    } else {
+        return Err(DictToolError::Usage(
+            "dict build-opencc 命令需要指定 [STCharacters.txt] [STPhrases.txt] [输出文件] 三个参数，或完全留空使用系统默认路径".into(),
+        ));
+    };
+    Ok(ToolCommand::BuildOpenCc {
+        chars,
+        phrases,
+        output,
+    })
+}
+
+/// 解析 `build-aux` 子命令参数：英文词表、符号表与输出文件各一个
+fn parse_build_aux_command(args: &[String]) -> Result<ToolCommand, DictToolError> {
+    if args.len() < 3 {
+        return Err(DictToolError::Usage(
+            "dict build-aux 命令需要 <英文词表> <符号表> <输出文件> 三个参数".into(),
+        ));
+    }
+    Ok(ToolCommand::BuildAux {
+        english: args[0].clone(),
+        symbols: args[1].clone(),
+        output: args[2].clone(),
+    })
+}
+
+/// 解析 `import-user` 子命令参数：外部用户词表与用户二进制 WAL 路径各一个
+fn parse_import_user_command(args: &[String]) -> Result<ToolCommand, DictToolError> {
+    if args.len() < 2 {
+        return Err(DictToolError::Usage(
+            "dict import-user 命令需要 <用户文本词库> <用户二进制WAL路径> 两个参数".into(),
+        ));
+    }
+    Ok(ToolCommand::ImportUser {
+        input: args[0].clone(),
+        user_dict: args[1].clone(),
+    })
+}
+
 /// 解析命令行参数（首项为可执行文件路径）
 fn parse_args(args: &[String]) -> Result<ToolCommand, DictToolError> {
     let tokens = args.get(1..).unwrap_or(&[]);
@@ -73,69 +134,85 @@ fn parse_args(args: &[String]) -> Result<ToolCommand, DictToolError> {
         return Ok(ToolCommand::Help);
     }
 
+    let sub_args = &tokens[1..];
     match tokens[0].as_str() {
-        "build" => {
-            let args = &tokens[1..];
-            if args.len() < 2 {
-                return Err(DictToolError::Usage(
-                    "dict build 命令需要至少一个输入文本词库和一个输出路径".into(),
-                ));
-            }
-            let output = args[args.len() - 1].clone();
-            let inputs = args[..args.len() - 1].to_vec();
-            Ok(ToolCommand::Build { inputs, output })
-        }
-        "build-opencc" => {
-            let args = &tokens[1..];
-            let (chars, phrases, output) = if args.is_empty() {
-                (
-                    "/usr/share/opencc/STCharacters.txt".to_string(),
-                    "/usr/share/opencc/STPhrases.txt".to_string(),
-                    "opencc.dict.bin".to_string(),
-                )
-            } else if args.len() == 3 {
-                (args[0].clone(), args[1].clone(), args[2].clone())
-            } else {
-                return Err(DictToolError::Usage(
-                    "dict build-opencc 命令需要指定 [STCharacters.txt] [STPhrases.txt] [输出文件] 三个参数，或完全留空使用系统默认路径".into(),
-                ));
-            };
-            Ok(ToolCommand::BuildOpenCc {
-                chars,
-                phrases,
-                output,
-            })
-        }
-        "build-aux" => {
-            let args = &tokens[1..];
-            if args.len() < 3 {
-                return Err(DictToolError::Usage(
-                    "dict build-aux 命令需要 <英文词表> <符号表> <输出文件> 三个参数".into(),
-                ));
-            }
-            Ok(ToolCommand::BuildAux {
-                english: args[0].clone(),
-                symbols: args[1].clone(),
-                output: args[2].clone(),
-            })
-        }
-        "import-user" => {
-            let args = &tokens[1..];
-            if args.len() < 2 {
-                return Err(DictToolError::Usage(
-                    "dict import-user 命令需要 <用户文本词库> <用户二进制WAL路径> 两个参数".into(),
-                ));
-            }
-            Ok(ToolCommand::ImportUser {
-                input: args[0].clone(),
-                user_dict: args[1].clone(),
-            })
-        }
+        "build" => parse_build_command(sub_args),
+        "build-opencc" => parse_build_opencc_command(sub_args),
+        "build-aux" => parse_build_aux_command(sub_args),
+        "import-user" => parse_import_user_command(sub_args),
         other => Err(DictToolError::Usage(format!(
             "未知的词库管理子命令: '{}'，请使用 waylan-dict --help 查看使用说明",
             other
         ))),
     }
+}
+
+/// 执行文本词库至 DAT 紧凑二进制词库的编译任务
+fn execute_build(inputs: Vec<String>, output: String) -> Result<(), DictToolError> {
+    println!(
+        "[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}",
+        output
+    );
+    let input_refs: Vec<&str> = inputs.iter().map(|s| s.as_str()).collect();
+    let stats = DictBuilder::build_compact_binary_dict(&input_refs, Path::new(&output))?;
+    println!(
+        "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
+        stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
+    );
+    Ok(())
+}
+
+/// 执行 OpenCC 简繁词表至二进制紧凑词库的编译任务
+fn execute_build_opencc(
+    chars: String,
+    phrases: String,
+    output: String,
+) -> Result<(), DictToolError> {
+    println!(
+        "[简繁词库] 正在将 OpenCC 词表编译为二进制紧凑词库: {} + {} -> {}",
+        chars, phrases, output
+    );
+    let dict = OpenCcDict::from_tsv_files(&chars, &phrases)?;
+    dict.save_to_file(&output)?;
+    println!(
+        "[简繁词库] 编译完成，短语数: {}, 单字数: {}",
+        dict.phrases_len(),
+        dict.chars.len()
+    );
+    Ok(())
+}
+
+/// 执行英文与符号表情辅助词库的编译任务
+fn execute_build_aux(
+    english: String,
+    symbols: String,
+    output: String,
+) -> Result<(), DictToolError> {
+    println!(
+        "[辅助词库] 编译英文与符号表情词库: {} + {} -> {}",
+        english, symbols, output
+    );
+    let stats = DictBuilder::build_auxiliary_dict(&[&english], &[&symbols], &output)?;
+    println!(
+        "[辅助词库] 编译完成，英文词汇数: {}, 符号表情数: {}",
+        stats.english_words.len(),
+        stats.symbols.len()
+    );
+    Ok(())
+}
+
+/// 执行外部用户词表的自造词与调频记录导入任务
+fn execute_import_user(input: String, user_dict: String) -> Result<(), DictToolError> {
+    println!(
+        "[用户词库] 从外部词库文件导入自造词与调频记录: {} -> {}",
+        input, user_dict
+    );
+    let report = DictImportService::import_pinyin_dict(&input, &user_dict)?;
+    println!(
+        "[用户词库] 成功导入 {} 条记录，当前词库总词量: {} 条",
+        report.imported_count, report.total_entries
+    );
+    Ok(())
 }
 
 /// 执行词库管理子命令
@@ -145,66 +222,18 @@ fn execute(command: ToolCommand) -> Result<(), DictToolError> {
             print_usage();
             Ok(())
         }
-        ToolCommand::Build { inputs, output } => {
-            println!(
-                "[词库构建] 正在将文本词库编译为零拷贝 DAT 紧凑二进制词库: {}",
-                output
-            );
-            let input_refs: Vec<&str> = inputs.iter().map(|s| s.as_str()).collect();
-            let stats = DictBuilder::build_compact_binary_dict(&input_refs, Path::new(&output))?;
-            println!(
-                "[构建完成] 行数: {}, 有效词条: {}, 键数: {}, 耗时: {} ms",
-                stats.total_lines, stats.total_words, stats.total_keys, stats.elapsed_ms
-            );
-            Ok(())
-        }
+        ToolCommand::Build { inputs, output } => execute_build(inputs, output),
         ToolCommand::BuildOpenCc {
             chars,
             phrases,
             output,
-        } => {
-            println!(
-                "[简繁词库] 正在将 OpenCC 词表编译为二进制紧凑词库: {} + {} -> {}",
-                chars, phrases, output
-            );
-            let dict = OpenCcDict::from_tsv_files(&chars, &phrases)?;
-            dict.save_to_file(&output)?;
-            println!(
-                "[简繁词库] 编译完成，短语数: {}, 单字数: {}",
-                dict.phrases_len(),
-                dict.chars.len()
-            );
-            Ok(())
-        }
+        } => execute_build_opencc(chars, phrases, output),
         ToolCommand::BuildAux {
             english,
             symbols,
             output,
-        } => {
-            println!(
-                "[辅助词库] 编译英文与符号表情词库: {} + {} -> {}",
-                english, symbols, output
-            );
-            let stats = DictBuilder::build_auxiliary_dict(&[&english], &[&symbols], &output)?;
-            println!(
-                "[辅助词库] 编译完成，英文词汇数: {}, 符号表情数: {}",
-                stats.english_words.len(),
-                stats.symbols.len()
-            );
-            Ok(())
-        }
-        ToolCommand::ImportUser { input, user_dict } => {
-            println!(
-                "[用户词库] 从外部词库文件导入自造词与调频记录: {} -> {}",
-                input, user_dict
-            );
-            let report = DictImportService::import_pinyin_dict(&input, &user_dict)?;
-            println!(
-                "[用户词库] 成功导入 {} 条记录，当前词库总词量: {} 条",
-                report.imported_count, report.total_entries
-            );
-            Ok(())
-        }
+        } => execute_build_aux(english, symbols, output),
+        ToolCommand::ImportUser { input, user_dict } => execute_import_user(input, user_dict),
     }
 }
 

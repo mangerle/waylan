@@ -40,70 +40,17 @@ impl ImeCoreSession {
 
         // 2. 密码框、PIN 码或系统锁屏安全保护：完全规避输入法算法，全量直通
         if ctx.is_password_or_locked {
-            self.shift_sm.reset();
-            if !ctx.is_press {
-                let was_consumed = self.consumed_keys.take_release(ctx.keycode);
-                return if was_consumed {
-                    ImeOutputAction::Handled { update_ui: false }
-                } else {
-                    ImeOutputAction::PassThrough
-                };
-            }
-            self.consumed_keys.record_press(ctx.keycode, false);
-            return ImeOutputAction::PassThrough;
+            return self.handle_protected_context_key(ctx.keycode, ctx.is_press);
         }
 
         // 3. CapsLock 处理：按下时若有拼音则提交拼音，但物理按键一律透传给系统切换大写灯
         if ctx.keycode == KEY_CAPSLOCK {
-            self.shift_sm.reset();
-            if ctx.is_press {
-                let (was_consumed, committed) = self.handle_capslock(true);
-                if let Some(text) = committed {
-                    return ImeOutputAction::CommitAndPassThrough(text);
-                }
-                return if was_consumed {
-                    ImeOutputAction::Handled { update_ui: true }
-                } else {
-                    ImeOutputAction::PassThrough
-                };
-            } else {
-                let (was_consumed, _) = self.handle_capslock(false);
-                return if was_consumed {
-                    ImeOutputAction::Handled { update_ui: false }
-                } else {
-                    ImeOutputAction::PassThrough
-                };
-            }
+            return self.handle_capslock_key(ctx.is_press);
         }
 
         // 4. 按键释放事件处理
         if !ctx.is_press {
-            if self.is_caps_locked() {
-                self.shift_sm.reset();
-                let was_consumed = self.consumed_keys.take_release(ctx.keycode);
-                return if was_consumed {
-                    ImeOutputAction::Handled { update_ui: false }
-                } else {
-                    ImeOutputAction::PassThrough
-                };
-            }
-
-            let (was_consumed, toggled_mode, committed) = self.handle_key_release(ctx.keycode);
-            if let Some(new_mode) = toggled_mode {
-                return ImeOutputAction::ModeChanged {
-                    new_mode,
-                    committed,
-                    was_consumed,
-                };
-            }
-            if let Some(text) = committed {
-                return ImeOutputAction::Commit(text);
-            }
-            return if was_consumed {
-                ImeOutputAction::Handled { update_ui: true }
-            } else {
-                ImeOutputAction::PassThrough
-            };
+            return self.handle_key_release_event(ctx.keycode);
         }
 
         // 5. 按键按下阶段：调用 handle_key_press 进行核心算法与快捷键决策
@@ -111,6 +58,73 @@ impl ImeCoreSession {
         let is_consumed = !matches!(result, ImeOutputAction::PassThrough);
         self.consumed_keys.record_press(ctx.keycode, is_consumed);
         result
+    }
+
+    /// 密码框、PIN 码或系统锁屏上下文下的按键直通处理
+    fn handle_protected_context_key(&mut self, keycode: u32, is_press: bool) -> ImeOutputAction {
+        self.shift_sm.reset();
+        if !is_press {
+            let was_consumed = self.consumed_keys.take_release(keycode);
+            return if was_consumed {
+                ImeOutputAction::Handled { update_ui: false }
+            } else {
+                ImeOutputAction::PassThrough
+            };
+        }
+        self.consumed_keys.record_press(keycode, false);
+        ImeOutputAction::PassThrough
+    }
+
+    /// CapsLock 按键处理（按下时若有拼音则提交拼音，物理按键一律透传给系统切换大写灯）
+    fn handle_capslock_key(&mut self, is_press: bool) -> ImeOutputAction {
+        self.shift_sm.reset();
+        if is_press {
+            let (was_consumed, committed) = self.handle_capslock(true);
+            if let Some(text) = committed {
+                return ImeOutputAction::CommitAndPassThrough(text);
+            }
+            return if was_consumed {
+                ImeOutputAction::Handled { update_ui: true }
+            } else {
+                ImeOutputAction::PassThrough
+            };
+        }
+        let (was_consumed, _) = self.handle_capslock(false);
+        if was_consumed {
+            ImeOutputAction::Handled { update_ui: false }
+        } else {
+            ImeOutputAction::PassThrough
+        }
+    }
+
+    /// 按键释放事件处理（区分 CapsLock 锁定态与常规释放语义）
+    fn handle_key_release_event(&mut self, keycode: u32) -> ImeOutputAction {
+        if self.is_caps_locked() {
+            self.shift_sm.reset();
+            let was_consumed = self.consumed_keys.take_release(keycode);
+            return if was_consumed {
+                ImeOutputAction::Handled { update_ui: false }
+            } else {
+                ImeOutputAction::PassThrough
+            };
+        }
+
+        let (was_consumed, toggled_mode, committed) = self.handle_key_release(keycode);
+        if let Some(new_mode) = toggled_mode {
+            return ImeOutputAction::ModeChanged {
+                new_mode,
+                committed,
+                was_consumed,
+            };
+        }
+        if let Some(text) = committed {
+            return ImeOutputAction::Commit(text);
+        }
+        if was_consumed {
+            ImeOutputAction::Handled { update_ui: true }
+        } else {
+            ImeOutputAction::PassThrough
+        }
     }
 
     /// 处理核心按键按下事件，返回会话决策 [`ImeOutputAction`]

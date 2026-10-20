@@ -99,6 +99,55 @@ fn handle_v1_key_event(
     }
 }
 
+/// 分发 V1 键盘按键与修饰键事件
+fn dispatch_v1_keyboard_event(
+    state: &mut WaylanV1Session,
+    context: &ZwpInputMethodContextV1,
+    event: KeyboardEvent,
+) {
+    match event {
+        KeyboardEvent::Key {
+            serial,
+            time,
+            key,
+            state: key_state,
+        } => {
+            state.protocol.current_serial = serial;
+            let is_press = matches!(key_state, WEnum::Value(KeyState::Pressed));
+            handle_v1_key_event(
+                state,
+                context,
+                V1KeyEventParams {
+                    serial,
+                    time,
+                    key,
+                    is_press,
+                },
+            );
+        }
+        KeyboardEvent::Modifiers {
+            serial,
+            mods_depressed,
+            mods_latched,
+            mods_locked,
+            group,
+        } => {
+            handle_v1_modifiers(
+                state,
+                context,
+                V1ModifiersParams {
+                    serial,
+                    mods_depressed,
+                    mods_latched,
+                    mods_locked,
+                    group,
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
 impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
     fn event(
         state: &mut Self,
@@ -119,46 +168,6 @@ impl Dispatch<WlKeyboard, ()> for WaylanV1Session {
 
         state.sync_atomic_state();
 
-        match event {
-            KeyboardEvent::Key {
-                serial,
-                time,
-                key,
-                state: key_state,
-            } => {
-                state.protocol.current_serial = serial;
-                let is_press = matches!(key_state, WEnum::Value(KeyState::Pressed));
-                handle_v1_key_event(
-                    state,
-                    &context,
-                    V1KeyEventParams {
-                        serial,
-                        time,
-                        key,
-                        is_press,
-                    },
-                );
-            }
-            KeyboardEvent::Modifiers {
-                serial,
-                mods_depressed,
-                mods_latched,
-                mods_locked,
-                group,
-            } => {
-                handle_v1_modifiers(
-                    state,
-                    &context,
-                    V1ModifiersParams {
-                        serial,
-                        mods_depressed,
-                        mods_latched,
-                        mods_locked,
-                        group,
-                    },
-                );
-            }
-            _ => {}
-        }
+        dispatch_v1_keyboard_event(state, &context, event);
     }
 }

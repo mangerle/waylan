@@ -100,50 +100,72 @@ pub fn expand_dynamic_macros(template: &str) -> String {
     let mut i = 0;
 
     while i < len {
-        if chars[i] == '#' {
-            // 转义处理：## 展开为字面量 '#'
-            if i + 1 < len && chars[i + 1] == '#' {
-                result.push('#');
-                i += 2;
-                continue;
-            }
-
-            // 提取宏名称
-            let mut j = i + 1;
-            while j < len && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
-                j += 1;
-            }
-
-            let macro_name: String = chars[i + 1..j].iter().collect();
-
-            // 检查是否有参数括号: #macro(arg)
-            let mut arg: Option<String> = None;
-            if j < len && chars[j] == '(' {
-                let mut k = j + 1;
-                while k < len && chars[k] != ')' {
-                    k += 1;
-                }
-                if k < len && chars[k] == ')' {
-                    arg = Some(chars[j + 1..k].iter().collect());
-                    j = k + 1;
-                }
-            }
-
-            if let Some(expanded) = eval_single_macro(&macro_name, arg.as_deref(), now) {
-                result.push_str(&expanded);
-                i = j;
-                continue;
-            } else {
-                result.push('#');
-                i += 1;
-            }
-        } else {
+        if chars[i] != '#' {
             result.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        // 转义处理：## 展开为字面量 '#'
+        if i + 1 < len && chars[i + 1] == '#' {
+            result.push('#');
+            i += 2;
+            continue;
+        }
+
+        let directive = parse_macro_directive(&chars, i);
+        if let Some(expanded) = eval_single_macro(&directive.name, directive.arg.as_deref(), now) {
+            result.push_str(&expanded);
+            i = directive.next_index;
+        } else {
+            // 未识别的宏名按字面量 '#' 处理，扫描游标仅前进一个字符
+            result.push('#');
             i += 1;
         }
     }
 
     result
+}
+
+/// 单条宏指令的解析结果
+struct MacroDirective {
+    /// 宏名称
+    name: String,
+    /// 可选的括号参数
+    arg: Option<String>,
+    /// 指令结束位置（不含），扫描游标应从此处继续
+    next_index: usize,
+}
+
+/// 从指定位置解析一条宏指令（提取宏名与可选的括号参数）
+fn parse_macro_directive(chars: &[char], start: usize) -> MacroDirective {
+    let len = chars.len();
+
+    // 提取宏名称
+    let mut j = start + 1;
+    while j < len && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+        j += 1;
+    }
+    let name: String = chars[start + 1..j].iter().collect();
+
+    // 检查是否有参数括号: #macro(arg)
+    let mut arg: Option<String> = None;
+    if j < len && chars[j] == '(' {
+        let mut k = j + 1;
+        while k < len && chars[k] != ')' {
+            k += 1;
+        }
+        if k < len && chars[k] == ')' {
+            arg = Some(chars[j + 1..k].iter().collect());
+            j = k + 1;
+        }
+    }
+
+    MacroDirective {
+        name,
+        arg,
+        next_index: j,
+    }
 }
 
 #[cfg(test)]

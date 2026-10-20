@@ -185,18 +185,7 @@ impl PrismFuzzy {
         let mut combos: Vec<Vec<String>> = Vec::with_capacity(16);
         combos.push(Vec::with_capacity(syllables.len()));
         for syl in syllables {
-            let mut syl_options = Vec::with_capacity(4);
-            if is_valid_syllable(syl) {
-                syl_options.push(syl.clone());
-            }
-            for alt in Self::expand_fuzzy_syllables(syl, fuzzy) {
-                if !syl_options.contains(&alt) {
-                    syl_options.push(alt);
-                }
-            }
-            if syl_options.is_empty() {
-                syl_options.push(syl.clone());
-            }
+            let syl_options = Self::collect_syllable_options(syl, fuzzy);
 
             if syl_options.len() == 1 {
                 let single_opt = &syl_options[0];
@@ -206,28 +195,56 @@ impl PrismFuzzy {
                 continue;
             }
 
-            let mut next_combos = Vec::with_capacity(16);
-            for prefix in &combos {
-                for opt in &syl_options {
-                    if next_combos.len() >= 16 {
-                        break;
-                    }
-                    let mut next = Vec::with_capacity(syllables.len());
-                    next.extend_from_slice(prefix);
-                    next.push(opt.clone());
-                    next_combos.push(next);
-                }
-                if next_combos.len() >= 16 {
-                    break;
-                }
-            }
-            combos = next_combos;
+            combos = Self::expand_combos(combos, &syl_options, syllables.len());
         }
 
         combos
             .into_iter()
             .filter(|parts| parts != syllables)
             .collect()
+    }
+
+    /// 收集单个音节在当前模糊音配置下的全部等价候选
+    ///
+    /// 原始音节优先入选；若模糊音扩展未产出任何有效候选，则回退为原始音节本身。
+    fn collect_syllable_options(syl: &str, fuzzy: &FuzzyConfig) -> Vec<String> {
+        let mut syl_options = Vec::with_capacity(4);
+        if is_valid_syllable(syl) {
+            syl_options.push(syl.to_string());
+        }
+        for alt in Self::expand_fuzzy_syllables(syl, fuzzy) {
+            if !syl_options.contains(&alt) {
+                syl_options.push(alt);
+            }
+        }
+        if syl_options.is_empty() {
+            syl_options.push(syl.to_string());
+        }
+        syl_options
+    }
+
+    /// 将当前音节的候选组合与已有前缀组合做笛卡尔积展开（限制最大组合数以控制爆炸）
+    fn expand_combos(
+        combos: Vec<Vec<String>>,
+        syl_options: &[String],
+        syl_count: usize,
+    ) -> Vec<Vec<String>> {
+        let mut next_combos = Vec::with_capacity(16);
+        for prefix in &combos {
+            for opt in syl_options {
+                if next_combos.len() >= 16 {
+                    break;
+                }
+                let mut next = Vec::with_capacity(syl_count);
+                next.extend_from_slice(prefix);
+                next.push(opt.clone());
+                next_combos.push(next);
+            }
+            if next_combos.len() >= 16 {
+                break;
+            }
+        }
+        next_combos
     }
 
     /// 展开一条切分路径在当前模糊音配置下的所有等价词典查询键（不含原始 `path.to_key_string()`）

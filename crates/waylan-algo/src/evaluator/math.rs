@@ -110,6 +110,25 @@ impl MathEvaluator {
             return None;
         }
 
+        let sign = Self::parse_unary_sign(chars, pos)?;
+
+        let &ch = chars.get(*pos)?;
+        if ch == '(' {
+            *pos += 1;
+            let val = Self::parse_expr(chars, pos, depth + 1)?;
+            if chars.get(*pos) == Some(&')') {
+                *pos += 1;
+                return Some(sign * val);
+            }
+            return None;
+        }
+
+        let val = Self::parse_number_literal(chars, pos)?;
+        Some(sign * val)
+    }
+
+    /// 解析原子因子前的一元正负号序列，返回符号值（正负号超过两个视为非法输入）
+    fn parse_unary_sign(chars: &[char], pos: &mut usize) -> Option<f64> {
         let mut sign = 1.0;
         let mut sign_count = 0;
         while let Some(&c) = chars.get(*pos) {
@@ -127,18 +146,11 @@ impl MathEvaluator {
                 return None;
             }
         }
+        Some(sign)
+    }
 
-        let &ch = chars.get(*pos)?;
-        if ch == '(' {
-            *pos += 1;
-            let val = Self::parse_expr(chars, pos, depth + 1)?;
-            if chars.get(*pos) == Some(&')') {
-                *pos += 1;
-                return Some(sign * val);
-            }
-            return None;
-        }
-
+    /// 解析原子因子中的浮点数常量文本，拒绝前导点、尾随点与多点格式
+    fn parse_number_literal(chars: &[char], pos: &mut usize) -> Option<f64> {
         let start = *pos;
         while let Some(&c) = chars.get(*pos) {
             if c.is_ascii_digit() || c == '.' {
@@ -155,7 +167,7 @@ impl MathEvaluator {
             return None;
         }
         let val = num_str.parse::<f64>().ok()?;
-        Some(sign * val)
+        Some(val)
     }
 }
 

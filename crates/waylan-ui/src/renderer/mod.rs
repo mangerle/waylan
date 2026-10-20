@@ -2,6 +2,7 @@ pub mod capsule;
 pub mod draw;
 pub mod expanded;
 pub mod font;
+mod geometry;
 pub mod grid;
 pub mod layout;
 pub mod measure_cache;
@@ -12,13 +13,13 @@ use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache};
 use draw::blend_swash_image;
 use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 use font::FontManager;
-use layout::{measure_candidates_bar, CandidateHitTarget, HitRegion, ItemMeasure, LayoutParams};
+use layout::{CandidateHitTarget, HitRegion};
 use measure_cache::TextMeasureCache;
 use std::path::Path;
 use style::RendererStyle;
 use tiny_skia::Pixmap;
 use waylan_core::config::UiConfig;
-use waylan_core::{Candidate, CandidateBoxState, CandidateBoxView, ThemeMode};
+use waylan_core::{Candidate, CandidateBoxState, CandidateBoxView, ThemeMode, VoiceBoxState};
 
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
@@ -36,25 +37,6 @@ pub(crate) struct DrawTextOptions<'a> {
     pub y: f32,
     pub size: f32,
     pub color: Color,
-}
-
-/// 胶囊候选栏与展开浮层卡片几何布局度量结果
-struct CandidateBoxGeometry<'a> {
-    measured_items: Vec<ItemMeasure>,
-    total_bar_width: f32,
-    bar_height: f32,
-    padding_h: f32,
-    corner_radius: f32,
-    font_size: f32,
-    scale: f32,
-    has_active_sub: bool,
-    sub_candidates: &'a [String],
-    popup_x: f32,
-    popup_w: f32,
-    popup_h: f32,
-    row_height: f32,
-    canvas_w: u32,
-    canvas_h: u32,
 }
 
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
@@ -233,218 +215,84 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 计算胶囊候选栏与展开浮层的几何尺寸与画布规格
-    /// 度量二级展开卡片几何尺寸与相对位置
-    fn measure_popup_dimensions<'a>(
-        &mut self,
-        state: &'a CandidateBoxState,
-        s: f32,
-        font_size: f32,
-        padding_h: f32,
-        measured_items: &[ItemMeasure],
-    ) -> (bool, &'a [String], f32, f32, f32, f32) {
-        let active_cand = state.candidates.get(state.selected_index);
-        let has_active_sub = state.is_expanded()
-            && active_cand
-                .map(|c| c.is_expandable && !c.sub_candidates.is_empty())
-                .unwrap_or(false);
-
-        let sub_candidates: &[String] = if has_active_sub {
-            active_cand
-                .map(|c| c.sub_candidates.as_slice())
-                .unwrap_or(&[])
-        } else {
-            &[]
-        };
-
-        let row_height: f32 = 28.0 * s;
-        let popup_h: f32 = if has_active_sub {
-            sub_candidates.len() as f32 * row_height + 12.0 * s
-        } else {
-            0.0
-        };
-
-        let max_sub_w = if has_active_sub {
-            sub_candidates
-                .iter()
-                .map(|item| self.measure_text(item, font_size))
-                .fold(0.0_f32, f32::max)
-        } else {
-            0.0
-        };
-        let popup_w: f32 = (max_sub_w + 48.0 * s).max(190.0 * s);
-
-        let active_item_x = measured_items
-            .get(state.selected_index)
-            .map(|m| m.start_x)
-            .unwrap_or(padding_h);
-        let popup_x = active_item_x.max(padding_h);
-
-        (
-            has_active_sub,
-            sub_candidates,
-            popup_x,
-            popup_w,
-            popup_h,
-            row_height,
-        )
-    }
-
-    /// 校验原始宽高边界并计算对齐后的画布物理像素规格
-    fn calculate_aligned_canvas_size(raw_w: f32, raw_h: f32, s: f32) -> Option<(u32, u32)> {
-        if raw_w > 4096.0 || raw_h > 2048.0 {
-            log::warn!(
-                "[候选框渲染] 候选框画布尺寸超出上限并进行安全截断，原始尺寸: {}x{}，安全上限: 4096x2048",
-                raw_w,
-                raw_h
-            );
-        }
-
-        let align = (s.round() as u32).max(1);
-        let clamped_w = raw_w.clamp(1.0, 4096.0) as u32;
-        let clamped_h = raw_h.clamp(1.0, 2048.0) as u32;
-        let canvas_w = clamped_w.div_ceil(align).saturating_mul(align);
-        let canvas_h = clamped_h.div_ceil(align).saturating_mul(align);
-
-        if canvas_w == 0 || canvas_h == 0 {
-            None
-        } else {
-            Some((canvas_w, canvas_h))
-        }
-    }
-
-    /// 计算胶囊候选栏与展开浮层的几何尺寸与画布规格
-    fn calculate_geometry<'a>(
-        &mut self,
-        state: &'a CandidateBoxState,
-    ) -> Option<CandidateBoxGeometry<'a>> {
-        let s = self.scale.max(0.5);
-        let bar_height: f32 = self.style.bar_height * s;
-        let padding_h: f32 = self.style.padding_h.max(4.0) * s;
-        let corner_radius: f32 = self.style.corner_radius.max(2.0) * s;
-        let item_gap: f32 = self.style.item_gap.max(2.0) * s;
-        let font_size = self.font_size * s;
-
-        let (measured_items, total_bar_width) = measure_candidates_bar(
-            LayoutParams {
-                candidates: &state.candidates,
-                selected_index: state.selected_index,
-                preedit: &state.preedit,
-                mode_badge: &state.mode_badge,
-                index_style: self.style.index_style,
-                show_comment: self.style.show_pinyin_comment,
-                s,
-                padding_h,
-                item_gap,
-                font_size,
-            },
-            |text, size| self.measure_text(text, size),
-        );
-
-        let (has_active_sub, sub_candidates, popup_x, popup_w, popup_h, row_height) =
-            self.measure_popup_dimensions(state, s, font_size, padding_h, &measured_items);
-
-        let raw_w = if has_active_sub {
-            total_bar_width.max(popup_x + popup_w + padding_h)
-        } else {
-            total_bar_width
-        }
-        .ceil();
-        let raw_h = if has_active_sub {
-            bar_height + 6.0 * s + popup_h
-        } else {
-            bar_height
-        }
-        .ceil();
-
-        let (canvas_w, canvas_h) = Self::calculate_aligned_canvas_size(raw_w, raw_h, s)?;
-
-        Some(CandidateBoxGeometry {
-            measured_items,
-            total_bar_width,
-            bar_height,
-            padding_h,
-            corner_radius,
-            font_size,
-            scale: s,
-            has_active_sub,
-            sub_candidates,
-            popup_x,
-            popup_w,
-            popup_h,
-            row_height,
-            canvas_w,
-            canvas_h,
-        })
-    }
-
     /// 渲染单行胶囊候选栏及二级展开浮层卡片
     pub fn render(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
         match state.view() {
             CandidateBoxView::Hidden => None,
-            CandidateBoxView::VoiceCapsule(voice) => {
-                let mut regions = Vec::with_capacity(4);
-                let pix = capsule::render_voice_capsule_bar(self, voice, &mut regions);
-                self.hit_regions = regions;
-                pix
-            }
+            CandidateBoxView::VoiceCapsule(voice) => self.render_voice_capsule(voice),
             CandidateBoxView::GridExpanded {
                 grid_candidates,
                 selected_index,
-            } => {
-                let mut regions = Vec::with_capacity(36);
-                let pix = grid::render_grid_expanded_panel(
-                    self,
-                    grid_candidates,
-                    selected_index,
-                    &mut regions,
-                );
-                self.hit_regions = regions;
-                pix
-            }
+            } => self.render_grid_expanded(grid_candidates, selected_index),
             CandidateBoxView::Compact { .. } | CandidateBoxView::ExpandedCard { .. } => {
-                let geom = self.calculate_geometry(state)?;
-                let mut pixmap = Pixmap::new(geom.canvas_w, geom.canvas_h)?;
-
-                let mut regions = capsule::render_capsule_bar(
-                    self,
-                    &mut pixmap,
-                    state,
-                    capsule::CapsuleBarParams {
-                        measured_items: &geom.measured_items,
-                        total_bar_width: geom.total_bar_width,
-                        bar_height: geom.bar_height,
-                        padding_h: geom.padding_h,
-                        corner_radius: geom.corner_radius,
-                        font_size: geom.font_size,
-                        scale: geom.scale,
-                    },
-                );
-
-                if geom.has_active_sub {
-                    render_expanded_popup_card(
-                        self,
-                        &mut pixmap,
-                        &mut regions,
-                        ExpandedCardRenderParams {
-                            state,
-                            sub_candidates: geom.sub_candidates,
-                            popup_x: geom.popup_x,
-                            popup_top_y: geom.bar_height + 6.0 * geom.scale,
-                            popup_w: geom.popup_w,
-                            popup_h: geom.popup_h,
-                            row_height: geom.row_height,
-                            corner_radius: geom.corner_radius,
-                            font_size: geom.font_size,
-                            scale: geom.scale,
-                        },
-                    );
-                }
-
-                self.hit_regions = regions;
-                Some(pixmap)
+                self.render_capsule_with_popup(state)
             }
         }
+    }
+
+    /// 渲染语音听写胶囊栏并同步更新命中区域
+    fn render_voice_capsule(&mut self, voice: &VoiceBoxState) -> Option<Pixmap> {
+        let mut regions = Vec::with_capacity(4);
+        let pix = capsule::render_voice_capsule_bar(self, voice, &mut regions);
+        self.hit_regions = regions;
+        pix
+    }
+
+    /// 渲染 5 行大网格候选面板并同步更新命中区域
+    fn render_grid_expanded(
+        &mut self,
+        grid_candidates: &[Candidate],
+        selected_index: usize,
+    ) -> Option<Pixmap> {
+        let mut regions = Vec::with_capacity(36);
+        let pix =
+            grid::render_grid_expanded_panel(self, grid_candidates, selected_index, &mut regions);
+        self.hit_regions = regions;
+        pix
+    }
+
+    /// 渲染单行胶囊候选栏，并在存在活动子候选时叠加二级展开浮层卡片
+    fn render_capsule_with_popup(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
+        let geom = self.calculate_geometry(state)?;
+        let mut pixmap = Pixmap::new(geom.canvas_w, geom.canvas_h)?;
+
+        let mut regions = capsule::render_capsule_bar(
+            self,
+            &mut pixmap,
+            state,
+            capsule::CapsuleBarParams {
+                measured_items: &geom.measured_items,
+                total_bar_width: geom.total_bar_width,
+                bar_height: geom.bar_height,
+                padding_h: geom.padding_h,
+                corner_radius: geom.corner_radius,
+                font_size: geom.font_size,
+                scale: geom.scale,
+            },
+        );
+
+        if geom.has_active_sub {
+            render_expanded_popup_card(
+                self,
+                &mut pixmap,
+                &mut regions,
+                ExpandedCardRenderParams {
+                    state,
+                    sub_candidates: geom.sub_candidates,
+                    popup_x: geom.popup_x,
+                    popup_top_y: geom.bar_height + 6.0 * geom.scale,
+                    popup_w: geom.popup_w,
+                    popup_h: geom.popup_h,
+                    row_height: geom.row_height,
+                    corner_radius: geom.corner_radius,
+                    font_size: geom.font_size,
+                    scale: geom.scale,
+                },
+            );
+        }
+
+        self.hit_regions = regions;
+        Some(pixmap)
     }
 }
 

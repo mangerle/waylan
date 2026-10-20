@@ -1,6 +1,8 @@
 use crate::theme::{Color, UiTheme};
 use cosmic_text::{SwashContent, SwashImage};
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, PremultipliedColorU8, Stroke, Transform};
+use tiny_skia::{
+    FillRule, Paint, Path, PathBuilder, Pixmap, PremultipliedColorU8, Stroke, Transform,
+};
 
 /// 圆角矩形几何参数
 pub struct RoundedRectParams {
@@ -23,6 +25,31 @@ pub struct CardBackgroundParams {
 
 /// 绘制外层卡片背景（纯白微阴影与细描边）
 pub fn draw_card_background_at(pixmap: &mut Pixmap, theme: &UiTheme, params: CardBackgroundParams) {
+    if let Some(path) = build_card_background_path(&params) {
+        let mut paint = Paint::default();
+        paint.set_color(theme.background.to_tiny_skia());
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+
+        let stroke = Stroke {
+            width: params.stroke_width,
+            ..Default::default()
+        };
+        let mut border_paint = Paint::default();
+        border_paint.set_color(theme.border.to_tiny_skia());
+        border_paint.anti_alias = true;
+        pixmap.stroke_path(&path, &border_paint, &stroke, Transform::identity(), None);
+    }
+}
+
+/// 构建圆角卡片背景的矢量路径（依次描出上、右、下、左四条边与四角圆弧）
+fn build_card_background_path(params: &CardBackgroundParams) -> Option<Path> {
     let r = params.radius;
     let mut pb = PathBuilder::new();
     pb.move_to(params.x + r, params.y);
@@ -50,28 +77,7 @@ pub fn draw_card_background_at(pixmap: &mut Pixmap, theme: &UiTheme, params: Car
     pb.line_to(params.x, params.y + r);
     pb.quad_to(params.x, params.y, params.x + r, params.y);
     pb.close();
-
-    if let Some(path) = pb.finish() {
-        let mut paint = Paint::default();
-        paint.set_color(theme.background.to_tiny_skia());
-        paint.anti_alias = true;
-        pixmap.fill_path(
-            &path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-
-        let stroke = Stroke {
-            width: params.stroke_width,
-            ..Default::default()
-        };
-        let mut border_paint = Paint::default();
-        border_paint.set_color(theme.border.to_tiny_skia());
-        border_paint.anti_alias = true;
-        pixmap.stroke_path(&path, &border_paint, &stroke, Transform::identity(), None);
-    }
+    pb.finish()
 }
 
 /// 绘制圆角矩形填充
@@ -136,6 +142,14 @@ pub fn draw_dropdown_arrow(pixmap: &mut Pixmap, theme: &UiTheme, x: f32, y: f32,
     }
 }
 
+/// 日历图标绘制参数
+struct CalendarIconParams {
+    x: f32,
+    y: f32,
+    is_selected: bool,
+    scale: f32,
+}
+
 /// 绘制微型矢量日历图标（针对可展开功能项）
 pub fn draw_calendar_icon(
     pixmap: &mut Pixmap,
@@ -145,17 +159,35 @@ pub fn draw_calendar_icon(
     is_selected: bool,
     s: f32,
 ) {
+    let params = CalendarIconParams {
+        x,
+        y,
+        is_selected,
+        scale: s,
+    };
     let stroke_color = if is_selected {
         theme.highlight_text
     } else {
         theme.index_text
     };
 
+    draw_calendar_icon_body(pixmap, theme, &params, stroke_color);
+    draw_calendar_icon_binders(pixmap, &params, stroke_color);
+}
+
+/// 绘制日历图标的外框描边色块与内芯底色
+fn draw_calendar_icon_body(
+    pixmap: &mut Pixmap,
+    theme: &UiTheme,
+    params: &CalendarIconParams,
+    stroke_color: Color,
+) {
+    let s = params.scale;
     draw_rounded_rect(
         pixmap,
         RoundedRectParams {
-            x,
-            y,
+            x: params.x,
+            y: params.y,
             w: 12.0 * s,
             h: 11.0 * s,
             r: 2.0 * s,
@@ -163,7 +195,7 @@ pub fn draw_calendar_icon(
         stroke_color,
     );
 
-    let bg_color = if is_selected {
+    let bg_color = if params.is_selected {
         theme.highlight_badge
     } else {
         theme.background
@@ -171,15 +203,25 @@ pub fn draw_calendar_icon(
     draw_rounded_rect(
         pixmap,
         RoundedRectParams {
-            x: x + 1.0 * s,
-            y: y + 3.0 * s,
+            x: params.x + 1.0 * s,
+            y: params.y + 3.0 * s,
             w: 10.0 * s,
             h: 7.0 * s,
             r: 1.0 * s,
         },
         bg_color,
     );
+}
 
+/// 绘制日历图标顶部的两条装订竖线
+fn draw_calendar_icon_binders(
+    pixmap: &mut Pixmap,
+    params: &CalendarIconParams,
+    stroke_color: Color,
+) {
+    let s = params.scale;
+    let x = params.x;
+    let y = params.y;
     let mut pb = PathBuilder::new();
     pb.move_to(x + 3.0 * s, y - 1.5 * s);
     pb.line_to(x + 3.0 * s, y + 1.5 * s);
@@ -229,6 +271,43 @@ struct BlitTarget<'a> {
     pixels: &'a mut [PremultipliedColorU8],
 }
 
+/// 灰度字形遮罩的源色分量（预乘前的 8 位通道值）
+#[derive(Clone, Copy)]
+struct MaskSourceColor {
+    r: u32,
+    g: u32,
+    b: u32,
+    a: u32,
+}
+
+impl MaskSourceColor {
+    /// 将浮点颜色量化为 8 位通道分量，颜色完全透明时返回 None
+    fn from_color(color: Color) -> Option<Self> {
+        let a = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
+        if a == 0 {
+            return None;
+        }
+        Some(Self {
+            r: (color.r * 255.0).round().clamp(0.0, 255.0) as u32,
+            g: (color.g * 255.0).round().clamp(0.0, 255.0) as u32,
+            b: (color.b * 255.0).round().clamp(0.0, 255.0) as u32,
+            a,
+        })
+    }
+}
+
+/// 计算灰度覆盖率对应的预乘源色分量（覆盖率过低导致完全透明时返回 None）
+fn premultiply_mask_color(source: MaskSourceColor, cov: u32) -> Option<(u32, u32, u32, u32)> {
+    let src_a = (source.a * cov + 127) / 255;
+    if src_a == 0 {
+        return None;
+    }
+    let src_r_premul = (source.r * src_a + 127) / 255;
+    let src_g_premul = (source.g * src_a + 127) / 255;
+    let src_b_premul = (source.b * src_a + 127) / 255;
+    Some((src_r_premul, src_g_premul, src_b_premul, src_a))
+}
+
 /// 混合单通道灰度字形遮罩
 fn blend_mask_glyph(
     target: &mut BlitTarget<'_>,
@@ -236,13 +315,9 @@ fn blend_mask_glyph(
     pos: (i32, i32),
     color: Color,
 ) {
-    let ca = (color.a * 255.0).round().clamp(0.0, 255.0) as u32;
-    if ca == 0 {
+    let Some(source) = MaskSourceColor::from_color(color) else {
         return;
-    }
-    let cr = (color.r * 255.0).round().clamp(0.0, 255.0) as u32;
-    let cg = (color.g * 255.0).round().clamp(0.0, 255.0) as u32;
-    let cb = (color.b * 255.0).round().clamp(0.0, 255.0) as u32;
+    };
 
     let (x, y) = pos;
     let width = image.placement.width as i32;
@@ -268,17 +343,10 @@ fn blend_mask_glyph(
                 continue;
             }
 
-            let src_a = (ca * cov + 127) / 255;
-            if src_a == 0 {
-                continue;
+            if let Some((src_r, src_g, src_b, src_a)) = premultiply_mask_color(source, cov) {
+                let pixel = &mut target.pixels[py_offset + px as usize];
+                blend_pixel_over(pixel, src_r, src_g, src_b, src_a);
             }
-
-            let src_r_premul = (cr * src_a + 127) / 255;
-            let src_g_premul = (cg * src_a + 127) / 255;
-            let src_b_premul = (cb * src_a + 127) / 255;
-
-            let pixel = &mut target.pixels[py_offset + px as usize];
-            blend_pixel_over(pixel, src_r_premul, src_g_premul, src_b_premul, src_a);
         }
     }
 }

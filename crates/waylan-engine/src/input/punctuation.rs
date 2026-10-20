@@ -186,47 +186,12 @@ impl PunctuationProcessor {
         }
 
         // 提取末尾紧邻的连续非空白 ASCII Token
-        let token_start = trimmed
-            .rfind(|c: char| c.is_whitespace() || !c.is_ascii())
-            .map(|i| {
-                let ch_len = trimmed[i..]
-                    .chars()
-                    .next()
-                    .map(|c| c.len_utf8())
-                    .unwrap_or(1);
-                i + ch_len
-            })
-            .unwrap_or(0);
-        let last_token = &trimmed[token_start..];
+        let last_token = trailing_ascii_token(trimmed);
         if last_token.is_empty() {
             return false;
         }
         let lower = last_token.to_lowercase();
-        lower.contains("://")
-            || lower.starts_with("http://")
-            || lower.starts_with("https://")
-            || lower.starts_with("ftp://")
-            || lower.starts_with("file://")
-            || lower.starts_with("www.")
-            || lower.starts_with("git@")
-            || lower.contains('@')
-            || lower.ends_with("http")
-            || lower.ends_with("https")
-            || lower.ends_with("ftp")
-            || lower.ends_with("http:")
-            || lower.ends_with("https:")
-            || lower.ends_with("ftp:")
-            || lower.ends_with("http:/")
-            || lower.ends_with("https:/")
-            || lower.ends_with("ftp:/")
-            || lower.ends_with("www")
-            || lower.ends_with(".com")
-            || lower.ends_with(".cn")
-            || lower.ends_with(".org")
-            || lower.ends_with(".net")
-            || lower.ends_with(".io")
-            || lower.ends_with(".edu")
-            || lower.ends_with(".gov")
+        contains_url_scheme(&lower) || contains_domain_suffix(&lower)
     }
 
     /// 尝试处理标点符号输入（自动从内置 recent_context 获取上下文）
@@ -276,48 +241,17 @@ impl PunctuationProcessor {
     /// 处理括号与引号等成对符号
     fn handle_paired_punctuation(&mut self, ch: char) -> Option<Vec<TextAction>> {
         match ch {
-            '(' => Some(if self.options.auto_complete_pairs {
-                vec![
-                    TextAction::Commit("（）".to_string()),
-                    TextAction::MoveCursor(-1),
-                ]
-            } else {
-                vec![TextAction::Commit("（".to_string())]
-            }),
+            '(' => Some(self.paired_symbol_actions("（）", "（")),
             ')' => Some(vec![TextAction::Commit("）".to_string())]),
-            '<' => Some(if self.options.auto_complete_pairs {
-                vec![
-                    TextAction::Commit("《》".to_string()),
-                    TextAction::MoveCursor(-1),
-                ]
-            } else {
-                vec![TextAction::Commit("《".to_string())]
-            }),
+            '<' => Some(self.paired_symbol_actions("《》", "《")),
             '>' => Some(vec![TextAction::Commit("》".to_string())]),
-            '[' => Some(if self.options.auto_complete_pairs {
-                vec![
-                    TextAction::Commit("【】".to_string()),
-                    TextAction::MoveCursor(-1),
-                ]
-            } else {
-                vec![TextAction::Commit("【".to_string())]
-            }),
+            '[' => Some(self.paired_symbol_actions("【】", "【")),
             ']' => Some(vec![TextAction::Commit("】".to_string())]),
-            '{' => Some(if self.options.auto_complete_pairs {
-                vec![
-                    TextAction::Commit("｛｝".to_string()),
-                    TextAction::MoveCursor(-1),
-                ]
-            } else {
-                vec![TextAction::Commit("｛".to_string())]
-            }),
+            '{' => Some(self.paired_symbol_actions("｛｝", "｛")),
             '}' => Some(vec![TextAction::Commit("｝".to_string())]),
             '"' => {
                 if self.options.auto_complete_pairs {
-                    Some(vec![
-                        TextAction::Commit("“”".to_string()),
-                        TextAction::MoveCursor(-1),
-                    ])
+                    Some(self.paired_symbol_actions("“”", "“"))
                 } else {
                     let quote_str = if self.double_quote_open {
                         self.double_quote_open = false;
@@ -331,10 +265,7 @@ impl PunctuationProcessor {
             }
             '\'' => {
                 if self.options.auto_complete_pairs {
-                    Some(vec![
-                        TextAction::Commit("‘’".to_string()),
-                        TextAction::MoveCursor(-1),
-                    ])
+                    Some(self.paired_symbol_actions("‘’", "‘"))
                 } else {
                     let quote_str = if self.single_quote_open {
                         self.single_quote_open = false;
@@ -350,6 +281,17 @@ impl PunctuationProcessor {
         }
     }
 
+    /// 依据自动补全开关生成成对符号的提交动作（自动补全时提交完整配对并将光标回移至中间位）
+    fn paired_symbol_actions(&self, pair: &str, single: &str) -> Vec<TextAction> {
+        if self.options.auto_complete_pairs {
+            vec![
+                TextAction::Commit(pair.to_string()),
+                TextAction::MoveCursor(-1),
+            ]
+        } else {
+            vec![TextAction::Commit(single.to_string())]
+        }
+    }
     /// 处理常规单字符全角中文标点映射
     fn handle_regular_punctuation(&self, ch: char) -> Option<Vec<TextAction>> {
         match ch {
@@ -383,4 +325,64 @@ impl PunctuationProcessor {
             _ => None,
         }
     }
+}
+
+/// 提取文本末尾紧邻的连续非空白 ASCII 词法单元
+///
+/// # 设计原理
+/// - 以"空白或非 ASCII 字符"作为 Token 分隔边界，确保只对光标前的完整网络词法单元做判定，
+///   避免把中文句子里的单个英文字母误判为网址模式。
+fn trailing_ascii_token(trimmed: &str) -> &str {
+    let token_start = trimmed
+        .rfind(|c: char| c.is_whitespace() || !c.is_ascii())
+        .map(|i| {
+            let ch_len = trimmed[i..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
+            i + ch_len
+        })
+        .unwrap_or(0);
+    &trimmed[token_start..]
+}
+
+/// 判断词法单元是否具备 URL 协议、常见协议前缀或邮箱特征
+///
+/// # 设计原理
+/// - 覆盖"显式协议"（含 `://`）、"裸域名"（`www.` 开头）与"账号@主机"（邮箱）三类主流网络词法。
+fn contains_url_scheme(lower: &str) -> bool {
+    lower.contains("://")
+        || lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("file://")
+        || lower.starts_with("www.")
+        || lower.starts_with("git@")
+        || lower.contains('@')
+}
+
+/// 判断词法单元是否以常见协议名、协议残尾或顶级域名结尾
+///
+/// # 设计原理
+/// - 覆盖"用户已输入部分协议但尚未补全分隔符"（如 `http`、`https:/`）与常见顶级域名后缀，
+///   使半成品网址同样保持半角标点。
+fn contains_domain_suffix(lower: &str) -> bool {
+    lower.ends_with("http")
+        || lower.ends_with("https")
+        || lower.ends_with("ftp")
+        || lower.ends_with("http:")
+        || lower.ends_with("https:")
+        || lower.ends_with("ftp:")
+        || lower.ends_with("http:/")
+        || lower.ends_with("https:/")
+        || lower.ends_with("ftp:/")
+        || lower.ends_with("www")
+        || lower.ends_with(".com")
+        || lower.ends_with(".cn")
+        || lower.ends_with(".org")
+        || lower.ends_with(".net")
+        || lower.ends_with(".io")
+        || lower.ends_with(".edu")
+        || lower.ends_with(".gov")
 }

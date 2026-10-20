@@ -142,7 +142,6 @@ pub(crate) fn run_ibus_monitor_loop(
     inotify_watcher: &mut Option<InotifyWatcher>,
     mut params: IbusMonitorParams,
 ) {
-    let mut startup_healing_rounds: u32 = 3;
     let initial_screen_locked = params.screen_locked_flag.load(Ordering::Acquire);
 
     if initial_screen_locked {
@@ -155,74 +154,165 @@ pub(crate) fn run_ibus_monitor_loop(
         Arc::clone(&screen_locked_flag),
         params.coordinator.clone(),
     );
-    let mut last_screen_locked = initial_screen_locked;
-    let mut last_voice_active = false;
-    let mut last_lock_probe_instant = Instant::now();
-    let mut last_reload_instant = Instant::now()
-        .checked_sub(Duration::from_secs(10))
-        .unwrap_or_else(Instant::now);
+    let mut state = MonitorLoopState::new(initial_screen_locked, screen_locked_flag);
 
     loop {
-        if params.coordinator.is_shutting_down() {
-            info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
+        let ctx = MonitorIterationContext { conn, shared_core };
+        if !run_monitor_iteration(&ctx, inotify_watcher, &mut params, &mut state) {
             break;
         }
-
-        if startup_healing_rounds > 0 {
-            startup_healing_rounds = startup_healing_rounds.saturating_sub(1);
-            ensure_global_engine_active(conn);
-        }
-
-        let current_locked = probe_and_handle_screensaver(
-            conn,
-            shared_core,
-            &screen_locked_flag,
-            &mut last_screen_locked,
-            &mut last_lock_probe_instant,
-        );
-
-        let (is_voice_active, target_engine_path) = query_voice_active_and_path(shared_core);
-        let poll_timeout_ms = compute_monitor_poll_timeout(
-            is_voice_active,
-            startup_healing_rounds,
-            current_locked || last_screen_locked,
-        );
-
-        poll_wakeup_and_inotify(
-            inotify_watcher.as_ref(),
-            params.coordinator.loop_wakeup(),
-            poll_timeout_ms,
-        );
-
-        handle_voice_stream_cycle(
-            conn,
-            shared_core,
-            &target_engine_path,
-            is_voice_active,
-            &mut last_voice_active,
-        );
-
-        if params.coordinator.is_shutting_down() {
-            info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
-            break;
-        }
-
-        let should_reload = check_reload_requested_or_files_changed(
-            params.reload_requested.as_deref(),
-            inotify_watcher,
-            &params.watched_paths,
-            &mut params.last_mtime,
-        );
-        if should_reload
-            && handle_config_reload_event(shared_core, &mut params, &mut last_reload_instant)
-        {
-            break;
-        }
-
-        sync_engine_mode_property(conn, shared_core);
     }
 
     listener_handle.stop();
+}
+
+/// 监控循环跨轮次保留的可变状态
+///
+/// # 设计原理
+/// - 将"需要在多轮事件循环之间延续"的状态（引擎自愈轮次、锁屏与语音状态快照、探活时刻）
+///   收敛到单一结构体，避免监控主函数退化为超长参数列表。
+struct MonitorLoopState {
+    /// 启动期引擎自愈剩余轮次
+    startup_healing_rounds: u32,
+    /// 上一轮观测到的锁屏状态
+    last_screen_locked: bool,
+    /// 上一轮观测到的语音激活状态
+    last_voice_active: bool,
+    /// 上次锁屏状态探活时刻
+    last_lock_probe_instant: Instant,
+    /// 上次配置热重载触发时刻（用于防抖窗口判定）
+    last_reload_instant: Instant,
+    /// 系统锁屏状态共享标记
+    screen_locked_flag: Arc<AtomicBool>,
+}
+
+impl MonitorLoopState {
+    /// 构造监控循环的初始跨轮次状态
+    fn new(initial_screen_locked: bool, screen_locked_flag: Arc<AtomicBool>) -> Self {
+        Self {
+            startup_healing_rounds: 3,
+            last_screen_locked: initial_screen_locked,
+            last_voice_active: false,
+            last_lock_probe_instant: Instant::now(),
+            last_reload_instant: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or_else(Instant::now),
+            screen_locked_flag,
+        }
+    }
+}
+
+/// 单轮监控迭代所需的只读运行时上下文
+struct MonitorIterationContext<'a> {
+    /// 到 `ibus-daemon` 的阻塞连接
+    conn: &'a Connection,
+    /// 共享的输入法会话核心
+    shared_core: &'a Arc<Mutex<IbusSessionCore>>,
+}
+
+/// 执行一轮监控迭代，返回是否应继续下一轮迭代
+///
+/// # 设计原理
+/// - 单轮迭代严格遵循"退出检查 -> 轮询与语音阶段 -> 退出检查 -> 热重载阶段 -> 状态同步"的固定顺序，
+///   任一阶段判定需要退场时立即结束事件循环。
+fn run_monitor_iteration(
+    ctx: &MonitorIterationContext<'_>,
+    inotify_watcher: &mut Option<InotifyWatcher>,
+    params: &mut IbusMonitorParams,
+    state: &mut MonitorLoopState,
+) -> bool {
+    if is_shutdown_requested(&params.coordinator) {
+        return false;
+    }
+
+    if !monitor_poll_phase(ctx, inotify_watcher.as_ref(), params, state) {
+        return false;
+    }
+
+    if is_shutdown_requested(&params.coordinator) {
+        return false;
+    }
+
+    if monitor_config_reload_phase(ctx, inotify_watcher, params, state) {
+        return false;
+    }
+
+    sync_engine_mode_property(ctx.conn, ctx.shared_core);
+    true
+}
+
+/// 执行一轮监控的轮询阶段：启动期引擎自愈、锁屏探活、`poll` 等待与语音流式刷新
+///
+/// # 设计原理
+/// - 返回 false 表示本阶段观测到退出请求，事件循环应尽快安全退场。
+fn monitor_poll_phase(
+    ctx: &MonitorIterationContext<'_>,
+    inotify_watcher: Option<&InotifyWatcher>,
+    params: &IbusMonitorParams,
+    state: &mut MonitorLoopState,
+) -> bool {
+    // 启动期引擎自愈：确保会话初期全局引擎处于激活状态
+    if state.startup_healing_rounds > 0 {
+        state.startup_healing_rounds = state.startup_healing_rounds.saturating_sub(1);
+        ensure_global_engine_active(ctx.conn);
+    }
+
+    let current_locked = probe_and_handle_screensaver(
+        ctx.conn,
+        ctx.shared_core,
+        &state.screen_locked_flag,
+        &mut state.last_screen_locked,
+        &mut state.last_lock_probe_instant,
+    );
+
+    let (is_voice_active, target_engine_path) = query_voice_active_and_path(ctx.shared_core);
+    let poll_timeout_ms = compute_monitor_poll_timeout(
+        is_voice_active,
+        state.startup_healing_rounds,
+        current_locked || state.last_screen_locked,
+    );
+
+    poll_wakeup_and_inotify(
+        inotify_watcher,
+        params.coordinator.loop_wakeup(),
+        poll_timeout_ms,
+    );
+
+    handle_voice_stream_cycle(
+        ctx.conn,
+        ctx.shared_core,
+        &target_engine_path,
+        is_voice_active,
+        &mut state.last_voice_active,
+    );
+
+    !is_shutdown_requested(&params.coordinator)
+}
+
+/// 执行一轮监控的配置热重载阶段，返回是否需要触发指示器形态变更自重启
+fn monitor_config_reload_phase(
+    ctx: &MonitorIterationContext<'_>,
+    inotify_watcher: &mut Option<InotifyWatcher>,
+    params: &mut IbusMonitorParams,
+    state: &mut MonitorLoopState,
+) -> bool {
+    let should_reload = check_reload_requested_or_files_changed(
+        params.reload_requested.as_deref(),
+        inotify_watcher,
+        &params.watched_paths,
+        &mut params.last_mtime,
+    );
+    should_reload
+        && handle_config_reload_event(ctx.shared_core, params, &mut state.last_reload_instant)
+}
+
+/// 检查是否收到退出请求，并输出统一的退场日志
+fn is_shutdown_requested(coordinator: &IbusShutdownCoordinator) -> bool {
+    if coordinator.is_shutting_down() {
+        info!("[微澜 IBus] 收到退出请求信号，正在安全退出 IBus 事件循环。");
+        return true;
+    }
+    false
 }
 
 /// 使用 `poll` 监听 `inotify` 与跨线程 `eventfd` 唤醒描述符

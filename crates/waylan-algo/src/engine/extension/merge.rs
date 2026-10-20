@@ -75,6 +75,17 @@ impl AlgoEngine {
             .cloned()
             .collect();
 
+        self.merge_spatial_typo_candidates(raw_input, &mut merged_typos);
+
+        self.insert_typo_candidates(raw_input.len(), is_broken_typo, merged_typos, candidates);
+    }
+
+    /// 合并物理空间键盘纠错候选到纠错候选集合，并执行简繁归一与文本去重
+    fn merge_spatial_typo_candidates(
+        &self,
+        raw_input: &str,
+        merged_typos: &mut Vec<AlgoCandidate>,
+    ) {
         for mut spatial_cand in SpatialTypoCorrector::generate_candidates(
             raw_input,
             &self.resources.table,
@@ -91,9 +102,18 @@ impl AlgoEngine {
                 merged_typos.push(spatial_cand);
             }
         }
+    }
 
+    /// 将纠错候选插回候选列表头部区域，保证纠错项优先于普通候选可见
+    fn insert_typo_candidates(
+        &self,
+        raw_input_len: usize,
+        is_broken_typo: bool,
+        merged_typos: Vec<AlgoCandidate>,
+        candidates: &mut Vec<AlgoCandidate>,
+    ) {
         for (i, mut typo_cand) in merged_typos.into_iter().take(2).enumerate() {
-            typo_cand.consumed_len = Some(raw_input.len());
+            typo_cand.consumed_len = Some(raw_input_len);
             candidates.retain(|c| c.text != typo_cand.text);
             let target_pos = if is_broken_typo || candidates.is_empty() {
                 i.min(candidates.len())

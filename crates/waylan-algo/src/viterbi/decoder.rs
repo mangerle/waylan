@@ -13,6 +13,54 @@ pub(super) struct LatticeSolveParams<'a> {
     pub(super) ctx_str: &'a str,
 }
 
+/// 单个构词条目的固有属性（与前驱束无关的部分）
+struct EntryWordInfo<'a> {
+    /// 构词文本
+    text: &'a str,
+    /// 构词文本在二元词表中的词 ID
+    word_id: Option<u32>,
+    /// 构词文本的字符数
+    char_len: i64,
+    /// 构词文本的一元对数似然得分
+    freq_score: i64,
+}
+
+/// 单个构词条目的束转移评估上下文参数对象
+struct EntryTransitionParams<'a, 'b> {
+    /// 词格点求解上下文（音节表、词典表、上屏上下文与二元模型标记）
+    lattice: &'a LatticeSolveParams<'b>,
+    /// 前驱束集合
+    prev_beam: &'a [ViterbiBeamNode],
+    /// 待评估的词典条目（文本、原始词频、词 ID）
+    entry: &'a (String, u32, Option<u32>),
+    /// 当前步的起始索引
+    start_idx: usize,
+}
+
+/// 最佳前驱转移结果
+struct BestTransition {
+    /// 前驱束下标
+    prev_beam_idx: usize,
+    /// 累计总得分
+    total_score: i64,
+}
+
+/// 单个音节跨度的条目展开与束剪枝上下文参数对象
+struct SpanBeamParams<'a, 'b> {
+    /// 词格点求解上下文
+    lattice: &'a LatticeSolveParams<'b>,
+    /// 当前跨度命中的原始词典条目
+    raw_entries: &'a [(String, u32, Option<u32>)],
+    /// 前驱束集合
+    prev_beam: &'a [ViterbiBeamNode],
+    /// 当前步的起始索引
+    start_idx: usize,
+    /// 单次检索的原始条目上限
+    raw_limit: usize,
+    /// 束搜索保留宽度
+    beam_width: usize,
+}
+
 /// 束搜索动态规划格点状态（引入反向指针拓扑与词 ID 缓存，彻底消除中间路径字符串克隆与重复查表）
 #[derive(Debug, Clone)]
 pub(super) struct ViterbiBeamNode {
@@ -114,6 +162,39 @@ impl ViterbiDecoder {
 
         let has_bigram = table.compact_bigram.is_some();
         let ctx_str = prev_context.unwrap_or("");
+
+        // 沿音节序列向右推进求解 Viterbi 最优路径
+        let dp = Self::solve_lattice_dp(syllables, table, has_bigram, ctx_str);
+
+        // 末尾残缺音节与声母扩展（处理未完成键入态）
+        if !remaining.is_empty() {
+            if let Some(cand) = expand_remaining_tail(
+                &TailExpansionContext {
+                    syllables,
+                    remaining,
+                    table,
+                    has_bigram,
+                    prev_context,
+                    enable_acronym,
+                },
+                &dp,
+            ) {
+                return Some(cand);
+            }
+        }
+
+        // 若无 remaining 或扩展未命中，直接提取到达第 n 个音节的全局最优解
+        Self::extract_best_sentence(&dp, n, syllables)
+    }
+
+    /// 构建词格点状态容器并沿音节序列推进求解 Viterbi 最优路径
+    fn solve_lattice_dp(
+        syllables: &[String],
+        table: &LexiconTable,
+        has_bigram: bool,
+        ctx_str: &str,
+    ) -> Vec<Vec<ViterbiBeamNode>> {
+        let n = syllables.len();
         let ctx_word_id = if has_bigram && !ctx_str.is_empty() {
             table.get_word_id(ctx_str)
         } else {
@@ -143,30 +224,21 @@ impl ViterbiDecoder {
             &mut dp,
         );
 
-        // 末尾残缺音节与声母扩展（处理未完成键入态）
-        if !remaining.is_empty() {
-            if let Some(cand) = expand_remaining_tail(
-                &TailExpansionContext {
-                    syllables,
-                    remaining,
-                    table,
-                    has_bigram,
-                    prev_context,
-                    enable_acronym,
-                },
-                &dp,
-            ) {
-                return Some(cand);
-            }
-        }
+        dp
+    }
 
-        // 若无 remaining 或扩展未命中，直接提取到达第 n 个音节的全局最优解
+    /// 从词格点状态中提取到达第 n 个音节的全局最优整句候选
+    fn extract_best_sentence(
+        dp: &[Vec<ViterbiBeamNode>],
+        n: usize,
+        syllables: &[String],
+    ) -> Option<AlgoCandidate> {
         if dp[n].is_empty() {
             return None;
         }
 
         let best = &dp[n][0];
-        let full_text = backtrack_sentence(&dp, n, 0, None);
+        let full_text = backtrack_sentence(dp, n, 0, None);
         let pinyin_str = syllables.join("'");
         let positive_score = to_positive_score(best.total_score);
 
@@ -198,39 +270,51 @@ impl ViterbiDecoder {
 
     /// 针对单个构词条目计算从前驱束集合的最佳转移对数得分并入队目标束
     fn evaluate_entry_transition(
-        prev_beam: &[ViterbiBeamNode],
+        params: &EntryTransitionParams<'_, '_>,
         target_beam: &mut Vec<ViterbiBeamNode>,
-        entry: &(String, u32, Option<u32>),
-        start_idx: usize,
-        ctx_str: &str,
-        table: &LexiconTable,
-        has_bigram: bool,
     ) {
-        let (text, raw_score, word_id_opt) = entry;
+        let (text, raw_score, word_id_opt) = params.entry;
         let freq_score = unigram_log_score(*raw_score);
         let curr_word_id = word_id_opt.or_else(|| {
-            if has_bigram {
-                table.get_word_id(text)
+            if params.lattice.has_bigram {
+                params.lattice.table.get_word_id(text)
             } else {
                 None
             }
         });
-        let curr_char_len = text.chars().count() as i64;
+        let word = EntryWordInfo {
+            text: text.as_str(),
+            word_id: curr_word_id,
+            char_len: text.chars().count() as i64,
+            freq_score,
+        };
 
+        let Some(best) = Self::find_best_prev_transition(params, &word) else {
+            return;
+        };
+
+        Self::upsert_beam_node(target_beam, &word, params, best);
+    }
+
+    /// 在前驱束集合中搜索累计总分最高的前驱状态，返回最佳转移结果
+    fn find_best_prev_transition(
+        params: &EntryTransitionParams<'_, '_>,
+        word: &EntryWordInfo<'_>,
+    ) -> Option<BestTransition> {
         let mut best_prev_idx = 0usize;
         let mut best_total = i64::MIN;
 
-        for (prev_beam_idx, prev_node) in prev_beam.iter().enumerate() {
-            let prev_word = if start_idx == 0 {
-                ctx_str
+        for (prev_beam_idx, prev_node) in params.prev_beam.iter().enumerate() {
+            let prev_word = if params.start_idx == 0 {
+                params.lattice.ctx_str
             } else {
                 prev_node.word.as_str()
             };
             let trans_score = BigramLanguageModel::transition_score_cached(
                 (prev_word, prev_node.last_word_id),
-                (text, curr_word_id, curr_char_len),
-                freq_score,
-                table,
+                (word.text, word.word_id, word.char_len),
+                word.freq_score,
+                params.lattice.table,
             );
             let candidate_total = prev_node.total_score.saturating_add(trans_score);
             if candidate_total > best_total {
@@ -240,31 +324,43 @@ impl ViterbiDecoder {
         }
 
         if best_total > i64::MIN {
-            if let Some(existing) = target_beam.iter_mut().find(|node| node.word == *text) {
-                if best_total > existing.total_score {
-                    existing.prev_step = start_idx;
-                    existing.prev_beam_idx = best_prev_idx;
-                    existing.total_score = best_total;
-                }
-            } else {
-                target_beam.push(ViterbiBeamNode {
-                    word: text.clone(),
-                    last_word_id: curr_word_id,
-                    prev_step: start_idx,
-                    prev_beam_idx: best_prev_idx,
-                    total_score: best_total,
-                });
+            Some(BestTransition {
+                prev_beam_idx: best_prev_idx,
+                total_score: best_total,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// 将最佳转移结果写入目标束集合（命中同词则更新分值，否则新增束状态）
+    fn upsert_beam_node(
+        target_beam: &mut Vec<ViterbiBeamNode>,
+        word: &EntryWordInfo<'_>,
+        params: &EntryTransitionParams<'_, '_>,
+        best: BestTransition,
+    ) {
+        if let Some(existing) = target_beam.iter_mut().find(|node| node.word == word.text) {
+            if best.total_score > existing.total_score {
+                existing.prev_step = params.start_idx;
+                existing.prev_beam_idx = best.prev_beam_idx;
+                existing.total_score = best.total_score;
             }
+        } else {
+            target_beam.push(ViterbiBeamNode {
+                word: word.text.to_string(),
+                last_word_id: word.word_id,
+                prev_step: params.start_idx,
+                prev_beam_idx: best.prev_beam_idx,
+                total_score: best.total_score,
+            });
         }
     }
 
     /// 遍历音节切分列表并在词格点拓扑上推进束搜索动态规划
     fn solve_syllable_lattice(params: &LatticeSolveParams<'_>, dp: &mut [Vec<ViterbiBeamNode>]) {
         let LatticeSolveParams {
-            syllables,
-            table,
-            has_bigram,
-            ctx_str,
+            syllables, table, ..
         } = *params;
         let n = syllables.len();
         let beam_width = Self::dynamic_beam_width(n);
@@ -283,19 +379,7 @@ impl ViterbiDecoder {
             for span in 1..=max_span {
                 let end_idx = start_idx + span;
                 let sub_syls = &syllables[start_idx..end_idx];
-
-                let key: &str = if span == 1 {
-                    sub_syls[0].as_str()
-                } else {
-                    key_buf.clear();
-                    for (i, syl) in sub_syls.iter().enumerate() {
-                        if i > 0 {
-                            key_buf.push('\'');
-                        }
-                        key_buf.push_str(syl);
-                    }
-                    &key_buf
-                };
+                let key = Self::build_span_key(sub_syls, &mut key_buf);
 
                 let Some(raw_entries) = Self::lookup_lattice_entries(table, key, span, raw_limit)
                 else {
@@ -306,23 +390,53 @@ impl ViterbiDecoder {
                 let prev_beam = &left_dp[start_idx];
                 let target_beam = &mut right_dp[0];
 
-                for entry in raw_entries.iter().take(raw_limit) {
-                    Self::evaluate_entry_transition(
+                Self::expand_span_beam(
+                    &SpanBeamParams {
+                        lattice: params,
+                        raw_entries: &raw_entries,
                         prev_beam,
-                        target_beam,
-                        entry,
                         start_idx,
-                        ctx_str,
-                        table,
-                        has_bigram,
-                    );
-                }
-
-                // 束搜索剪枝：保留得分最高的 Top-K 个不同末端词状态（根据序列长度自适应确定 K）
-                target_beam.sort_by_key(|state| std::cmp::Reverse(state.total_score));
-                target_beam.truncate(beam_width);
+                        raw_limit,
+                        beam_width,
+                    },
+                    target_beam,
+                );
             }
         }
+    }
+
+    /// 拼接指定音节跨度对应的词典查询键（跨度为 1 时直接借用单音节，避免额外分配）
+    fn build_span_key<'a>(sub_syls: &'a [String], key_buf: &'a mut String) -> &'a str {
+        if sub_syls.len() == 1 {
+            return sub_syls[0].as_str();
+        }
+        key_buf.clear();
+        for (i, syl) in sub_syls.iter().enumerate() {
+            if i > 0 {
+                key_buf.push('\'');
+            }
+            key_buf.push_str(syl);
+        }
+        key_buf
+    }
+
+    /// 将当前跨度的词典条目逐条评估入束，并按束宽剪枝保留高分状态
+    fn expand_span_beam(params: &SpanBeamParams<'_, '_>, target_beam: &mut Vec<ViterbiBeamNode>) {
+        for entry in params.raw_entries.iter().take(params.raw_limit) {
+            Self::evaluate_entry_transition(
+                &EntryTransitionParams {
+                    lattice: params.lattice,
+                    prev_beam: params.prev_beam,
+                    entry,
+                    start_idx: params.start_idx,
+                },
+                target_beam,
+            );
+        }
+
+        // 束搜索剪枝：保留得分最高的 Top-K 个不同末端词状态（根据序列长度自适应确定 K）
+        target_beam.sort_by_key(|state| std::cmp::Reverse(state.total_score));
+        target_beam.truncate(params.beam_width);
     }
 }
 

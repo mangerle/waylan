@@ -131,40 +131,9 @@ impl DictImportService {
             .map(|(w, _)| w.to_lowercase())
             .collect();
 
-        let mut added_count = 0;
-        let mut in_yaml_header = false;
+        let added_count = Self::parse_english_words(&content, &mut existing, aux);
 
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed == "---" {
-                in_yaml_header = true;
-                continue;
-            }
-            if trimmed == "..." {
-                in_yaml_header = false;
-                continue;
-            }
-            if in_yaml_header || trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            let word = trimmed.split('\t').next().unwrap_or("").trim();
-            if !word.is_empty()
-                && word.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
-                && existing.insert(word.to_lowercase())
-            {
-                aux.english_words.push((word.to_string(), 50_000));
-                added_count += 1;
-            }
-        }
-
-        if let Some(save_path) = aux_save_path {
-            aux.save_to_file(save_path)
-                .map_err(|e| DictImportError::SaveFailed {
-                    path: save_path.to_path_buf(),
-                    reason: e.to_string(),
-                })?;
-        }
+        Self::save_aux_dict(aux, aux_save_path)?;
 
         Ok(AuxImportReport {
             added_count,
@@ -195,6 +164,66 @@ impl DictImportService {
             .map(|(k, s, _)| (k.clone(), s.clone()))
             .collect();
 
+        let added_count = Self::parse_symbols(&content, &mut existing, aux);
+
+        Self::save_aux_dict(aux, aux_save_path)?;
+
+        Ok(AuxImportReport {
+            added_count,
+            total_count: aux.symbols.len(),
+        })
+    }
+
+    /// 解析英文词表文本并去重合入辅助词库，返回本次新增条目数
+    ///
+    /// # 设计原理
+    /// - 词表可能带有 YAML 头部（`---` 与 `...` 之间），该区间一律跳过；
+    ///   仅接受纯 ASCII 字母与连字符构成的单词，杜绝符号与数字污染英文词库。
+    fn parse_english_words(
+        content: &str,
+        existing: &mut HashSet<String>,
+        aux: &mut AuxiliaryDict,
+    ) -> usize {
+        let mut added_count = 0;
+        let mut in_yaml_header = false;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed == "---" {
+                in_yaml_header = true;
+                continue;
+            }
+            if trimmed == "..." {
+                in_yaml_header = false;
+                continue;
+            }
+            if in_yaml_header || trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let word = trimmed.split('\t').next().unwrap_or("").trim();
+            if !word.is_empty()
+                && word.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
+                && existing.insert(word.to_lowercase())
+            {
+                aux.english_words.push((word.to_string(), 50_000));
+                added_count += 1;
+            }
+        }
+
+        added_count
+    }
+
+    /// 解析符号映射表文本并去重合入辅助词库，返回本次新增条目数
+    ///
+    /// # 设计原理
+    /// - 符号表以制表符分隔"快捷码 / 符号 / 描述"三列，缺省描述时统一回退为"外部符号"；
+    ///   以"快捷码 + 符号"二元组作为去重键，允许同一快捷码对应多个不同符号。
+    fn parse_symbols(
+        content: &str,
+        existing: &mut HashSet<(String, String)>,
+        aux: &mut AuxiliaryDict,
+    ) -> usize {
         let mut added_count = 0;
 
         for line in content.lines() {
@@ -218,6 +247,14 @@ impl DictImportService {
             }
         }
 
+        added_count
+    }
+
+    /// 将辅助词库落盘到指定路径（未指定路径时仅在内存中生效）
+    fn save_aux_dict(
+        aux: &AuxiliaryDict,
+        aux_save_path: Option<&Path>,
+    ) -> Result<(), DictImportError> {
         if let Some(save_path) = aux_save_path {
             aux.save_to_file(save_path)
                 .map_err(|e| DictImportError::SaveFailed {
@@ -225,11 +262,7 @@ impl DictImportService {
                     reason: e.to_string(),
                 })?;
         }
-
-        Ok(AuxImportReport {
-            added_count,
-            total_count: aux.symbols.len(),
-        })
+        Ok(())
     }
 }
 

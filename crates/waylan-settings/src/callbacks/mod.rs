@@ -48,6 +48,21 @@ pub fn register_settings_callbacks(window: &SettingsWindow, context: SettingsCal
             },
     } = context;
 
+    // 1. 注册配置保存与恢复默认设置回调
+    register_persistence_callbacks(window, loaded_config);
+
+    // 2. 注册外部词库文件选取与异步导入回调
+    register_dict_import_callbacks(window, aux_dict);
+
+    // 3. 注册自定义短语管理与自适应模型清空回调
+    register_phrase_callbacks(window, phrases_model, phrase_path);
+}
+
+/// 注册配置持久化回调（保存设置、恢复默认设置）
+///
+/// 设计意图：将「写盘落盘 + 界面状态回写」这两段具体业务逻辑从主装配函数中剥离，
+/// 使主装配函数仅保留回调注册顺序的编排职责，避免装配层与业务实现相互渗透。
+fn register_persistence_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
     // 1. 保存设置回调
     let window_weak = window.as_weak();
     let current_cfg_cell = loaded_config;
@@ -81,10 +96,4 @@ pub fn register_settings_callbacks(window: &SettingsWindow, context: SettingsCal
             win.set_global_status(SharedString::from("已恢复为默认配置（点击保存后生效）"));
         }
     });
-
-    // 3. 注册外部词库文件选取与异步导入回调
-    register_dict_import_callbacks(window, aux_dict);
-
-    // 4. 注册自定义短语管理与自适应模型清空回调
-    register_phrase_callbacks(window, phrases_model, phrase_path);
 }

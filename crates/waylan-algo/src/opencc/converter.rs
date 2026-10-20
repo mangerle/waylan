@@ -1,7 +1,12 @@
 //! 简繁转换正向最大匹配（FMM）与候选词转换引擎
 
+use std::str::CharIndices;
+
 use super::OpenCcDict;
 use crate::types::AlgoCandidate;
+
+/// FMM 单次匹配允许的最大窗口字符数上限
+const MAX_FMM_WINDOW: usize = 24;
 
 impl OpenCcDict {
     /// 使用正向最大匹配（FMM）将输入简体文本转换为繁体文本
@@ -24,31 +29,12 @@ impl OpenCcDict {
             if let Some(&max_len) = self.first_char_max_len.get(&first_ch) {
                 if max_len >= 2 {
                     // 使用栈固定数组收集 UTF-8 字节结束偏移，彻底消除每次字符匹配时的堆内存分配
-                    const MAX_FMM_WINDOW: usize = 24;
-                    let mut end_offsets = [0usize; MAX_FMM_WINDOW];
-                    let mut offset_count = 0usize;
-                    let limit = max_len.min(MAX_FMM_WINDOW);
-
-                    for (char_idx, (byte_idx, ch)) in chars_iter.enumerate() {
-                        let cur_char_count = char_idx + 2;
-                        if offset_count < MAX_FMM_WINDOW {
-                            end_offsets[offset_count] = byte_idx + ch.len_utf8();
-                            offset_count += 1;
-                        }
-                        if cur_char_count >= limit {
-                            break;
-                        }
-                    }
-
-                    // 从最长窗口向下递减执行零拷贝切片匹配
-                    for &byte_end in end_offsets[..offset_count].iter().rev() {
-                        let slice = &rem[..byte_end];
-                        if let Some(trad_phrase) = self.lookup_phrase(slice) {
-                            result.push_str(trad_phrase);
-                            pos += byte_end;
-                            matched_phrase = true;
-                            break;
-                        }
+                    if let Some((trad_phrase, byte_end)) =
+                        self.match_phrase(rem, chars_iter, max_len)
+                    {
+                        result.push_str(trad_phrase);
+                        pos += byte_end;
+                        matched_phrase = true;
                     }
                 }
             }
@@ -65,6 +51,50 @@ impl OpenCcDict {
         }
 
         result
+    }
+
+    /// 以正向最大匹配（FMM）在剩余文本中命中词组转换，返回命中的繁体文本与推进的字节数
+    fn match_phrase(
+        &self,
+        rem: &str,
+        chars_iter: CharIndices,
+        max_len: usize,
+    ) -> Option<(&str, usize)> {
+        let mut end_offsets = [0usize; MAX_FMM_WINDOW];
+        let offset_count =
+            Self::collect_window_ends(chars_iter, max_len.min(MAX_FMM_WINDOW), &mut end_offsets);
+
+        // 从最长窗口向下递减执行零拷贝切片匹配
+        for &byte_end in end_offsets[..offset_count].iter().rev() {
+            let slice = &rem[..byte_end];
+            if let Some(trad_phrase) = self.lookup_phrase(slice) {
+                return Some((trad_phrase, byte_end));
+            }
+        }
+
+        None
+    }
+
+    /// 收集候选匹配窗口的 UTF-8 字节结束偏移，返回实际收集到的窗口数量
+    fn collect_window_ends(
+        chars_iter: CharIndices,
+        limit: usize,
+        end_offsets: &mut [usize; MAX_FMM_WINDOW],
+    ) -> usize {
+        let mut offset_count = 0usize;
+
+        for (char_idx, (byte_idx, ch)) in chars_iter.enumerate() {
+            let cur_char_count = char_idx + 2;
+            if offset_count < MAX_FMM_WINDOW {
+                end_offsets[offset_count] = byte_idx + ch.len_utf8();
+                offset_count += 1;
+            }
+            if cur_char_count >= limit {
+                break;
+            }
+        }
+
+        offset_count
     }
 
     /// 对候选词列表执行简转繁处理：

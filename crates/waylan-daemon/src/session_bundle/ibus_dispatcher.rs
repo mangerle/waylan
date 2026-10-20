@@ -106,6 +106,42 @@ fn apply_initial_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore
     core.runtime_mut().apply_initial_config(cfg);
 }
 
+/// 构建 IBus 会话核心实例，并按需挂载托盘状态联动与初始输入配置
+fn build_ibus_session_core(
+    engine: AlgoEngine,
+    tray: Option<&TrayService>,
+    initial_cfg: &AppConfig,
+) -> IbusSessionCore {
+    let mut session_core = IbusSessionCore::new(engine).with_voice_provider(Box::new(
+        waylan_voice::VoiceInteractionManager::new(initial_cfg.voice.clone()),
+    ));
+    if let Some(tray) = tray {
+        session_core.attach_tray(tray.shared_flags().clone(), Some(tray.icon_notifier()));
+    }
+    apply_initial_config_to_ibus_core(initial_cfg, &mut session_core);
+    session_core
+}
+
+/// 构建宿主侧 IBus 配置热重载驱动器
+fn build_config_reloader(exclusive_source: bool) -> Arc<DaemonIbusConfigReloader> {
+    Arc::new(DaemonIbusConfigReloader {
+        exclusive_input_source: AtomicBool::new(exclusive_source),
+        pending_sync_exclusive: AtomicBool::new(false),
+    })
+}
+
+/// 构建 IBus 会话停机协调器，串联宿主停机标志、事件循环唤醒与优雅重启回调
+fn build_ibus_coordinator(coordinator: &ShutdownCoordinator) -> IbusShutdownCoordinator {
+    IbusShutdownCoordinator::new(
+        coordinator.flag(),
+        coordinator.loop_wakeup(),
+        Some(Arc::new({
+            let coord = coordinator.clone();
+            move || coord.trigger_graceful_restart()
+        })),
+    )
+}
+
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
 pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), DaemonError> {
     info!(
@@ -118,32 +154,13 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
     );
 
     let initial_cfg = AppConfig::load_or_create();
-    let mut session_core = IbusSessionCore::new(opts.engine).with_voice_provider(Box::new(
-        waylan_voice::VoiceInteractionManager::new(initial_cfg.voice.clone()),
-    ));
-    if let Some(tray) = opts.tray {
-        session_core.attach_tray(
-            tray.shared_flags().clone(),
-            opts.tray.as_ref().map(|t| t.icon_notifier()),
-        );
-    }
-    apply_initial_config_to_ibus_core(&initial_cfg, &mut session_core);
+    let session_core = build_ibus_session_core(opts.engine, opts.tray, &initial_cfg);
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {
         subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),
     });
-    let config_reloader = Arc::new(DaemonIbusConfigReloader {
-        exclusive_input_source: AtomicBool::new(opts.exclusive_source),
-        pending_sync_exclusive: AtomicBool::new(false),
-    });
-    let ibus_coordinator = IbusShutdownCoordinator::new(
-        opts.coordinator.flag(),
-        opts.coordinator.loop_wakeup(),
-        Some(Arc::new({
-            let coord = opts.coordinator.clone();
-            move || coord.trigger_graceful_restart()
-        })),
-    );
+    let config_reloader = build_config_reloader(opts.exclusive_source);
+    let ibus_coordinator = build_ibus_coordinator(&opts.coordinator);
 
     let ibus_res = run_ibus_session(IbusSessionOptions {
         session_core,

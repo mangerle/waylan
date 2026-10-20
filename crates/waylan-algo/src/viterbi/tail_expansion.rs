@@ -26,6 +26,22 @@ pub(super) struct TailExpansionContext<'a> {
 /// 候选分支扩展项 (回溯步索引, 束索引, 扩展词文本, 累计得分)
 type ExtensionBranch = (usize, usize, String, i64);
 
+/// 单个双字词条目向前驱束集合扩展的上下文参数对象
+struct CompoundEntryParams<'a, 'b> {
+    /// 尾部扩展上下文
+    ctx: &'a TailExpansionContext<'b>,
+    /// 前驱步索引
+    prev_step: usize,
+    /// 前驱束集合
+    prev_beam: &'a [ViterbiBeamNode],
+    /// 候选词文本
+    text: &'a str,
+    /// 候选词在二元词表中的词 ID
+    word_id: Option<u32>,
+    /// 候选词原始词频
+    raw_score: u32,
+}
+
 /// 对末尾残存拼音与声母链进行结合扩展与整句回溯生成
 pub(super) fn expand_remaining_tail(
     ctx: &TailExpansionContext<'_>,
@@ -123,44 +139,64 @@ fn expand_compound_with_prefix(
     let mut key_buf = String::with_capacity(16);
 
     for &syl in find_syllables_by_prefix(ctx.remaining) {
-        key_buf.clear();
-        key_buf.push_str(last_syl);
-        key_buf.push('\'');
-        key_buf.push_str(syl);
+        build_compound_key(last_syl, syl, &mut key_buf);
 
         if let Some(entries) = ctx.table.get_top_raw_entries(&key_buf, 2) {
             for (text, raw_score, word_id_opt) in entries.iter().take(2) {
-                let freq_score = unigram_log_score(*raw_score);
-                let curr_word_id = word_id_opt.or_else(|| {
-                    if ctx.has_bigram {
-                        ctx.table.get_word_id(text)
-                    } else {
-                        None
-                    }
-                });
-                let curr_char_len = text.chars().count() as i64;
-
-                for (prev_beam_idx, prev) in dp[prev_step].iter().enumerate() {
-                    let prev_word = if prev_step == 0 {
-                        ctx.prev_context.unwrap_or("")
-                    } else {
-                        &prev.word
-                    };
-                    let trans_score = BigramLanguageModel::transition_score_cached(
-                        (prev_word, prev.last_word_id),
-                        (text, curr_word_id, curr_char_len),
-                        freq_score,
-                        ctx.table,
-                    );
-                    out.push((
+                push_compound_branches(
+                    &CompoundEntryParams {
+                        ctx,
                         prev_step,
-                        prev_beam_idx,
-                        text.clone(),
-                        prev.total_score.saturating_add(trans_score),
-                    ));
-                }
+                        prev_beam: &dp[prev_step],
+                        text,
+                        word_id: *word_id_opt,
+                        raw_score: *raw_score,
+                    },
+                    out,
+                );
             }
         }
+    }
+}
+
+/// 拼接候选双字词的拼音键（前一完整音节 + 声母前缀展开所得音节）
+fn build_compound_key(last_syl: &str, syl: &str, key_buf: &mut String) {
+    key_buf.clear();
+    key_buf.push_str(last_syl);
+    key_buf.push('\'');
+    key_buf.push_str(syl);
+}
+
+/// 将单个双字词条目与前驱束集合组合为扩展分支并推入结果
+fn push_compound_branches(params: &CompoundEntryParams<'_, '_>, out: &mut Vec<ExtensionBranch>) {
+    let freq_score = unigram_log_score(params.raw_score);
+    let curr_word_id = params.word_id.or_else(|| {
+        if params.ctx.has_bigram {
+            params.ctx.table.get_word_id(params.text)
+        } else {
+            None
+        }
+    });
+    let curr_char_len = params.text.chars().count() as i64;
+
+    for (prev_beam_idx, prev) in params.prev_beam.iter().enumerate() {
+        let prev_word = if params.prev_step == 0 {
+            params.ctx.prev_context.unwrap_or("")
+        } else {
+            &prev.word
+        };
+        let trans_score = BigramLanguageModel::transition_score_cached(
+            (prev_word, prev.last_word_id),
+            (params.text, curr_word_id, curr_char_len),
+            freq_score,
+            params.ctx.table,
+        );
+        out.push((
+            params.prev_step,
+            prev_beam_idx,
+            params.text.to_string(),
+            prev.total_score.saturating_add(trans_score),
+        ));
     }
 }
 

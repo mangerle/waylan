@@ -176,46 +176,57 @@ pub fn weighted_edit_distance(source: &str, target: &str) -> u32 {
         return 0;
     }
     if source.is_ascii() && target.is_ascii() {
-        let s_bytes = source.as_bytes();
-        let t_bytes = target.as_bytes();
-        let m = s_bytes.len();
-        let n = t_bytes.len();
-
-        if m == 0 {
-            return (n as u32) * 26;
-        }
-        if n == 0 {
-            return (m as u32) * 26;
-        }
-        if m.abs_diff(n) > 2 {
-            return 100;
-        }
-
-        if m <= 9 && n <= 9 {
-            let mut dp = [[0u32; 10]; 10];
-            for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
-                row[0] = (i as u32) * 26;
-            }
-            for (j, item) in dp[0].iter_mut().enumerate().take(n + 1) {
-                *item = (j as u32) * 26;
-            }
-            for i in 1..=m {
-                let sc = s_bytes[i - 1] as char;
-                for j in 1..=n {
-                    let tc = t_bytes[j - 1] as char;
-                    let sub_cost = char_substitution_cost(sc, tc);
-                    let cost_sub = dp[i - 1][j - 1] + sub_cost;
-                    let cost_del = dp[i - 1][j] + 26;
-                    let cost_ins = dp[i][j - 1] + 26;
-                    dp[i][j] = cost_sub.min(cost_del).min(cost_ins);
-                }
-            }
-            return dp[m][n];
+        if let Some(distance) = ascii_weighted_edit_distance(source.as_bytes(), target.as_bytes()) {
+            return distance;
         }
     }
 
     let s_chars: Vec<char> = source.chars().collect();
     let t_chars: Vec<char> = target.chars().collect();
+    chars_weighted_edit_distance(&s_chars, &t_chars)
+}
+
+/// 计算纯 ASCII 输入的加权编辑距离（长度在栈上小矩阵可承载时走零堆分配快路径，超出范围返回 None）
+fn ascii_weighted_edit_distance(s_bytes: &[u8], t_bytes: &[u8]) -> Option<u32> {
+    let m = s_bytes.len();
+    let n = t_bytes.len();
+
+    if m == 0 {
+        return Some((n as u32) * 26);
+    }
+    if n == 0 {
+        return Some((m as u32) * 26);
+    }
+    if m.abs_diff(n) > 2 {
+        return Some(100);
+    }
+    if m > 9 || n > 9 {
+        return None;
+    }
+
+    let mut dp = [[0u32; 10]; 10];
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = (i as u32) * 26;
+    }
+    for (j, item) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *item = (j as u32) * 26;
+    }
+    for i in 1..=m {
+        let sc = s_bytes[i - 1] as char;
+        for j in 1..=n {
+            let tc = t_bytes[j - 1] as char;
+            let sub_cost = char_substitution_cost(sc, tc);
+            let cost_sub = dp[i - 1][j - 1] + sub_cost;
+            let cost_del = dp[i - 1][j] + 26;
+            let cost_ins = dp[i][j - 1] + 26;
+            dp[i][j] = cost_sub.min(cost_del).min(cost_ins);
+        }
+    }
+    Some(dp[m][n])
+}
+
+/// 计算任意 Unicode 字符序列的加权编辑距离（通用堆上动态规划路径）
+fn chars_weighted_edit_distance(s_chars: &[char], t_chars: &[char]) -> u32 {
     let m = s_chars.len();
     let n = t_chars.len();
 
@@ -225,13 +236,11 @@ pub fn weighted_edit_distance(source: &str, target: &str) -> u32 {
     if n == 0 {
         return (m as u32) * 26;
     }
-
     if m.abs_diff(n) > 2 {
         return 100;
     }
 
     let mut dp = vec![vec![0u32; n + 1]; m + 1];
-
     for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
         row[0] = (i as u32) * 26;
     }
@@ -309,63 +318,78 @@ pub fn get_typo_corrections_with_rules(slice: &str, rules: &TypoCorrectionRules)
     let mut results = Vec::new();
 
     // 1. 韵母易混颠倒属于通用拼写容错，受主开关控制
-    if slice.contains("ie") {
-        push_valid_typo(&mut results, slice, slice.replace("ie", "ei"));
-    } else if slice.contains("ei") {
-        push_valid_typo(&mut results, slice, slice.replace("ei", "ie"));
-    }
-    if slice.contains("ui") {
-        push_valid_typo(&mut results, slice, slice.replace("ui", "iu"));
-    } else if slice.contains("iu") {
-        push_valid_typo(&mut results, slice, slice.replace("iu", "ui"));
-    }
+    collect_rhyme_swap_typos(slice, &mut results);
 
     // 2. 鼻音与辅音快速键入倒置
+    collect_nasal_typos(slice, rules, &mut results);
+
+    // 3. 韵母缩写与 ü 系列输入习惯变换
+    collect_abbrev_typos(slice, rules, &mut results);
+
+    results
+}
+
+/// 收集韵母易混颠倒的容错音节（ie/ei 与 ui/iu 双向互换）
+fn collect_rhyme_swap_typos(slice: &str, results: &mut Vec<String>) {
+    if slice.contains("ie") {
+        push_valid_typo(results, slice, slice.replace("ie", "ei"));
+    } else if slice.contains("ei") {
+        push_valid_typo(results, slice, slice.replace("ei", "ie"));
+    }
+    if slice.contains("ui") {
+        push_valid_typo(results, slice, slice.replace("ui", "iu"));
+    } else if slice.contains("iu") {
+        push_valid_typo(results, slice, slice.replace("iu", "ui"));
+    }
+}
+
+/// 收集鼻音与辅音快速键入倒置的容错音节（gn、neg、mg 尾部误触归一）
+fn collect_nasal_typos(slice: &str, rules: &TypoCorrectionRules, results: &mut Vec<String>) {
     if rules.gn_ng {
         if let Some(prefix) = slice.strip_suffix("gn") {
-            push_valid_typo(&mut results, slice, format!("{}ng", prefix));
+            push_valid_typo(results, slice, format!("{}ng", prefix));
         }
         if let Some(prefix) = slice.strip_suffix("neg") {
-            push_valid_typo(&mut results, slice, format!("{}eng", prefix));
+            push_valid_typo(results, slice, format!("{}eng", prefix));
         }
     }
     if rules.mg_ng {
         if let Some(prefix) = slice.strip_suffix("mg") {
-            push_valid_typo(&mut results, slice, format!("{}ng", prefix));
+            push_valid_typo(results, slice, format!("{}ng", prefix));
         }
     }
+}
 
-    // 3. 韵母缩写与 ü 系列输入习惯变换
+/// 收集韵母缩写与 ü 系列输入习惯变换的容错音节
+fn collect_abbrev_typos(slice: &str, rules: &TypoCorrectionRules, results: &mut Vec<String>) {
     if rules.iou_iu && slice.contains("iou") {
-        push_valid_typo(&mut results, slice, slice.replace("iou", "iu"));
+        push_valid_typo(results, slice, slice.replace("iou", "iu"));
     }
     if rules.uei_ui && slice.contains("uei") {
-        push_valid_typo(&mut results, slice, slice.replace("uei", "ui"));
+        push_valid_typo(results, slice, slice.replace("uei", "ui"));
     }
     if rules.uen_un && slice.contains("uen") {
-        push_valid_typo(&mut results, slice, slice.replace("uen", "un"));
+        push_valid_typo(results, slice, slice.replace("uen", "un"));
     }
     if rules.ue_ve && slice.contains("ue") {
-        push_valid_typo(&mut results, slice, slice.replace("ue", "ve"));
+        push_valid_typo(results, slice, slice.replace("ue", "ve"));
     }
     if rules.v_u {
         if slice.contains('v') {
-            push_valid_typo(&mut results, slice, slice.replace('v', "u"));
+            push_valid_typo(results, slice, slice.replace('v', "u"));
         }
         if slice.contains("ve") {
-            push_valid_typo(&mut results, slice, slice.replace("ve", "ue"));
+            push_valid_typo(results, slice, slice.replace("ve", "ue"));
         }
         if slice.contains("van") {
-            push_valid_typo(&mut results, slice, slice.replace("van", "uan"));
+            push_valid_typo(results, slice, slice.replace("van", "uan"));
         }
     }
     if rules.on_ong {
         if let Some(prefix) = slice.strip_suffix("on") {
-            push_valid_typo(&mut results, slice, format!("{}ong", prefix));
+            push_valid_typo(results, slice, format!("{}ong", prefix));
         }
     }
-
-    results
 }
 
 /// 将合法且不重复的纠错音节追加到结果列表

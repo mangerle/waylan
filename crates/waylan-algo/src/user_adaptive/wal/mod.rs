@@ -166,10 +166,11 @@ impl UserAdaptiveWal {
         model: &mut UserAdaptiveModel,
         path_ref: &Path,
     ) -> Result<(), AlgoError> {
-        let mut guard = self.wal_file.lock();
-
-        if !Self::check_need_reopen(guard.as_ref(), path_ref) {
-            return Ok(());
+        {
+            let guard = self.wal_file.lock();
+            if !Self::check_need_reopen(guard.as_ref(), path_ref) {
+                return Ok(());
+            }
         }
 
         if let Some(parent) = path_ref.parent() {
@@ -179,26 +180,49 @@ impl UserAdaptiveWal {
         }
 
         // 若目标文件已存在但并非当前 V2 WAL 格式，先合并重放旧数据再归并升级为标准 V2 WAL 格式
-        if path_ref.exists() {
-            if let Ok(mut existing_file) = File::open(path_ref) {
-                let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
-                if len > 0 {
-                    let mut magic = [0u8; 16];
-                    if existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC {
-                        drop(existing_file);
-                        drop(guard);
-                        if let Ok(old_model) = replay::load_or_replay_without_lock(path_ref) {
-                            model.merge(&old_model);
-                        }
-                        compactor::compact_model_internal(model, path_ref, || {
-                            self.mark_internal_compact();
-                        })?;
-                        guard = self.wal_file.lock();
-                    }
-                }
-            }
+        if Self::is_legacy_wal_format(path_ref) {
+            self.upgrade_legacy_wal(model, path_ref)?;
         }
 
+        let mut guard = self.wal_file.lock();
+        let file = Self::open_wal_append_file(path_ref)?;
+
+        *guard = Some((PathBuf::from(path_ref), file));
+        Ok(())
+    }
+
+    /// 判断目标路径上的 WAL 文件是否为待升级的旧格式（非空且不带 V2 魔数头）
+    fn is_legacy_wal_format(path_ref: &Path) -> bool {
+        if !path_ref.exists() {
+            return false;
+        }
+        let Ok(mut existing_file) = File::open(path_ref) else {
+            return false;
+        };
+        let len = existing_file.metadata().map(|m| m.len()).unwrap_or(0);
+        if len == 0 {
+            return false;
+        }
+        let mut magic = [0u8; 16];
+        existing_file.read_exact(&mut magic).is_err() || &magic != WAL_MAGIC
+    }
+
+    /// 将旧格式 WAL 中的历史词条合并入内存模型并归并升级为标准 V2 WAL
+    fn upgrade_legacy_wal(
+        &self,
+        model: &mut UserAdaptiveModel,
+        path_ref: &Path,
+    ) -> Result<(), AlgoError> {
+        if let Ok(old_model) = replay::load_or_replay_without_lock(path_ref) {
+            model.merge(&old_model);
+        }
+        compactor::compact_model_internal(model, path_ref, || {
+            self.mark_internal_compact();
+        })
+    }
+
+    /// 以追加模式打开 WAL 日志文件并按需写入 V2 魔数头（受跨进程排他锁保护）
+    fn open_wal_append_file(path_ref: &Path) -> Result<File, AlgoError> {
         let mut options = OpenOptions::new();
         options.create(true).append(true);
         #[cfg(unix)]
@@ -220,8 +244,7 @@ impl UserAdaptiveWal {
                 })?;
         }
 
-        *guard = Some((PathBuf::from(path_ref), file));
-        Ok(())
+        Ok(file)
     }
 
     /// 序列化单条用户上屏 WAL 帧二进制数据包（包含校验和）

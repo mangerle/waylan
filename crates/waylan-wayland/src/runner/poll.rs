@@ -33,6 +33,46 @@ pub(super) enum PollEventOutcome {
     Interrupted,
 }
 
+/// 解析 poll 就绪结果，返回唤醒通道与 inotify 监控各自的触发标记
+fn interpret_poll_result(
+    fds: &[PollFd<'_>],
+    inotify_idx: Option<usize>,
+    wakeup_idx: Option<usize>,
+) -> (bool, bool) {
+    let wakeup_triggered = wakeup_idx
+        .map(|idx| {
+            fds[idx]
+                .revents()
+                .intersects(PollFlags::IN | PollFlags::ERR)
+        })
+        .unwrap_or(false);
+    let inotify_triggered = inotify_idx
+        .map(|idx| {
+            fds[idx]
+                .revents()
+                .intersects(PollFlags::IN | PollFlags::ERR)
+        })
+        .unwrap_or(false);
+
+    (wakeup_triggered, inotify_triggered)
+}
+
+/// 在 poll 就绪后读取 Wayland 事件，致命 IO 错误向上抛出
+///
+/// 传入 `None` 表示本次无 Wayland 事件可读，读取守卫随参数析构立即释放读锁。
+fn read_wayland_events(guard: Option<ReadEventsGuard>) -> Result<(), WaylandRunnerError> {
+    let Some(guard) = guard else {
+        return Ok(());
+    };
+
+    if let Err(WaylandError::Io(io_err)) = guard.read() {
+        if io_err.kind() != ErrorKind::WouldBlock {
+            return Err(io_err.into());
+        }
+    }
+    Ok(())
+}
+
 /// 执行事件循环多路复用 poll 与 Wayland 消息读取
 pub(super) fn poll_and_read_events(
     guard: ReadEventsGuard,
@@ -68,30 +108,11 @@ pub(super) fn poll_and_read_events(
             Ok(PollEventOutcome::TimedOut)
         }
         Ok(_) => {
-            let wakeup_triggered = wakeup_idx
-                .map(|idx| {
-                    fds[idx]
-                        .revents()
-                        .intersects(PollFlags::IN | PollFlags::ERR)
-                })
-                .unwrap_or(false);
-            let inotify_triggered = inotify_idx
-                .map(|idx| {
-                    fds[idx]
-                        .revents()
-                        .intersects(PollFlags::IN | PollFlags::ERR)
-                })
-                .unwrap_or(false);
+            let (wakeup_triggered, inotify_triggered) =
+                interpret_poll_result(&fds, inotify_idx, wakeup_idx);
 
-            if fds[0].revents().intersects(PollFlags::IN | PollFlags::ERR) {
-                if let Err(WaylandError::Io(io_err)) = guard.read() {
-                    if io_err.kind() != ErrorKind::WouldBlock {
-                        return Err(io_err.into());
-                    }
-                }
-            } else {
-                drop(guard);
-            }
+            let wayland_ready = fds[0].revents().intersects(PollFlags::IN | PollFlags::ERR);
+            read_wayland_events(if wayland_ready { Some(guard) } else { None })?;
 
             Ok(PollEventOutcome::WokenUp {
                 wakeup_triggered,

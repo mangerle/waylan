@@ -26,6 +26,19 @@ impl LexiconTable {
             return;
         }
 
+        let candidates =
+            self.collect_prefix_extension_candidates(prefix_syllables, remaining_initial);
+        Self::merge_prefix_extension_candidates(candidates, out);
+    }
+
+    /// 采集带末尾残存前缀的补全候选词
+    ///
+    /// 无已确定前缀时取前缀音节对应的单字候选；已有前缀时以带隔音符的完整键检索并叠加长度增益。
+    fn collect_prefix_extension_candidates(
+        &self,
+        prefix_syllables: &[String],
+        remaining_initial: &str,
+    ) -> Vec<AlgoCandidate> {
         let matched_syllables = find_syllables_by_prefix(remaining_initial);
         let mut candidates = Vec::with_capacity(matched_syllables.len() * 4);
 
@@ -66,6 +79,16 @@ impl LexiconTable {
             }
         }
 
+        candidates
+    }
+
+    /// 将补全候选词按分值降序合并进复用容器
+    ///
+    /// 同名候选保留层级更优者（层级相同时取更高分值），最多向容器新增 20 条候选。
+    fn merge_prefix_extension_candidates(
+        mut candidates: Vec<AlgoCandidate>,
+        out: &mut Vec<AlgoCandidate>,
+    ) {
         candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
         let mut count = 0;
         for cand in candidates {

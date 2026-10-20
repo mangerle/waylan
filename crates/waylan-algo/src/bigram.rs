@@ -38,6 +38,88 @@ pub struct CompactMmapBigram {
     cols_offset: usize,
 }
 
+/// Bigram 文件头解析结果（记录各数据段的绝对偏移量与规模）
+struct BigramHeader {
+    /// 词表总容量 V
+    vocab_size: usize,
+    /// 收录的有效二元词对总数 N
+    total_pairs: usize,
+    /// 码本偏移量
+    codebook_offset: usize,
+    /// 行偏移数组起始偏移
+    row_offsets_offset: usize,
+    /// 列与分数数据数组起始偏移
+    cols_offset: usize,
+}
+
+impl BigramHeader {
+    /// 解析并校验 Bigram 文件头（魔数、版本与各数据段起始偏移量）
+    fn parse(mmap: &Mmap, path: &Path) -> Result<Self, AlgoError> {
+        Self::validate_magic_and_version(mmap, path)?;
+
+        let vocab_size = read_u32_le(mmap, 20)
+            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram词表大小读取失败"))?
+            as usize;
+        let total_pairs = read_u32_le(mmap, 24)
+            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram词对总数读取失败"))?
+            as usize;
+        let codebook_offset = read_u64_le(mmap, 28)
+            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram码本偏移读取失败"))?
+            as usize;
+        let row_offsets_offset = read_u64_le(mmap, 36)
+            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram行偏移表读取失败"))?
+            as usize;
+        let cols_offset = read_u64_le(mmap, 44)
+            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram列数据偏移读取失败"))?
+            as usize;
+
+        Ok(Self {
+            vocab_size,
+            total_pairs,
+            codebook_offset,
+            row_offsets_offset,
+            cols_offset,
+        })
+    }
+
+    /// 校验 Bigram 文件的体积下限、魔数标识与版本号
+    fn validate_magic_and_version(mmap: &Mmap, path: &Path) -> Result<(), AlgoError> {
+        if mmap.len() < BIGRAM_HEADER_SIZE.saturating_add(CODEBOOK_SIZE) {
+            return Err(AlgoError::deserialize_failed(path, "Bigram文件体积过小"));
+        }
+
+        if &mmap[0..16] != BIGRAM_MAGIC {
+            return Err(AlgoError::deserialize_failed(path, "Bigram文件魔数不匹配"));
+        }
+
+        let version = read_u32_le(mmap, 16)
+            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram版本字段缺失"))?;
+        if version != 2 {
+            return Err(AlgoError::deserialize_failed(
+                path,
+                format!("不支持的Bigram版本号: {}", version),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 校验各数据段的结束偏移是否均落在内存映射范围内
+    fn validate_sections(&self, mmap: &Mmap, path: &Path) -> Result<(), AlgoError> {
+        let codebook_end = self.codebook_offset.saturating_add(CODEBOOK_SIZE);
+        let row_offsets_end = self
+            .row_offsets_offset
+            .saturating_add(self.vocab_size.saturating_add(1).saturating_mul(4));
+        let cols_end = self
+            .cols_offset
+            .saturating_add(self.total_pairs.saturating_mul(4));
+        let expected_size = codebook_end.max(row_offsets_end).max(cols_end);
+        if mmap.len() < expected_size {
+            return Err(AlgoError::deserialize_failed(path, "Bigram数据区截断损坏"));
+        }
+        Ok(())
+    }
+}
+
 impl std::fmt::Debug for CompactMmapBigram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompactMmapBigram")
@@ -67,55 +149,15 @@ impl CompactMmapBigram {
 
     /// 从已映射的内存切片解析矩阵元数据并验证合法性
     pub fn from_mmap(mmap: Mmap, path: &Path) -> Result<Self, AlgoError> {
-        if mmap.len() < BIGRAM_HEADER_SIZE.saturating_add(CODEBOOK_SIZE) {
-            return Err(AlgoError::deserialize_failed(path, "Bigram文件体积过小"));
-        }
-
-        if &mmap[0..16] != BIGRAM_MAGIC {
-            return Err(AlgoError::deserialize_failed(path, "Bigram文件魔数不匹配"));
-        }
-
-        let version = read_u32_le(&mmap, 16)
-            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram版本字段缺失"))?;
-        if version != 2 {
-            return Err(AlgoError::deserialize_failed(
-                path,
-                format!("不支持的Bigram版本号: {}", version),
-            ));
-        }
-
-        let vocab_size = read_u32_le(&mmap, 20)
-            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram词表大小读取失败"))?
-            as usize;
-        let total_pairs = read_u32_le(&mmap, 24)
-            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram词对总数读取失败"))?
-            as usize;
-        let codebook_offset = read_u64_le(&mmap, 28)
-            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram码本偏移读取失败"))?
-            as usize;
-        let row_offsets_offset = read_u64_le(&mmap, 36)
-            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram行偏移表读取失败"))?
-            as usize;
-        let cols_offset = read_u64_le(&mmap, 44)
-            .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram列数据偏移读取失败"))?
-            as usize;
-
-        let codebook_end = codebook_offset.saturating_add(CODEBOOK_SIZE);
-        let row_offsets_end =
-            row_offsets_offset.saturating_add(vocab_size.saturating_add(1).saturating_mul(4));
-        let cols_end = cols_offset.saturating_add(total_pairs.saturating_mul(4));
-        let expected_size = codebook_end.max(row_offsets_end).max(cols_end);
-        if mmap.len() < expected_size {
-            return Err(AlgoError::deserialize_failed(path, "Bigram数据区截断损坏"));
-        }
-
+        let header = BigramHeader::parse(&mmap, path)?;
+        header.validate_sections(&mmap, path)?;
         Ok(Self {
             mmap,
-            vocab_size,
-            total_pairs,
-            codebook_offset,
-            row_offsets_offset,
-            cols_offset,
+            vocab_size: header.vocab_size,
+            total_pairs: header.total_pairs,
+            codebook_offset: header.codebook_offset,
+            row_offsets_offset: header.row_offsets_offset,
+            cols_offset: header.cols_offset,
         })
     }
 

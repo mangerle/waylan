@@ -40,8 +40,24 @@ struct ResolvedTrayIcons {
     icon_en_caps: String,
 }
 
-/// 解析系统环境变量与应用配置中的托盘图标主题路径及各状态图标名称
-fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
+/// 托盘状态图标的名称解析输入参数包
+///
+/// 封装单个状态图标（中文、英文、大写英文）在环境变量、应用配置与内置默认值之间的取值优先级。
+struct TrayIconSpec {
+    /// 环境变量中显式指定的图标名称（优先级最高）
+    env_name: Option<String>,
+    /// 应用配置文件中指定的图标名称（次优先级）
+    config_name: Option<String>,
+    /// 存在自定义图标主题时使用的默认图标名称
+    themed_default: &'static str,
+    /// 不存在自定义图标主题时使用的系统内置图标名称
+    plain_fallback: &'static str,
+}
+
+/// 解析托盘图标主题目录路径，并返回当前是否存在自定义图标主题
+///
+/// 主题来源优先级：环境变量显式指定 > 环境变量图标路径的父目录 > 应用配置 > 随包发布的默认资源目录。
+fn resolve_icon_theme_path(config: &AppConfig) -> (String, bool) {
     let env_theme = env_var_non_empty("WAYLAN_ICON_THEME_PATH");
     let env_path = env_var_non_empty("WAYLAN_ICON_PATH");
     let path_parent = env_path.as_deref().and_then(|p| {
@@ -55,49 +71,69 @@ fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
         .or(path_parent)
         .or_else(|| config.desktop.tray_icon_theme_path.clone());
 
-    let (icon_theme_path, has_custom_theme) = if let Some(p) = explicit_theme {
+    if let Some(p) = explicit_theme {
         (p, true)
     } else if let Some(p) = detect_default_assets_path() {
         (p, true)
     } else {
         (String::new(), false)
-    };
+    }
+}
+
+/// 依据单个状态图标的规格解析出最终可用的图标名称或绝对路径
+fn resolve_state_icon(theme_path: &str, has_custom_theme: bool, spec: TrayIconSpec) -> String {
+    spec.env_name
+        .or(spec.config_name)
+        .map(|name| resolve_icon_path_or_name(theme_path, &name))
+        .unwrap_or_else(|| {
+            if has_custom_theme {
+                resolve_icon_path_or_name(theme_path, spec.themed_default)
+            } else {
+                spec.plain_fallback.to_string()
+            }
+        })
+}
+
+/// 解析系统环境变量与应用配置中的托盘图标主题路径及各状态图标名称
+fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
+    let (icon_theme_path, has_custom_theme) = resolve_icon_theme_path(config);
 
     let env_zh = env_var_non_empty("WAYLAN_ICON_ZH");
     let env_en = env_var_non_empty("WAYLAN_ICON_EN");
     let env_en_caps = env_var_non_empty("WAYLAN_ICON_EN_CAPS");
 
-    let icon_zh = env_zh
-        .or_else(|| config.desktop.tray_icon_zh.clone())
-        .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
-        .unwrap_or_else(|| {
-            if has_custom_theme {
-                resolve_icon_path_or_name(&icon_theme_path, "tray-zh")
-            } else {
-                "input-keyboard".to_string()
-            }
-        });
+    let icon_zh = resolve_state_icon(
+        &icon_theme_path,
+        has_custom_theme,
+        TrayIconSpec {
+            env_name: env_zh,
+            config_name: config.desktop.tray_icon_zh.clone(),
+            themed_default: "tray-zh",
+            plain_fallback: "input-keyboard",
+        },
+    );
 
-    let icon_en = env_en
-        .or_else(|| config.desktop.tray_icon_en.clone())
-        .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
-        .unwrap_or_else(|| {
-            if has_custom_theme {
-                resolve_icon_path_or_name(&icon_theme_path, "tray-en")
-            } else {
-                "input-latin".to_string()
-            }
-        });
+    let icon_en = resolve_state_icon(
+        &icon_theme_path,
+        has_custom_theme,
+        TrayIconSpec {
+            env_name: env_en,
+            config_name: config.desktop.tray_icon_en.clone(),
+            themed_default: "tray-en",
+            plain_fallback: "input-latin",
+        },
+    );
 
-    let icon_en_caps = env_en_caps
-        .map(|name| resolve_icon_path_or_name(&icon_theme_path, &name))
-        .unwrap_or_else(|| {
-            if has_custom_theme {
-                resolve_icon_path_or_name(&icon_theme_path, "tray-en-caps")
-            } else {
-                "input-latin".to_string()
-            }
-        });
+    let icon_en_caps = resolve_state_icon(
+        &icon_theme_path,
+        has_custom_theme,
+        TrayIconSpec {
+            env_name: env_en_caps,
+            config_name: None,
+            themed_default: "tray-en-caps",
+            plain_fallback: "input-latin",
+        },
+    );
 
     ResolvedTrayIcons {
         theme_path: icon_theme_path,

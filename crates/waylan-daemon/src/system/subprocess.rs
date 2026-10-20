@@ -47,6 +47,84 @@ pub(crate) struct TrackedChild {
     pub(crate) name: &'static str,
 }
 
+impl TrackedChild {
+    /// 标记该子进程已不再运行，清除运行态指示标志
+    fn mark_finished(&self) {
+        if let Some(ref guard) = self.running_guard {
+            guard.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// 收割已退出或状态查询失败的子进程条目，及时回收 PCB 杜绝僵尸进程堆积
+fn reap_exited_children(children: &Mutex<Vec<TrackedChild>>) {
+    let mut lock = children.lock();
+    lock.retain_mut(|tracked| match tracked.child.try_wait() {
+        Ok(Some(status)) => {
+            log::debug!(
+                "[进程治理] 外部子进程 [{}] 已正常退出: {:?}",
+                tracked.name,
+                status
+            );
+            tracked.mark_finished();
+            false
+        }
+        Ok(None) => true,
+        Err(e) => {
+            log::warn!(
+                "[进程治理] 查询外部子进程 [{}] 状态失败: {}",
+                tracked.name,
+                e
+            );
+            tracked.mark_finished();
+            false
+        }
+    });
+}
+
+/// 收到退出信号后，主动终止所有存活子进程并收割其退出状态
+fn terminate_all_children(children: &Mutex<Vec<TrackedChild>>) {
+    let mut lock = children.lock();
+    for tracked in lock.iter_mut() {
+        info!(
+            "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
+            tracked.name
+        );
+        let _ = tracked.child.kill();
+        let _ = tracked.child.wait();
+        tracked.mark_finished();
+    }
+    lock.clear();
+}
+
+/// 启动后台收割线程，持续轮询回收已退出的外部子进程并在停机时强制终止存活进程
+fn spawn_reaper_thread(
+    children: Arc<Mutex<Vec<TrackedChild>>>,
+    shutdown: Arc<AtomicBool>,
+    exit_requested: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    match thread::Builder::new()
+        .name("waylan-subprocess-reaper".to_string())
+        .spawn(move || {
+            while !shutdown.load(Ordering::Acquire) && !exit_requested.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(200));
+                reap_exited_children(&children);
+            }
+
+            // 收到退出信号后，主动清理所有存活子进程并收割状态
+            terminate_all_children(&children);
+        }) {
+        Ok(handle) => Some(handle),
+        Err(e) => {
+            log::warn!(
+                "[进程治理 警告] 创建子进程收割线程失败，外部子进程将无法自动回收: {}",
+                e
+            );
+            None
+        }
+    }
+}
+
 /// 外部子进程生命周期管理器
 pub struct SubprocessManager {
     children: Arc<Mutex<Vec<TrackedChild>>>,
@@ -60,68 +138,8 @@ impl SubprocessManager {
         let children = Arc::new(Mutex::new(Vec::<TrackedChild>::new()));
         let shutdown = Arc::new(AtomicBool::new(false));
 
-        let children_clone = Arc::clone(&children);
-        let shutdown_clone = Arc::clone(&shutdown);
-
-        let reaper_handle = match thread::Builder::new()
-            .name("waylan-subprocess-reaper".to_string())
-            .spawn(move || {
-                while !shutdown_clone.load(Ordering::Acquire)
-                    && !exit_requested.load(Ordering::Acquire)
-                {
-                    thread::sleep(Duration::from_millis(200));
-                    let mut lock = children_clone.lock();
-                    lock.retain_mut(|tracked| match tracked.child.try_wait() {
-                        Ok(Some(status)) => {
-                            log::debug!(
-                                "[进程治理] 外部子进程 [{}] 已正常退出: {:?}",
-                                tracked.name,
-                                status
-                            );
-                            if let Some(ref guard) = tracked.running_guard {
-                                guard.store(false, Ordering::Release);
-                            }
-                            false
-                        }
-                        Ok(None) => true,
-                        Err(e) => {
-                            log::warn!(
-                                "[进程治理] 查询外部子进程 [{}] 状态失败: {}",
-                                tracked.name,
-                                e
-                            );
-                            if let Some(ref guard) = tracked.running_guard {
-                                guard.store(false, Ordering::Release);
-                            }
-                            false
-                        }
-                    });
-                }
-
-                // 收到退出信号后，主动清理所有存活子进程并收割状态
-                let mut lock = children_clone.lock();
-                for tracked in lock.iter_mut() {
-                    info!(
-                        "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
-                        tracked.name
-                    );
-                    let _ = tracked.child.kill();
-                    let _ = tracked.child.wait();
-                    if let Some(ref guard) = tracked.running_guard {
-                        guard.store(false, Ordering::Release);
-                    }
-                }
-                lock.clear();
-            }) {
-            Ok(handle) => Some(handle),
-            Err(e) => {
-                log::warn!(
-                    "[进程治理 警告] 创建子进程收割线程失败，外部子进程将无法自动回收: {}",
-                    e
-                );
-                None
-            }
-        };
+        let reaper_handle =
+            spawn_reaper_thread(Arc::clone(&children), Arc::clone(&shutdown), exit_requested);
 
         Self {
             children,

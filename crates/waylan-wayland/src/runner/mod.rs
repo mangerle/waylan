@@ -177,6 +177,84 @@ pub struct WaylandSessionOptions<'a> {
     pub voice_provider: Option<Box<dyn VoiceProvider>>,
 }
 
+/// 复用 V2 会话失败后回收的运行时状态降级拉起 V1 会话
+fn run_v1_fallback_session(
+    returned_session: Box<WaylanV2Session>,
+    exit_requested: Option<Arc<AtomicBool>>,
+    loop_wakeup: Option<LoopWakeup>,
+) -> Result<(), WaylandRunnerError> {
+    let session_v1 = WaylanV1Session {
+        runtime: returned_session.runtime,
+        surface: WaylandV1SurfaceContext {
+            surface_manager: returned_session.surface.surface_manager,
+            ..Default::default()
+        },
+        watcher: WaylandV1WatcherContext {
+            watched_paths: returned_session.watcher.watched_paths,
+            last_watched_mtime: returned_session.watcher.last_watched_mtime,
+            exit_requested,
+            loop_wakeup,
+            reload_callback: Some(Box::new(reload_wayland_session)),
+            ..Default::default()
+        },
+        ..WaylanV1Session::default()
+    };
+    run_session_v1_loop(session_v1)
+}
+
+/// 启动 Wayland V2 会话并在协议不可用或运行异常时优雅降级至 V1 会话
+fn run_v2_session(
+    engine: AlgoEngine,
+    setup_opts: SessionSetupOptions<'_>,
+    exit_requested: Option<Arc<AtomicBool>>,
+    loop_wakeup: Option<LoopWakeup>,
+) -> Result<(), WaylandRunnerError> {
+    info!("[微澜 Wayland] 启用现代 Wayland V2 协议会话。");
+    let mut session_v2 = WaylanV2Session::new(engine);
+    apply_session_setup(
+        &mut session_v2.runtime,
+        &mut session_v2.surface.surface_manager.renderer,
+        &mut session_v2.watcher,
+        setup_opts,
+        reload_wayland_session,
+    );
+
+    match run_session_v2_loop_fallible(session_v2) {
+        Ok(()) => Ok(()),
+        Err((e, returned_session)) => {
+            if exit_requested
+                .as_ref()
+                .is_some_and(|f| f.load(Ordering::Acquire))
+            {
+                info!("[微澜 Wayland] 收到退出请求信号，V2 会话安全退出。");
+                return Ok(());
+            }
+            warn!(
+                "[微澜 Wayland 警告] Wayland V2 会话建立或运行失败 ({})，正在优雅降级至广泛兼容的 V1 会话...",
+                e
+            );
+            run_v1_fallback_session(returned_session, exit_requested, loop_wakeup)
+        }
+    }
+}
+
+/// 启动 Wayland V1 兼容会话
+fn run_v1_session(
+    engine: AlgoEngine,
+    setup_opts: SessionSetupOptions<'_>,
+) -> Result<(), WaylandRunnerError> {
+    info!("[微澜 Wayland] 启用兼容 Wayland V1 协议会话。");
+    let mut session_v1 = WaylanV1Session::with_engine(engine);
+    apply_session_setup(
+        &mut session_v1.runtime,
+        &mut session_v1.surface.surface_manager.renderer,
+        &mut session_v1.watcher,
+        setup_opts,
+        reload_wayland_session,
+    );
+    run_session_v1_loop(session_v1)
+}
+
 /// 统一启动并运行 Wayland 输入法事件循环（支持 V2 优先并在必要时自动优雅降级至 V1）
 ///
 /// # Errors
@@ -184,6 +262,8 @@ pub struct WaylandSessionOptions<'a> {
 pub fn run_wayland_session(opts: WaylandSessionOptions<'_>) -> Result<(), WaylandRunnerError> {
     let prefer_v2 = opts.prefer_v2;
     let engine = opts.engine;
+    let exit_requested = opts.exit_requested.clone();
+    let loop_wakeup = opts.loop_wakeup.clone();
     let setup_opts = SessionSetupOptions {
         renderer: opts.renderer,
         cfg: opts.cfg,
@@ -198,60 +278,8 @@ pub fn run_wayland_session(opts: WaylandSessionOptions<'_>) -> Result<(), Waylan
     };
 
     if prefer_v2 {
-        info!("[微澜 Wayland] 启用现代 Wayland V2 协议会话。");
-        let mut session_v2 = WaylanV2Session::new(engine);
-        apply_session_setup(
-            &mut session_v2.runtime,
-            &mut session_v2.surface.surface_manager.renderer,
-            &mut session_v2.watcher,
-            setup_opts,
-            reload_wayland_session,
-        );
-
-        match run_session_v2_loop_fallible(session_v2) {
-            Ok(()) => Ok(()),
-            Err((e, returned_session)) => {
-                if opts
-                    .exit_requested
-                    .as_ref()
-                    .is_some_and(|f| f.load(Ordering::Acquire))
-                {
-                    info!("[微澜 Wayland] 收到退出请求信号，V2 会话安全退出。");
-                    return Ok(());
-                }
-                warn!(
-                    "[微澜 Wayland 警告] Wayland V2 会话建立或运行失败 ({})，正在优雅降级至广泛兼容的 V1 会话...",
-                    e
-                );
-                let session_v1 = WaylanV1Session {
-                    runtime: returned_session.runtime,
-                    surface: WaylandV1SurfaceContext {
-                        surface_manager: returned_session.surface.surface_manager,
-                        ..Default::default()
-                    },
-                    watcher: WaylandV1WatcherContext {
-                        watched_paths: returned_session.watcher.watched_paths,
-                        last_watched_mtime: returned_session.watcher.last_watched_mtime,
-                        exit_requested: opts.exit_requested,
-                        loop_wakeup: opts.loop_wakeup,
-                        reload_callback: Some(Box::new(reload_wayland_session)),
-                        ..Default::default()
-                    },
-                    ..WaylanV1Session::default()
-                };
-                run_session_v1_loop(session_v1)
-            }
-        }
+        run_v2_session(engine, setup_opts, exit_requested, loop_wakeup)
     } else {
-        info!("[微澜 Wayland] 启用兼容 Wayland V1 协议会话。");
-        let mut session_v1 = WaylanV1Session::with_engine(engine);
-        apply_session_setup(
-            &mut session_v1.runtime,
-            &mut session_v1.surface.surface_manager.renderer,
-            &mut session_v1.watcher,
-            setup_opts,
-            reload_wayland_session,
-        );
-        run_session_v1_loop(session_v1)
+        run_v1_session(engine, setup_opts)
     }
 }

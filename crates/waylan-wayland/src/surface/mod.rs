@@ -282,46 +282,28 @@ impl CandidateSurfaceManager {
         }
     }
 
-    /// 根据当前候选框状态渲染位图并复用共享内存槽位准备提交
-    pub fn render_state(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &File)> {
-        if !state.visible || state.candidates.is_empty() {
-            self.on_input_inactive();
-            return None;
-        }
-
-        // 1. 调用矢量渲染器绘制候选框位图
-        let pixmap = self.renderer.render(state)?;
-        let width = pixmap.width();
-        let height = pixmap.height();
-        self.on_input_active(width, height);
-
-        let required_bytes = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
-
-        // 2. 轮转选取空闲的共享内存槽位（优先选取非 busy 的槽位）
-        let mut available_slot = None;
+    /// 轮转选取可用于本次渲染的共享内存槽位下标（优先选取非 busy 或尚未分配的槽位）
+    fn select_available_slot(&self) -> usize {
         for i in 0..self.shm_slots.len() {
             let candidate = (self.current_slot + 1 + i) % self.shm_slots.len();
-            if let Some(ref slot) = self.shm_slots[candidate] {
-                if !slot.is_busy {
-                    available_slot = Some(candidate);
-                    break;
-                }
-            } else {
-                available_slot = Some(candidate);
-                break;
+            match self.shm_slots[candidate].as_ref() {
+                Some(slot) if slot.is_busy => continue,
+                _ => return candidate,
             }
         }
+        debug!(
+            "[悬浮窗口] 合成器未及时下发 release 事件，轮转复用最旧槽位保证候选框画面实时刷新。"
+        );
+        (self.current_slot + 1) % self.shm_slots.len()
+    }
 
-        let next_slot = match available_slot {
-            Some(slot) => slot,
-            None => {
-                debug!("[悬浮窗口] 合成器未及时下发 release 事件，轮转复用最旧槽位保证候选框画面实时刷新。");
-                (self.current_slot + 1) % self.shm_slots.len()
-            }
-        };
-
+    /// 确保目标槽位可用于本次渲染：必要时重新分配独立槽位并完成容量扩容
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：合成器读取共享内存期间槽位处于 busy 状态，若直接覆写会导致画面撕裂。
+    /// - **核心优势**：将「避让忙槽位」与「容量扩容」收敛于同一处，渲染主流程保持线性可读。
+    /// - **代价与局限**：忙槽位需等待 release 事件才能真正释放，此处仅做规避与重分配。
+    fn prepare_slot_for_render(&mut self, next_slot: usize, required_bytes: usize) -> bool {
         // 若所选槽位仍被合成器占用，为避免覆盖正在被合成读取的共享内存引发撕裂，重新分配独立槽位
         let is_slot_busy = self.shm_slots[next_slot]
             .as_ref()
@@ -346,9 +328,34 @@ impl CandidateSurfaceManager {
                 "[悬浮窗口] 扩容共享内存槽位失败，槽位: {}，原因: {}",
                 next_slot, e
             );
-            return None;
+            return false;
         }
         self.current_slot = next_slot;
+        true
+    }
+
+    /// 根据当前候选框状态渲染位图并复用共享内存槽位准备提交
+    pub fn render_state(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &File)> {
+        if !state.visible || state.candidates.is_empty() {
+            self.on_input_inactive();
+            return None;
+        }
+
+        // 1. 调用矢量渲染器绘制候选框位图
+        let pixmap = self.renderer.render(state)?;
+        let width = pixmap.width();
+        let height = pixmap.height();
+        self.on_input_active(width, height);
+
+        let required_bytes = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+
+        // 2. 轮转选取空闲的共享内存槽位并完成容量准备
+        let next_slot = self.select_available_slot();
+        if !self.prepare_slot_for_render(next_slot, required_bytes) {
+            return None;
+        }
 
         // 3. 复用持久映射句柄零拷贝写入像素数据，消除中间堆内存中转与重复 seek+write_all 内核拷贝
         let slot = self.shm_slots[self.current_slot].as_mut()?;

@@ -166,67 +166,14 @@ impl CompactDictBuilder {
         let mut total_words = 0usize;
 
         for in_path in input_paths {
-            let path_ref = in_path.as_ref();
-            let file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-            let reader = BufReader::new(file);
-
-            for line_res in reader.lines() {
-                total_lines = total_lines.saturating_add(1);
-                let line = match line_res {
-                    Ok(l) => l,
-                    Err(_) => continue,
-                };
-
-                let trimmed = line.trim();
-                if trimmed.is_empty()
-                    || trimmed.starts_with('#')
-                    || trimmed.starts_with("---")
-                    || trimmed.starts_with("...")
-                    || trimmed.starts_with("name:")
-                    || trimmed.starts_with("version:")
-                    || trimmed.starts_with("sort:")
-                {
-                    continue;
-                }
-
-                let parts: Vec<&str> = trimmed.split('\t').collect();
-                if parts.len() >= 2 {
-                    let word = parts[0].trim().to_string();
-                    let pinyin = normalize_pinyin_tones(parts[1].trim());
-                    if pinyin.is_empty() || word.is_empty() {
-                        continue;
-                    }
-
-                    let score: u32 = if parts.len() >= 3 {
-                        parts[2].trim().parse().unwrap_or(1000)
-                    } else {
-                        1000
-                    };
-
-                    let wid = if let Some(&id) = word_to_id.get(&word) {
-                        id
-                    } else {
-                        let new_id = words.len() as u32;
-                        words.push(word.clone());
-                        word_to_id.insert(word, new_id);
-                        new_id
-                    };
-
-                    dict_map.entry(pinyin).or_default().push((wid, score));
-                    total_words = total_words.saturating_add(1);
-                }
-            }
+            let (file_lines, file_words) =
+                Self::parse_text_source_file(in_path.as_ref(), &mut dict_map, word_to_id, words)?;
+            total_lines = total_lines.saturating_add(file_lines);
+            total_words = total_words.saturating_add(file_words);
         }
 
         // 按原始词频降序排序并去重（保留最高分）
-        for entries in dict_map.values_mut() {
-            entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
-            entries.dedup_by(|a, b| a.0 == b.0);
-            entries.sort_by_key(|b| std::cmp::Reverse(b.1));
-        }
+        Self::sort_and_dedup_candidates(&mut dict_map);
 
         Ok(ParsedTextSources {
             dict_map,
@@ -235,32 +182,140 @@ impl CompactDictBuilder {
         })
     }
 
+    /// 判定文本词典行是否为注释、空行或词库元信息头（此类行不参与词条编译）
+    fn is_skippable_dict_line(trimmed: &str) -> bool {
+        trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("---")
+            || trimmed.starts_with("...")
+            || trimmed.starts_with("name:")
+            || trimmed.starts_with("version:")
+            || trimmed.starts_with("sort:")
+    }
+
+    /// 解析单个文本词典源文件，将词条归一化为候选并同步维护全局词表
+    ///
+    /// 返回该文件实际读取的原始行数与有效词条数（注释与空行仅计入行数）
+    fn parse_text_source_file(
+        path_ref: &Path,
+        dict_map: &mut KeyCandidateMap,
+        word_to_id: &mut HashMap<String, u32>,
+        words: &mut Vec<String>,
+    ) -> Result<(usize, usize), AlgoError> {
+        let file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
+            path: PathBuf::from(path_ref),
+            source: e,
+        })?;
+        let reader = BufReader::new(file);
+        let mut total_lines = 0usize;
+        let mut total_words = 0usize;
+
+        for line_res in reader.lines() {
+            total_lines = total_lines.saturating_add(1);
+            let line = match line_res {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+
+            let trimmed = line.trim();
+            if Self::is_skippable_dict_line(trimmed) {
+                continue;
+            }
+
+            let parts: Vec<&str> = trimmed.split('\t').collect();
+            if parts.len() >= 2 {
+                let word = parts[0].trim().to_string();
+                let pinyin = normalize_pinyin_tones(parts[1].trim());
+                if pinyin.is_empty() || word.is_empty() {
+                    continue;
+                }
+
+                let score: u32 = if parts.len() >= 3 {
+                    parts[2].trim().parse().unwrap_or(1000)
+                } else {
+                    1000
+                };
+
+                let wid = Self::intern_word(word, word_to_id, words);
+
+                dict_map.entry(pinyin).or_default().push((wid, score));
+                total_words = total_words.saturating_add(1);
+            }
+        }
+
+        Ok((total_lines, total_words))
+    }
+
+    /// 在全局词表中登记新词并返回其 Word ID（已存在则复用原 ID，保障 ID 稳定）
+    fn intern_word(
+        word: String,
+        word_to_id: &mut HashMap<String, u32>,
+        words: &mut Vec<String>,
+    ) -> u32 {
+        if let Some(&id) = word_to_id.get(&word) {
+            id
+        } else {
+            let new_id = words.len() as u32;
+            words.push(word.clone());
+            word_to_id.insert(word, new_id);
+            new_id
+        }
+    }
+
+    /// 对同一拼音键下的候选列表按词频降序排序，并按 Word ID 去重（保留最高分）
+    fn sort_and_dedup_candidates(dict_map: &mut KeyCandidateMap) {
+        for entries in dict_map.values_mut() {
+            entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+            entries.dedup_by(|a, b| a.0 == b.0);
+            entries.sort_by_key(|b| std::cmp::Reverse(b.1));
+        }
+    }
+
     /// 提取简拼与声母单字索引，合并并生成前缀隔离的排序键集合
     fn build_combined_keys(
         dict_map: KeyCandidateMap,
         words: &[String],
     ) -> (CombinedKeyMap, Vec<String>) {
         // 提取简拼缩写索引 (key_type = 1)
+        let acronym_map = Self::extract_acronym_map(&dict_map);
+
+        // 提取声母单字索引 (key_type = 2)
+        let initial_map = Self::extract_initial_map(&dict_map, words);
+
+        // 汇总隔离键空间：全拼("{k}"), 简拼("'{k}"), 声母("''{k}")
+        let combined_keys = Self::merge_isolated_key_spaces(dict_map, acronym_map, initial_map);
+
+        let mut sorted_keys: Vec<String> = combined_keys.keys().cloned().collect();
+        sorted_keys.sort();
+
+        (combined_keys, sorted_keys)
+    }
+
+    /// 提取简拼缩写索引（对隔音符分隔的多音节拼音取各段首字母并拼成缩写键）
+    fn extract_acronym_map(dict_map: &KeyCandidateMap) -> KeyCandidateMap {
         let mut acronym_map: KeyCandidateMap = HashMap::new();
-        for (pinyin, cand_list) in &dict_map {
-            if pinyin.contains('\'') {
-                let parts: Vec<&str> = pinyin.split('\'').collect();
-                if parts.len() >= 2 {
-                    let mut acronym = String::with_capacity(parts.len());
-                    for part in parts {
-                        if let Some(ch) = part.chars().next() {
-                            acronym.push(ch);
-                        }
-                    }
-                    if acronym.len() >= 2 {
-                        let min_score = if acronym.len() == 2 { 200 } else { 50 };
-                        let list = acronym_map.entry(acronym).or_default();
-                        for &(wid, score) in cand_list.iter().take(8) {
-                            if score >= min_score {
-                                list.push((wid, score));
-                            }
-                        }
-                    }
+        for (pinyin, cand_list) in dict_map {
+            if !pinyin.contains('\'') {
+                continue;
+            }
+            let parts: Vec<&str> = pinyin.split('\'').collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let mut acronym = String::with_capacity(parts.len());
+            for part in parts {
+                if let Some(ch) = part.chars().next() {
+                    acronym.push(ch);
+                }
+            }
+            if acronym.len() < 2 {
+                continue;
+            }
+            let min_score = if acronym.len() == 2 { 200 } else { 50 };
+            let list = acronym_map.entry(acronym).or_default();
+            for &(wid, score) in cand_list.iter().take(8) {
+                if score >= min_score {
+                    list.push((wid, score));
                 }
             }
         }
@@ -270,20 +325,25 @@ impl CompactDictBuilder {
             list.sort_by_key(|b| std::cmp::Reverse(b.1));
             list.truncate(8);
         }
+        acronym_map
+    }
 
-        // 提取声母单字索引 (key_type = 2)
+    /// 提取声母单字索引（仅收录以指定声母开头的标准音节所对应的单字词条）
+    fn extract_initial_map(dict_map: &KeyCandidateMap, words: &[String]) -> KeyCandidateMap {
         let mut initial_map: KeyCandidateMap = HashMap::new();
         for &initial in STANDARD_INITIALS {
             let mut list = Vec::new();
             for &syl in STANDARD_SYLLABLES {
-                if syl.starts_with(initial) {
-                    if let Some(matches) = dict_map.get(syl) {
-                        for &(wid, score) in matches {
-                            if let Some(text) = words.get(wid as usize) {
-                                if text.chars().count() == 1 {
-                                    list.push((wid, score));
-                                }
-                            }
+                if !syl.starts_with(initial) {
+                    continue;
+                }
+                let Some(matches) = dict_map.get(syl) else {
+                    continue;
+                };
+                for &(wid, score) in matches {
+                    if let Some(text) = words.get(wid as usize) {
+                        if text.chars().count() == 1 {
+                            list.push((wid, score));
                         }
                     }
                 }
@@ -296,8 +356,15 @@ impl CompactDictBuilder {
                 initial_map.insert(initial.to_string(), list);
             }
         }
+        initial_map
+    }
 
-        // 汇总隔离键空间：全拼("{k}"), 简拼("'{k}"), 声母("''{k}")
+    /// 汇总三类前缀隔离的键空间：全拼("{k}")、简拼("'{k}")、声母("''{k}")
+    fn merge_isolated_key_spaces(
+        dict_map: KeyCandidateMap,
+        acronym_map: KeyCandidateMap,
+        initial_map: KeyCandidateMap,
+    ) -> CombinedKeyMap {
         let mut combined_keys: CombinedKeyMap = HashMap::new();
         for (k, v) in dict_map {
             combined_keys.insert(k, (0, v));
@@ -312,11 +379,7 @@ impl CompactDictBuilder {
                 combined_keys.insert(format!("''{}", k), (2, v));
             }
         }
-
-        let mut sorted_keys: Vec<String> = combined_keys.keys().cloned().collect();
-        sorted_keys.sort();
-
-        (combined_keys, sorted_keys)
+        combined_keys
     }
 
     /// 编码键元数据与紧凑候选值数组

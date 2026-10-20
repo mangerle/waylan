@@ -145,14 +145,7 @@ impl FinancialEvaluator {
                 }
                 let sec_str = Self::convert_section(sec);
                 res.push_str(&sec_str);
-
-                match idx {
-                    4 => res.push_str("亿亿"),
-                    3 => res.push('万'),
-                    2 => res.push('亿'),
-                    1 => res.push('万'),
-                    _ => {}
-                }
+                Self::push_section_unit(&mut res, idx);
 
                 has_high_section = true;
                 has_zero_section = false;
@@ -169,6 +162,17 @@ impl FinancialEvaluator {
         }
 
         res
+    }
+
+    /// 追加四位小节所归属的大节单位（万、亿、万亿、亿亿）
+    fn push_section_unit(res: &mut String, idx: usize) {
+        match idx {
+            4 => res.push_str("亿亿"),
+            3 => res.push('万'),
+            2 => res.push('亿'),
+            1 => res.push('万'),
+            _ => {}
+        }
     }
 
     /// 转换千以内的四位小节

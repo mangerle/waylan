@@ -11,6 +11,20 @@ use crate::table::{calculate_length_boost, extract_raw_score};
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
+/// 跨词短语合成的前驱片段上下文参数对象
+///
+/// 用途：在笛卡尔积合成中复用同一份前驱候选的文本、拼音、得分与末字信息，避免参数列表膨胀。
+struct PhraseHead<'a> {
+    /// 前驱候选文本
+    text: &'a str,
+    /// 前驱候选拼音键
+    pinyin: &'a str,
+    /// 前驱候选原始得分
+    score: u32,
+    /// 前驱候选末字（用于二元亲和度的末字回退查询）
+    last_char: String,
+}
+
 impl AlgoEngine {
     /// 跨词边界短语前缀合成检索（解决诸如 "womendeshij" 召回“我们的时间”、“我们的世界”等）
     pub(crate) fn synthesize_prefix_phrases(
@@ -142,50 +156,62 @@ impl AlgoEngine {
     ) -> Vec<AlgoCandidate> {
         let mut results = Vec::with_capacity(head_options.len() * 5);
         for (head_text, head_pinyin, head_score) in head_options {
-            let head_last_char = head_text
-                .chars()
-                .last()
-                .map(|c| c.to_string())
-                .unwrap_or_default();
+            let head = PhraseHead {
+                text: head_text,
+                pinyin: head_pinyin,
+                score: *head_score,
+                last_char: head_text
+                    .chars()
+                    .last()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+            };
             for tail in tail_cands.iter().take(5) {
-                let phrase_text = format!("{}{}", head_text, tail.text);
-                let phrase_pinyin = format!("{}'{}", head_pinyin, tail.pinyin);
-
-                let char_len = (phrase_text.chars().count() as u32).min(64);
-                let length_boost = calculate_length_boost(char_len).min(30_000_000);
-
-                let bigram_bonus = self
-                    .resources
-                    .table
-                    .get_bigram_affinity(head_text, &tail.text)
-                    .unwrap_or_else(|| {
-                        let rule_score =
-                            BigramLanguageModel::estimate_bigram_affinity(head_text, &tail.text);
-                        if rule_score > 0 {
-                            rule_score
-                        } else {
-                            self.resources
-                                .table
-                                .get_bigram_affinity(&head_last_char, &tail.text)
-                                .unwrap_or(0)
-                        }
-                    });
-
-                let head_base = extract_raw_score(*head_score) / 8;
-                let tail_base = extract_raw_score(tail.score) / 4;
-                let final_score = head_base
-                    .saturating_add(tail_base)
-                    .saturating_add(length_boost)
-                    .saturating_add((bigram_bonus.max(0) as u32).min(50_000) / 2);
-
-                let cand = AlgoCandidate::new(phrase_text, phrase_pinyin, final_score)
-                    .with_tier(CandidateTier::ExactWord);
-                results.push(cand);
+                results.push(self.build_phrase_candidate(&head, tail));
             }
         }
 
         results.sort_by_key(|c| std::cmp::Reverse(c.score));
         results.truncate(10);
         results
+    }
+
+    /// 合成单个跨词短语候选并计算最终得分（字长加成 + 二元文法加成）
+    fn build_phrase_candidate(&self, head: &PhraseHead<'_>, tail: &AlgoCandidate) -> AlgoCandidate {
+        let phrase_text = format!("{}{}", head.text, tail.text);
+        let phrase_pinyin = format!("{}'{}", head.pinyin, tail.pinyin);
+
+        let char_len = (phrase_text.chars().count() as u32).min(64);
+        let length_boost = calculate_length_boost(char_len).min(30_000_000);
+
+        let bigram_bonus = self.resolve_bigram_bonus(head, tail);
+        let head_base = extract_raw_score(head.score) / 8;
+        let tail_base = extract_raw_score(tail.score) / 4;
+        let final_score = head_base
+            .saturating_add(tail_base)
+            .saturating_add(length_boost)
+            .saturating_add((bigram_bonus.max(0) as u32).min(50_000) / 2);
+
+        AlgoCandidate::new(phrase_text, phrase_pinyin, final_score)
+            .with_tier(CandidateTier::ExactWord)
+    }
+
+    /// 解析跨词短语的二元文法亲和度：优先整词对命中，回退至前驱末字与尾部词的组合查询
+    fn resolve_bigram_bonus(&self, head: &PhraseHead<'_>, tail: &AlgoCandidate) -> i64 {
+        self.resources
+            .table
+            .get_bigram_affinity(head.text, &tail.text)
+            .unwrap_or_else(|| {
+                let rule_score =
+                    BigramLanguageModel::estimate_bigram_affinity(head.text, &tail.text);
+                if rule_score > 0 {
+                    rule_score
+                } else {
+                    self.resources
+                        .table
+                        .get_bigram_affinity(&head.last_char, &tail.text)
+                        .unwrap_or(0)
+                }
+            })
     }
 }

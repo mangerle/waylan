@@ -222,6 +222,9 @@ impl DictImporter {
     }
 
     /// 解析指定同音词集合并追加到词条结果列表，若数据截断返回 false
+    ///
+    /// # 设计原理
+    /// - 每个同音词条目独立解析，任一条目解析失败即整体中止，避免产出半截词库。
     fn parse_scel_words_for_pinyin(
         data: &[u8],
         cursor: &mut usize,
@@ -230,46 +233,63 @@ impl DictImporter {
         entries: &mut Vec<ImportedDictEntry>,
     ) -> bool {
         for _ in 0..same_pinyin_count {
-            if cursor.saturating_add(2) > data.len() {
+            if !Self::parse_scel_single_word(data, cursor, full_pinyin, entries) {
                 return false;
             }
-            let word_byte_len = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
-            *cursor = cursor.saturating_add(2);
+        }
+        true
+    }
 
-            let word_end = cursor.saturating_add(word_byte_len);
-            if word_end > data.len() {
-                return false;
-            }
+    /// 解析单个搜狗细胞词库词条（UTF-16 编码词文本 + 定长扩展信息块）
+    ///
+    /// # 设计原理
+    /// - 词文本以 UTF-16 小端存储，扩展信息块长度取自数据流本身，
+    ///   因此必须逐段做越界防御，畸形词库一律判定为解析失败而不得越界读取。
+    fn parse_scel_single_word(
+        data: &[u8],
+        cursor: &mut usize,
+        full_pinyin: &str,
+        entries: &mut Vec<ImportedDictEntry>,
+    ) -> bool {
+        if cursor.saturating_add(2) > data.len() {
+            return false;
+        }
+        let word_byte_len = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
+        *cursor = cursor.saturating_add(2);
 
-            let word_bytes = &data[*cursor..word_end];
-            let u16_chars: Vec<u16> = word_bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .copied()
-                .map(u16::from_le_bytes)
-                .collect();
-            let word_text = String::from_utf16_lossy(&u16_chars);
-            *cursor = word_end;
+        let word_end = cursor.saturating_add(word_byte_len);
+        if word_end > data.len() {
+            return false;
+        }
 
-            // 跳过扩展信息（通常包含权重、词频说明，占 12 字节左右），防御畸形 ext_len 越界
-            if cursor.saturating_add(2) > data.len() {
-                return false;
-            }
-            let ext_len = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
-            let next_cursor = cursor.saturating_add(2).saturating_add(ext_len);
-            if next_cursor > data.len() {
-                return false;
-            }
-            *cursor = next_cursor;
+        let word_bytes = &data[*cursor..word_end];
+        let u16_chars: Vec<u16> = word_bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .copied()
+            .map(u16::from_le_bytes)
+            .collect();
+        let word_text = String::from_utf16_lossy(&u16_chars);
+        *cursor = word_end;
 
-            if !word_text.is_empty() && !full_pinyin.is_empty() {
-                entries.push(ImportedDictEntry {
-                    text: word_text,
-                    pinyin: full_pinyin.to_string(),
-                    weight: 200,
-                });
-            }
+        // 跳过扩展信息（通常包含权重、词频说明，占 12 字节左右），防御畸形 ext_len 越界
+        if cursor.saturating_add(2) > data.len() {
+            return false;
+        }
+        let ext_len = u16::from_le_bytes([data[*cursor], data[*cursor + 1]]) as usize;
+        let next_cursor = cursor.saturating_add(2).saturating_add(ext_len);
+        if next_cursor > data.len() {
+            return false;
+        }
+        *cursor = next_cursor;
+
+        if !word_text.is_empty() && !full_pinyin.is_empty() {
+            entries.push(ImportedDictEntry {
+                text: word_text,
+                pinyin: full_pinyin.to_string(),
+                weight: 200,
+            });
         }
         true
     }

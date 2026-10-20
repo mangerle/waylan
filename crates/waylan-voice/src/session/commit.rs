@@ -21,67 +21,21 @@ use crate::recognizer::{PunctuationRestorer, VoiceRecognizer};
 pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     info!("[语音会话] 收到外部主动提交指令，正在执行音频管道排空与整句结算");
 
-    // 1. 等待并排空麦克风硬件驱动与管道中的在途音频（最长 80ms，单次 40ms 无新数据即快速跳出）
-    let drain_start = Instant::now();
-    while drain_start.elapsed() < Duration::from_millis(80) {
-        match ctx.pcm_rx.recv_timeout(Duration::from_millis(40)) {
-            Ok(mut samples) => {
-                ctx.afe.process(&mut samples);
-                let _ = process_recognition_feed(
-                    RecognitionFeedContext {
-                        recognizer: ctx.recognizer,
-                        pre_speech_buffer: ctx.pre_speech_buffer,
-                        last_partial_text: ctx.last_partial_text,
-                        event_tx: ctx.event_tx,
-                        real_time_preview: ctx.voice_config.interaction.real_time_preview,
-                    },
-                    &samples,
-                );
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
+    // 1. 排空麦克风硬件驱动与管道中的在途音频，并释放音频捕获硬件
+    drain_pending_audio(&mut ctx);
 
-    // 2. 显式释放音频捕获硬件，彻底终止麦克风录入
-    drop(ctx.capture.take());
-
-    // 3. 将通道中可能剩余的任何切片彻底清空并处理
-    while let Ok(mut samples) = ctx.pcm_rx.try_recv() {
-        ctx.afe.process(&mut samples);
-        let _ = process_recognition_feed(
-            RecognitionFeedContext {
-                recognizer: ctx.recognizer,
-                pre_speech_buffer: ctx.pre_speech_buffer,
-                last_partial_text: ctx.last_partial_text,
-                event_tx: ctx.event_tx,
-                real_time_preview: ctx.voice_config.interaction.real_time_preview,
-            },
-            &samples,
-        );
-    }
-
-    // 若此前尚未检测到人声起音（短句），将预存的静音缓冲倒出送入识别器
+    // 2. 若此前尚未检测到人声起音（短句），将预存的静音缓冲倒出送入识别器
     if !ctx.pre_speech_buffer.is_empty() {
         let buffered: Vec<f32> = ctx.pre_speech_buffer.drain(..).collect();
         let _ = ctx.recognizer.feed_pcm(&buffered);
     }
 
-    // 4. 注入约 200ms 的尾部静音 padding（3200 个 16kHz 零采样点）
+    // 3. 注入约 200ms 的尾部静音 padding（3200 个 16kHz 零采样点）
     const TRAILING_SILENCE_SAMPLES: usize = 16_000 * 200 / 1000;
     let silence = vec![0.0f32; TRAILING_SILENCE_SAMPLES];
-    let _ = process_recognition_feed(
-        RecognitionFeedContext {
-            recognizer: ctx.recognizer,
-            pre_speech_buffer: ctx.pre_speech_buffer,
-            last_partial_text: ctx.last_partial_text,
-            event_tx: ctx.event_tx,
-            real_time_preview: ctx.voice_config.interaction.real_time_preview,
-        },
-        &silence,
-    );
+    feed_recognition(&mut ctx, &silence);
 
-    // 5. 调用 finish 提取最终整句识别文字与标点预测
+    // 4. 调用 finish 提取最终整句识别文字与标点预测
     let mut final_text = extract_final_text(
         ctx.recognizer,
         ctx.punct_restorer,
@@ -100,6 +54,45 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
     let _ = ctx.event_tx.send(VoiceEvent::FinalCommit(final_text));
     ctx.is_active.store(false, Ordering::Release);
+}
+
+/// 排空管道中残留的在途音频并彻底终止麦克风硬件录入
+fn drain_pending_audio(ctx: &mut StopCommitContext<'_>) {
+    // 1. 等待并排空麦克风硬件驱动与管道中的在途音频（最长 80ms，单次 40ms 无新数据即快速跳出）
+    let drain_start = Instant::now();
+    while drain_start.elapsed() < Duration::from_millis(80) {
+        match ctx.pcm_rx.recv_timeout(Duration::from_millis(40)) {
+            Ok(mut samples) => {
+                ctx.afe.process(&mut samples);
+                feed_recognition(ctx, &samples);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    // 2. 显式释放音频捕获硬件，彻底终止麦克风录入
+    drop(ctx.capture.take());
+
+    // 3. 将通道中可能剩余的任何切片彻底清空并处理
+    while let Ok(mut samples) = ctx.pcm_rx.try_recv() {
+        ctx.afe.process(&mut samples);
+        feed_recognition(ctx, &samples);
+    }
+}
+
+/// 将音频采样喂入识别器并推进流式解码
+fn feed_recognition(ctx: &mut StopCommitContext<'_>, samples: &[f32]) {
+    let _ = process_recognition_feed(
+        RecognitionFeedContext {
+            recognizer: ctx.recognizer,
+            pre_speech_buffer: ctx.pre_speech_buffer,
+            last_partial_text: ctx.last_partial_text,
+            event_tx: ctx.event_tx,
+            real_time_preview: ctx.voice_config.interaction.real_time_preview,
+        },
+        samples,
+    );
 }
 
 /// 将静音音频采样压入前置环形队列，并维持最大容量限制

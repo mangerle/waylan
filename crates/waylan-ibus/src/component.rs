@@ -146,6 +146,10 @@ pub fn format_ibus_engines_xml(exe_path: &str, version: &str) -> String {
 }
 
 /// 在非打包/用户运行环境下确保微澜 IBus XML 组件描述文件已写入用户目录并更新缓存
+///
+/// # 设计原理
+/// - 遵循"系统级优先"策略：系统级组件描述已存在时不再重复写入用户目录，
+///   避免用户级文件覆盖发行版打包的正式组件。
 pub fn ensure_ibus_component_installed(exe_path: &str) {
     let Some(home) = env_var_non_empty("HOME") else {
         return;
@@ -175,31 +179,43 @@ pub fn ensure_ibus_component_installed(exe_path: &str) {
         Err(_) => true,
     };
 
-    if need_write {
-        if let Err(e) = fs::write(&comp_xml_path, &xml_content) {
-            warn!("[微澜 IBus 警告] 写入组件描述文件失败: {}", e);
-            return;
-        }
-        info!(
-            "[微澜 IBus] 已成功安装用户级 IBus 组件描述: {:?}",
-            comp_xml_path
-        );
+    if need_write && write_user_component_file(&comp_xml_path, &xml_content) {
+        refresh_ibus_component_cache();
+    }
+}
 
-        let mut cmd = Command::new("ibus");
-        cmd.arg("write-cache");
-        match run_command_with_timeout(cmd, DEFAULT_COMMAND_TIMEOUT) {
-            Ok(output) if output.status.success() => {
-                info!("[微澜 IBus] 已执行 ibus write-cache 更新用户级 IBus 注册表缓存");
-            }
-            Ok(output) => {
-                debug!(
-                    "[微澜 IBus] ibus write-cache 执行非零返回: {:?}",
-                    output.status.code()
-                );
-            }
-            Err(e) => {
-                debug!("[微澜 IBus] 调度 ibus write-cache 命令失败或超时: {}", e);
-            }
+/// 写入用户级 IBus 组件描述文件，返回是否写入成功
+fn write_user_component_file(comp_xml_path: &Path, xml_content: &str) -> bool {
+    if let Err(e) = fs::write(comp_xml_path, xml_content) {
+        warn!("[微澜 IBus 警告] 写入组件描述文件失败: {}", e);
+        return false;
+    }
+    info!(
+        "[微澜 IBus] 已成功安装用户级 IBus 组件描述: {:?}",
+        comp_xml_path
+    );
+    true
+}
+
+/// 调度 `ibus write-cache` 更新用户级 IBus 注册表缓存
+///
+/// # 设计原理
+/// - 缓存刷新属于尽力而为的收尾动作，失败仅记录调试日志而不影响输入法主体功能。
+fn refresh_ibus_component_cache() {
+    let mut cmd = Command::new("ibus");
+    cmd.arg("write-cache");
+    match run_command_with_timeout(cmd, DEFAULT_COMMAND_TIMEOUT) {
+        Ok(output) if output.status.success() => {
+            info!("[微澜 IBus] 已执行 ibus write-cache 更新用户级 IBus 注册表缓存");
+        }
+        Ok(output) => {
+            debug!(
+                "[微澜 IBus] ibus write-cache 执行非零返回: {:?}",
+                output.status.code()
+            );
+        }
+        Err(e) => {
+            debug!("[微澜 IBus] 调度 ibus write-cache 命令失败或超时: {}", e);
         }
     }
 }

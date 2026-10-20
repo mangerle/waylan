@@ -74,54 +74,17 @@ impl<'a> DatReader<'a> {
         let mut depth = 0usize;
 
         while depth < key_bytes.len() {
-            let b = key_bytes[depth];
-            let code = pinyin_char_to_code(b);
+            let code = pinyin_char_to_code(key_bytes[depth]);
             if code == 0 || code >= 28 {
                 return None; // 拦截空字节穿透与非合法拼音字符
             }
 
-            if curr >= self.base.len() {
-                return None;
-            }
-            let b_val = self.base[curr];
-            if b_val <= 0 {
-                return None;
-            }
-
-            let next = (b_val as usize) + code;
-            if next >= self.check.len() || self.check[next] != curr as u32 {
-                return None;
-            }
+            let next = self.step_to_next_state(curr, code)?;
 
             // 检查新状态是否命中 Tail 压缩
             let next_b_val = self.base[next];
             if next_b_val < 0 {
-                // 进入 Tail 匹配
-                let tail_offset = (-(next_b_val + 1)) as usize;
-                if tail_offset >= self.tail.len() {
-                    return None;
-                }
-
-                // 剩余待匹配字符
-                let remaining = &key_bytes[depth + 1..];
-                if remaining.contains(&0) {
-                    return None;
-                }
-                let tail_slice = &self.tail[tail_offset..];
-
-                // 检查 remaining 是否与 tail_slice 完全一致且刚好以 0 结束
-                let rem_len = remaining.len();
-                if tail_slice.len() < rem_len + 5 {
-                    return None;
-                }
-
-                if &tail_slice[..rem_len] != remaining || tail_slice[rem_len] != 0 {
-                    return None;
-                }
-
-                // 取出 4 字节关联值
-                let val_bytes: [u8; 4] = tail_slice[rem_len + 1..rem_len + 5].try_into().ok()?;
-                return Some(u32::from_le_bytes(val_bytes));
+                return self.match_compressed_tail(&key_bytes[depth + 1..], next_b_val);
             }
 
             curr = next;
@@ -129,6 +92,30 @@ impl<'a> DatReader<'a> {
         }
 
         // 走终止符 code 0
+        self.match_terminal_leaf(curr)
+    }
+
+    /// 在 DAT 中执行单字符状态转移，命中非法分支时返回 None
+    #[inline]
+    fn step_to_next_state(&self, curr: usize, code: usize) -> Option<usize> {
+        if curr >= self.base.len() {
+            return None;
+        }
+        let b_val = self.base[curr];
+        if b_val <= 0 {
+            return None;
+        }
+
+        let next = (b_val as usize) + code;
+        if next >= self.check.len() || self.check[next] != curr as u32 {
+            return None;
+        }
+        Some(next)
+    }
+
+    /// 匹配 DAT 终止符分支并取出叶子节点上绑定的关联值
+    #[inline]
+    fn match_terminal_leaf(&self, curr: usize) -> Option<u32> {
         if curr >= self.base.len() {
             return None;
         }
@@ -148,6 +135,31 @@ impl<'a> DatReader<'a> {
         } else {
             None
         }
+    }
+
+    /// 在命中 Tail 压缩分支时匹配剩余字符并取出关联值
+    fn match_compressed_tail(&self, remaining: &[u8], next_b_val: i32) -> Option<u32> {
+        let tail_offset = (-(next_b_val + 1)) as usize;
+        if tail_offset >= self.tail.len() {
+            return None;
+        }
+        if remaining.contains(&0) {
+            return None;
+        }
+        let tail_slice = &self.tail[tail_offset..];
+
+        // 检查 remaining 是否与 tail_slice 完全一致且刚好以 0 结束
+        let rem_len = remaining.len();
+        if tail_slice.len() < rem_len + 5 {
+            return None;
+        }
+        if &tail_slice[..rem_len] != remaining || tail_slice[rem_len] != 0 {
+            return None;
+        }
+
+        // 取出 4 字节关联值
+        let val_bytes: [u8; 4] = tail_slice[rem_len + 1..rem_len + 5].try_into().ok()?;
+        Some(u32::from_le_bytes(val_bytes))
     }
 }
 

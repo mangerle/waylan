@@ -176,15 +176,27 @@ impl DateTimeEvaluator {
 
     /// 将数字公历日期转换为中文全大写（如：二〇二六年十月九日）
     fn to_chinese_date(year: i32, month: u32, day: u32) -> String {
-        let digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+        let year_str = Self::chinese_year_digits(year);
+        let month_str = Self::chinese_month_name(month);
+        let day_str = Self::chinese_day_name(day);
+        format!("{}年{}{}", year_str, month_str, day_str)
+    }
+
+    /// 将公历年份逐位转换为中文大写数字（忽略非数字字符）
+    fn chinese_year_digits(year: i32) -> String {
+        const DIGITS: [char; 10] = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
         let mut year_str = String::new();
         for ch in year.to_string().chars() {
             if let Some(d) = ch.to_digit(10) {
-                year_str.push(digits[d as usize]);
+                year_str.push(DIGITS[d as usize]);
             }
         }
+        year_str
+    }
 
-        let month_str = match month {
+    /// 将公历月份映射为中文大写月份名称（越界值回退为一月）
+    fn chinese_month_name(month: u32) -> &'static str {
+        match month {
             1 => "一月",
             2 => "二月",
             3 => "三月",
@@ -198,9 +210,12 @@ impl DateTimeEvaluator {
             11 => "十一月",
             12 => "十二月",
             _ => "一月",
-        };
+        }
+    }
 
-        let day_str = match day {
+    /// 将公历日映射为中文大写日名称（越界值回退为一日）
+    fn chinese_day_name(day: u32) -> &'static str {
+        match day {
             1 => "一日",
             2 => "二日",
             3 => "三日",
@@ -233,9 +248,7 @@ impl DateTimeEvaluator {
             30 => "三十日",
             31 => "三十一日",
             _ => "一日",
-        };
-
-        format!("{}年{}{}", year_str, month_str, day_str)
+        }
     }
 
     /// 计算干支年及生肖（如：丙午[马]年）与农历月日（基于 1900-2100 标准农历数据表精确推算）

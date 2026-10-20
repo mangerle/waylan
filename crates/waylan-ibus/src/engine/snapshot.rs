@@ -5,7 +5,7 @@
 //! - **核心优势**：锁保护范围被极限压缩为纯内存快照提取，耗时的 D-Bus 序列化与信号发送均在锁外完成。
 //! - **代价与局限**：每次 UI 刷新需要浅克隆当前的候选列表与预编辑字符串。
 
-use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation};
+use waylan_core::{Candidate, CandidateBoxState, CandidateIndexStyle, CandidateOrientation};
 use waylan_engine::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 
 use super::super::keys::IbusSessionCore;
@@ -34,6 +34,10 @@ impl UiSnapshot {
     }
 
     /// 从当前会话核心提取 UI 快照
+    ///
+    /// # 设计原理
+    /// - 快照提取全程只读且在锁外完成，语音激活态与常规组词态分别走独立的快照构造路径，
+    ///   确保语音波形绝不会污染输入框预编辑区。
     pub(crate) fn capture(core: &IbusSessionCore) -> Self {
         let is_voice = core.is_voice_active();
         if !is_voice && core.runtime.core.engine.raw_input().is_empty() {
@@ -51,43 +55,11 @@ impl UiSnapshot {
         );
 
         if is_voice {
-            return Self {
-                preedit: box_state.preedit,
-                candidates: box_state.candidates,
-                page_size: 1,
-                selected_index: 0,
-                orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
-                index_style: CandidateIndexStyle::None,
-            };
+            return Self::from_voice_box_state(box_state);
         }
 
-        let is_expanded = core.runtime.core.is_card_expanded();
-        let (page_size, selected_index, orientation) = if is_expanded {
-            let sel = core.runtime.core.card_selected_index();
-            (
-                box_state.candidates.len().max(1),
-                sel,
-                super::super::types::IBUS_ORIENTATION_VERTICAL,
-            )
-        } else {
-            let orientation = match core.candidate_orientation {
-                CandidateOrientation::Horizontal => {
-                    super::super::types::IBUS_ORIENTATION_HORIZONTAL
-                }
-                CandidateOrientation::Vertical => super::super::types::IBUS_ORIENTATION_VERTICAL,
-            };
-            (
-                core.runtime.core.engine.config.page_size,
-                box_state.selected_index,
-                orientation,
-            )
-        };
-
-        let preedit = if core.runtime.core.engine.raw_input().starts_with('v') {
-            core.runtime.core.engine.raw_input().to_string()
-        } else {
-            box_state.preedit
-        };
+        let (page_size, selected_index, orientation) = Self::resolve_page_layout(core, &box_state);
+        let preedit = Self::resolve_preedit(core, box_state.preedit);
 
         Self {
             preedit,
@@ -96,6 +68,58 @@ impl UiSnapshot {
             selected_index,
             orientation,
             index_style: core.candidate_index_style,
+        }
+    }
+
+    /// 构造语音激活态下的界面快照
+    ///
+    /// # 设计原理
+    /// - 语音态固定为单条目候选列表且不带数字序号，候选区承载语音文本与波形。
+    fn from_voice_box_state(box_state: CandidateBoxState) -> Self {
+        Self {
+            preedit: box_state.preedit,
+            candidates: box_state.candidates,
+            page_size: 1,
+            selected_index: 0,
+            orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
+            index_style: CandidateIndexStyle::None,
+        }
+    }
+
+    /// 依据卡片展开状态与候选框布局推导页大小、选中索引与候选框方向
+    ///
+    /// # 设计原理
+    /// - 二级卡片展开态强制纵向排列并以卡片内选中项为准；
+    ///   常规态则沿用引擎配置页大小与候选框自身的选中索引。
+    fn resolve_page_layout(
+        core: &IbusSessionCore,
+        box_state: &CandidateBoxState,
+    ) -> (usize, usize, i32) {
+        if core.runtime.core.is_card_expanded() {
+            let sel = core.runtime.core.card_selected_index();
+            return (
+                box_state.candidates.len().max(1),
+                sel,
+                super::super::types::IBUS_ORIENTATION_VERTICAL,
+            );
+        }
+        let orientation = match core.candidate_orientation {
+            CandidateOrientation::Horizontal => super::super::types::IBUS_ORIENTATION_HORIZONTAL,
+            CandidateOrientation::Vertical => super::super::types::IBUS_ORIENTATION_VERTICAL,
+        };
+        (
+            core.runtime.core.engine.config.page_size,
+            box_state.selected_index,
+            orientation,
+        )
+    }
+
+    /// 解析预编辑文本：V 模式保留原始拼音串，其余场景沿用候选框预编辑
+    fn resolve_preedit(core: &IbusSessionCore, box_preedit: String) -> String {
+        if core.runtime.core.engine.raw_input().starts_with('v') {
+            core.runtime.core.engine.raw_input().to_string()
+        } else {
+            box_preedit
         }
     }
 }

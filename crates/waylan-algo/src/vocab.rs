@@ -123,116 +123,63 @@ impl Vocabulary {
     /// - String Table: 连续紧凑 UTF-8 字符串段（每个词以 `u16 长度 + 字节流` 存储）
     pub fn save_binary(&self, path: impl AsRef<Path>) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
-        let file = File::create(path_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        let file = File::create(path_ref).map_err(|e| vocab_io_error(path_ref, e))?;
         let mut writer = BufWriter::new(file);
 
         // 1. 写入魔数与头部
-        writer
-            .write_all(VOCAB_MAGIC)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        writer
-            .write_all(&Self::FORMAT_VERSION.to_le_bytes())
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        writer
-            .write_all(&(self.words.len() as u32).to_le_bytes())
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
+        Self::write_header(&mut writer, self.words.len() as u32, path_ref)?;
 
         // 2. 依次写入各词条
         for word in &self.words {
-            let bytes = word.as_bytes();
-            let len = bytes.len() as u16;
-            writer
-                .write_all(&len.to_le_bytes())
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(path_ref),
-                    source: e,
-                })?;
-            writer
-                .write_all(bytes)
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(path_ref),
-                    source: e,
-                })?;
+            Self::write_word_entry(&mut writer, word, path_ref)?;
         }
 
-        writer.flush().map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        writer.flush().map_err(|e| vocab_io_error(path_ref, e))?;
+        Ok(())
+    }
+
+    /// 写入词表二进制文件头（魔数、格式版本号与词条数量）
+    fn write_header(writer: &mut impl Write, count: u32, path_ref: &Path) -> Result<(), AlgoError> {
+        writer
+            .write_all(VOCAB_MAGIC)
+            .map_err(|e| vocab_io_error(path_ref, e))?;
+        writer
+            .write_all(&Self::FORMAT_VERSION.to_le_bytes())
+            .map_err(|e| vocab_io_error(path_ref, e))?;
+        writer
+            .write_all(&count.to_le_bytes())
+            .map_err(|e| vocab_io_error(path_ref, e))?;
+        Ok(())
+    }
+
+    /// 写入单条词条（2 字节长度前缀 + UTF-8 字节流）
+    fn write_word_entry(
+        writer: &mut impl Write,
+        word: &str,
+        path_ref: &Path,
+    ) -> Result<(), AlgoError> {
+        let bytes = word.as_bytes();
+        let len = bytes.len() as u16;
+        writer
+            .write_all(&len.to_le_bytes())
+            .map_err(|e| vocab_io_error(path_ref, e))?;
+        writer
+            .write_all(bytes)
+            .map_err(|e| vocab_io_error(path_ref, e))?;
         Ok(())
     }
 
     /// 从紧凑二进制文件载入词表
     pub fn load_binary(path: impl AsRef<Path>) -> Result<Self, AlgoError> {
         let path_ref = path.as_ref();
-        let file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
+        let file = File::open(path_ref).map_err(|e| vocab_io_error(path_ref, e))?;
         let file_len = file
             .metadata()
             .map(|m| m.len() as usize)
             .unwrap_or(usize::MAX);
         let mut reader = BufReader::new(file);
 
-        let mut magic = [0u8; 16];
-        reader
-            .read_exact(&mut magic)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-
-        if &magic != VOCAB_MAGIC {
-            return Err(AlgoError::deserialize_failed(
-                path_ref,
-                "词表文件魔数不匹配",
-            ));
-        }
-
-        let mut ver_bytes = [0u8; 4];
-        reader
-            .read_exact(&mut ver_bytes)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        let version = u32::from_le_bytes(ver_bytes);
-        if version != Self::FORMAT_VERSION {
-            return Err(AlgoError::deserialize_failed(
-                path_ref,
-                format!("不支持的词表格式版本: {}", version),
-            ));
-        }
-
-        let mut count_bytes = [0u8; 4];
-        reader
-            .read_exact(&mut count_bytes)
-            .map_err(|e| AlgoError::DictionaryIo {
-                path: PathBuf::from(path_ref),
-                source: e,
-            })?;
-        let count = u32::from_le_bytes(count_bytes) as usize;
-        // 每个词条至少包含 2 字节长度前缀，校验剩余字节数可容纳的最大条目数防止伪造大数触发 OOM
-        let max_possible = file_len.saturating_sub(24) / 2;
-        if count > max_possible || count > Self::MAX_VOCAB_ENTRIES {
-            return Err(AlgoError::deserialize_failed(
-                path_ref,
-                format!("词表头部声明的词条数量异常越界: {}", count),
-            ));
-        }
+        let count = Self::read_vocab_header(&mut reader, path_ref, file_len)?;
 
         let mut words = Vec::with_capacity(count);
         let mut word_to_id = HashMap::with_capacity(count);
@@ -242,19 +189,13 @@ impl Vocabulary {
             let mut len_bytes = [0u8; 2];
             reader
                 .read_exact(&mut len_bytes)
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(path_ref),
-                    source: e,
-                })?;
+                .map_err(|e| vocab_io_error(path_ref, e))?;
             let len = u16::from_le_bytes(len_bytes) as usize;
 
             buf.resize(len, 0);
             reader
                 .read_exact(&mut buf)
-                .map_err(|e| AlgoError::DictionaryIo {
-                    path: PathBuf::from(path_ref),
-                    source: e,
-                })?;
+                .map_err(|e| vocab_io_error(path_ref, e))?;
 
             let s = std::str::from_utf8(&buf)
                 .map_err(|e| {
@@ -267,6 +208,61 @@ impl Vocabulary {
         }
 
         Ok(Self { words, word_to_id })
+    }
+
+    /// 读取并校验词表二进制文件头（魔数、格式版本号与词条数量上限）
+    fn read_vocab_header(
+        reader: &mut impl Read,
+        path_ref: &Path,
+        file_len: usize,
+    ) -> Result<usize, AlgoError> {
+        let mut magic = [0u8; 16];
+        reader
+            .read_exact(&mut magic)
+            .map_err(|e| vocab_io_error(path_ref, e))?;
+
+        if &magic != VOCAB_MAGIC {
+            return Err(AlgoError::deserialize_failed(
+                path_ref,
+                "词表文件魔数不匹配",
+            ));
+        }
+
+        let mut ver_bytes = [0u8; 4];
+        reader
+            .read_exact(&mut ver_bytes)
+            .map_err(|e| vocab_io_error(path_ref, e))?;
+        let version = u32::from_le_bytes(ver_bytes);
+        if version != Self::FORMAT_VERSION {
+            return Err(AlgoError::deserialize_failed(
+                path_ref,
+                format!("不支持的词表格式版本: {}", version),
+            ));
+        }
+
+        let mut count_bytes = [0u8; 4];
+        reader
+            .read_exact(&mut count_bytes)
+            .map_err(|e| vocab_io_error(path_ref, e))?;
+        let count = u32::from_le_bytes(count_bytes) as usize;
+        // 每个词条至少包含 2 字节长度前缀，校验剩余字节数可容纳的最大条目数防止伪造大数触发 OOM
+        let max_possible = file_len.saturating_sub(24) / 2;
+        if count > max_possible || count > Self::MAX_VOCAB_ENTRIES {
+            return Err(AlgoError::deserialize_failed(
+                path_ref,
+                format!("词表头部声明的词条数量异常越界: {}", count),
+            ));
+        }
+
+        Ok(count)
+    }
+}
+
+/// 构造词表持久化过程中的文件 IO 错误（统一附带出错文件路径）
+fn vocab_io_error(path_ref: &Path, source: std::io::Error) -> AlgoError {
+    AlgoError::DictionaryIo {
+        path: PathBuf::from(path_ref),
+        source,
     }
 }
 

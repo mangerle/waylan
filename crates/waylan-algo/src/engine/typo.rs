@@ -106,6 +106,9 @@ impl SpatialTypoCorrector {
     }
 
     /// 根据模糊音与拼音纠错规则生成方言软约束纠错
+    ///
+    /// 处理流程依次为：通用 gn/mg 误输归一、平翘舌软约束互换、鼻音边音混淆、前后鼻音混淆，
+    /// 各阶段产出的变异输入统一按代价权重推入候选列表。
     fn collect_rule_soft_corrections(
         raw_input: &str,
         table: &LexiconTable,
@@ -116,14 +119,44 @@ impl SpatialTypoCorrector {
         let mut mutated_inputs = Vec::with_capacity(8);
 
         // 1. 通用 gn/mg 误输替换为 ng
+        Self::collect_gn_mg_corrections(raw_input, typo_rules, &mut mutated_inputs);
+
+        // 2. 平翘舌音软约束互换，分别受对应模糊音开关控制
+        Self::collect_retroflex_corrections(raw_input, fuzzy, &mut mutated_inputs);
+
+        // 3. 鼻音边音软约束混淆
+        Self::collect_lateral_nasal_corrections(raw_input, fuzzy, &mut mutated_inputs);
+
+        // 4. 前后鼻音软约束混淆，分别受对应模糊音开关控制
+        Self::collect_back_front_nasal_corrections(raw_input, fuzzy, &mut mutated_inputs);
+
+        for (mutated, cost) in mutated_inputs {
+            if mutated != raw_input {
+                Self::try_push_valid_candidate(&mutated, cost, table, candidates);
+            }
+        }
+    }
+
+    /// 收集通用 gn/mg 误输归一为 ng 的候选变异输入
+    fn collect_gn_mg_corrections(
+        raw_input: &str,
+        typo_rules: &TypoCorrectionRules,
+        mutated_inputs: &mut Vec<(String, u32)>,
+    ) {
         if typo_rules.gn_ng && raw_input.contains("gn") {
             mutated_inputs.push((raw_input.replace("gn", "ng"), 18));
         }
         if typo_rules.mg_ng && raw_input.contains("mg") {
             mutated_inputs.push((raw_input.replace("mg", "ng"), 18));
         }
+    }
 
-        // 2. 平翘舌音软约束互换，分别受对应模糊音开关控制
+    /// 收集平舌与卷舌声母软约束互换（组合纠错与单对互换）产生的候选变异输入
+    fn collect_retroflex_corrections(
+        raw_input: &str,
+        fuzzy: &FuzzyPinyinRules,
+        mutated_inputs: &mut Vec<(String, u32)>,
+    ) {
         let mut retroflex_pairs = Vec::with_capacity(3);
         if fuzzy.z_zh {
             retroflex_pairs.push(("zh", "z"));
@@ -135,7 +168,7 @@ impl SpatialTypoCorrector {
             retroflex_pairs.push(("sh", "s"));
         }
 
-        // 2.1 组合纠错：同时应用所有已启用的平舌转卷舌规则（如 cuanze => chuanzhe）
+        // 组合纠错：同时应用所有已启用的平舌转卷舌规则（如 cuanze => chuanzhe）
         let mut combined = raw_input.to_string();
         let mut combined_changed = false;
         for &(retro, dental) in &retroflex_pairs {
@@ -149,7 +182,7 @@ impl SpatialTypoCorrector {
             mutated_inputs.push((combined, 22));
         }
 
-        // 2.2 单对平翘舌独立互换
+        // 单对平翘舌独立互换
         for (retro, dental) in retroflex_pairs {
             if raw_input.contains(retro) {
                 mutated_inputs.push((raw_input.replace(retro, dental), 22));
@@ -160,8 +193,14 @@ impl SpatialTypoCorrector {
                 }
             }
         }
+    }
 
-        // 3. 鼻音边音软约束混淆
+    /// 收集鼻音 l/n 软约束混淆产生的候选变异输入
+    fn collect_lateral_nasal_corrections(
+        raw_input: &str,
+        fuzzy: &FuzzyPinyinRules,
+        mutated_inputs: &mut Vec<(String, u32)>,
+    ) {
         if fuzzy.l_n {
             if let Some(rest) = raw_input.strip_prefix('l') {
                 mutated_inputs.push((format!("n{}", rest), 24));
@@ -169,8 +208,14 @@ impl SpatialTypoCorrector {
                 mutated_inputs.push((format!("l{}", rest), 24));
             }
         }
+    }
 
-        // 4. 前后鼻音软约束混淆，分别受对应模糊音开关控制
+    /// 收集前后鼻音软约束混淆（ang/an、eng/en、ing/in）产生的候选变异输入
+    fn collect_back_front_nasal_corrections(
+        raw_input: &str,
+        fuzzy: &FuzzyPinyinRules,
+        mutated_inputs: &mut Vec<(String, u32)>,
+    ) {
         let mut nasal_pairs = Vec::with_capacity(3);
         if fuzzy.an_ang {
             nasal_pairs.push(("ang", "an"));
@@ -186,12 +231,6 @@ impl SpatialTypoCorrector {
                 mutated_inputs.push((raw_input.replace(back, front), 24));
             } else if raw_input.contains(front) {
                 mutated_inputs.push((raw_input.replace(front, back), 24));
-            }
-        }
-
-        for (mutated, cost) in mutated_inputs {
-            if mutated != raw_input {
-                Self::try_push_valid_candidate(&mutated, cost, table, candidates);
             }
         }
     }

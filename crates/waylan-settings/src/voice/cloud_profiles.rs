@@ -27,11 +27,30 @@ pub(crate) fn register_cloud_profile_callbacks(
     let editing_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
     // 1. 开始新增
+    register_cloud_add_callback(window, editing_id.clone());
+
+    // 2. 开始编辑
+    register_cloud_edit_callback(window, loaded_config.clone(), editing_id.clone());
+
+    // 3. 取消编辑
+    register_cloud_cancel_callback(window, editing_id.clone());
+
+    // 4. 保存云端服务
+    register_cloud_save_and_delete(window, loaded_config.clone(), editing_id);
+
+    // 5. 测试云端服务
+    register_cloud_test_callback(window, loaded_config);
+}
+
+/// 注册「开始新增云端服务」回调
+///
+/// 设计意图：新增态的表单初值属于纯界面装配逻辑，与配置持久化无关，故独立成函数，
+/// 使主注册函数仅承担回调注册顺序的编排职责。
+fn register_cloud_add_callback(window: &SettingsWindow, editing_id: Rc<RefCell<Option<String>>>) {
     let window_weak = window.as_weak();
-    let editing_id_add = editing_id.clone();
     window.on_start_add_cloud_profile(move || {
         if let Some(win) = window_weak.upgrade() {
-            editing_id_add.borrow_mut().take();
+            editing_id.borrow_mut().take();
             win.set_edit_cloud_name(SharedString::from(""));
             win.set_edit_cloud_endpoint(SharedString::from(
                 "https://api.openai.com/v1/audio/transcriptions",
@@ -42,17 +61,25 @@ pub(crate) fn register_cloud_profile_callbacks(
             win.set_global_status(SharedString::from("正在添加新的云端语音服务配置..."));
         }
     });
+}
 
-    // 2. 开始编辑
+/// 注册「开始编辑云端服务」回调
+///
+/// 设计意图：编辑态需要先从当前生效配置中回读目标条目，故必须持有配置锁的共享引用；
+/// 该依赖通过参数显式注入，避免依赖隐式的全局状态。
+fn register_cloud_edit_callback(
+    window: &SettingsWindow,
+    loaded_config: Arc<Mutex<AppConfig>>,
+    editing_id: Rc<RefCell<Option<String>>>,
+) {
     let window_weak = window.as_weak();
-    let current_cfg_cell = loaded_config.clone();
-    let editing_id_edit = editing_id.clone();
+    let current_cfg_cell = loaded_config;
     window.on_start_edit_cloud_profile(move |idx| {
         if let Some(win) = window_weak.upgrade() {
             let index = idx as usize;
             let cfg = current_cfg_cell.lock().clone();
             if let Some(p) = cfg.voice.cloud_profiles.get(index) {
-                *editing_id_edit.borrow_mut() = Some(p.id.clone());
+                *editing_id.borrow_mut() = Some(p.id.clone());
                 win.set_edit_cloud_name(SharedString::from(&p.name));
                 win.set_edit_cloud_endpoint(SharedString::from(&p.endpoint));
                 win.set_edit_cloud_key(SharedString::from(p.api_key.as_deref().unwrap_or("")));
@@ -62,23 +89,21 @@ pub(crate) fn register_cloud_profile_callbacks(
             }
         }
     });
+}
 
-    // 3. 取消编辑
+/// 注册「取消编辑云端服务」回调
+fn register_cloud_cancel_callback(
+    window: &SettingsWindow,
+    editing_id: Rc<RefCell<Option<String>>>,
+) {
     let window_weak = window.as_weak();
-    let editing_id_cancel = editing_id.clone();
     window.on_cancel_cloud_edit(move || {
         if let Some(win) = window_weak.upgrade() {
-            editing_id_cancel.borrow_mut().take();
+            editing_id.borrow_mut().take();
             win.set_is_editing_cloud(false);
             win.set_global_status(SharedString::from("已取消云端服务编辑。"));
         }
     });
-
-    // 4. 保存云端服务
-    register_cloud_save_and_delete(window, loaded_config.clone(), editing_id);
-
-    // 5. 测试云端服务
-    register_cloud_test_callback(window, loaded_config);
 }
 
 /// 注册云端服务保存与删除回调
@@ -123,6 +148,77 @@ struct CloudProfileFormData<'a> {
     model: &'a str,
 }
 
+/// 归一化并校验后的云端语音服务字段值
+struct CloudProfileValues {
+    name: String,
+    endpoint: String,
+    model: String,
+    api_key: Option<String>,
+}
+
+/// 归一化并校验云端语音服务表单输入
+///
+/// 设计意图：将「去除首尾空白 + 必填项判定 + 空 API Key 归一」这些纯数据加工逻辑从落盘流程中剥离，
+/// 使保存主流程专注于「写配置 -> 持久化 -> 回写界面」的顺序编排，校验失败时即刻短路返回。
+fn normalize_cloud_profile_form(
+    win: &SettingsWindow,
+    form: CloudProfileFormData<'_>,
+) -> Option<CloudProfileValues> {
+    let name = form.name.trim().to_string();
+    let endpoint = form.endpoint.trim().to_string();
+    let model = form.model.trim().to_string();
+    if name.is_empty() || endpoint.is_empty() || model.is_empty() {
+        win.set_global_status_is_error(true);
+        win.set_global_status(SharedString::from("服务名称、接口地址和模型标识不能为空！"));
+        return None;
+    }
+    let key = form.key.trim();
+    let api_key = if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    };
+    Some(CloudProfileValues {
+        name,
+        endpoint,
+        model,
+        api_key,
+    })
+}
+
+/// 将归一化后的表单值回写到已存在的云端服务条目，并在其处于生效状态时同步当前云端参数
+fn apply_cloud_profile_update(cfg: &mut AppConfig, target_id: &str, values: &CloudProfileValues) {
+    if let Some(p) = cfg
+        .voice
+        .cloud_profiles
+        .iter_mut()
+        .find(|p| p.id == target_id)
+    {
+        p.name = values.name.clone();
+        p.endpoint = values.endpoint.clone();
+        p.api_key = values.api_key.clone();
+        p.model = values.model.clone();
+    }
+    if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", target_id)) {
+        cfg.voice.cloud.endpoint = values.endpoint.clone();
+        cfg.voice.cloud.api_key = values.api_key.clone();
+        cfg.voice.cloud.model = values.model.clone();
+    }
+}
+
+/// 向配置中追加一个新的云端语音服务条目
+fn apply_cloud_profile_insert(cfg: &mut AppConfig, values: &CloudProfileValues) {
+    let new_id = format!("cloud_{}", chrono::Utc::now().timestamp_millis());
+    cfg.voice.cloud_profiles.push(CloudProfile {
+        id: new_id,
+        name: values.name.clone(),
+        provider: CloudProviderType::OpenAiCompatible,
+        endpoint: values.endpoint.clone(),
+        api_key: values.api_key.clone(),
+        model: values.model.clone(),
+    });
+}
+
 /// 处理保存/更新云端语音服务配置
 fn handle_save_cloud_profile(
     win: &SettingsWindow,
@@ -130,46 +226,17 @@ fn handle_save_cloud_profile(
     editing_id_save: &Rc<RefCell<Option<String>>>,
     form: CloudProfileFormData<'_>,
 ) {
-    let name_str = form.name.trim().to_string();
-    let endpoint_str = form.endpoint.trim().to_string();
-    let model_str = form.model.trim().to_string();
-    if name_str.is_empty() || endpoint_str.is_empty() || model_str.is_empty() {
-        win.set_global_status_is_error(true);
-        win.set_global_status(SharedString::from("服务名称、接口地址和模型标识不能为空！"));
+    let Some(values) = normalize_cloud_profile_form(win, form) else {
         return;
-    }
-    let key_str = form.key.trim();
-    let api_key = if key_str.is_empty() {
-        None
-    } else {
-        Some(key_str.to_string())
     };
 
     let mut cfg = current_cfg_cell.lock().clone();
     update_config_from_window(win, &mut cfg);
     let target_id = editing_id_save.borrow_mut().take();
     if let Some(ref tid) = target_id {
-        if let Some(p) = cfg.voice.cloud_profiles.iter_mut().find(|p| &p.id == tid) {
-            p.name = name_str.clone();
-            p.endpoint = endpoint_str.clone();
-            p.api_key = api_key.clone();
-            p.model = model_str.clone();
-        }
-        if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", tid)) {
-            cfg.voice.cloud.endpoint = endpoint_str;
-            cfg.voice.cloud.api_key = api_key;
-            cfg.voice.cloud.model = model_str;
-        }
+        apply_cloud_profile_update(&mut cfg, tid, &values);
     } else {
-        let new_id = format!("cloud_{}", chrono::Utc::now().timestamp_millis());
-        cfg.voice.cloud_profiles.push(CloudProfile {
-            id: new_id,
-            name: name_str.clone(),
-            provider: CloudProviderType::OpenAiCompatible,
-            endpoint: endpoint_str,
-            api_key,
-            model: model_str,
-        });
+        apply_cloud_profile_insert(&mut cfg, &values);
     }
 
     match cfg.save_default() {
@@ -180,7 +247,7 @@ fn handle_save_cloud_profile(
             win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from(format!(
                 "云端服务 [{}] 已保存生效！",
-                name_str
+                values.name
             )));
         }
         Err(e) => {

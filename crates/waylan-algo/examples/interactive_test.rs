@@ -3,11 +3,36 @@ use std::time::Instant;
 use waylan_algo::custom_phrase::AuxiliaryDict;
 use waylan_algo::{table::LexiconTable, types::AlgoConfig, AlgoEngine};
 
+/// 单次输入的响应延迟统计参数对象
+struct LatencyReport {
+    /// 末键延迟（微秒）
+    last_char_us: u128,
+    /// 平均每键延迟（微秒）
+    avg_us: u128,
+    /// 全句累积耗时（微秒）
+    total_us: u128,
+}
+
 fn main() {
+    print_banner();
+
+    let table = load_main_table();
+    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+
+    load_auxiliary_dict(&mut engine);
+    print_guide();
+    run_interactive_loop(&mut engine);
+}
+
+/// 打印引擎标题横幅
+fn print_banner() {
     println!("============================================================");
     println!("       微澜 (WayLan) 输入法核心引擎 - 交互式打字测试终端    ");
     println!("============================================================");
+}
 
+/// 定位并载入全量汉语主词库，同时输出载入耗时与语言模型挂载信息
+fn load_main_table() -> LexiconTable {
     let dict_path = if std::path::Path::new("data/base.dict.bin").exists() {
         "data/base.dict.bin"
     } else if std::path::Path::new("/usr/share/waylan/data/base.dict.bin").exists() {
@@ -32,9 +57,11 @@ fn main() {
             bg.total_pairs / 10000
         );
     }
+    table
+}
 
-    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
-
+/// 载入辅助混输词库（文件存在时才挂载到引擎）
+fn load_auxiliary_dict(engine: &mut AlgoEngine) {
     let aux_path = if std::path::Path::new("data/aux.dict.bin").exists() {
         "data/aux.dict.bin"
     } else if std::path::Path::new("/usr/share/waylan/data/aux.dict.bin").exists() {
@@ -49,7 +76,10 @@ fn main() {
             println!("      辅助混输库载入成功 (包含 2.3万 英文与 5000+ 符号表情)！");
         }
     }
+}
 
+/// 打印测试指南说明
+fn print_guide() {
     println!("------------------------------------------------------------");
     println!("测试指南：");
     println!("  1. 拼音打字测试：输入 women、xian、zhongguo、weilan");
@@ -59,7 +89,10 @@ fn main() {
     println!("  5. 动态扩展特性：输入 riqi、shijian、v1+2*3");
     println!("  6. 退出测试：    输入 q 或 exit");
     println!("============================================================\n");
+}
 
+/// 逐行读取用户输入，模拟逐字敲键并输出候选词与响应延迟统计
+fn run_interactive_loop(engine: &mut AlgoEngine) {
     let stdin = io::stdin();
     let mut line = String::new();
 
@@ -93,31 +126,45 @@ fn main() {
         }
         let total_us = start.elapsed().as_micros();
         let avg_us = total_us / input.len().max(1) as u128;
-        let candidates = engine.candidates();
 
-        let preedit = engine.formatted_preedit();
-        println!(
-            "  切分音节: [{}]  (末键延迟: {} µs, 均键延迟: {} µs, {}键累积: {} µs)",
-            preedit,
-            last_char_us,
-            avg_us,
-            input.len(),
-            total_us
+        print_input_result(
+            engine,
+            input,
+            LatencyReport {
+                last_char_us,
+                avg_us,
+                total_us,
+            },
         );
-        if candidates.is_empty() {
-            println!("  [无匹配候选词]");
-        } else {
-            print!("  候选词列表: ");
-            for (idx, cand) in candidates.iter().take(8).enumerate() {
-                let comment_str = if let Some(ref c) = cand.comment {
-                    format!("({})", c)
-                } else {
-                    String::new()
-                };
-                print!("{}.{}{}\t", idx + 1, cand.text, comment_str);
-            }
-            println!();
+    }
+}
+
+/// 输出单次输入的切分音节、响应延迟统计与候选词列表
+fn print_input_result(engine: &AlgoEngine, input: &str, report: LatencyReport) {
+    let candidates = engine.candidates();
+
+    let preedit = engine.formatted_preedit();
+    println!(
+        "  切分音节: [{}]  (末键延迟: {} µs, 均键延迟: {} µs, {}键累积: {} µs)",
+        preedit,
+        report.last_char_us,
+        report.avg_us,
+        input.len(),
+        report.total_us
+    );
+    if candidates.is_empty() {
+        println!("  [无匹配候选词]");
+    } else {
+        print!("  候选词列表: ");
+        for (idx, cand) in candidates.iter().take(8).enumerate() {
+            let comment_str = if let Some(ref c) = cand.comment {
+                format!("({})", c)
+            } else {
+                String::new()
+            };
+            print!("{}.{}{}\t", idx + 1, cand.text, comment_str);
         }
         println!();
     }
+    println!();
 }

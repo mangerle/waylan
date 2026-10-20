@@ -53,21 +53,7 @@ impl AuxiliaryDict {
         if let Some(parent) = path_ref.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let pid = std::process::id();
-        let temp_path = path_ref.with_extension(format!("aux.{}.{}.tmp", pid, nanos));
-
-        struct TempFileGuard<'a>(&'a Path, bool);
-        impl<'a> Drop for TempFileGuard<'a> {
-            fn drop(&mut self) {
-                if !self.1 {
-                    let _ = fs::remove_file(self.0);
-                }
-            }
-        }
+        let temp_path = build_temp_file_path(path_ref);
         let mut guard = TempFileGuard(&temp_path, false);
 
         let file = fs::File::create(&temp_path).map_err(|e| AlgoError::DictionaryIo {
@@ -90,18 +76,7 @@ impl AuxiliaryDict {
 
         write_dict_data(&mut writer, path_ref, &payload)?;
 
-        writer.flush().map_err(|e| AlgoError::DictionaryIo {
-            path: temp_path.clone(),
-            source: e,
-        })?;
-        let inner_file = writer.into_inner().map_err(|e| AlgoError::DictionaryIo {
-            path: temp_path.clone(),
-            source: e.into_error(),
-        })?;
-        inner_file.sync_all().map_err(|e| AlgoError::DictionaryIo {
-            path: temp_path.clone(),
-            source: e,
-        })?;
+        flush_and_sync(writer, &temp_path)?;
 
         fs::rename(&temp_path, path_ref).map_err(|e| AlgoError::DictionaryIo {
             path: PathBuf::from(path_ref),
@@ -152,6 +127,46 @@ impl AuxiliaryDict {
             symbols,
         })
     }
+}
+
+/// 临时文件守卫（原子重命名成功前自动清理残留文件）
+struct TempFileGuard<'a>(&'a Path, bool);
+
+impl<'a> Drop for TempFileGuard<'a> {
+    fn drop(&mut self) {
+        if !self.1 {
+            let _ = fs::remove_file(self.0);
+        }
+    }
+}
+
+/// 生成用于原子落盘的临时文件路径（携带进程号与纳秒时间戳避免并发冲突）
+fn build_temp_file_path(path_ref: &Path) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id();
+    path_ref.with_extension(format!("aux.{}.{}.tmp", pid, nanos))
+}
+
+/// 将缓冲区内容刷入磁盘并同步落盘，确保原子重命名前数据已持久化
+fn flush_and_sync(
+    mut writer: std::io::BufWriter<fs::File>,
+    temp_path: &Path,
+) -> Result<(), AlgoError> {
+    writer.flush().map_err(|e| AlgoError::DictionaryIo {
+        path: temp_path.to_path_buf(),
+        source: e,
+    })?;
+    let inner_file = writer.into_inner().map_err(|e| AlgoError::DictionaryIo {
+        path: temp_path.to_path_buf(),
+        source: e.into_error(),
+    })?;
+    inner_file.sync_all().map_err(|e| AlgoError::DictionaryIo {
+        path: temp_path.to_path_buf(),
+        source: e,
+    })
 }
 
 /// 辅助词库构建期字符串驻留池管理器

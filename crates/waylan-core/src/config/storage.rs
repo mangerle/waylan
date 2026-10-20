@@ -52,56 +52,73 @@ impl AppConfig {
 
     /// 加载配置，若不存在则自动初始化默认配置文件（具备容错合并与备份救援能力）
     pub fn load_or_create() -> Self {
-        if let Some(path) = Self::config_path() {
-            if path.exists() {
-                match fs::read_to_string(&path) {
-                    Ok(content) => match Self::parse_tolerant(&content) {
-                        Ok(cfg) => {
-                            return cfg;
-                        }
-                        Err(e) => {
-                            let ts = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0);
-                            let broken_path = path.with_extension(format!("toml.broken.{}", ts));
-                            let _ = fs::rename(&path, &broken_path);
-                            log::warn!(
-                                "[配置系统] 严重解析错误 ({})，已备份损坏配置至 {:?}，将尝试救援或回退默认配置。",
-                                e,
-                                broken_path
-                            );
-                            if let Some(rescued) = Self::try_rescue_from_broken_backups(&path) {
-                                let _ = rescued.save_to_file(&path);
-                                return rescued;
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        log::warn!(
-                            "[配置系统] 读取配置文件 {:?} 失败 ({})，将回退使用默认配置。",
-                            path,
-                            e
-                        );
-                    }
-                }
-            } else {
-                // 配置文件尚不存在，先尝试从历史备份中救援，若无历史备份则初始化默认配置
-                if let Some(rescued) = Self::try_rescue_from_broken_backups(&path) {
-                    if let Err(e) = rescued.save_to_file(&path) {
-                        log::warn!("[配置系统] 保存已救援的配置至 {:?} 失败: {}", path, e);
-                    }
-                    return rescued;
-                }
+        let Some(path) = Self::config_path() else {
+            return Self::default();
+        };
 
-                let default_cfg = Self::default();
-                if let Err(e) = default_cfg.save_to_file(&path) {
-                    log::warn!("[配置系统] 初始化写入默认配置文件 {:?} 失败: {}", path, e);
+        if path.exists() {
+            Self::load_existing_config(&path)
+        } else {
+            Self::initialize_fresh_config(&path)
+        }
+    }
+
+    /// 读取并解析已存在的配置文件，解析失败时备份损坏文件并尝试从历史备份中救援
+    ///
+    /// 设计意图：将「读取 -> 宽容解析 -> 损坏备份 -> 历史救援」这条容错链与主加载流程分离，
+    /// 使主流程仅保留「文件存在与否」的分支判定，容错细节的演进不影响调用方契约。
+    fn load_existing_config(path: &Path) -> Self {
+        match fs::read_to_string(path) {
+            Ok(content) => match Self::parse_tolerant(&content) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let broken_path = path.with_extension(format!("toml.broken.{}", ts));
+                    let _ = fs::rename(path, &broken_path);
+                    log::warn!(
+                        "[配置系统] 严重解析错误 ({})，已备份损坏配置至 {:?}，将尝试救援或回退默认配置。",
+                        e,
+                        broken_path
+                    );
+                    if let Some(rescued) = Self::try_rescue_from_broken_backups(path) {
+                        let _ = rescued.save_to_file(path);
+                        return rescued;
+                    }
+                    Self::default()
                 }
-                return default_cfg;
+            },
+            Err(e) => {
+                log::warn!(
+                    "[配置系统] 读取配置文件 {:?} 失败 ({})，将回退使用默认配置。",
+                    path,
+                    e
+                );
+                Self::default()
             }
         }
-        Self::default()
+    }
+
+    /// 在配置文件尚不存在时初始化默认配置，并优先尝试从历史损坏备份中救援
+    ///
+    /// 设计意图：首次启动与「配置文件被误删」两种场景必须走同一条救援路径，
+    /// 避免用户个性化设置因文件丢失而永久丢失。
+    fn initialize_fresh_config(path: &Path) -> Self {
+        // 配置文件尚不存在，先尝试从历史备份中救援，若无历史备份则初始化默认配置
+        if let Some(rescued) = Self::try_rescue_from_broken_backups(path) {
+            if let Err(e) = rescued.save_to_file(path) {
+                log::warn!("[配置系统] 保存已救援的配置至 {:?} 失败: {}", path, e);
+            }
+            return rescued;
+        }
+
+        let default_cfg = Self::default();
+        if let Err(e) = default_cfg.save_to_file(path) {
+            log::warn!("[配置系统] 初始化写入默认配置文件 {:?} 失败: {}", path, e);
+        }
+        default_cfg
     }
 
     /// 保存配置到默认用户路径

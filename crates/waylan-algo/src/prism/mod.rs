@@ -60,6 +60,72 @@ impl PrismEngine {
         let mut paths = Vec::new();
 
         // 3.1 专有名词与实体保护机制 (NER 原型)：若输入精确匹配受保护实体，直接生成零代价原子路径
+        Self::push_protected_entity_path(input, entity_mgr, &mut paths);
+
+        let mut current_syllables = Vec::new();
+        let params = DfsSearchParams {
+            input,
+            fuzzy,
+            typo_rules,
+        };
+
+        // 第一阶段：正向严格搜索（不启用容错虚边，保证正常长句以微秒级极致性能直通）
+        Self::run_dfs_search(&params, false, &mut current_syllables, &mut paths);
+
+        // 判定是否属于正常击键流程
+        let is_normal_typing = Self::is_normal_typing_flow(&paths, fuzzy);
+
+        // 判定是否属于纯声母缩写（所有按键字符均为合法辅音声母）：纯声母缩写绝不触发拼音容错
+        let is_pure_initials = Self::is_pure_initials_input(input);
+
+        // 第二阶段：若非纯声母缩写，且非正常全拼键入流（存在断流、孤立辅音声母或非法残余前缀），启动容错虚边补救搜索
+        if !is_pure_initials && !is_normal_typing && typo_rules.enable {
+            Self::run_dfs_search(&params, true, &mut current_syllables, &mut paths);
+        }
+
+        // 如果完全无法形成完整音节切分，尝试提取最长可能前缀
+        if paths.is_empty() {
+            Self::push_unresolved_path(input, &mut paths);
+        }
+
+        Self::dedup_best_paths(&mut paths);
+        paths
+    }
+
+    /// 当输入完全无法形成完整音节切分时，记录一条携带完整剩余串的兜底路径
+    fn push_unresolved_path(input: &str, paths: &mut Vec<SegmentPath>) {
+        paths.push(SegmentPath {
+            syllables: Vec::new(),
+            remaining: input.to_string(),
+            cost: 100,
+            is_typo: false,
+        });
+    }
+
+    /// 在 DAG 上执行一次深度优先路径搜索（`enable_typo` 决定是否启用容错虚边）
+    fn run_dfs_search(
+        params: &DfsSearchParams<'_>,
+        enable_typo: bool,
+        current: &mut Vec<String>,
+        results: &mut Vec<SegmentPath>,
+    ) {
+        let mut ctx = DfsContext {
+            input: params.input,
+            fuzzy: params.fuzzy,
+            typo_rules: params.typo_rules,
+            enable_typo,
+            current,
+            results,
+        };
+        dfs_dag(&mut ctx, 0, 0, 0);
+    }
+
+    /// 若输入精确匹配受保护实体，直接生成零代价原子路径（专有名词与实体保护机制）
+    fn push_protected_entity_path(
+        input: &str,
+        entity_mgr: Option<&EntityProtectionManager>,
+        paths: &mut Vec<SegmentPath>,
+    ) {
         if let Some(mgr) = entity_mgr {
             if let Some(entity) = mgr.match_exact(input) {
                 paths.push(SegmentPath {
@@ -70,25 +136,14 @@ impl PrismEngine {
                 });
             }
         }
+    }
 
-        let mut current_syllables = Vec::new();
-        // 第一阶段：正向严格搜索（不启用容错虚边，保证正常长句以微秒级极致性能直通）
-        {
-            let mut ctx = DfsContext {
-                input,
-                fuzzy,
-                typo_rules,
-                enable_typo: false,
-                current: &mut current_syllables,
-                results: &mut paths,
-            };
-            dfs_dag(&mut ctx, 0, 0, 0);
-        }
-
-        // 判定是否属于正常击键流程：
-        // 1. 前驱音节全部属于完整标准音节或合法模糊音音节（无单字母辅音声母降级，且无夹在中间的孤立单字母元音碎切如 shi'o'hu）；
-        // 2. 末尾闭合（remaining 为空）或处于合法音节前缀键入中（如 "bei" + "j"）
-        let is_normal_typing = paths.iter().any(|p| {
+    /// 判定候选路径集合是否属于正常全拼击键流程
+    ///
+    /// 正常流程需同时满足：前驱音节均为完整标准音节或合法模糊音音节（无单字母辅音声母降级，
+    /// 且无夹在中间的孤立单字母元音碎切），且末尾闭合（remaining 为空）或处于合法音节前缀键入中。
+    fn is_normal_typing_flow(paths: &[SegmentPath], fuzzy: &FuzzyConfig) -> bool {
+        paths.iter().any(|p| {
             let has_mid_single_vowel = p.syllables.len() >= 3
                 && p.syllables[1..]
                     .iter()
@@ -108,10 +163,12 @@ impl PrismEngine {
             } else {
                 has_syllable_prefix(&p.remaining)
             }
-        });
+        })
+    }
 
-        // 判定是否属于纯声母缩写（所有按键字符均为合法辅音声母）：纯声母缩写绝不触发拼音容错
-        let is_pure_initials = input.chars().all(|c| {
+    /// 判定输入序列是否由纯辅音声母字符构成（此类输入绝不触发拼音容错搜索）
+    fn is_pure_initials_input(input: &str) -> bool {
+        input.chars().all(|c| {
             matches!(
                 c,
                 'b' | 'p'
@@ -134,33 +191,7 @@ impl PrismEngine {
                     | 'y'
                     | 'w'
             )
-        });
-
-        // 第二阶段：若非纯声母缩写，且非正常全拼键入流（存在断流、孤立辅音声母或非法残余前缀），启动容错虚边补救搜索
-        if !is_pure_initials && !is_normal_typing && typo_rules.enable {
-            let mut ctx = DfsContext {
-                input,
-                fuzzy,
-                typo_rules,
-                enable_typo: true,
-                current: &mut current_syllables,
-                results: &mut paths,
-            };
-            dfs_dag(&mut ctx, 0, 0, 0);
-        }
-
-        // 如果完全无法形成完整音节切分，尝试提取最长可能前缀
-        if paths.is_empty() {
-            paths.push(SegmentPath {
-                syllables: Vec::new(),
-                remaining: input.to_string(),
-                cost: 100,
-                is_typo: false,
-            });
-        }
-
-        Self::dedup_best_paths(&mut paths);
-        paths
+        })
     }
 
     /// 路径排序与全局去重：正向非容错路径优先、代价值与音节数最小优先，相同 (syllables, remaining) 仅保留最优解
@@ -194,6 +225,40 @@ impl PrismEngine {
         let last_idx = parts.len() - 1;
         let last_part = parts[last_idx];
 
+        let base_syllables = Self::build_base_syllables(&parts, last_idx, fuzzy);
+        let mut paths = Vec::new();
+        let last_is_single_valid =
+            is_valid_syllable(last_part) || PrismFuzzy::is_fuzzy_valid(last_part, fuzzy);
+
+        let tail = TailSplitParams {
+            base_syllables: &base_syllables,
+            last_part,
+            fuzzy,
+            is_trailing_quote,
+            last_is_single_valid,
+        };
+
+        // 1. 若末尾片段本身是单个合法音节，生成闭合音节路径
+        Self::push_tail_closed_paths(&tail, &mut paths);
+
+        // 2. 若末尾未以单引号显式封口，且末尾片段是合法音节前缀（非完整音节或存在更长合法音节），
+        // 则生成将末尾片段作为未完成前缀 (remaining) 的扩展路径（支持如 xi'a 联想 喜爱 xi'ai / 西安 xi'an）
+        Self::push_tail_prefix_paths(&tail, &mut paths);
+
+        if paths.is_empty() {
+            paths.push(SegmentPath {
+                syllables: parts.iter().map(|s| s.to_string()).collect(),
+                remaining: String::new(),
+                cost: parts.len() as u32,
+                is_typo: false,
+            });
+        }
+
+        paths
+    }
+
+    /// 构建显式切分的前置音节序列（非合法音节的片段尝试自动拆解为多音节子路径）
+    fn build_base_syllables(parts: &[&str], last_idx: usize, fuzzy: &FuzzyConfig) -> Vec<String> {
         let mut base_syllables = Vec::with_capacity(parts.len() + 2);
         for &part in &parts[..last_idx] {
             if is_valid_syllable(part)
@@ -213,15 +278,14 @@ impl PrismEngine {
                 base_syllables.push(part.to_string());
             }
         }
+        base_syllables
+    }
 
-        let mut paths = Vec::new();
-        let last_is_single_valid =
-            is_valid_syllable(last_part) || PrismFuzzy::is_fuzzy_valid(last_part, fuzzy);
-
-        // 1. 若末尾片段本身是单个合法音节，生成闭合音节路径
-        if last_is_single_valid {
-            let mut syls = base_syllables.clone();
-            syls.push(last_part.to_string());
+    /// 生成末段为完整音节的闭合路径，以及末段包含多个连续音节时的拆解拼接路径
+    fn push_tail_closed_paths(tail: &TailSplitParams<'_>, paths: &mut Vec<SegmentPath>) {
+        if tail.last_is_single_valid {
+            let mut syls = tail.base_syllables.to_vec();
+            syls.push(tail.last_part.to_string());
             let cost = syls.len() as u32;
             paths.push(SegmentPath {
                 syllables: syls,
@@ -231,11 +295,11 @@ impl PrismEngine {
             });
         } else {
             // 1.1 若末尾片段包含多个连续音节（如 "xi'anhui" 中的 "anhui"），调用内部切分逻辑拆解拼接
-            for sub in Self::build_paths(last_part, fuzzy) {
+            for sub in Self::build_paths(tail.last_part, tail.fuzzy) {
                 if !sub.syllables.is_empty() {
-                    let mut syls = base_syllables.clone();
+                    let mut syls = tail.base_syllables.to_vec();
                     syls.extend(sub.syllables);
-                    let remaining = if is_trailing_quote && !sub.remaining.is_empty() {
+                    let remaining = if tail.is_trailing_quote && !sub.remaining.is_empty() {
                         syls.push(sub.remaining);
                         String::new()
                     } else {
@@ -251,33 +315,47 @@ impl PrismEngine {
                 }
             }
         }
+    }
 
-        // 2. 若末尾未以单引号显式封口，且末尾片段是合法音节前缀（非完整音节或存在更长合法音节），
-        // 则生成将末尾片段作为未完成前缀 (remaining) 的扩展路径（支持如 xi'a 联想 喜爱 xi'ai / 西安 xi'an）
-        if !is_trailing_quote
-            && has_syllable_prefix(last_part)
-            && (!last_is_single_valid || has_strictly_longer_syllable(last_part))
+    /// 生成将末段作为未完成前缀 (remaining) 的扩展路径（支持如 xi'a 联想 喜爱 xi'ai / 西安 xi'an）
+    fn push_tail_prefix_paths(tail: &TailSplitParams<'_>, paths: &mut Vec<SegmentPath>) {
+        if !tail.is_trailing_quote
+            && has_syllable_prefix(tail.last_part)
+            && (!tail.last_is_single_valid || has_strictly_longer_syllable(tail.last_part))
         {
-            let cost = (base_syllables.len() + 1) as u32;
+            let cost = (tail.base_syllables.len() + 1) as u32;
             paths.push(SegmentPath {
-                syllables: base_syllables,
-                remaining: last_part.to_string(),
+                syllables: tail.base_syllables.to_vec(),
+                remaining: tail.last_part.to_string(),
                 cost,
                 is_typo: false,
             });
         }
-
-        if paths.is_empty() {
-            paths.push(SegmentPath {
-                syllables: parts.iter().map(|s| s.to_string()).collect(),
-                remaining: String::new(),
-                cost: parts.len() as u32,
-                is_typo: false,
-            });
-        }
-
-        paths
     }
+}
+
+/// DAG 多阶段深度优先搜索的共享输入参数（收敛搜索入口的入参数量）
+struct DfsSearchParams<'a> {
+    /// 用户原始键入序列
+    input: &'a str,
+    /// 模糊音规则配置
+    fuzzy: &'a FuzzyConfig,
+    /// 用户拼音纠错规则
+    typo_rules: &'a TypoCorrectionRules,
+}
+
+/// 显式切分末段处理的输入参数（收敛末段路径生成函数的入参数量）
+struct TailSplitParams<'a> {
+    /// 已构建完成的前置音节序列
+    base_syllables: &'a [String],
+    /// 末段原始文本
+    last_part: &'a str,
+    /// 模糊音规则配置
+    fuzzy: &'a FuzzyConfig,
+    /// 输入是否以单引号显式封口
+    is_trailing_quote: bool,
+    /// 末段本身是否为单个合法音节
+    last_is_single_valid: bool,
 }
 
 impl PrismEngine {

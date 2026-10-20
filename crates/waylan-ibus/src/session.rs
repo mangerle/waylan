@@ -161,30 +161,58 @@ fn build_ibus_connection(
 }
 
 /// 根据启动模式向 `ibus-daemon` 申请总线名或动态注册并激活微澜组件
+///
+/// # 设计原理
+/// - 依次完成：动态注册组件描述（仅非子进程模式）-> 申请独占总线名 -> 切换全局引擎 ->
+///   安装用户级组件描述（仅非子进程模式），各步骤失败均降级为日志告警而不中断会话启动。
 fn register_or_activate_ibus_engine(
     conn: &Connection,
     is_ibus_child_mode: bool,
 ) -> Result<(), IbusError> {
-    let exe_path = env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "waylan".to_string());
+    let exe_path = resolve_current_exe_path();
 
     if !is_ibus_child_mode {
-        let exec_cmd = format!("{} --ibus", exe_path);
-        let setup_cmd = format!("{} settings", exe_path);
-        if let Ok(comp_val) = build_waylan_ibus_component(&exec_cmd, &setup_cmd) {
-            let _ = conn.call_method(
-                Some("org.freedesktop.IBus"),
-                "/org/freedesktop/IBus",
-                Some("org.freedesktop.IBus"),
-                "RegisterComponent",
-                &(Value::from(comp_val),),
-            );
-            info!("[微澜 IBus] 成功向 ibus-daemon 动态注册微澜输入法组件 (org.freedesktop.IBus.Waylan)");
-        }
+        register_ibus_component(conn, &exe_path);
     }
 
+    request_ibus_engine_name(conn, is_ibus_child_mode);
+    activate_global_ibus_engine(conn);
+
+    if !is_ibus_child_mode {
+        ensure_ibus_component_installed(&exe_path);
+    }
+
+    Ok(())
+}
+
+/// 解析当前进程可执行文件路径（无法解析时回退为 `waylan` 命令名）
+fn resolve_current_exe_path() -> String {
+    env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "waylan".to_string())
+}
+
+/// 向 `ibus-daemon` 动态注册微澜输入法组件描述
+fn register_ibus_component(conn: &Connection, exe_path: &str) {
+    let exec_cmd = format!("{} --ibus", exe_path);
+    let setup_cmd = format!("{} settings", exe_path);
+    if let Ok(comp_val) = build_waylan_ibus_component(&exec_cmd, &setup_cmd) {
+        let _ = conn.call_method(
+            Some("org.freedesktop.IBus"),
+            "/org/freedesktop/IBus",
+            Some("org.freedesktop.IBus"),
+            "RegisterComponent",
+            &(Value::from(comp_val),),
+        );
+        info!(
+            "[微澜 IBus] 成功向 ibus-daemon 动态注册微澜输入法组件 (org.freedesktop.IBus.Waylan)"
+        );
+    }
+}
+
+/// 申请微澜引擎的独占总线名称
+fn request_ibus_engine_name(conn: &Connection, is_ibus_child_mode: bool) {
     if let Err(e) = conn.request_name("org.freedesktop.IBus.Waylan") {
         log::warn!(
             "[微澜 IBus 警告] 申请独占总线名称 org.freedesktop.IBus.Waylan 失败: {}",
@@ -193,7 +221,10 @@ fn register_or_activate_ibus_engine(
     } else if is_ibus_child_mode {
         info!("[微澜 IBus] 已在子进程模式下成功申请总线名称 org.freedesktop.IBus.Waylan");
     }
+}
 
+/// 将当前 GNOME / IBus 全局输入法引擎切换为微澜
+fn activate_global_ibus_engine(conn: &Connection) {
     if let Err(e) = conn.call_method(
         Some("org.freedesktop.IBus"),
         "/org/freedesktop/IBus",
@@ -208,12 +239,6 @@ fn register_or_activate_ibus_engine(
     } else {
         info!("[微澜 IBus] 已成功将当前 GNOME / IBus 全局输入法引擎激活为: waylan (微澜)");
     }
-
-    if !is_ibus_child_mode {
-        ensure_ibus_component_installed(&exe_path);
-    }
-
-    Ok(())
 }
 
 /// 从 IBus `GetGlobalEngine` 返回的 `IBusEngineDesc` D-Bus 结构体/变体中提取引擎名称

@@ -74,28 +74,7 @@ impl TextMeasureCache {
             return &self.entries[idx];
         }
 
-        buffer.set_metrics(Metrics::new(size, size * 1.2));
-        let shaping = if text.is_ascii() {
-            Shaping::Basic
-        } else {
-            Shaping::Advanced
-        };
-        buffer.set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
-        buffer.shape_until_scroll(font_system, false);
-
-        let mut width = 0.0f32;
-        let mut glyphs = Vec::with_capacity(text.len().max(4));
-        for run in buffer.layout_runs() {
-            width = width.max(run.line_w);
-            for glyph in run.glyphs {
-                let physical = glyph.physical((0.0, -run.line_y), 1.0);
-                glyphs.push(CachedGlyph {
-                    cache_key: physical.cache_key,
-                    x: physical.x,
-                    y: physical.y,
-                });
-            }
-        }
+        let (width, glyphs) = shape_text_runs(buffer, font_system, text, size);
 
         let entry = &mut self.entries[idx];
         entry.hash = hash;
@@ -107,6 +86,39 @@ impl TextMeasureCache {
 
         &self.entries[idx]
     }
+}
+
+/// 对文本执行 HarfBuzz 排版塑形，返回排版宽度与物理字形序列
+fn shape_text_runs(
+    buffer: &mut Buffer,
+    font_system: &mut FontSystem,
+    text: &str,
+    size: f32,
+) -> (f32, Vec<CachedGlyph>) {
+    buffer.set_metrics(Metrics::new(size, size * 1.2));
+    let shaping = if text.is_ascii() {
+        Shaping::Basic
+    } else {
+        Shaping::Advanced
+    };
+    buffer.set_text(text, &Attrs::new().family(Family::SansSerif), shaping, None);
+    buffer.shape_until_scroll(font_system, false);
+
+    let mut width = 0.0f32;
+    let mut glyphs = Vec::with_capacity(text.len().max(4));
+    for run in buffer.layout_runs() {
+        width = width.max(run.line_w);
+        for glyph in run.glyphs {
+            let physical = glyph.physical((0.0, -run.line_y), 1.0);
+            glyphs.push(CachedGlyph {
+                cache_key: physical.cache_key,
+                x: physical.x,
+                y: physical.y,
+            });
+        }
+    }
+
+    (width, glyphs)
 }
 
 /// 计算文本测量查询键的哈希指纹

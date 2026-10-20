@@ -35,37 +35,10 @@ impl IbusFactoryService {
             guard.reset_context();
         }
 
-        let id = self.next_engine_id.fetch_add(1, Ordering::SeqCst);
-        let path_str = format!("/org/freedesktop/IBus/Engine/{}", id);
-        let obj_path = OwnedObjectPath::try_from(path_str.as_str())
-            .map_err(|e| fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
-
-        let conn_registered = if let Some(conn) = self.conn_slot.get() {
-            let mut srv = self.engine_template.clone();
-            srv.is_password = Arc::new(AtomicBool::new(false));
-            srv.lock_healer = Arc::clone(&self.engine_template.lock_healer);
-            let gen = IbusGenericService {
-                core: Arc::clone(&self.core),
-            };
-            if let Err(e) = conn.object_server().at(&obj_path, srv) {
-                warn!(
-                    "[微澜 IBus] 为动态路径 {} 注册 Engine 接口失败: {}",
-                    path_str, e
-                );
-            }
-            if let Err(e) = conn.object_server().at(&obj_path, gen) {
-                warn!(
-                    "[微澜 IBus] 为动态路径 {} 注册 Service 接口失败: {}",
-                    path_str, e
-                );
-            }
-            debug!(
-                "[微澜 IBus] 成功为新应用输入上下文动态注册 Engine 实例: {}",
-                path_str
-            );
-            true
-        } else {
-            false
+        let (obj_path, path_str) = self.build_engine_object_path()?;
+        let conn_registered = match self.conn_slot.get() {
+            Some(conn) => self.register_engine_interfaces(conn, &obj_path, &path_str),
+            None => false,
         };
 
         if !conn_registered {
@@ -79,6 +52,58 @@ impl IbusFactoryService {
         }
 
         Ok(obj_path)
+    }
+}
+
+/// `IbusFactoryService` 的内部辅助逻辑
+///
+/// # 设计原理
+/// - 与 `#[interface]` 接口块分离：接口块内的方法会被 zbus 宏导出为 D-Bus 方法，
+///   内部辅助逻辑必须置于普通 impl 块中，否则会被误当作 D-Bus 方法暴露。
+impl IbusFactoryService {
+    /// 为新的引擎实例分配唯一的 D-Bus 对象路径
+    fn build_engine_object_path(&self) -> Result<(OwnedObjectPath, String), fdo::Error> {
+        let id = self.next_engine_id.fetch_add(1, Ordering::SeqCst);
+        let path_str = format!("/org/freedesktop/IBus/Engine/{}", id);
+        let obj_path = OwnedObjectPath::try_from(path_str.as_str())
+            .map_err(|e| fdo::Error::Failed(format!("构造引擎对象路径失败: {}", e)))?;
+        Ok((obj_path, path_str))
+    }
+
+    /// 在动态对象路径上注册 Engine 与 Service 接口，返回是否注册成功
+    ///
+    /// # 设计原理
+    /// - Engine 与 Service 接口分别独立挂载：单个接口注册失败仅告警降级，
+    ///   另一个接口仍可正常工作，避免局部失败导致整个引擎实例不可用。
+    fn register_engine_interfaces(
+        &self,
+        conn: &Connection,
+        obj_path: &OwnedObjectPath,
+        path_str: &str,
+    ) -> bool {
+        let mut srv = self.engine_template.clone();
+        srv.is_password = Arc::new(AtomicBool::new(false));
+        srv.lock_healer = Arc::clone(&self.engine_template.lock_healer);
+        let gen = IbusGenericService {
+            core: Arc::clone(&self.core),
+        };
+        if let Err(e) = conn.object_server().at(obj_path, srv) {
+            warn!(
+                "[微澜 IBus] 为动态路径 {} 注册 Engine 接口失败: {}",
+                path_str, e
+            );
+        }
+        if let Err(e) = conn.object_server().at(obj_path, gen) {
+            warn!(
+                "[微澜 IBus] 为动态路径 {} 注册 Service 接口失败: {}",
+                path_str, e
+            );
+        }
+        debug!(
+            "[微澜 IBus] 成功为新应用输入上下文动态注册 Engine 实例: {}",
+            path_str
+        );
+        true
     }
 }
 

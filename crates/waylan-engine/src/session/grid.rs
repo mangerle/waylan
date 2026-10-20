@@ -45,6 +45,10 @@ impl ImeCoreSession {
     }
 
     /// 处理处于 5 行网格大候选词面板展开态下的专属键盘导航与选词
+    ///
+    /// # 设计原理
+    /// - 判定顺序固定为：方向键与 Esc 折叠导航 -> 数字键 1..=6 选词 -> 空格键确认选词，
+    ///   三级拦截严格互斥，任何一级命中后立即返回，不得改变既有优先级。
     pub(crate) fn handle_grid_expanded_key(
         &mut self,
         key: u32,
@@ -59,60 +63,22 @@ impl ImeCoreSession {
             return None;
         }
 
-        let row_count = total.div_ceil(GRID_COLS).clamp(1, 5);
-        let row = selected_index / GRID_COLS;
-        let col = selected_index % GRID_COLS;
+        let layout = derive_grid_layout(total, selected_index);
 
         // 1. 方向键与 Esc 折叠导航
-        match key {
-            KEY_DOWN => {
-                let next_row = (row + 1) % row_count;
-                selected_index = (next_row * GRID_COLS + col).min(total.saturating_sub(1));
-                self.expansion = CandidateExpansion::Grid { selected_index };
-                return Some(ImeOutputAction::Handled { update_ui: true });
-            }
-            KEY_UP => {
-                let prev_row = if row == 0 {
-                    row_count.saturating_sub(1)
-                } else {
-                    row - 1
-                };
-                selected_index = (prev_row * GRID_COLS + col).min(total.saturating_sub(1));
-                self.expansion = CandidateExpansion::Grid { selected_index };
-                return Some(ImeOutputAction::Handled { update_ui: true });
-            }
-            KEY_RIGHT => {
-                selected_index = (selected_index + 1) % total;
-                self.expansion = CandidateExpansion::Grid { selected_index };
-                return Some(ImeOutputAction::Handled { update_ui: true });
-            }
-            KEY_LEFT => {
-                selected_index = if selected_index == 0 {
-                    total.saturating_sub(1)
-                } else {
-                    selected_index - 1
-                };
-                self.expansion = CandidateExpansion::Grid { selected_index };
-                return Some(ImeOutputAction::Handled { update_ui: true });
-            }
-            KEY_ESC => {
-                self.collapse_grid();
-                return Some(ImeOutputAction::Handled { update_ui: true });
-            }
-            _ => {}
+        if let Some(target) = grid_navigation_target(&layout, key, selected_index) {
+            selected_index = target;
+            self.expansion = CandidateExpansion::Grid { selected_index };
+            return Some(ImeOutputAction::Handled { update_ui: true });
+        }
+        if key == KEY_ESC {
+            self.collapse_grid();
+            return Some(ImeOutputAction::Handled { update_ui: true });
         }
 
         // 2. 数字键 1..=6 选词（Shift 状态下需显式开启 Shift 选词）
-        if !self.is_shift_active() || self.shift_select_second {
-            if let Some(digit) = keycode_to_digit(key) {
-                if (1..=6).contains(&digit) {
-                    let target_idx = row * GRID_COLS + (digit - 1);
-                    if target_idx < total {
-                        return Some(self.commit_grid_candidate_by_index(target_idx, now));
-                    }
-                }
-                return Some(ImeOutputAction::Handled { update_ui: false });
-            }
+        if let Some(action) = self.handle_grid_digit_selection(key, &layout, now) {
+            return Some(action);
         }
 
         // 3. 空格键确认选词
@@ -123,4 +89,85 @@ impl ImeCoreSession {
 
         None
     }
+
+    /// 处理网格面板的数字键选词，返回 None 表示当前按键不属于数字选词分支
+    ///
+    /// # 设计原理
+    /// - 仅在"未按下 Shift"或"已显式开启 Shift 选词"时才会拦截数字键；
+    ///   命中数字键但目标行内并无候选词时，统一以"已消费但不刷新界面"的语义收口，
+    ///   避免数字键被透传为原生日字符。
+    fn handle_grid_digit_selection(
+        &mut self,
+        key: u32,
+        layout: &GridLayout,
+        now: u64,
+    ) -> Option<ImeOutputAction> {
+        if self.is_shift_active() && !self.shift_select_second {
+            return None;
+        }
+        let digit = keycode_to_digit(key)?;
+        if (1..=6).contains(&digit) {
+            let target_idx = layout.row * GRID_COLS + (digit - 1);
+            if target_idx < layout.total {
+                return Some(self.commit_grid_candidate_by_index(target_idx, now));
+            }
+        }
+        Some(ImeOutputAction::Handled { update_ui: false })
+    }
+}
+
+/// 网格候选面板的几何布局参数
+///
+/// 由参与布局的候选总数与当前选中索引推导，用于方向键跨行导航与数字键行内定位。
+struct GridLayout {
+    /// 参与布局的候选总数
+    total: usize,
+    /// 网格行数（固定 6 列，最多 5 行）
+    row_count: usize,
+    /// 当前选中项所在行
+    row: usize,
+    /// 当前选中项所在列
+    col: usize,
+}
+
+/// 依据候选总数与当前选中索引推导网格几何布局
+fn derive_grid_layout(total: usize, selected_index: usize) -> GridLayout {
+    GridLayout {
+        total,
+        row_count: total.div_ceil(GRID_COLS).clamp(1, 5),
+        row: selected_index / GRID_COLS,
+        col: selected_index % GRID_COLS,
+    }
+}
+
+/// 计算方向键导航后的目标选中索引，返回 None 表示该按键不属于方向键导航
+///
+/// # 设计原理
+/// - 上下方向键在行内保持列号不变并在首尾行循环，跨行后需按候选总数收敛边界；
+///   左右方向键则在当前页候选序列内循环。
+fn grid_navigation_target(layout: &GridLayout, key: u32, selected_index: usize) -> Option<usize> {
+    let target = match key {
+        KEY_DOWN => {
+            let next_row = (layout.row + 1) % layout.row_count;
+            (next_row * GRID_COLS + layout.col).min(layout.total.saturating_sub(1))
+        }
+        KEY_UP => {
+            let prev_row = if layout.row == 0 {
+                layout.row_count.saturating_sub(1)
+            } else {
+                layout.row - 1
+            };
+            (prev_row * GRID_COLS + layout.col).min(layout.total.saturating_sub(1))
+        }
+        KEY_RIGHT => (selected_index + 1) % layout.total,
+        KEY_LEFT => {
+            if selected_index == 0 {
+                layout.total.saturating_sub(1)
+            } else {
+                selected_index - 1
+            }
+        }
+        _ => return None,
+    };
+    Some(target)
 }

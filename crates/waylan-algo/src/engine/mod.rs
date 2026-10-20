@@ -231,6 +231,15 @@ impl AlgoEngine {
         }
 
         let raw_prefix = &raw[..raw_cursor];
+        match Self::scan_formatted_offset(&formatted, raw_prefix) {
+            Some(offset) => offset,
+            // 前缀切分场景：基于前缀切分路径长度计算字节偏移
+            None => self.prefix_path_byte_offset(raw_prefix, &formatted),
+        }
+    }
+
+    /// 逐字符对齐原始输入前缀与格式化预编辑文本，全部前缀字符命中时返回对应字节偏移
+    fn scan_formatted_offset(formatted: &str, raw_prefix: &str) -> Option<usize> {
         let mut raw_iter = raw_prefix.chars();
         let mut target_opt = raw_iter.next();
         let mut offset = 0;
@@ -251,10 +260,14 @@ impl AlgoEngine {
         }
 
         if target_opt.is_none() {
-            return offset.min(formatted.len());
+            Some(offset.min(formatted.len()))
+        } else {
+            None
         }
+    }
 
-        // 前缀切分场景：基于前缀切分路径长度计算字节偏移
+    /// 基于前缀切分路径长度计算光标字节偏移（逐字符对齐无法命中时的回退策略）
+    fn prefix_path_byte_offset(&self, raw_prefix: &str, formatted: &str) -> usize {
         let prefix_paths = PrismEngine::build_paths_with_options(
             raw_prefix,
             &self.config.fuzzy,

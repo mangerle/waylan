@@ -27,6 +27,18 @@ pub struct LayoutParams<'a> {
     pub font_size: f32,
 }
 
+/// 单个候选条目的测量参数
+struct CandidateItemMeasureParams<'a> {
+    cand: &'a Candidate,
+    index: usize,
+    index_style: CandidateIndexStyle,
+    show_comment: bool,
+    is_selected: bool,
+    font_size: f32,
+    scale: f32,
+    start_x: f32,
+}
+
 /// 计算整行候选条的测量结果与尺寸
 pub fn measure_candidates_bar<'a, F>(
     params: LayoutParams<'a>,
@@ -36,67 +48,107 @@ where
     F: FnMut(&str, f32) -> f32,
 {
     let mut measured = Vec::with_capacity(params.candidates.len());
+
+    let (badge_offset, preedit_offset) = measure_candidate_prefix_offsets(&params, &mut measure_fn);
     let mut current_pos_x = params.padding_h + 2.0 * params.s;
-
-    // 若配置了模式标识（如“中”、“英”、“V”），前置预留徽标宽度
-    if !params.mode_badge.is_empty() {
-        let badge_w = measure_fn(params.mode_badge, params.font_size * 0.8) + 10.0 * params.s;
-        current_pos_x += badge_w + 6.0 * params.s;
-    }
-
-    // 若存在预编辑拼音，前置预留预编辑文本区域
-    if !params.preedit.is_empty() {
-        let preedit_w = measure_fn(params.preedit, params.font_size * 0.9) + 8.0 * params.s;
-        current_pos_x += preedit_w + 8.0 * params.s;
-    }
+    current_pos_x += badge_offset;
+    current_pos_x += preedit_offset;
 
     for (idx, cand) in params.candidates.iter().enumerate() {
-        let index_str = format_candidate_index(params.index_style, idx);
-        let index_width = if index_str.is_empty() {
-            0.0
-        } else {
-            measure_fn(&index_str, params.font_size * 0.85)
-        };
-        let display_text: Cow<'_, str> = if params.show_comment {
-            match cand.comment.as_deref() {
-                Some(comment) if !comment.is_empty() => {
-                    Cow::Owned(format!("{} {}", cand.text, comment))
-                }
-                _ => Cow::Borrowed(cand.text.as_str()),
-            }
-        } else {
-            Cow::Borrowed(cand.text.as_str())
-        };
-        let text_width = measure_fn(&display_text, params.font_size);
-        let icon_width = if cand.is_expandable {
-            16.0 * params.s
-        } else {
-            0.0
-        };
-
-        let is_selected = idx == params.selected_index;
-        let item_width = if is_selected {
-            index_width + icon_width + text_width + 16.0 * params.s
-        } else {
-            index_width + 4.0 * params.s + icon_width + text_width
-        };
-
-        measured.push(ItemMeasure {
-            index_str,
-            index_width,
-            text_width,
-            is_expandable: cand.is_expandable,
-            icon_width,
-            total_item_width: item_width,
-            start_x: current_pos_x,
-        });
-
+        let item = measure_candidate_item(
+            &CandidateItemMeasureParams {
+                cand,
+                index: idx,
+                index_style: params.index_style,
+                show_comment: params.show_comment,
+                is_selected: idx == params.selected_index,
+                font_size: params.font_size,
+                scale: params.s,
+                start_x: current_pos_x,
+            },
+            &mut measure_fn,
+        );
+        let item_width = item.total_item_width;
+        measured.push(item);
         current_pos_x += item_width + params.item_gap;
     }
 
     let action_area_width = 24.0 * params.s;
     let total_bar_width = current_pos_x - params.item_gap + action_area_width + params.padding_h;
     (measured, total_bar_width)
+}
+
+/// 测量模式标识徽标与预编辑拼音各自的前置占位宽度（含各自后置间距）
+fn measure_candidate_prefix_offsets<F>(params: &LayoutParams<'_>, measure_fn: &mut F) -> (f32, f32)
+where
+    F: FnMut(&str, f32) -> f32,
+{
+    // 若配置了模式标识（如“中”、“英”、“V”），前置预留徽标宽度
+    let badge_offset = if params.mode_badge.is_empty() {
+        0.0
+    } else {
+        let badge_w = measure_fn(params.mode_badge, params.font_size * 0.8) + 10.0 * params.s;
+        badge_w + 6.0 * params.s
+    };
+
+    // 若存在预编辑拼音，前置预留预编辑文本区域
+    let preedit_offset = if params.preedit.is_empty() {
+        0.0
+    } else {
+        let preedit_w = measure_fn(params.preedit, params.font_size * 0.9) + 8.0 * params.s;
+        preedit_w + 8.0 * params.s
+    };
+
+    (badge_offset, preedit_offset)
+}
+
+/// 测量单个候选条目的序号、注释、图标与文本宽度明细
+fn measure_candidate_item<F>(
+    params: &CandidateItemMeasureParams<'_>,
+    measure_fn: &mut F,
+) -> ItemMeasure
+where
+    F: FnMut(&str, f32) -> f32,
+{
+    let s = params.scale;
+    let index_str = format_candidate_index(params.index_style, params.index);
+    let index_width = if index_str.is_empty() {
+        0.0
+    } else {
+        measure_fn(&index_str, params.font_size * 0.85)
+    };
+    let display_text: Cow<'_, str> = if params.show_comment {
+        match params.cand.comment.as_deref() {
+            Some(comment) if !comment.is_empty() => {
+                Cow::Owned(format!("{} {}", params.cand.text, comment))
+            }
+            _ => Cow::Borrowed(params.cand.text.as_str()),
+        }
+    } else {
+        Cow::Borrowed(params.cand.text.as_str())
+    };
+    let text_width = measure_fn(&display_text, params.font_size);
+    let icon_width = if params.cand.is_expandable {
+        16.0 * s
+    } else {
+        0.0
+    };
+
+    let item_width = if params.is_selected {
+        index_width + icon_width + text_width + 16.0 * s
+    } else {
+        index_width + 4.0 * s + icon_width + text_width
+    };
+
+    ItemMeasure {
+        index_str,
+        index_width,
+        text_width,
+        is_expandable: params.cand.is_expandable,
+        icon_width,
+        total_item_width: item_width,
+        start_x: params.start_x,
+    }
 }
 
 /// 鼠标在候选框上的命中交互目标

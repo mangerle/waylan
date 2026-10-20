@@ -25,7 +25,36 @@ pub struct CompositionKeyParams {
 }
 
 /// 使用收敛的参数结构体处理处于拼音组词状态（raw_input 非空）下的核心按键拦截决策
+///
+/// # 设计原理
+/// - 按键优先级自上而下严格固定：二级展开卡片 -> 智能方向键导航 -> 选词/编辑/翻页类按键，
+///   高优先级分支一旦命中即返回，杜绝同一次按键被多层状态机重复消费。
 pub fn handle_composition_key_with_params(
+    session: &mut ImeCoreSession,
+    params: CompositionKeyParams,
+) -> Option<ImeOutputAction> {
+    // 1. 二级展开卡片优先拦截（Tab 键展开/收起与卡片内部导航）
+    if let Some(act) = expanded::handle_expanded_tab_key(session, params.key) {
+        return Some(act);
+    }
+
+    // 2. 未展开卡片时才允许智能方向键导航接管按键
+    if !session.is_card_expanded() {
+        if let Some(act) = navigation::handle_smart_navigation_key(session, params.key) {
+            return Some(act);
+        }
+    }
+
+    // 3. 选词、编辑与翻页类按键决策
+    handle_composition_selection_keys(session, params)
+}
+
+/// 选词、编辑与翻页类按键的顺序决策
+///
+/// # 设计原理
+/// - 判定顺序固定为：V 模式字符 -> 数字选词 -> 确认/取消动作键 -> 退格与分词编辑 -> 翻页快捷键；
+///   命中后按动作语义决定是否收起二级卡片（文本上屏与状态重置必然收起）。
+fn handle_composition_selection_keys(
     session: &mut ImeCoreSession,
     params: CompositionKeyParams,
 ) -> Option<ImeOutputAction> {
@@ -35,16 +64,6 @@ pub fn handle_composition_key_with_params(
         page_keys,
         now,
     } = params;
-
-    if let Some(act) = expanded::handle_expanded_tab_key(session, key) {
-        return Some(act);
-    }
-
-    if !session.is_card_expanded() {
-        if let Some(act) = navigation::handle_smart_navigation_key(session, key) {
-            return Some(act);
-        }
-    }
 
     if let Some(act) = selection::handle_v_mode_key(session, key, shift_active) {
         session.collapse_card();

@@ -22,9 +22,25 @@ pub(crate) fn register_phrase_callbacks(
     phrase_path: PathBuf,
 ) {
     // 1. 新增短语回调
+    register_add_phrase_callback(window, phrases_model.clone(), phrase_path.clone());
+
+    // 2. 删除短语回调
+    register_delete_phrase_callback(window, phrases_model, phrase_path);
+
+    // 3. 清空自适应历史词模型回调
+    register_clear_user_model_callback(window);
+}
+
+/// 注册新增自定义短语回调
+///
+/// 设计意图：将「入参校验 -> 落盘 -> 回写列表与输入框」这一条完整业务链收敛于单处，
+/// 避免主注册函数在多个回调之间交错共享状态，降低后续维护时的遗漏风险。
+fn register_add_phrase_callback(
+    window: &SettingsWindow,
+    phrases_model: Rc<VecModel<PhraseItem>>,
+    phrase_path: PathBuf,
+) {
     let window_weak = window.as_weak();
-    let phrases_model_for_add = phrases_model.clone();
-    let phrase_path_for_add = phrase_path.clone();
     window.on_add_custom_phrase(move |code, text| {
         if let Some(win) = window_weak.upgrade() {
             let code_str = code.trim();
@@ -33,13 +49,13 @@ pub(crate) fn register_phrase_callbacks(
                 win.set_phrase_status(SharedString::from("快捷代码与展开文本不能为空！"));
                 return;
             }
-            let mut mgr = CustomPhraseManager::load_or_init(&phrase_path_for_add);
+            let mut mgr = CustomPhraseManager::load_or_init(&phrase_path);
             mgr.add_entry(code_str.to_string(), text_str.to_string());
-            if let Err(e) = mgr.save_to_file(&phrase_path_for_add) {
+            if let Err(e) = mgr.save_to_file(&phrase_path) {
                 win.set_phrase_status(SharedString::from(format!("保存短语失败: {}", e)));
                 return;
             }
-            phrases_model_for_add.push(PhraseItem {
+            phrases_model.push(PhraseItem {
                 code: SharedString::from(code_str),
                 text: SharedString::from(text_str),
             });
@@ -48,20 +64,27 @@ pub(crate) fn register_phrase_callbacks(
             win.set_phrase_status(SharedString::from("自定义短语添加成功！"));
         }
     });
+}
 
-    // 2. 删除短语回调
+/// 注册删除自定义短语回调
+///
+/// 设计意图：删除动作必须先落盘成功再移除列表项，失败时保留原列表以避免界面与磁盘状态脱节；
+/// 该一致性约束与实现细节一并封装在本回调内。
+fn register_delete_phrase_callback(
+    window: &SettingsWindow,
+    phrases_model: Rc<VecModel<PhraseItem>>,
+    phrase_path: PathBuf,
+) {
     let window_weak = window.as_weak();
-    let phrases_model_for_del = phrases_model;
-    let phrase_path_for_del = phrase_path;
     window.on_delete_custom_phrase(move |idx| {
         if let Some(win) = window_weak.upgrade() {
             let index = idx as usize;
-            if let Some(item) = phrases_model_for_del.row_data(index) {
-                let mut mgr = CustomPhraseManager::load_or_init(&phrase_path_for_del);
+            if let Some(item) = phrases_model.row_data(index) {
+                let mut mgr = CustomPhraseManager::load_or_init(&phrase_path);
                 mgr.remove_entry(item.code.as_str(), item.text.as_str());
-                match mgr.save_to_file(&phrase_path_for_del) {
+                match mgr.save_to_file(&phrase_path) {
                     Ok(()) => {
-                        phrases_model_for_del.remove(index);
+                        phrases_model.remove(index);
                         win.set_phrase_status(SharedString::from("已成功移除指定短语。"));
                     }
                     Err(e) => {
@@ -74,8 +97,13 @@ pub(crate) fn register_phrase_callbacks(
             }
         }
     });
+}
 
-    // 3. 清空自适应历史词模型回调
+/// 注册清空自适应历史词模型回调
+///
+/// 设计意图：清空动作需同时处理当前 WAL 文件与旧版本遗留的 `.bin.wal` 文件，
+/// 并在成功后唤醒守护进程重载配置，防止守护进程退出时把旧内存数据回写磁盘。
+fn register_clear_user_model_callback(window: &SettingsWindow) {
     let window_weak = window.as_weak();
     window.on_clear_user_model(move || {
         if let Some(win) = window_weak.upgrade() {

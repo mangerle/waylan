@@ -236,14 +236,8 @@ impl TrayService {
         }
     }
 
-    /// 向 DBus 发射图标、提示与菜单刷新信号
-    fn emit_tray_signals(
-        conn: &zbus::blocking::Connection,
-        sni: &StatusNotifierItem,
-        menu_revision: &mut u32,
-    ) {
-        let current_icon = sni.icon_name();
-
+    /// 向 D-Bus 发射 NewIcon 图标刷新信号
+    fn emit_new_icon_signal(conn: &zbus::blocking::Connection) {
         if let Err(e) = conn.emit_signal(
             Option::<&str>::None,
             "/StatusNotifierItem",
@@ -255,7 +249,10 @@ impl TrayService {
         } else {
             debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
         }
+    }
 
+    /// 向 D-Bus 发射 NewToolTip 悬停提示刷新信号
+    fn emit_new_tool_tip_signal(conn: &zbus::blocking::Connection) {
         let _ = conn.emit_signal(
             Option::<&str>::None,
             "/StatusNotifierItem",
@@ -263,7 +260,10 @@ impl TrayService {
             "NewToolTip",
             &(),
         );
+    }
 
+    /// 向 D-Bus 发射 PropertiesChanged 属性变更通知，携带最新图标名称
+    fn emit_properties_changed_signal(conn: &zbus::blocking::Connection, current_icon: String) {
         let mut changed_props = HashMap::with_capacity(1);
         changed_props.insert("IconName", Value::from(current_icon));
         let invalidated_props: Vec<&str> = Vec::new();
@@ -278,14 +278,16 @@ impl TrayService {
                 invalidated_props,
             ),
         );
+    }
 
-        *menu_revision = menu_revision.wrapping_add(1);
+    /// 向 D-Bus 发射 LayoutUpdated 菜单布局刷新信号
+    fn emit_layout_updated_signal(conn: &zbus::blocking::Connection, menu_revision: u32) {
         if let Err(e) = conn.emit_signal(
             Option::<&str>::None,
             "/MenuBar",
             "com.canonical.dbusmenu",
             "LayoutUpdated",
-            &(*menu_revision, 0i32),
+            &(menu_revision, 0i32),
         ) {
             warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
         } else {
@@ -294,6 +296,25 @@ impl TrayService {
                 menu_revision
             );
         }
+    }
+
+    /// 向 DBus 发射图标、提示与菜单刷新信号
+    ///
+    /// 信号发射顺序固定为 NewIcon -> NewToolTip -> PropertiesChanged -> LayoutUpdated，
+    /// 以保证任务栏按既定次序刷新图标、悬停提示与右键菜单。
+    fn emit_tray_signals(
+        conn: &zbus::blocking::Connection,
+        sni: &StatusNotifierItem,
+        menu_revision: &mut u32,
+    ) {
+        let current_icon = sni.icon_name();
+
+        Self::emit_new_icon_signal(conn);
+        Self::emit_new_tool_tip_signal(conn);
+        Self::emit_properties_changed_signal(conn, current_icon);
+
+        *menu_revision = menu_revision.wrapping_add(1);
+        Self::emit_layout_updated_signal(conn, *menu_revision);
     }
 
     /// 保持 DBus 事件处理循环运行并在收到状态变更时广播信号

@@ -174,50 +174,7 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
 
     let on_selected = move |selected: Option<PathBuf>| {
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(win) = win_weak.upgrade() else {
-                return;
-            };
-            let Some(src_path) = selected else {
-                win.set_global_status(SharedString::from(format!("已取消选择 {} 模型", label)));
-                return;
-            };
-            win.set_global_status_is_error(false);
-            win.set_global_status(SharedString::from(format!(
-                "正在后台导入 {} 模型，请稍候...",
-                label
-            )));
-
-            let win_weak_inner = win.as_weak();
-            let cfg_cell_inner = cfg_cell.clone();
-            let thread_name = format!("{}-model-importer", kind.label().to_lowercase());
-            if let Err(e) = std::thread::Builder::new()
-                .name(thread_name)
-                .spawn(move || {
-                    let imported_opt = match kind {
-                        ModelImportKind::AsrPackage => {
-                            waylan_voice::import_asr_model_from_dir(&src_path)
-                        }
-                        ModelImportKind::Onnx(sub) => {
-                            waylan_voice::import_onnx_model_from_file(sub, &src_path)
-                        }
-                    };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = win_weak_inner.upgrade() {
-                            handle_imported_model_event(
-                                &w,
-                                &cfg_cell_inner,
-                                kind,
-                                imported_opt,
-                                apply_fn,
-                            );
-                        }
-                    });
-                })
-            {
-                log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
-                win.set_global_status_is_error(true);
-                win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
-            }
+            dispatch_model_import(win_weak, cfg_cell, kind, apply_fn, selected);
         });
     };
 
@@ -233,6 +190,55 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
                 on_selected,
             );
         }
+    }
+}
+
+/// 在 Slint 主线程中接收用户选择结果并派发后台导入任务
+fn dispatch_model_import(
+    win_weak: slint::Weak<SettingsWindow>,
+    cfg_cell: Arc<Mutex<AppConfig>>,
+    kind: ModelImportKind,
+    apply_fn: ApplyConfigFn,
+    selected: Option<PathBuf>,
+) {
+    let Some(win) = win_weak.upgrade() else {
+        return;
+    };
+    let Some(src_path) = selected else {
+        win.set_global_status(SharedString::from(format!(
+            "已取消选择 {} 模型",
+            kind.label()
+        )));
+        return;
+    };
+    win.set_global_status_is_error(false);
+    win.set_global_status(SharedString::from(format!(
+        "正在后台导入 {} 模型，请稍候...",
+        kind.label()
+    )));
+
+    let win_weak_inner = win.as_weak();
+    let cfg_cell_inner = cfg_cell.clone();
+    let thread_name = format!("{}-model-importer", kind.label().to_lowercase());
+    if let Err(e) = std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let imported_opt = match kind {
+                ModelImportKind::AsrPackage => waylan_voice::import_asr_model_from_dir(&src_path),
+                ModelImportKind::Onnx(sub) => {
+                    waylan_voice::import_onnx_model_from_file(sub, &src_path)
+                }
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = win_weak_inner.upgrade() {
+                    handle_imported_model_event(&w, &cfg_cell_inner, kind, imported_opt, apply_fn);
+                }
+            });
+        })
+    {
+        log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
+        win.set_global_status_is_error(true);
+        win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
     }
 }
 

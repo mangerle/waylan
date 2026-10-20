@@ -12,6 +12,22 @@ use crate::table::LENGTH_BOOST_MULTIPLIER;
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, ViterbiDecoder};
 
+/// 单条音节切分路径的容错状态与次优代价惩罚上下文参数对象
+///
+/// 用途：向词库检索与用户自造词检索两个子过程传递同一份路径判定结果，避免重复计算与参数膨胀。
+struct PathMatchContext {
+    /// 路径对应的词典查询键
+    key: String,
+    /// 路径是否来自拼写容错切分
+    is_typo: bool,
+    /// 路径是否为相对最优路径的次优切分
+    is_suboptimal: bool,
+    /// 最优路径的音节数（用于剥离虚增的字长加成）
+    best_syl_count: u32,
+    /// 路径切分代价差值惩罚
+    cost_penalty: u32,
+}
+
 impl AlgoEngine {
     /// 聚合各维度候选词（专名实体、DAG 路径匹配、长句前缀合成、简拼降级与习惯加权）
     pub(crate) fn collect_all_raw_candidates(
@@ -66,41 +82,19 @@ impl AlgoEngine {
             let cost_penalty = path.cost.saturating_sub(best_cost).saturating_mul(100);
             let is_suboptimal = !path.is_typo
                 && (cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count);
+            let path_ctx = PathMatchContext {
+                key,
+                is_typo: path.is_typo,
+                is_suboptimal,
+                best_syl_count,
+                cost_penalty,
+            };
 
             // 词典精确及倒排检索（原地填充至复用容器）
-            let start_lex = results.len();
-            self.resources.table.lookup_into(&key, results);
-            if path.is_typo {
-                for m in &mut results[start_lex..] {
-                    m.tier = CandidateTier::TypoCorrection;
-                    m.comment = Some(format!("[纠错: {}]", key));
-                }
-            } else if is_suboptimal {
-                for m in &mut results[start_lex..] {
-                    m.score = Self::calibrate_lexicon_path_score(
-                        m.score,
-                        &m.text,
-                        best_syl_count,
-                        cost_penalty,
-                    );
-                }
-            }
+            self.collect_lexicon_path_matches(&path_ctx, results);
 
             // 用户自造词检索（原地填充至复用容器）
-            let start_usr = results.len();
-            self.adaptive
-                .model
-                .lookup_user_words_into(&key, eval_ts, results);
-            if path.is_typo {
-                for m in &mut results[start_usr..] {
-                    m.tier = CandidateTier::TypoCorrection;
-                    m.comment = Some(format!("[纠错: {}]", key));
-                }
-            } else if is_suboptimal {
-                for m in &mut results[start_usr..] {
-                    m.score = m.score.saturating_sub(cost_penalty).max(1);
-                }
-            }
+            self.collect_user_path_matches(&path_ctx, eval_ts, results);
 
             // 模糊音等价查询键联合检索
             if self.config.fuzzy.has_active_rules() && !path.is_typo {
@@ -111,6 +105,54 @@ impl AlgoEngine {
                     cost_penalty,
                     results,
                 );
+            }
+        }
+    }
+
+    /// 收集单条切分路径在词典精确及倒排索引上的候选，并按容错/次优状态修正层级与得分
+    fn collect_lexicon_path_matches(
+        &self,
+        ctx: &PathMatchContext,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        let start_lex = results.len();
+        self.resources.table.lookup_into(&ctx.key, results);
+        if ctx.is_typo {
+            for m in &mut results[start_lex..] {
+                m.tier = CandidateTier::TypoCorrection;
+                m.comment = Some(format!("[纠错: {}]", ctx.key));
+            }
+        } else if ctx.is_suboptimal {
+            for m in &mut results[start_lex..] {
+                m.score = Self::calibrate_lexicon_path_score(
+                    m.score,
+                    &m.text,
+                    ctx.best_syl_count,
+                    ctx.cost_penalty,
+                );
+            }
+        }
+    }
+
+    /// 收集单条切分路径在用户自造词库上的候选，并按容错/次优状态修正层级与得分
+    fn collect_user_path_matches(
+        &self,
+        ctx: &PathMatchContext,
+        eval_ts: u64,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        let start_usr = results.len();
+        self.adaptive
+            .model
+            .lookup_user_words_into(&ctx.key, eval_ts, results);
+        if ctx.is_typo {
+            for m in &mut results[start_usr..] {
+                m.tier = CandidateTier::TypoCorrection;
+                m.comment = Some(format!("[纠错: {}]", ctx.key));
+            }
+        } else if ctx.is_suboptimal {
+            for m in &mut results[start_usr..] {
+                m.score = m.score.saturating_sub(ctx.cost_penalty).max(1);
             }
         }
     }
@@ -201,59 +243,93 @@ impl AlgoEngine {
         let total_units =
             best_path.syllables.len() + if best_path.remaining.is_empty() { 0 } else { 1 };
         if total_units >= min_units {
-            if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context_options(
-                &best_path.syllables,
-                &best_path.remaining,
-                &self.resources.table,
-                self.composition.last_commit_context(),
-                self.config.enable_acronym,
-            ) {
-                sentence.score = sentence
-                    .score
-                    .saturating_sub(best_path.cost.saturating_mul(100));
-                results.push(sentence);
-            }
+            self.collect_viterbi_sentence_match(best_path, results);
         }
 
         // 前缀残存拼音补全与跨词短语合成
         if !best_path.remaining.is_empty() {
-            self.resources.table.lookup_prefix_extension_into(
-                &best_path.syllables,
-                &best_path.remaining,
-                results,
-            );
+            self.collect_prefix_extension_matches(best_path, results);
+            self.collect_prefix_phrase_matches(best_path, results);
+            self.collect_prefix_top_k_matches(best_path, results);
+        }
+    }
 
-            if self.config.fuzzy.has_active_rules() && !best_path.syllables.is_empty() {
-                for fuzzy_syls in PrismFuzzy::expand_fuzzy_syllable_lists(
-                    &best_path.syllables,
-                    &self.config.fuzzy,
-                ) {
-                    let start_fzp = results.len();
-                    self.resources.table.lookup_prefix_extension_into(
-                        &fuzzy_syls,
-                        &best_path.remaining,
-                        results,
-                    );
-                    for fp in &mut results[start_fzp..] {
-                        fp.score = fp.score.saturating_sub(50);
-                    }
+    /// 基于 Viterbi 整句动态规划合成最佳长句候选，并按路径切分代价惩罚其得分
+    fn collect_viterbi_sentence_match(
+        &self,
+        best_path: &SegmentPath,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        if let Some(mut sentence) = ViterbiDecoder::decode_sentence_with_context_options(
+            &best_path.syllables,
+            &best_path.remaining,
+            &self.resources.table,
+            self.composition.last_commit_context(),
+            self.config.enable_acronym,
+        ) {
+            sentence.score = sentence
+                .score
+                .saturating_sub(best_path.cost.saturating_mul(100));
+            results.push(sentence);
+        }
+    }
+
+    /// 收集前缀残存拼音补全候选，并对模糊音扩展召回项统一降权
+    fn collect_prefix_extension_matches(
+        &self,
+        best_path: &SegmentPath,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        self.resources.table.lookup_prefix_extension_into(
+            &best_path.syllables,
+            &best_path.remaining,
+            results,
+        );
+
+        if self.config.fuzzy.has_active_rules() && !best_path.syllables.is_empty() {
+            for fuzzy_syls in
+                PrismFuzzy::expand_fuzzy_syllable_lists(&best_path.syllables, &self.config.fuzzy)
+            {
+                let start_fzp = results.len();
+                self.resources.table.lookup_prefix_extension_into(
+                    &fuzzy_syls,
+                    &best_path.remaining,
+                    results,
+                );
+                for fp in &mut results[start_fzp..] {
+                    fp.score = fp.score.saturating_sub(50);
                 }
             }
+        }
+    }
 
-            let mut phrase_matches =
-                self.synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
-            results.append(&mut phrase_matches);
+    /// 合成跨词边界短语候选并追加到候选列表
+    fn collect_prefix_phrase_matches(
+        &self,
+        best_path: &SegmentPath,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        let mut phrase_matches =
+            self.synthesize_prefix_phrases(&best_path.syllables, &best_path.remaining);
+        results.append(&mut phrase_matches);
+    }
 
-            if !best_path.syllables.is_empty() {
-                let base_key = best_path.syllables.join("'");
-                let start_top = results.len();
-                self.resources
-                    .table
-                    .lookup_top_k_into(&base_key, 32, results);
-                for bm in &mut results[start_top..] {
-                    bm.tier = CandidateTier::PrefixPartial;
-                }
-            }
+    /// 收集首音节完整键对应的高频词候选，并统一标记为前缀部分命中层级
+    fn collect_prefix_top_k_matches(
+        &self,
+        best_path: &SegmentPath,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        if best_path.syllables.is_empty() {
+            return;
+        }
+        let base_key = best_path.syllables.join("'");
+        let start_top = results.len();
+        self.resources
+            .table
+            .lookup_top_k_into(&base_key, 32, results);
+        for bm in &mut results[start_top..] {
+            bm.tier = CandidateTier::PrefixPartial;
         }
     }
 
@@ -265,61 +341,74 @@ impl AlgoEngine {
         results: &mut Vec<AlgoCandidate>,
     ) {
         // 简拼检索（受用户配置 enable_acronym 控制）
-        if self.config.enable_acronym {
-            let acronym_query = if raw_input.contains('\'') {
-                raw_input.replace('\'', "")
-            } else {
-                raw_input.to_string()
-            };
-            let mut acronym_matches = self
-                .resources
-                .table
-                .lookup_acronym_top_k(&acronym_query, 64);
-            if raw_input.contains('\'') {
-                for am in &mut acronym_matches {
-                    am.consumed_len = Some(raw_input.len());
-                }
-            }
-            results.append(&mut acronym_matches);
-        }
+        self.collect_acronym_matches(raw_input, results);
 
         // 首音节单字降级备选
-        if let Some(first_path) = paths.first() {
-            if !first_path.syllables.is_empty() {
-                let first_syl = &first_path.syllables[0];
-                let mut first_matches = self.resources.table.lookup_top_k(first_syl, 32);
-                if self.config.fuzzy.has_active_rules() {
-                    for alt_syl in
-                        PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy)
-                    {
-                        let mut alt_matches = self.resources.table.lookup_top_k(&alt_syl, 32);
-                        for am in &mut alt_matches {
-                            am.consumed_len = Some(first_syl.len());
-                            am.score = am.score.saturating_sub(50);
-                        }
-                        first_matches.append(&mut alt_matches);
-                    }
-                }
-                if first_matches.is_empty() {
-                    if let Some(initial_entries) =
-                        self.resources.table.get_initial_raw_entries(first_syl)
-                    {
-                        for (text, score, word_id) in initial_entries {
-                            first_matches.push(
-                                AlgoCandidate::new(text, first_syl.clone(), score)
-                                    .with_tier(CandidateTier::PrefixPartial)
-                                    .with_word_id(word_id),
-                            );
-                        }
-                    }
-                } else {
-                    for fm in &mut first_matches {
-                        fm.tier = CandidateTier::PrefixPartial;
-                    }
-                }
-                results.append(&mut first_matches);
+        self.collect_first_syllable_fallback(paths, results);
+    }
+
+    /// 检索首字母缩写简拼候选，并对含分隔符输入标注完整消耗长度
+    fn collect_acronym_matches(&self, raw_input: &str, results: &mut Vec<AlgoCandidate>) {
+        if !self.config.enable_acronym {
+            return;
+        }
+        let acronym_query = if raw_input.contains('\'') {
+            raw_input.replace('\'', "")
+        } else {
+            raw_input.to_string()
+        };
+        let mut acronym_matches = self
+            .resources
+            .table
+            .lookup_acronym_top_k(&acronym_query, 64);
+        if raw_input.contains('\'') {
+            for am in &mut acronym_matches {
+                am.consumed_len = Some(raw_input.len());
             }
         }
+        results.append(&mut acronym_matches);
+    }
+
+    /// 检索首音节单字降级备选候选（含模糊音扩展召回与首字母兜底条目）
+    fn collect_first_syllable_fallback(
+        &self,
+        paths: &[SegmentPath],
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        let Some(first_path) = paths.first() else {
+            return;
+        };
+        if first_path.syllables.is_empty() {
+            return;
+        }
+        let first_syl = &first_path.syllables[0];
+        let mut first_matches = self.resources.table.lookup_top_k(first_syl, 32);
+        if self.config.fuzzy.has_active_rules() {
+            for alt_syl in PrismEngine::expand_fuzzy_syllables(first_syl, &self.config.fuzzy) {
+                let mut alt_matches = self.resources.table.lookup_top_k(&alt_syl, 32);
+                for am in &mut alt_matches {
+                    am.consumed_len = Some(first_syl.len());
+                    am.score = am.score.saturating_sub(50);
+                }
+                first_matches.append(&mut alt_matches);
+            }
+        }
+        if first_matches.is_empty() {
+            if let Some(initial_entries) = self.resources.table.get_initial_raw_entries(first_syl) {
+                for (text, score, word_id) in initial_entries {
+                    first_matches.push(
+                        AlgoCandidate::new(text, first_syl.clone(), score)
+                            .with_tier(CandidateTier::PrefixPartial)
+                            .with_word_id(word_id),
+                    );
+                }
+            }
+        } else {
+            for fm in &mut first_matches {
+                fm.tier = CandidateTier::PrefixPartial;
+            }
+        }
+        results.append(&mut first_matches);
     }
 
     /// 应用自适应词频提权与上屏历史二元语言模型亲和度加权

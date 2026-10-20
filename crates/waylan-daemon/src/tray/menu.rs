@@ -93,6 +93,55 @@ impl DBusMenu {
         self.coordinator.trigger_graceful_restart();
         let _ = self.icon_update_tx.try_send(());
     }
+
+    /// 响应点击菜单“当前输入”项：切换中英文状态，并在大写锁定时优先解除锁定
+    fn on_menu_input_mode(&self) {
+        let snap = self.shared_flags.snapshot();
+        if snap.is_caps_locked {
+            self.shared_flags.set_caps_locked(false);
+            self.shared_flags.set_chinese(true);
+            self.notify_flag_changed("输入模式", "中文 (解除大写锁定)");
+        } else {
+            let next = !snap.is_chinese;
+            self.shared_flags.set_chinese(next);
+            self.notify_flag_changed("输入模式", if next { "中文" } else { "英文" });
+        }
+    }
+
+    /// 响应点击菜单“简繁切换”项：在简体与繁体输入模式间翻转
+    fn on_menu_traditional(&self) {
+        let next = !self.shared_flags.is_traditional();
+        self.shared_flags.set_traditional(next);
+        self.notify_flag_changed("简繁模式", if next { "繁体" } else { "简体" });
+    }
+
+    /// 响应点击菜单“标点切换”项：在中文全角标点与英文半角标点间翻转
+    fn on_menu_punct_width(&self) {
+        let next = !self.shared_flags.is_full_width_punct();
+        self.shared_flags.set_full_width_punct(next);
+        self.notify_flag_changed(
+            "标点模式",
+            if next {
+                "全角 (中文标点)"
+            } else {
+                "半角 (英文标点)"
+            },
+        );
+    }
+
+    /// 响应点击菜单“字符切换”项：在全角与半角英文字母间翻转
+    fn on_menu_char_width(&self) {
+        let next = !self.shared_flags.is_full_width_char();
+        self.shared_flags.set_full_width_char(next);
+        self.notify_flag_changed(
+            "字符全半角",
+            if next {
+                "全角 (英文字母)"
+            } else {
+                "半角 (英文字母)"
+            },
+        );
+    }
 }
 
 #[interface(name = "com.canonical.dbusmenu")]
@@ -159,51 +208,14 @@ impl DBusMenu {
         }
 
         match id {
-            1 => {
-                let snap = self.shared_flags.snapshot();
-                if snap.is_caps_locked {
-                    self.shared_flags.set_caps_locked(false);
-                    self.shared_flags.set_chinese(true);
-                    self.notify_flag_changed("输入模式", "中文 (解除大写锁定)");
-                } else {
-                    let next = !snap.is_chinese;
-                    self.shared_flags.set_chinese(next);
-                    self.notify_flag_changed("输入模式", if next { "中文" } else { "英文" });
-                }
-            }
+            1 => self.on_menu_input_mode(),
             2 => self.on_menu_reload(),
             3 => self.launch_settings(),
             4 => self.launch_view_log(),
             5 => self.on_menu_exit(),
-            6 => {
-                let next = !self.shared_flags.is_traditional();
-                self.shared_flags.set_traditional(next);
-                self.notify_flag_changed("简繁模式", if next { "繁体" } else { "简体" });
-            }
-            7 => {
-                let next = !self.shared_flags.is_full_width_punct();
-                self.shared_flags.set_full_width_punct(next);
-                self.notify_flag_changed(
-                    "标点模式",
-                    if next {
-                        "全角 (中文标点)"
-                    } else {
-                        "半角 (英文标点)"
-                    },
-                );
-            }
-            8 => {
-                let next = !self.shared_flags.is_full_width_char();
-                self.shared_flags.set_full_width_char(next);
-                self.notify_flag_changed(
-                    "字符全半角",
-                    if next {
-                        "全角 (英文字母)"
-                    } else {
-                        "半角 (英文字母)"
-                    },
-                );
-            }
+            6 => self.on_menu_traditional(),
+            7 => self.on_menu_punct_width(),
+            8 => self.on_menu_char_width(),
             9 => self.on_menu_restart(),
             _ => {}
         }

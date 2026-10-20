@@ -31,6 +31,58 @@ struct VoiceWorkerLoopState<'a> {
     shutdown_requested: &'a Arc<AtomicBool>,
 }
 
+/// 等待控制命令的接收结果
+enum WorkerCommandWait {
+    /// 收到新的控制命令，附带刷新后的最近活动时间戳
+    Received(WorkerCommand, Instant),
+    /// 等待超时，应继续下一轮轮询
+    TimedOut,
+    /// 命令通道已断开，应退出常驻工作线程
+    Disconnected,
+}
+
+/// 等待下一条控制命令，并按空闲超时策略决定轮询截止时间
+fn wait_for_worker_command(
+    cmd_rx: &Receiver<WorkerCommand>,
+    cache: &mut WorkerModelCache,
+    last_activity_time: Instant,
+) -> WorkerCommandWait {
+    let idle_timeout = check_idle_timeout_and_calculate_deadline(cache, last_activity_time);
+    let timeout = idle_timeout.min(SHUTDOWN_POLL_INTERVAL);
+    match cmd_rx.recv_timeout(timeout) {
+        Ok(cmd) => WorkerCommandWait::Received(cmd, Instant::now()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => WorkerCommandWait::TimedOut,
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => WorkerCommandWait::Disconnected,
+    }
+}
+
+/// 分发常驻工作线程收到的控制命令，返回是否应退出常驻工作线程
+fn dispatch_worker_command(cmd: WorkerCommand, state: &mut VoiceWorkerLoopState<'_>) -> bool {
+    match cmd {
+        WorkerCommand::Start { options, event_tx } => {
+            if handle_start_command(state, *options, event_tx) {
+                info!("[语音会话] 录音过程中收到销毁指令，后台常驻语音工作线程平滑退出");
+                true
+            } else {
+                false
+            }
+        }
+        WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
+            state.is_active.store(false, Ordering::Release);
+            false
+        }
+        WorkerCommand::UnloadModels => {
+            state.cache.unload();
+            info!("[语音会话] 已卸载内存中缓存的语音识别、VAD与标点模型权重，完全释放常驻内存");
+            false
+        }
+        WorkerCommand::Shutdown => {
+            info!("[语音会话] 收到销毁指令，后台常驻语音工作线程平滑退出");
+            true
+        }
+    }
+}
+
 /// 常驻工作线程主入口：纳管模型单例生命周期与会话状态机
 pub(crate) fn run_worker_main(
     cmd_rx: Receiver<WorkerCommand>,
@@ -43,46 +95,28 @@ pub(crate) fn run_worker_main(
 
     info!("[语音会话] 后台常驻语音工作线程启动完成，进入就绪待命状态");
 
+    let mut state = VoiceWorkerLoopState {
+        cache: &mut cache,
+        visualizer: &mut visualizer,
+        cmd_rx: &cmd_rx,
+        is_active: &is_active,
+        shutdown_requested: &shutdown_requested,
+    };
+
     loop {
-        if shutdown_requested.load(Ordering::Acquire) {
+        if state.shutdown_requested.load(Ordering::Acquire) {
             info!("[语音会话] 检测到全局停机标志，后台常驻语音工作线程退出");
             break;
         }
 
-        let idle_timeout =
-            check_idle_timeout_and_calculate_deadline(&mut cache, last_activity_time);
-        let timeout = idle_timeout.min(SHUTDOWN_POLL_INTERVAL);
-        let cmd = match cmd_rx.recv_timeout(timeout) {
-            Ok(c) => c,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        };
-
-        last_activity_time = Instant::now();
-        match cmd {
-            WorkerCommand::Start { options, event_tx } => {
-                let mut loop_state = VoiceWorkerLoopState {
-                    cache: &mut cache,
-                    visualizer: &mut visualizer,
-                    cmd_rx: &cmd_rx,
-                    is_active: &is_active,
-                    shutdown_requested: &shutdown_requested,
-                };
-                if handle_start_command(&mut loop_state, *options, event_tx) {
-                    info!("[语音会话] 录音过程中收到销毁指令，后台常驻语音工作线程平滑退出");
+        match wait_for_worker_command(state.cmd_rx, state.cache, last_activity_time) {
+            WorkerCommandWait::TimedOut => continue,
+            WorkerCommandWait::Disconnected => break,
+            WorkerCommandWait::Received(cmd, activity_time) => {
+                last_activity_time = activity_time;
+                if dispatch_worker_command(cmd, &mut state) {
                     break;
                 }
-            }
-            WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
-                is_active.store(false, Ordering::Release);
-            }
-            WorkerCommand::UnloadModels => {
-                cache.unload();
-                info!("[语音会话] 已卸载内存中缓存的语音识别、VAD与标点模型权重，完全释放常驻内存");
-            }
-            WorkerCommand::Shutdown => {
-                info!("[语音会话] 收到销毁指令，后台常驻语音工作线程平滑退出");
-                break;
             }
         }
     }

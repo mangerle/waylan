@@ -84,37 +84,52 @@ fn solar_to_lunar(year: i32, month: u32, day: u32) -> Option<(i32, bool, u32, u3
         return None;
     }
 
-    let lunar_year_days = |info: u32| -> i64 {
-        let mut sum = 348i64;
-        let mut mask = 0x8000u32;
-        while mask > 0x8 {
-            if (info & mask) != 0 {
-                sum += 1;
-            }
-            mask >>= 1;
-        }
-        let leap_month = info & 0xf;
-        if leap_month != 0 {
-            sum += if (info & 0x10000) != 0 { 30 } else { 29 };
-        }
-        sum
-    };
+    let l_year = locate_lunar_year(&mut offset);
+    let y_idx = (l_year - 1900) as usize;
+    let info = *LUNAR_INFO.get(y_idx)?;
+    let (l_month, is_leap) = locate_lunar_month(info, &mut offset);
 
+    let l_day = (offset as u32).saturating_add(1);
+    Some((l_year, is_leap, l_month, l_day))
+}
+
+/// 计算农历编码表条目所代表年份的总天数（含闰月天数）
+fn lunar_year_days(info: u32) -> i64 {
+    let mut sum = 348i64;
+    let mut mask = 0x8000u32;
+    while mask > 0x8 {
+        if (info & mask) != 0 {
+            sum += 1;
+        }
+        mask >>= 1;
+    }
+    let leap_month = info & 0xf;
+    if leap_month != 0 {
+        sum += if (info & 0x10000) != 0 { 30 } else { 29 };
+    }
+    sum
+}
+
+/// 依据自基准日起的天数偏移定位所属农历年，并扣除已完整走过的整年天数
+fn locate_lunar_year(offset: &mut i64) -> i32 {
     let mut l_year = 1900i32;
     for &info in &LUNAR_INFO {
         let days = lunar_year_days(info);
-        if offset < days {
+        if *offset < days {
             break;
         }
-        offset -= days;
+        *offset -= days;
         l_year += 1;
     }
-    let y_idx = (l_year - 1900) as usize;
-    let info = *LUNAR_INFO.get(y_idx)?;
+    l_year
+}
+
+/// 依据农历年编码与剩余天数偏移定位农历月份，返回月序与是否闰月
+fn locate_lunar_month(info: u32, offset: &mut i64) -> (u32, bool) {
     let leap_month = info & 0xf;
     let mut is_leap = false;
-
     let mut l_month = 1u32;
+
     while l_month <= 12 {
         let days_in_month = if is_leap {
             if (info & 0x10000) != 0 {
@@ -128,10 +143,10 @@ fn solar_to_lunar(year: i32, month: u32, day: u32) -> Option<(i32, bool, u32, u3
             29
         };
 
-        if offset < days_in_month {
+        if *offset < days_in_month {
             break;
         }
-        offset -= days_in_month;
+        *offset -= days_in_month;
 
         if !is_leap && leap_month > 0 && l_month == leap_month {
             is_leap = true;
@@ -143,8 +158,7 @@ fn solar_to_lunar(year: i32, month: u32, day: u32) -> Option<(i32, bool, u32, u3
         }
     }
 
-    let l_day = (offset as u32).saturating_add(1);
-    Some((l_year, is_leap, l_month, l_day))
+    (l_month, is_leap)
 }
 
 #[cfg(test)]

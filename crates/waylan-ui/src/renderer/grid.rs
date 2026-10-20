@@ -9,6 +9,7 @@ use super::draw::{
 };
 use super::layout::{CandidateHitTarget, HitRegion};
 use super::{CandidateBoxRenderer, DrawTextOptions};
+use crate::theme::{Color, UiTheme};
 use tiny_skia::Pixmap;
 use waylan_core::Candidate;
 
@@ -30,6 +31,48 @@ struct GridDimensions {
     s: f32,
 }
 
+/// 单个网格候选项的绘制参数
+struct GridItemDrawParams<'a> {
+    cand: &'a Candidate,
+    col: usize,
+    item_x: f32,
+    item_y: f32,
+    item_w: f32,
+    item_h: f32,
+    baseline_y: f32,
+    is_selected: bool,
+    is_selected_row: bool,
+    font_size: f32,
+    scale: f32,
+}
+
+/// 网格项序号前缀绘制参数
+struct GridIndexDrawParams<'a> {
+    num_str: &'a str,
+    x: f32,
+    baseline_y: f32,
+    font_size: f32,
+    color: Color,
+    scale: f32,
+}
+
+/// 网格折叠按钮几何参数
+struct GridCollapseButtonParams {
+    center_x: f32,
+    top_y: f32,
+    scale: f32,
+}
+
+/// 网格右侧滚动条几何参数
+struct GridScrollbarParams {
+    scroll_x: f32,
+    scroll_y: f32,
+    scroll_h: f32,
+    thumb_y: f32,
+    thumb_h: f32,
+    scale: f32,
+}
+
 /// 计算网格各列宽度与总宽高
 fn compute_grid_dimensions(
     renderer: &mut CandidateBoxRenderer,
@@ -37,24 +80,7 @@ fn compute_grid_dimensions(
     selected_index: usize,
     s: f32,
 ) -> GridDimensions {
-    let font_size = renderer.font_size * s;
-    let index_font_size = font_size * 0.85;
-    let mut col_widths = [40.0 * s; GRID_COLS];
-
-    for (idx, cand) in candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
-        let col = idx % GRID_COLS;
-        let text_w = renderer.measure_text(&cand.text, font_size);
-        let num_str = renderer.index_label(col);
-        let num_w = if num_str.is_empty() {
-            0.0
-        } else {
-            renderer.measure_text(&num_str, index_font_size)
-        };
-        let item_w = num_w + 6.0 * s + text_w + 14.0 * s;
-        if item_w > col_widths[col] {
-            col_widths[col] = item_w;
-        }
-    }
+    let col_widths = measure_grid_col_widths(renderer, candidates, s);
 
     let padding_h = 12.0 * s;
     let padding_v = 10.0 * s;
@@ -81,6 +107,33 @@ fn compute_grid_dimensions(
         selected_row: selected_index / GRID_COLS,
         s,
     }
+}
+
+/// 逐项测量网格各列所需的最小宽度
+fn measure_grid_col_widths(
+    renderer: &mut CandidateBoxRenderer,
+    candidates: &[Candidate],
+    s: f32,
+) -> [f32; GRID_COLS] {
+    let font_size = renderer.font_size * s;
+    let index_font_size = font_size * 0.85;
+    let mut col_widths = [40.0 * s; GRID_COLS];
+
+    for (idx, cand) in candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
+        let col = idx % GRID_COLS;
+        let text_w = renderer.measure_text(&cand.text, font_size);
+        let num_str = renderer.index_label(col);
+        let num_w = if num_str.is_empty() {
+            0.0
+        } else {
+            renderer.measure_text(&num_str, index_font_size)
+        };
+        let item_w = num_w + 6.0 * s + text_w + 14.0 * s;
+        if item_w > col_widths[col] {
+            col_widths[col] = item_w;
+        }
+    }
+    col_widths
 }
 
 /// 渲染 5 行展开大候选词网格面板
@@ -150,12 +203,7 @@ fn render_grid_items(
     let font_size = renderer.font_size * s;
     let col_gap = 8.0 * s;
 
-    let mut col_starts = [0.0; GRID_COLS];
-    let mut acc_x = ctx.dims.padding_h;
-    for (c, start) in col_starts.iter_mut().enumerate() {
-        *start = acc_x;
-        acc_x += ctx.dims.col_widths[c] + col_gap;
-    }
+    let col_starts = compute_grid_col_starts(ctx.dims.padding_h, &ctx.dims.col_widths, col_gap);
 
     for (idx, cand) in ctx.candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
         let row = idx / GRID_COLS;
@@ -166,60 +214,22 @@ fn render_grid_items(
         let item_h = ctx.dims.row_height;
 
         let is_selected = idx == ctx.selected_index;
-        if is_selected {
-            draw_rounded_rect(
-                pixmap,
-                RoundedRectParams {
-                    x: item_x,
-                    y: item_y + 2.0 * s,
-                    w: item_w,
-                    h: item_h - 4.0 * s,
-                    r: 4.0 * s,
-                },
-                renderer.theme.highlight_badge,
-            );
-        }
-
         let baseline_y = item_y + (item_h + font_size * 0.72) / 2.0;
-        let mut cur_x = item_x + 4.0 * s;
-
-        if row == ctx.dims.selected_row {
-            let num_str = renderer.index_label(col);
-            if !num_str.is_empty() {
-                let num_color = if is_selected {
-                    renderer.theme.highlight_text
-                } else {
-                    renderer.theme.index_text
-                };
-                let num_w = renderer.measure_text(&num_str, font_size * 0.85);
-                renderer.draw_text(
-                    pixmap,
-                    DrawTextOptions {
-                        text: &num_str,
-                        x: cur_x,
-                        y: baseline_y,
-                        size: font_size * 0.85,
-                        color: num_color,
-                    },
-                );
-                cur_x += num_w + 4.0 * s;
-            }
-        }
-
-        let text_color = if is_selected {
-            renderer.theme.highlight_text
-        } else {
-            renderer.theme.candidate_text
-        };
-        let display_text = renderer.display_text(cand);
-        renderer.draw_text(
+        draw_grid_item(
+            renderer,
             pixmap,
-            DrawTextOptions {
-                text: &display_text,
-                x: cur_x,
-                y: baseline_y,
-                size: font_size,
-                color: text_color,
+            &GridItemDrawParams {
+                cand,
+                col,
+                item_x,
+                item_y,
+                item_w,
+                item_h,
+                baseline_y,
+                is_selected,
+                is_selected_row: row == ctx.dims.selected_row,
+                font_size,
+                scale: s,
             },
         );
 
@@ -230,6 +240,131 @@ fn render_grid_items(
             item_h,
             CandidateHitTarget::Select(idx),
         ));
+    }
+}
+
+/// 计算网格各列的起始横坐标
+fn compute_grid_col_starts(
+    padding_h: f32,
+    col_widths: &[f32; GRID_COLS],
+    col_gap: f32,
+) -> [f32; GRID_COLS] {
+    let mut col_starts = [0.0; GRID_COLS];
+    let mut acc_x = padding_h;
+    for (c, start) in col_starts.iter_mut().enumerate() {
+        *start = acc_x;
+        acc_x += col_widths[c] + col_gap;
+    }
+    col_starts
+}
+
+/// 绘制单个网格候选词项（高亮底色、序号前缀与候选文本）
+fn draw_grid_item(
+    renderer: &mut CandidateBoxRenderer,
+    pixmap: &mut Pixmap,
+    params: &GridItemDrawParams<'_>,
+) {
+    let s = params.scale;
+
+    if params.is_selected {
+        draw_grid_item_highlight(pixmap, &renderer.theme, params);
+    }
+
+    let mut cur_x = params.item_x + 4.0 * s;
+
+    if params.is_selected_row {
+        cur_x = draw_grid_selected_row_index(renderer, pixmap, params, cur_x);
+    }
+
+    let text_color = resolve_grid_text_color(
+        &renderer.theme,
+        params.is_selected,
+        renderer.theme.candidate_text,
+    );
+    let display_text = renderer.display_text(params.cand);
+    renderer.draw_text(
+        pixmap,
+        DrawTextOptions {
+            text: &display_text,
+            x: cur_x,
+            y: params.baseline_y,
+            size: params.font_size,
+            color: text_color,
+        },
+    );
+}
+
+/// 绘制网格当前选中行内的序号前缀，并返回候选文本的起始横坐标
+fn draw_grid_selected_row_index(
+    renderer: &mut CandidateBoxRenderer,
+    pixmap: &mut Pixmap,
+    params: &GridItemDrawParams<'_>,
+    cur_x: f32,
+) -> f32 {
+    let num_str = renderer.index_label(params.col);
+    let num_color = resolve_grid_text_color(
+        &renderer.theme,
+        params.is_selected,
+        renderer.theme.index_text,
+    );
+    draw_grid_index(
+        renderer,
+        pixmap,
+        &GridIndexDrawParams {
+            num_str: &num_str,
+            x: cur_x,
+            baseline_y: params.baseline_y,
+            font_size: params.font_size,
+            color: num_color,
+            scale: params.scale,
+        },
+    )
+}
+
+/// 绘制网格选中项的高亮圆角底色
+fn draw_grid_item_highlight(pixmap: &mut Pixmap, theme: &UiTheme, params: &GridItemDrawParams<'_>) {
+    draw_rounded_rect(
+        pixmap,
+        RoundedRectParams {
+            x: params.item_x,
+            y: params.item_y + 2.0 * params.scale,
+            w: params.item_w,
+            h: params.item_h - 4.0 * params.scale,
+            r: 4.0 * params.scale,
+        },
+        theme.highlight_badge,
+    );
+}
+
+/// 绘制网格项序号前缀并返回候选文本的起始横坐标
+fn draw_grid_index(
+    renderer: &mut CandidateBoxRenderer,
+    pixmap: &mut Pixmap,
+    params: &GridIndexDrawParams<'_>,
+) -> f32 {
+    if params.num_str.is_empty() {
+        return params.x;
+    }
+    let num_w = renderer.measure_text(params.num_str, params.font_size * 0.85);
+    renderer.draw_text(
+        pixmap,
+        DrawTextOptions {
+            text: params.num_str,
+            x: params.x,
+            y: params.baseline_y,
+            size: params.font_size * 0.85,
+            color: params.color,
+        },
+    );
+    params.x + num_w + 4.0 * params.scale
+}
+
+/// 依据选中态解析网格文本的前景色（选中高亮，否则使用常规配色）
+fn resolve_grid_text_color(theme: &UiTheme, is_selected: bool, normal_color: Color) -> Color {
+    if is_selected {
+        theme.highlight_text
+    } else {
+        normal_color
     }
 }
 
@@ -244,24 +379,51 @@ fn render_grid_controls(
     let ctrl_center_x = dims.total_width - 14.0 * s;
     let ctrl_top_y = dims.padding_v + 12.0 * s;
 
-    // 绘制向上折叠箭头
-    draw_collapse_arrow(
+    // 绘制向上折叠箭头并记录折叠按钮点击区域
+    draw_grid_collapse_button(
         pixmap,
-        ctrl_center_x,
-        ctrl_top_y,
-        10.0 * s,
-        renderer.theme.index_text,
+        &renderer.theme,
+        &GridCollapseButtonParams {
+            center_x: ctrl_center_x,
+            top_y: ctrl_top_y,
+            scale: s,
+        },
+        regions,
     );
-    // 记录折叠按钮点击区域
-    regions.push(HitRegion::new(
-        ctrl_center_x - 10.0 * s,
-        ctrl_top_y - 10.0 * s,
-        20.0 * s,
-        20.0 * s,
-        CandidateHitTarget::ToggleExpand,
-    ));
 
     // 绘制右侧细长动态滚动条滑块
+    let scrollbar = compute_grid_scrollbar(dims, ctrl_top_y, s);
+    draw_grid_scrollbar(pixmap, &renderer.theme, &scrollbar);
+
+    // 注册右侧上下滚动区域为上一页与下一页点击目标
+    register_grid_scroll_regions(regions, &scrollbar, ctrl_center_x);
+}
+
+/// 绘制向上折叠箭头并登记折叠按钮命中区域
+fn draw_grid_collapse_button(
+    pixmap: &mut Pixmap,
+    theme: &UiTheme,
+    params: &GridCollapseButtonParams,
+    regions: &mut Vec<HitRegion>,
+) {
+    draw_collapse_arrow(
+        pixmap,
+        params.center_x,
+        params.top_y,
+        10.0 * params.scale,
+        theme.index_text,
+    );
+    regions.push(HitRegion::new(
+        params.center_x - 10.0 * params.scale,
+        params.top_y - 10.0 * params.scale,
+        20.0 * params.scale,
+        20.0 * params.scale,
+        CandidateHitTarget::ToggleExpand,
+    ));
+}
+
+/// 计算网格右侧滚动条滑块的几何参数
+fn compute_grid_scrollbar(dims: &GridDimensions, ctrl_top_y: f32, s: f32) -> GridScrollbarParams {
     let scroll_x = dims.total_width - 9.0 * s;
     let scroll_y = ctrl_top_y + 16.0 * s;
     let scroll_h = (dims.total_height - scroll_y - dims.padding_v).max(18.0 * s);
@@ -273,31 +435,49 @@ fn render_grid_controls(
     } else {
         scroll_y
     };
+    GridScrollbarParams {
+        scroll_x,
+        scroll_y,
+        scroll_h,
+        thumb_y,
+        thumb_h,
+        scale: s,
+    }
+}
+
+/// 绘制右侧细长动态滚动条滑块
+fn draw_grid_scrollbar(pixmap: &mut Pixmap, theme: &UiTheme, params: &GridScrollbarParams) {
     draw_scrollbar(
         pixmap,
         ScrollbarParams {
-            x: scroll_x,
-            y: thumb_y,
-            width: 3.0 * s,
-            height: thumb_h,
-            radius: 1.5 * s,
+            x: params.scroll_x,
+            y: params.thumb_y,
+            width: 3.0 * params.scale,
+            height: params.thumb_h,
+            radius: 1.5 * params.scale,
         },
-        renderer.theme.border,
+        theme.border,
     );
+}
 
-    // 注册右侧上下滚动区域为上一页与下一页点击目标
-    let half_scroll_h = scroll_h * 0.5;
+/// 注册右侧上下滚动区域为上一页与下一页点击目标
+fn register_grid_scroll_regions(
+    regions: &mut Vec<HitRegion>,
+    params: &GridScrollbarParams,
+    ctrl_center_x: f32,
+) {
+    let half_scroll_h = params.scroll_h * 0.5;
     regions.push(HitRegion::new(
-        ctrl_center_x - 10.0 * s,
-        scroll_y,
-        20.0 * s,
+        ctrl_center_x - 10.0 * params.scale,
+        params.scroll_y,
+        20.0 * params.scale,
         half_scroll_h,
         CandidateHitTarget::PrevPage,
     ));
     regions.push(HitRegion::new(
-        ctrl_center_x - 10.0 * s,
-        scroll_y + half_scroll_h,
-        20.0 * s,
+        ctrl_center_x - 10.0 * params.scale,
+        params.scroll_y + half_scroll_h,
+        20.0 * params.scale,
         half_scroll_h,
         CandidateHitTarget::NextPage,
     ));

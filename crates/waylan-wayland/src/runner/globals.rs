@@ -7,10 +7,11 @@
 //! - **代价与局限**：涉及与会话内部上下文的借用交互，需通过 `session` 对应字段赋值。
 
 use log::{info, warn};
-use wayland_client::globals::GlobalList;
+use wayland_client::globals::{Global, GlobalList};
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_seat::WlSeat, wl_shm::WlShm};
 use wayland_client::QueueHandle;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
+use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
     Layer, ZwlrLayerShellV1,
@@ -26,29 +27,21 @@ use crate::session_common::WaylandSessionLifecycle;
 use crate::session_v1::WaylanV1Session;
 use crate::session_v2::WaylanV2Session;
 
-/// 初始化绑定 V1 输入法协议与相关全局接口（Compositor、Panel/LayerShell、Shm）
-pub(super) fn bind_session_v1_globals(
+/// 在合成器全局注册表中查找 zwp_input_method_v1 接口声明
+fn find_input_method_global(globals: &GlobalList) -> Option<Global> {
+    globals
+        .contents()
+        .clone_list()
+        .into_iter()
+        .find(|g| g.interface == "zwp_input_method_v1")
+}
+
+/// 为 V1 会话绑定候选框呈现表面：优先使用 input_panel，缺失时退化使用 layer_shell
+fn bind_v1_candidate_surface(
     globals: &GlobalList,
     qh: &QueueHandle<WaylanV1Session>,
     session: &mut WaylanV1Session,
-) -> Result<(), WaylandRunnerError> {
-    let mut im_global = None;
-    for g in globals.contents().clone_list() {
-        if g.interface == "zwp_input_method_v1" {
-            im_global = Some(g);
-            break;
-        }
-    }
-
-    if im_global.is_none() {
-        return Err(WaylandRunnerError::UnsupportedProtocol {
-            interface: "zwp_input_method_v1",
-            reason: "合成器全局注册表中未声明该接口".to_string(),
-        });
-    }
-
-    let _input_method: ZwpInputMethodV1 = globals.bind(qh, 1..=1, ())?;
-
+) {
     if let Ok(compositor) = globals.bind::<WlCompositor, _, _>(qh, 1..=6, ()) {
         let wl_surface = compositor.create_surface(qh, ());
 
@@ -80,6 +73,25 @@ pub(super) fn bind_session_v1_globals(
 
         session.surface.popup_wl_surface = Some(wl_surface);
     }
+}
+
+/// 初始化绑定 V1 输入法协议与相关全局接口（Compositor、Panel/LayerShell、Shm）
+pub(super) fn bind_session_v1_globals(
+    globals: &GlobalList,
+    qh: &QueueHandle<WaylanV1Session>,
+    session: &mut WaylanV1Session,
+) -> Result<(), WaylandRunnerError> {
+    if find_input_method_global(globals).is_none() {
+        return Err(WaylandRunnerError::UnsupportedProtocol {
+            interface: "zwp_input_method_v1",
+            reason: "合成器全局注册表中未声明该接口".to_string(),
+        });
+    }
+
+    let _input_method: ZwpInputMethodV1 = globals.bind(qh, 1..=1, ())?;
+
+    bind_v1_candidate_surface(globals, qh, session);
+
     if let Ok(shm) = globals.bind::<WlShm, _, _>(qh, 1..=1, ()) {
         session.surface.shm = Some(shm);
     }
@@ -89,12 +101,11 @@ pub(super) fn bind_session_v1_globals(
     Ok(())
 }
 
-/// 初始化绑定 V2 现代输入法协议与虚拟键盘回退接口
-pub(super) fn bind_session_v2_globals(
+/// 绑定 V2 会话所需的 wl_seat 与 zwp_input_method_v2 输入法对象
+fn bind_v2_seat_and_input_method(
     globals: &GlobalList,
     qh: &QueueHandle<WaylanV2Session>,
-    session: &mut WaylanV2Session,
-) -> Result<(), WaylandRunnerError> {
+) -> Result<(WlSeat, ZwpInputMethodV2), WaylandRunnerError> {
     let seat: WlSeat =
         globals
             .bind(qh, 1..=7, ())
@@ -110,11 +121,18 @@ pub(super) fn bind_session_v2_globals(
                 interface: "zwp_input_method_manager_v2",
                 reason: e.to_string(),
             })?;
-    let input_method = im_manager.get_input_method(&seat, qh, ());
-    let pointer = seat.get_pointer(qh, ());
-    session.surface.pointer = Some(pointer);
-    info!("[微澜 Wayland] 成功向 wl_seat 注册鼠标指针(wl_pointer)，支持候选框点击与网格展开交互。");
 
+    let input_method = im_manager.get_input_method(&seat, qh, ());
+    Ok((seat, input_method))
+}
+
+/// 为 V2 会话绑定候选框弹出表面
+fn bind_v2_candidate_surface(
+    globals: &GlobalList,
+    qh: &QueueHandle<WaylanV2Session>,
+    session: &mut WaylanV2Session,
+    input_method: &ZwpInputMethodV2,
+) -> Result<(), WaylandRunnerError> {
     let compositor: WlCompositor =
         globals
             .bind(qh, 1..=6, ())
@@ -126,7 +144,15 @@ pub(super) fn bind_session_v2_globals(
     let popup_surface = input_method.get_input_popup_surface(&wl_surface, qh, ());
     session.surface.popup_wl_surface = Some(wl_surface);
     session.protocol.popup_surface = Some(popup_surface);
+    Ok(())
+}
 
+/// 绑定 V2 会话共享内存接口
+fn bind_v2_shm(
+    globals: &GlobalList,
+    qh: &QueueHandle<WaylanV2Session>,
+    session: &mut WaylanV2Session,
+) -> Result<(), WaylandRunnerError> {
     let shm: WlShm =
         globals
             .bind(qh, 1..=1, ())
@@ -135,22 +161,48 @@ pub(super) fn bind_session_v2_globals(
                 reason: e.to_string(),
             })?;
     session.protocol.shm = Some(shm);
+    Ok(())
+}
+
+/// 绑定 V2 虚拟键盘回退接口，缺失时主动放弃 V2 会话以避免按键黑洞
+fn bind_v2_virtual_keyboard(
+    globals: &GlobalList,
+    qh: &QueueHandle<WaylanV2Session>,
+    seat: &WlSeat,
+    session: &mut WaylanV2Session,
+) -> Result<(), WaylandRunnerError> {
+    match globals.bind::<ZwpVirtualKeyboardManagerV1, _, _>(qh, 1..=1, ()) {
+        Ok(vk_mgr) => {
+            let vk = vk_mgr.create_virtual_keyboard(seat, qh, ());
+            session.protocol.virtual_keyboard = Some(vk);
+            info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
+            Ok(())
+        }
+        Err(e) => Err(WaylandRunnerError::UnsupportedProtocol {
+            interface: "zwp_virtual_keyboard_v1",
+            reason: format!("合成器缺少扩展协议 ({})，为避免按键黑洞主动放弃 V2 会话", e),
+        }),
+    }
+}
+
+/// 初始化绑定 V2 现代输入法协议与虚拟键盘回退接口
+pub(super) fn bind_session_v2_globals(
+    globals: &GlobalList,
+    qh: &QueueHandle<WaylanV2Session>,
+    session: &mut WaylanV2Session,
+) -> Result<(), WaylandRunnerError> {
+    let (seat, input_method) = bind_v2_seat_and_input_method(globals, qh)?;
+
+    let pointer = seat.get_pointer(qh, ());
+    session.surface.pointer = Some(pointer);
+    info!("[微澜 Wayland] 成功向 wl_seat 注册鼠标指针(wl_pointer)，支持候选框点击与网格展开交互。");
+
+    bind_v2_candidate_surface(globals, qh, session, &input_method)?;
+    bind_v2_shm(globals, qh, session)?;
     session.qhandle = Some(qh.clone());
     session.set_input_method(input_method);
 
-    match globals.bind::<ZwpVirtualKeyboardManagerV1, _, _>(qh, 1..=1, ()) {
-        Ok(vk_mgr) => {
-            let vk = vk_mgr.create_virtual_keyboard(&seat, qh, ());
-            session.protocol.virtual_keyboard = Some(vk);
-            info!("[微澜 Wayland] 成功绑定 zwp_virtual_keyboard_v1，支持虚拟键盘事件回退。");
-        }
-        Err(e) => {
-            return Err(WaylandRunnerError::UnsupportedProtocol {
-                interface: "zwp_virtual_keyboard_v1",
-                reason: format!("合成器缺少扩展协议 ({})，为避免按键黑洞主动放弃 V2 会话", e),
-            });
-        }
-    }
+    bind_v2_virtual_keyboard(globals, qh, &seat, session)?;
 
     session.init_inotify_watcher();
     info!("[微澜 Wayland] 成功绑定 zwp_input_method_v2 接口，进入输入法事件分发循环。");

@@ -8,7 +8,7 @@
 //!   2. RAII 模式临时文件守卫（TempFileGuard），任何环节异常自动清理垃圾文件；
 //!   3. 原子重命名前后精确时间戳标记，避免外部监控事件误触发重复重载。
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use crate::error::AlgoError;
 use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC};
 use crate::user_adaptive::wal::lock::ProcessFileLock;
-use crate::user_adaptive::UserAdaptiveModel;
+use crate::user_adaptive::{UserAdaptiveModel, UserEntry};
 
 struct TempFileGuard<'a>(&'a Path, bool);
 
@@ -54,17 +54,7 @@ fn write_compact_model_to_temp(
     model: &UserAdaptiveModel,
     temp_path: &Path,
 ) -> Result<(), AlgoError> {
-    let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-
-    let mut file = options
-        .open(temp_path)
-        .map_err(|e| AlgoError::UserDictPersistFailed {
-            path: temp_path.to_path_buf(),
-            source: e,
-        })?;
+    let mut file = open_wal_temp_file(temp_path)?;
 
     file.write_all(WAL_MAGIC)
         .map_err(|e| AlgoError::UserDictPersistFailed {
@@ -74,26 +64,9 @@ fn write_compact_model_to_temp(
 
     for list in model.entries.values() {
         for entry in list {
-            let py_bytes = entry.pinyin.as_bytes();
-            let text_bytes = entry.text.as_bytes();
-            if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
+            let Some(buf) = encode_wal_frame(entry) else {
                 continue;
-            }
-            let py_len = py_bytes.len() as u16;
-            let text_len = text_bytes.len() as u16;
-
-            let mut buf = Vec::with_capacity(20 + py_bytes.len() + text_bytes.len());
-            buf.extend_from_slice(&entry.last_used_timestamp.to_le_bytes());
-            buf.extend_from_slice(&entry.commit_count.to_le_bytes());
-            buf.extend_from_slice(&py_len.to_le_bytes());
-            buf.extend_from_slice(&text_len.to_le_bytes());
-            buf.extend_from_slice(py_bytes);
-            buf.extend_from_slice(text_bytes);
-            let checksum: u32 = buf
-                .iter()
-                .fold(WAL_CHECKSUM_SEED, |acc, &b| acc.wrapping_add(b as u32));
-            buf.extend_from_slice(&checksum.to_le_bytes());
-
+            };
             file.write_all(&buf)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: temp_path.to_path_buf(),
@@ -107,6 +80,46 @@ fn write_compact_model_to_temp(
             path: temp_path.to_path_buf(),
             source: e,
         })
+}
+
+/// 以截断写入模式打开 WAL 临时文件（属主读写权限，杜绝临时文件被他人读取）
+fn open_wal_temp_file(temp_path: &Path) -> Result<File, AlgoError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    options
+        .open(temp_path)
+        .map_err(|e| AlgoError::UserDictPersistFailed {
+            path: temp_path.to_path_buf(),
+            source: e,
+        })
+}
+
+/// 将单条用户词条编码为 WAL 二进制帧（超出长度上限的词条返回 None 予以跳过）
+fn encode_wal_frame(entry: &UserEntry) -> Option<Vec<u8>> {
+    let py_bytes = entry.pinyin.as_bytes();
+    let text_bytes = entry.text.as_bytes();
+    if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
+        return None;
+    }
+    let py_len = py_bytes.len() as u16;
+    let text_len = text_bytes.len() as u16;
+
+    let mut buf = Vec::with_capacity(20 + py_bytes.len() + text_bytes.len());
+    buf.extend_from_slice(&entry.last_used_timestamp.to_le_bytes());
+    buf.extend_from_slice(&entry.commit_count.to_le_bytes());
+    buf.extend_from_slice(&py_len.to_le_bytes());
+    buf.extend_from_slice(&text_len.to_le_bytes());
+    buf.extend_from_slice(py_bytes);
+    buf.extend_from_slice(text_bytes);
+    let checksum: u32 = buf
+        .iter()
+        .fold(WAL_CHECKSUM_SEED, |acc, &b| acc.wrapping_add(b as u32));
+    buf.extend_from_slice(&checksum.to_le_bytes());
+
+    Some(buf)
 }
 
 /// 在已持有排他锁的上下文中执行核心 WAL 压缩落盘与原子重命名

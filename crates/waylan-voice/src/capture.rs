@@ -148,34 +148,19 @@ impl AudioCapture {
         let (device, device_name) = Self::select_input_device(target_device)?;
         info!("[语音采集] 正在初始化音频捕获设备: {}", device_name);
 
-        let default_config =
-            device
-                .default_input_config()
-                .map_err(|e| VoiceError::DeviceInitFailed {
-                    device: device_name.clone(),
-                    message: format!("获取设备默认配置失败: {}", e),
-                })?;
-
-        let sample_format = default_config.sample_format();
-        let config: StreamConfig = default_config.into();
-        let channels = config.channels;
-        let native_sample_rate = config.sample_rate.0;
-
-        info!(
-            "[语音采集] 设备采样率: {} Hz, 声道数: {}, 采样格式: {:?}",
-            native_sample_rate, channels, sample_format
-        );
+        let (stream_config, sample_format) =
+            Self::resolve_device_stream_config(&device, &device_name)?;
 
         let is_stream_dead = Arc::new(AtomicBool::new(false));
         let dropped_chunks = Arc::new(AtomicU64::new(0));
-        let stream = Self::build_input_stream_by_format(
-            &device,
-            &config,
+        let stream = Self::build_input_stream_by_format(InputStreamParams {
+            device: &device,
+            config: &stream_config,
             sample_format,
-            is_stream_dead.clone(),
-            dropped_chunks.clone(),
+            is_stream_dead: is_stream_dead.clone(),
+            dropped_chunks: dropped_chunks.clone(),
             pcm_sender,
-        )?;
+        })?;
 
         stream.play().map_err(|e| VoiceError::StreamStartFailed {
             message: format!("激活音频捕获流失败: {}", e),
@@ -188,9 +173,33 @@ impl AudioCapture {
             is_stream_dead,
             dropped_chunks,
             device_name,
-            native_sample_rate,
-            channels,
+            native_sample_rate: stream_config.sample_rate.0,
+            channels: stream_config.channels,
         })
+    }
+
+    /// 探测并归一化音频输入设备的默认流配置与底层采样格式
+    fn resolve_device_stream_config(
+        device: &Device,
+        device_name: &str,
+    ) -> Result<(StreamConfig, SampleFormat), VoiceError> {
+        let default_config =
+            device
+                .default_input_config()
+                .map_err(|e| VoiceError::DeviceInitFailed {
+                    device: device_name.to_string(),
+                    message: format!("获取设备默认配置失败: {}", e),
+                })?;
+
+        let sample_format = default_config.sample_format();
+        let stream_config: StreamConfig = default_config.into();
+
+        info!(
+            "[语音采集] 设备采样率: {} Hz, 声道数: {}, 采样格式: {:?}",
+            stream_config.sample_rate.0, stream_config.channels, sample_format
+        );
+
+        Ok((stream_config, sample_format))
     }
 
     /// 探测并选择音频输入硬件设备
@@ -226,48 +235,33 @@ impl AudioCapture {
 
     /// 根据底层硬件采样格式构建重采样管道与音频输入流
     fn build_input_stream_by_format(
-        device: &Device,
-        config: &StreamConfig,
-        sample_format: SampleFormat,
-        is_stream_dead: Arc<AtomicBool>,
-        dropped_chunks: Arc<AtomicU64>,
-        pcm_sender: SyncSender<Vec<f32>>,
+        params: InputStreamParams<'_>,
     ) -> Result<cpal::Stream, VoiceError> {
-        let channels = config.channels;
-        let native_sample_rate = config.sample_rate.0;
-        let mut pipeline = CapturePipeline {
-            resampler: LinearResampler::new(native_sample_rate, TARGET_SAMPLE_RATE),
-            mono_buf: Vec::with_capacity(1024),
-            resampled_buf: Vec::with_capacity(1024),
-            pcm_sender,
-            dropped_chunks,
-        };
+        let channels = params.config.channels;
+        let native_sample_rate = params.config.sample_rate.0;
+        let mut pipeline =
+            build_capture_pipeline(native_sample_rate, params.pcm_sender, params.dropped_chunks);
+        let err_fn = build_stream_error_callback(params.is_stream_dead);
 
-        let dead_flag = is_stream_dead.clone();
-        let err_fn = move |err| {
-            error!("[语音采集 错误] 麦克风音频捕获流异常: {}", err);
-            dead_flag.store(true, Ordering::Release);
-        };
-
-        match sample_format {
-            SampleFormat::F32 => device.build_input_stream(
-                config,
+        match params.sample_format {
+            SampleFormat::F32 => params.device.build_input_stream(
+                params.config,
                 move |data: &[f32], _| {
                     pipeline.convert(data, channels, |s| s);
                 },
                 err_fn,
                 None,
             ),
-            SampleFormat::I16 => device.build_input_stream(
-                config,
+            SampleFormat::I16 => params.device.build_input_stream(
+                params.config,
                 move |data: &[i16], _| {
                     pipeline.convert(data, channels, |s| (s as f32) / 32768.0);
                 },
                 err_fn,
                 None,
             ),
-            SampleFormat::U16 => device.build_input_stream(
-                config,
+            SampleFormat::U16 => params.device.build_input_stream(
+                params.config,
                 move |data: &[u16], _| {
                     pipeline.convert(data, channels, |s| (s as f32 - 32768.0) / 32768.0);
                 },
@@ -299,6 +293,49 @@ impl AudioCapture {
     /// 获取硬件声道数
     pub fn channels(&self) -> u16 {
         self.channels
+    }
+}
+
+/// 音频输入流构建参数包
+///
+/// 聚合构建底层音频输入流所需的设备、流配置、采样格式与运行时计数器，避免超长参数平铺。
+struct InputStreamParams<'a> {
+    /// 目标音频输入硬件设备
+    device: &'a Device,
+    /// 设备默认流配置
+    config: &'a StreamConfig,
+    /// 设备底层采样格式
+    sample_format: SampleFormat,
+    /// 音频流异常中断标记
+    is_stream_dead: Arc<AtomicBool>,
+    /// 因通道拥塞被丢弃的音频切片计数器
+    dropped_chunks: Arc<AtomicU64>,
+    /// 重采样后 PCM 帧投递通道
+    pcm_sender: SyncSender<Vec<f32>>,
+}
+
+/// 构造音频回调复用的重采样管道工作区
+fn build_capture_pipeline(
+    native_sample_rate: u32,
+    pcm_sender: SyncSender<Vec<f32>>,
+    dropped_chunks: Arc<AtomicU64>,
+) -> CapturePipeline {
+    CapturePipeline {
+        resampler: LinearResampler::new(native_sample_rate, TARGET_SAMPLE_RATE),
+        mono_buf: Vec::with_capacity(1024),
+        resampled_buf: Vec::with_capacity(1024),
+        pcm_sender,
+        dropped_chunks,
+    }
+}
+
+/// 构造底层音频流的异常回调，在流异常中止时置位中断标记供上层感知
+fn build_stream_error_callback(
+    is_stream_dead: Arc<AtomicBool>,
+) -> impl FnMut(cpal::StreamError) + Send + 'static {
+    move |err| {
+        error!("[语音采集 错误] 麦克风音频捕获流异常: {}", err);
+        is_stream_dead.store(true, Ordering::Release);
     }
 }
 
