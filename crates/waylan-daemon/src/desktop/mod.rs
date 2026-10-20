@@ -10,4 +10,7 @@ pub mod executor;
 pub mod gnome_shell;
 
 pub use executor::{run_command_with_timeout, DEFAULT_DESKTOP_COMMAND_TIMEOUT};
-pub use gnome_shell::{ensure_gnome_input_source_registered, sync_gnome_hide_indicator_extension};
+pub use gnome_shell::{
+    ensure_gnome_input_source_registered, gnome_extension_intent, sync_gnome_extension_state_async,
+    sync_gnome_hide_indicator_extension, GnomeExtensionIntent,
+};

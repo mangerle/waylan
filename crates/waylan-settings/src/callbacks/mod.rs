@@ -11,8 +11,8 @@ pub mod phrases;
 pub mod tasks;
 
 pub use desktop::{
-    pick_directory_dialog, pick_directory_dialog_async, pick_file_dialog, pick_file_dialog_async,
-    sync_gnome_indicator_mode,
+    gnome_extension_intent, pick_directory_dialog, pick_directory_dialog_async, pick_file_dialog,
+    pick_file_dialog_async, sync_gnome_indicator_mode,
 };
 pub use dict::{populate_lexicon_statistics, LexiconStatsBundle};
 pub(crate) use tasks::TaskRunningGuard;
@@ -76,9 +76,9 @@ fn apply_save_settings(
     update_config_from_window(&win, &mut base_cfg);
     match base_cfg.save_default() {
         Ok(()) => {
-            let hide_ext = base_cfg.desktop.exclusive_input_source;
+            let intent = gnome_extension_intent(&base_cfg);
             *current_cfg_cell.lock() = base_cfg;
-            sync_gnome_indicator_mode(hide_ext);
+            sync_gnome_indicator_mode(intent);
             win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from("配置已成功保存并同步！"));
         }

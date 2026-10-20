@@ -1,8 +1,9 @@
-//! GNOME 桌面环境原生输入源与隐藏指示器扩展集成管理
+//! GNOME 桌面环境原生输入源与配套 Shell 扩展集成管理
 //!
 //! # 设计原理
 //! - **实现初衷**：GNOME 顶栏输入源列表由 org.gnome.desktop.input-sources 控制。
-//!   本模块负责将微澜置顶为首选输入源，并在独占托盘模式下安装并启用 GNOME Shell 扩展以隐藏原生冗余指示器。
+//!   本模块负责将微澜置顶为首选输入源，并按 [`GnomeExtensionIntent`] 描述的两项职责
+//!   （隐藏原生冗余指示器、渲染微澜自定义候选框）决定配套 Shell 扩展是否需要加载。
 //! - **核心优势**：兼顾 GNOME 规范对底层 XKB 映射的强要求，同时保证微澜处于首选激活位置并保留系统原有输入源。
 //! - **代价与局限**：依赖 gsettings 与 gnome-extensions 命令行工具，仅在 GNOME 桌面环境下生效。
 
@@ -30,6 +31,45 @@ fn env_var_non_empty(key: &str) -> Option<String> {
     env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
+/// GNOME Shell 扩展 `waylan-hide-input-source` 的启用意图
+///
+/// # 设计原理
+/// - **实现初衷**：该扩展身兼两职——隐藏顶栏原生输入源指示器，以及在微澜自定义候选框模式下
+///   接管 IBus 候选弹窗渲染微澜胶囊视图。原实现仅用"独占输入源"一个布尔量决定整个扩展是否加载，
+///   导致用户选择了微澜候选框但未开启独占输入源时，扩展根本不加载，全部候选框外观设置静默失效。
+/// - **核心优势**：加载条件取两职并集，扩展内部再按各自独立配置分别生效，
+///   界面上的"独占输入源"与"候选框模式"恢复互不牵连的语义。
+/// - **代价与局限**：两职皆关时扩展仍会因配置需要而加载（仅剩配置监听开销）；
+///   指示器隐藏从"随扩展加载无条件执行"改为"扩展内部按配置热切换"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GnomeExtensionIntent {
+    /// 是否需要隐藏顶栏原生输入源指示器（对应独占输入源模式）
+    pub hide_indicator: bool,
+    /// 是否需要由扩展渲染微澜自定义候选框（对应候选框模式为微澜专属）
+    pub custom_candidate_view: bool,
+}
+
+impl GnomeExtensionIntent {
+    /// 扩展是否应当处于加载状态：两职责任一需要即须加载
+    #[must_use]
+    pub fn should_enable(self) -> bool {
+        self.hide_indicator || self.custom_candidate_view
+    }
+}
+
+/// 定位扩展源文件目录：兼容开发仓库布局（`<repo>/assets/gnome-extension`）与
+/// 历史打包布局（`<share>/gnome-extension`），两者均不存在时返回 `None`
+fn locate_extension_src_dir(assets: &str) -> Option<PathBuf> {
+    let assets_dir = Path::new(assets);
+    let candidates = [assets_dir.join("gnome-extension"), {
+        assets_dir
+            .parent()
+            .unwrap_or(assets_dir)
+            .join("gnome-extension")
+    }];
+    candidates.into_iter().find(|dir| dir.is_dir())
+}
+
 /// 安装或更新 GNOME Shell 隐藏原生指示器扩展文件至用户扩展目录
 pub fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
     let user_dir = env_var_non_empty("HOME").map(|h| {
@@ -41,13 +81,15 @@ pub fn install_gnome_hide_indicator_extension(extension_uuid: &str) {
     let Some(assets) = detect_default_assets_path() else {
         return;
     };
-    let src_dir = Path::new(&assets)
-        .parent()
-        .unwrap_or(Path::new(&assets))
-        .join("gnome-extension");
-    if !src_dir.is_dir() {
+    let Some(src_dir) = locate_extension_src_dir(&assets) else {
+        // 扩展文件由系统包直接安装至 /usr/share/gnome-shell/extensions 时属正常情形，
+        // 此处仅跳过用户目录同步；记为 debug 以便排查"改了扩展代码但界面没变"的问题。
+        debug!(
+            "[桌面集成] 未找到微澜 GNOME 扩展源目录 (基于资源路径 {:?})，跳过用户目录同步",
+            assets
+        );
         return;
-    }
+    };
     let Some(ref target) = user_dir else {
         return;
     };
@@ -101,15 +143,15 @@ pub fn set_gnome_extension_enabled(extension_uuid: &str, enable: bool) {
     }
 }
 
-/// 同步 GNOME Shell 原生输入法指示器隐藏扩展的启用/禁用状态
-pub fn sync_gnome_hide_indicator_extension(hide_native: bool) {
+/// 同步 GNOME Shell 扩展的加载状态：任一职责需要即加载，具体做什么由扩展内部按配置判定
+pub fn sync_gnome_hide_indicator_extension(intent: GnomeExtensionIntent) {
     if !is_gnome_desktop() {
         return;
     }
 
     let extension_uuid = "waylan-hide-input-source@waylan.org";
     install_gnome_hide_indicator_extension(extension_uuid);
-    set_gnome_extension_enabled(extension_uuid, hide_native);
+    set_gnome_extension_enabled(extension_uuid, intent.should_enable());
 }
 
 /// 同步更新 GNOME GSettings enabled-extensions 列表
@@ -298,8 +340,26 @@ pub fn prioritize_waylan_in_gsettings_sources(raw: &str) -> Option<String> {
     Some(format!("[{}]", new_items.join(", ")))
 }
 
-/// 安全同步桌面环境输入源与指示器扩展（后台异步派发执行，具备超时保护并保留用户原有输入源）
-pub fn safe_sync_desktop_input_sources(exclusive: bool) {
+/// 后台派发扩展加载状态对齐：仅同步扩展本身，不触碰输入源与当前引擎选择
+///
+/// 供守护进程启动自检使用——扩展可能因用户升级、在扩展管理器里手动关闭或首次安装而与
+/// 配置脱节，而外部命令均带超时，必须离开主启动路径执行，否则会拖慢会话就绪。
+pub fn sync_gnome_extension_state_async(intent: GnomeExtensionIntent) {
+    if !is_gnome_desktop() {
+        return;
+    }
+
+    let spawn_res = std::thread::Builder::new()
+        .name("sync-gnome-extension".to_string())
+        .spawn(move || sync_gnome_hide_indicator_extension(intent));
+
+    if let Err(e) = spawn_res {
+        warn!("[桌面集成 警告] 派发启动期扩展状态对齐线程失败: {}", e);
+    }
+}
+
+/// 安全同步桌面环境输入源与扩展加载状态（后台异步派发执行，具备超时保护并保留用户原有输入源）
+pub fn safe_sync_desktop_input_sources(intent: GnomeExtensionIntent) {
     if !is_gnome_desktop() {
         return;
     }
@@ -307,8 +367,8 @@ pub fn safe_sync_desktop_input_sources(exclusive: bool) {
     let spawn_res = std::thread::Builder::new()
         .name("sync-desktop-mode".to_string())
         .spawn(move || {
-            ensure_gnome_input_source_registered(exclusive);
-            sync_gnome_hide_indicator_extension(exclusive);
+            ensure_gnome_input_source_registered(intent.hide_indicator);
+            sync_gnome_hide_indicator_extension(intent);
 
             let mut cmd = Command::new("ibus");
             cmd.args(["engine", "waylan"]);

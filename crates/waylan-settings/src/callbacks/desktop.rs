@@ -9,15 +9,28 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use waylan_sys::desktop::safe_sync_desktop_input_sources;
+use waylan_core::config::AppConfig;
+use waylan_sys::desktop::{safe_sync_desktop_input_sources, GnomeExtensionIntent};
 use waylan_sys::process::run_command_with_timeout;
 
 /// 默认系统原生对话框等待超时时间（2分钟）
 const DEFAULT_DIALOG_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// 同步更新 GNOME 输入源列表与指示器隐藏扩展（委托底层系统抽象统一安全执行）
-pub fn sync_gnome_indicator_mode(exclusive: bool) {
-    safe_sync_desktop_input_sources(exclusive);
+/// 由配置解析 GNOME 扩展启用意图
+///
+/// 扩展的"隐藏顶栏指示器"与"渲染微澜候选框"两职分别由两个独立设置项决定，
+/// 加载条件取并集，故必须同时读取；判定谓词统一由 `AppConfig` 提供。
+#[must_use]
+pub fn gnome_extension_intent(cfg: &AppConfig) -> GnomeExtensionIntent {
+    GnomeExtensionIntent {
+        hide_indicator: cfg.desktop.exclusive_input_source,
+        custom_candidate_view: cfg.uses_custom_candidate_view(),
+    }
+}
+
+/// 同步更新 GNOME 输入源列表与配套扩展加载状态（委托底层系统抽象统一安全执行）
+pub fn sync_gnome_indicator_mode(intent: GnomeExtensionIntent) {
+    safe_sync_desktop_input_sources(intent);
 }
 
 /// 调用系统原生对话框 (zenity) 选择外部词库文件（具备超时保护）

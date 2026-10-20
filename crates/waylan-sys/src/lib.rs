@@ -20,7 +20,7 @@ pub use desktop::{
     ensure_gnome_input_source_registered, install_gnome_hide_indicator_extension, is_gnome_desktop,
     prioritize_waylan_in_gsettings_sources, safe_sync_desktop_input_sources,
     set_gnome_extension_enabled, set_waylan_as_exclusive_input_source,
-    sync_gnome_hide_indicator_extension,
+    sync_gnome_extension_state_async, sync_gnome_hide_indicator_extension, GnomeExtensionIntent,
 };
 pub use fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,

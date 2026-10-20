@@ -26,6 +26,7 @@ function readWaylanConfig() {
         paddingH: 8,
         cornerRadius: 8,
         opacity: 95,
+        hideIndicator: false,
     };
 
     if (!file.query_exists(null)) {
@@ -94,7 +95,23 @@ function readWaylanConfig() {
             opacity = parseInt(opacityMatch[1], 10);
         }
 
-        return { windowMode, density, theme, voiceVisual, itemSpacing, paddingV, paddingH, cornerRadius, opacity };
+        // 顶栏原生指示器的隐藏属独立职责，仅在微澜独占输入源时执行；
+        // 读取失败时保持 false（宁可多显示指示器，也不剥夺用户切换输入源的入口）
+        const exclusiveMatch = text.match(/^\s*exclusive_input_source\s*=\s*(true|false)/m);
+        const hideIndicator = exclusiveMatch ? exclusiveMatch[1] === 'true' : defaultConfig.hideIndicator;
+
+        return {
+            windowMode,
+            density,
+            theme,
+            voiceVisual,
+            itemSpacing,
+            paddingV,
+            paddingH,
+            cornerRadius,
+            opacity,
+            hideIndicator,
+        };
     } catch (e) {
         console.error('[WaylanExtension] 读取微澜配置文件异常:', e);
         return defaultConfig;
@@ -588,47 +605,98 @@ class WaylanCandidateView {
 
 export default class WaylanHideInputExtension extends Extension {
     enable() {
-        // 1. 隐藏系统原生顶栏键盘指示器（单输入源体验）
-        this._indicator = Main.panel.statusArea['keyboard'];
-        if (this._indicator) {
-            this._origShow = this._indicator.show;
-            this._indicator.show = () => {};
-            this._indicator.hide();
+        // 扩展被加载不代表要隐藏顶栏指示器：隐藏指示器与渲染微澜候选框是两项独立职责，
+        // 分别由 exclusive_input_source 与 candidate_window_mode 决定，故 enable 只建立
+        // 配置通道并应用一次当前意图，具体副作用全部下沉到 _applyCurrentConfig。
+        this._indicatorHidden = false;
+        this._setupConfigWatcher();
+        this._applyCurrentConfig();
+    }
 
-            if (this._indicator.container) {
-                this._origContainerShow = this._indicator.container.show;
-                this._indicator.container.show = () => {};
-                this._indicator.container.hide();
-            }
-
-            this._visibleWatchId = this._indicator.connect('notify::visible', () => {
-                if (this._indicator && this._indicator.visible) {
-                    this._indicator.visible = false;
-                }
-            });
-
-            if (this._indicator.container) {
-                this._containerVisibleWatchId = this._indicator.container.connect('notify::visible', () => {
-                    if (this._indicator && this._indicator.container && this._indicator.container.visible) {
-                        this._indicator.container.visible = false;
-                    }
-                });
-            }
-
-            this._manager = this._indicator._inputSourceManager;
-            if (this._manager) {
-                this._activateWaylanIfAvailable();
-                this._sourcesChangedId = this._manager.connect('sources-changed', () => {
-                    this._activateWaylanIfAvailable();
-                });
-            }
+    /**
+     * 按配置应用或撤销对顶栏原生输入源指示器的隐藏
+     *
+     * 幂等设计：配置热切换（用户在设置中心勾选/取消独占输入源）时无需重载扩展即可生效。
+     */
+    _applyIndicatorVisibility(hide) {
+        if (!this._indicator) {
+            this._indicator = Main.panel.statusArea['keyboard'];
+        }
+        if (!this._indicator || hide === this._indicatorHidden) {
+            return;
         }
 
-        // 2. 监听微澜配置文件变动，实现专属模式与桌面原生模式的热切换
-        this._setupConfigWatcher();
+        if (hide) {
+            this._hideIndicator();
+        } else {
+            this._restoreIndicator();
+        }
+        this._indicatorHidden = hide;
+    }
 
-        // 3. 应用当前配置
-        this._applyCurrentConfig();
+    _hideIndicator() {
+        this._origShow = this._indicator.show;
+        this._indicator.show = () => {};
+        this._indicator.hide();
+
+        if (this._indicator.container) {
+            this._origContainerShow = this._indicator.container.show;
+            this._indicator.container.show = () => {};
+            this._indicator.container.hide();
+        }
+
+        this._visibleWatchId = this._indicator.connect('notify::visible', () => {
+            if (this._indicator && this._indicator.visible) {
+                this._indicator.visible = false;
+            }
+        });
+
+        if (this._indicator.container) {
+            this._containerVisibleWatchId = this._indicator.container.connect('notify::visible', () => {
+                if (this._indicator && this._indicator.container && this._indicator.container.visible) {
+                    this._indicator.container.visible = false;
+                }
+            });
+        }
+
+        // 独占模式下持续把激活输入源收敛回微澜，避免用户误切换到系统兜底源
+        this._manager = this._indicator._inputSourceManager;
+        if (this._manager) {
+            this._activateWaylanIfAvailable();
+            this._sourcesChangedId = this._manager.connect('sources-changed', () => {
+                this._activateWaylanIfAvailable();
+            });
+        }
+    }
+
+    _restoreIndicator() {
+        if (this._manager && this._sourcesChangedId) {
+            this._manager.disconnect(this._sourcesChangedId);
+            this._sourcesChangedId = 0;
+            this._manager = null;
+        }
+
+        if (this._visibleWatchId) {
+            this._indicator.disconnect(this._visibleWatchId);
+            this._visibleWatchId = 0;
+        }
+        if (this._containerVisibleWatchId && this._indicator.container) {
+            this._indicator.container.disconnect(this._containerVisibleWatchId);
+            this._containerVisibleWatchId = 0;
+        }
+        if (this._origShow) {
+            this._indicator.show = this._origShow;
+            this._origShow = null;
+        }
+        if (this._origContainerShow && this._indicator.container) {
+            this._indicator.container.show = this._origContainerShow;
+            this._origContainerShow = null;
+        }
+
+        this._indicator.visible = true;
+        if (this._indicator.container) {
+            this._indicator.container.visible = true;
+        }
     }
 
     _setupConfigWatcher() {
@@ -661,8 +729,12 @@ export default class WaylanHideInputExtension extends Extension {
         const config = readWaylanConfig();
         this._currentConfig = config;
 
+        // 职责一：仅在微澜独占输入源时隐藏顶栏原生指示器
+        this._applyIndicatorVisibility(config.hideIndicator);
+
+        // 职责二：按候选框模式决定是否接管 IBus 候选弹窗
         if (config.windowMode === 'native') {
-            // 桌面系统原生模式：卸载微澜自定义视图，保留底层隐藏重复序号与指示器修复
+            // 桌面系统原生模式：卸载微澜自定义视图，仅保留上述指示器隐藏职责
             this._unmountWaylanView();
         } else {
             // 微澜现代专属模式：接管候选弹窗或热更新样式
@@ -805,39 +877,18 @@ export default class WaylanHideInputExtension extends Extension {
             this._configMonitor = null;
         }
 
-        if (this._manager && this._sourcesChangedId) {
-            this._manager.disconnect(this._sourcesChangedId);
-            this._sourcesChangedId = 0;
-            this._manager = null;
+        // 仅在确实隐藏过指示器时还原，避免把 GNOME 自身的可见性状态强行改写为显示
+        if (this._indicatorHidden) {
+            if (!this._indicator) {
+                this._indicator = Main.panel.statusArea['keyboard'];
+            }
+            if (this._indicator) {
+                this._restoreIndicator();
+            }
+            this._indicatorHidden = false;
         }
 
-        if (!this._indicator) {
-            this._indicator = Main.panel.statusArea['keyboard'];
-        }
-        if (this._indicator) {
-            if (this._visibleWatchId) {
-                this._indicator.disconnect(this._visibleWatchId);
-                this._visibleWatchId = 0;
-            }
-            if (this._containerVisibleWatchId && this._indicator.container) {
-                this._indicator.container.disconnect(this._containerVisibleWatchId);
-                this._containerVisibleWatchId = 0;
-            }
-            if (this._origShow) {
-                this._indicator.show = this._origShow;
-                this._origShow = null;
-            }
-            if (this._origContainerShow && this._indicator.container) {
-                this._indicator.container.show = this._origContainerShow;
-                this._origContainerShow = null;
-            }
-            this._indicator.visible = true;
-            if (this._indicator.container) {
-                this._indicator.container.visible = true;
-            }
-            this._indicator = null;
-        }
-
+        this._indicator = null;
         this._unmountWaylanView();
     }
 }

@@ -42,6 +42,16 @@ impl AppConfig {
         self.voice.vad.speech_threshold = self.voice.vad.speech_threshold.clamp(0.01, 0.99);
     }
 
+    /// 候选框是否交由微澜自定义渲染
+    ///
+    /// 该判定决定 GNOME Shell 扩展是否需要接管 IBus 候选弹窗，与"独占输入源"互不蕴含，
+    /// 故集中在此处提供单一真相源，避免各调用点自行比较枚举造成语义漂移。
+    #[inline]
+    #[must_use]
+    pub fn uses_custom_candidate_view(&self) -> bool {
+        self.ui.candidate_window_mode == CandidateWindowMode::WaylanCustom
+    }
+
     /// 获取无 HOME 环境下的受控运行时回退目录
     #[inline]
     pub fn fallback_runtime_dir() -> PathBuf {

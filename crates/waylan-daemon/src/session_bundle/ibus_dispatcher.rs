@@ -20,6 +20,9 @@ use waylan_ibus::{
     IbusShutdownCoordinator,
 };
 
+use crate::desktop::{
+    gnome_extension_intent, sync_gnome_extension_state_async, GnomeExtensionIntent,
+};
 use crate::system::{ShutdownCoordinator, SubprocessManager};
 use crate::tray::TrayService;
 
@@ -50,16 +53,42 @@ impl IbusMenuActionHandler for DaemonIbusMenuHandler {
     }
 }
 
-/// 宿主 IBus 配置热重载与指示器形态变迁驱动器
+/// 宿主 IBus 配置热重载与 GNOME 桌面集成变迁驱动器
 struct DaemonIbusConfigReloader {
-    exclusive_input_source: AtomicBool,
-    pending_sync_exclusive: AtomicBool,
+    /// 当前生效的扩展意图：是否隐藏顶栏原生输入源指示器
+    hide_indicator: AtomicBool,
+    /// 当前生效的扩展意图：是否由扩展渲染微澜自定义候选框
+    custom_candidate_view: AtomicBool,
+    /// 待锁守卫释放后执行的桌面集成外部命令标记
+    pending_sync: AtomicBool,
+}
+
+impl DaemonIbusConfigReloader {
+    /// 写入最新扩展意图并返回是否发生变迁
+    ///
+    /// 两项职责必须一起比较：只监听独占输入源会让"候选框模式"的改动静默丢失。
+    fn update_intent(&self, intent: GnomeExtensionIntent) -> bool {
+        let prev_hide = self
+            .hide_indicator
+            .swap(intent.hide_indicator, Ordering::AcqRel);
+        let prev_view = self
+            .custom_candidate_view
+            .swap(intent.custom_candidate_view, Ordering::AcqRel);
+        prev_hide != intent.hide_indicator || prev_view != intent.custom_candidate_view
+    }
+
+    /// 读取当前生效的扩展意图
+    fn current_intent(&self) -> GnomeExtensionIntent {
+        GnomeExtensionIntent {
+            hide_indicator: self.hide_indicator.load(Ordering::Acquire),
+            custom_candidate_view: self.custom_candidate_view.load(Ordering::Acquire),
+        }
+    }
 }
 
 impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn reload(&self, core: &mut IbusSessionCore) -> bool {
         let new_cfg = AppConfig::load_or_create();
-        let hide_ext = new_cfg.desktop.exclusive_input_source;
         let current_has_tray = core.has_tray();
         let is_gnome = env::var("XDG_CURRENT_DESKTOP")
             .map(|d| d.to_uppercase().contains("GNOME"))
@@ -75,19 +104,18 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
         }
 
         apply_config_to_ibus_core(&new_cfg, core);
-        let old_exclusive = self.exclusive_input_source.swap(hide_ext, Ordering::AcqRel);
-        if hide_ext != old_exclusive {
+        if self.update_intent(gnome_extension_intent(&new_cfg)) {
             // 标记待在锁守卫释放后的 post_reload 中安全执行桌面集成外部命令
-            self.pending_sync_exclusive.store(true, Ordering::Release);
+            self.pending_sync.store(true, Ordering::Release);
         }
         false
     }
 
     fn post_reload(&self) {
-        if self.pending_sync_exclusive.swap(false, Ordering::AcqRel) {
-            let hide_ext = self.exclusive_input_source.load(Ordering::Acquire);
-            crate::desktop::ensure_gnome_input_source_registered(hide_ext);
-            crate::desktop::sync_gnome_hide_indicator_extension(hide_ext);
+        if self.pending_sync.swap(false, Ordering::AcqRel) {
+            let intent = self.current_intent();
+            crate::desktop::ensure_gnome_input_source_registered(intent.hide_indicator);
+            crate::desktop::sync_gnome_hide_indicator_extension(intent);
         }
     }
 }
@@ -122,11 +150,12 @@ fn build_ibus_session_core(
     session_core
 }
 
-/// 构建宿主侧 IBus 配置热重载驱动器
-fn build_config_reloader(exclusive_source: bool) -> Arc<DaemonIbusConfigReloader> {
+/// 构建宿主侧 IBus 配置热重载驱动器（以启动期配置作为变迁比较基线）
+fn build_config_reloader(intent: GnomeExtensionIntent) -> Arc<DaemonIbusConfigReloader> {
     Arc::new(DaemonIbusConfigReloader {
-        exclusive_input_source: AtomicBool::new(exclusive_source),
-        pending_sync_exclusive: AtomicBool::new(false),
+        hide_indicator: AtomicBool::new(intent.hide_indicator),
+        custom_candidate_view: AtomicBool::new(intent.custom_candidate_view),
+        pending_sync: AtomicBool::new(false),
     })
 }
 
@@ -154,12 +183,16 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
     );
 
     let initial_cfg = AppConfig::load_or_create();
+    let initial_intent = gnome_extension_intent(&initial_cfg);
+    // 启动即后台对齐一次扩展加载状态：扩展可能因系统升级、用户在扩展管理器中手动关闭或首次
+    // 安装而与配置脱节，原实现只在配置值变化时才同步，会让脱节状态永久保留。
+    sync_gnome_extension_state_async(initial_intent);
     let session_core = build_ibus_session_core(opts.engine, opts.tray, &initial_cfg);
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {
         subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),
     });
-    let config_reloader = build_config_reloader(opts.exclusive_source);
+    let config_reloader = build_config_reloader(initial_intent);
     let ibus_coordinator = build_ibus_coordinator(&opts.coordinator);
 
     let ibus_res = run_ibus_session(IbusSessionOptions {
