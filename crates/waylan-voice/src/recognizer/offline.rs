@@ -6,7 +6,7 @@ use log::{info, warn};
 use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 use waylan_core::{OfflineAsrConfig, OfflineModelType};
 
-use super::traits::{MockVoiceRecognizer, VoiceRecognizer};
+use super::traits::VoiceRecognizer;
 use crate::error::VoiceError;
 
 /// 解析指定的本地 ASR 模型目录路径（支持自定义配置、XDG 用户目录、系统共享目录与本地相对目录）
@@ -64,8 +64,6 @@ pub struct OfflineVoiceRecognizer {
     models_ready: bool,
     /// 活跃的 sherpa-onnx 流式识别会话
     active_session: Option<SherpaOnlineSession>,
-    /// 仿真降级识别器（当模型尚未下载或配置错误时优雅保底）
-    fallback_mock: MockVoiceRecognizer,
 }
 
 /// 侦测到的本地 Zipformer 模型文件集合
@@ -198,13 +196,15 @@ impl OfflineVoiceRecognizer {
                 if let Some(session) = create_online_session(&detected) {
                     active_session = Some(session);
                 } else {
-                    warn!("[本地 ASR] 创建 sherpa-onnx 识别器失败，正在使用仿真器优雅降级");
+                    warn!(
+                        "[本地 ASR] 模型文件已找到，但 sherpa-onnx 识别器创建失败；本次语音输入将明确报错而非伪造文本"
+                    );
                 }
             } else {
                 warn!("[本地 ASR] 模型目录 {:?} 缺少必要权重文件", path);
             }
         } else {
-            info!("[本地 ASR] 未检测到已下载的本地 ASR 模型，使用仿真识别器保底");
+            info!("[本地 ASR] 未检测到已下载的本地 ASR 模型，语音输入将返回明确错误");
         }
 
         Self {
@@ -212,13 +212,35 @@ impl OfflineVoiceRecognizer {
             resolved_model_dir: resolved_dir,
             models_ready,
             active_session,
-            fallback_mock: MockVoiceRecognizer::new(),
         }
+    }
+
+    /// 生成模型不可用错误
+    fn unavailable_error(&self) -> VoiceError {
+        let reason = match self.resolved_model_dir {
+            Some(ref path) => format!(
+                "模型目录 {} 缺少必要的 encoder/decoder/tokens 权重，或识别器初始化失败",
+                path.display()
+            ),
+            None => "未找到本地离线 ASR 模型，请先在设置中心导入模型".to_string(),
+        };
+        VoiceError::RecognizerUnavailable { reason }
     }
 
     /// 模型文件是否已就绪
     pub fn is_models_ready(&self) -> bool {
         self.models_ready
+    }
+
+    /// 构造一个确定缺少模型的识别器实例（仅用于验证失败关闭契约）
+    #[cfg(test)]
+    pub(crate) fn unavailable_for_test() -> Self {
+        Self {
+            config: OfflineAsrConfig::default(),
+            resolved_model_dir: None,
+            models_ready: false,
+            active_session: None,
+        }
     }
 
     /// 获取解析后的模型所在目录路径
@@ -233,43 +255,47 @@ impl OfflineVoiceRecognizer {
 }
 
 impl VoiceRecognizer for OfflineVoiceRecognizer {
+    fn is_ready(&self) -> bool {
+        self.active_session.is_some()
+    }
+
     fn feed_pcm(&mut self, samples: &[f32]) -> Result<Option<String>, VoiceError> {
-        if let Some(session) = &mut self.active_session {
-            session.stream.accept_waveform(16000, samples);
-            while session.recognizer.is_ready(&session.stream) {
-                session.recognizer.decode(&session.stream);
-            }
-            if let Some(res) = session.recognizer.get_result(&session.stream) {
-                if !res.text.is_empty() && res.text != session.last_text {
-                    session.last_text = res.text.clone();
-                    return Ok(Some(res.text));
-                }
-            }
-            return Ok(None);
+        let Some(session) = &mut self.active_session else {
+            return Err(self.unavailable_error());
+        };
+        session.stream.accept_waveform(16000, samples);
+        while session.recognizer.is_ready(&session.stream) {
+            session.recognizer.decode(&session.stream);
         }
-        self.fallback_mock.feed_pcm(samples)
+        if let Some(res) = session.recognizer.get_result(&session.stream) {
+            if !res.text.is_empty() && res.text != session.last_text {
+                session.last_text = res.text.clone();
+                return Ok(Some(res.text));
+            }
+        }
+        Ok(None)
     }
 
     fn finish(&mut self) -> Result<String, VoiceError> {
-        if let Some(session) = &mut self.active_session {
-            session.stream.input_finished();
-            while session.recognizer.is_ready(&session.stream) {
-                session.recognizer.decode(&session.stream);
-            }
-            let final_text = if let Some(res) = session.recognizer.get_result(&session.stream) {
-                if !res.text.is_empty() {
-                    res.text
-                } else {
-                    session.last_text.clone()
-                }
+        let Some(session) = &mut self.active_session else {
+            return Err(self.unavailable_error());
+        };
+        session.stream.input_finished();
+        while session.recognizer.is_ready(&session.stream) {
+            session.recognizer.decode(&session.stream);
+        }
+        let final_text = if let Some(res) = session.recognizer.get_result(&session.stream) {
+            if !res.text.is_empty() {
+                res.text
             } else {
                 session.last_text.clone()
-            };
-            session.recognizer.reset(&session.stream);
-            session.last_text.clear();
-            return Ok(final_text);
-        }
-        self.fallback_mock.finish()
+            }
+        } else {
+            session.last_text.clone()
+        };
+        session.recognizer.reset(&session.stream);
+        session.last_text.clear();
+        Ok(final_text)
     }
 
     fn reset(&mut self) {
@@ -277,6 +303,24 @@ impl VoiceRecognizer for OfflineVoiceRecognizer {
             session.recognizer.reset(&session.stream);
             session.last_text.clear();
         }
-        self.fallback_mock.reset();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_missing_model_fails_closed_without_fake_text() {
+        let mut recognizer = OfflineVoiceRecognizer::unavailable_for_test();
+        assert!(!recognizer.is_ready());
+        assert!(matches!(
+            recognizer.feed_pcm(&[0.0; 160]),
+            Err(VoiceError::RecognizerUnavailable { .. })
+        ));
+        assert!(matches!(
+            recognizer.finish(),
+            Err(VoiceError::RecognizerUnavailable { .. })
+        ));
     }
 }

@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use log::info;
+use log::{info, warn};
 use waylan_core::VoiceConfig;
 
 use super::types::IDLE_MODEL_UNLOAD_TIMEOUT;
@@ -93,6 +93,14 @@ impl WorkerModelCache {
 
         if self.recognizer.is_none() {
             self.recognizer = Some(create_recognizer(voice_config));
+        }
+        if !self
+            .recognizer
+            .as_ref()
+            .is_some_and(|recognizer| recognizer.is_ready())
+        {
+            warn!("[语音会话] 识别器未就绪（本地模型缺失或云端 API Key 未配置），拒绝启动录音");
+            return None;
         }
         if self.vad.is_none() {
             self.vad = Some(create_vad(&voice_config.vad));

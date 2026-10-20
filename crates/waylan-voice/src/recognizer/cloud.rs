@@ -6,6 +6,26 @@ use waylan_core::CloudAsrConfig;
 use super::traits::VoiceRecognizer;
 use crate::error::VoiceError;
 
+/// 单次云端识别允许缓存的最大 PCM 采样数（16kHz 下 5 分钟）
+const MAX_CLOUD_PCM_SAMPLES: usize = 16_000 * 300;
+
+/// 校验本次追加采样后是否仍处于单次云端识别上限内
+fn validate_buffer_growth(
+    current_samples: usize,
+    incoming_samples: usize,
+) -> Result<(), VoiceError> {
+    if current_samples.saturating_add(incoming_samples) > MAX_CLOUD_PCM_SAMPLES {
+        return Err(VoiceError::RecognizerFailed {
+            engine_type: "云端 Whisper".to_string(),
+            message: format!(
+                "单次云端识别音频超过 {} 秒上限，已终止本次请求；请缩短单次听写时长或改用本地离线模型",
+                MAX_CLOUD_PCM_SAMPLES / 16_000
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// 将 16kHz f32 PCM 浮点音频采样序列编码为标准 16 位单声道 WAV 字节数据
 pub fn encode_pcm_to_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     let num_channels: u16 = 1;
@@ -87,7 +107,15 @@ impl CloudVoiceRecognizer {
 }
 
 impl VoiceRecognizer for CloudVoiceRecognizer {
+    fn is_ready(&self) -> bool {
+        self.config
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+    }
+
     fn feed_pcm(&mut self, samples: &[f32]) -> Result<Option<String>, VoiceError> {
+        validate_buffer_growth(self.pcm_buffer.len(), samples.len())?;
         self.pcm_buffer.extend_from_slice(samples);
         // 云端批处理/分块上传接口在说话过程中累积采样
         Ok(None)
@@ -251,5 +279,23 @@ fn parse_cloud_response(resp: ureq::Response) -> Result<String, VoiceError> {
             engine_type: "云端 Whisper".to_string(),
             message: format!("远端服务器返回错误: {}", detail),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cloud_pcm_buffer_limit() {
+        assert!(validate_buffer_growth(MAX_CLOUD_PCM_SAMPLES - 1, 1).is_ok());
+        assert!(matches!(
+            validate_buffer_growth(MAX_CLOUD_PCM_SAMPLES, 1),
+            Err(VoiceError::RecognizerFailed { .. })
+        ));
+        assert!(matches!(
+            validate_buffer_growth(MAX_CLOUD_PCM_SAMPLES, usize::MAX),
+            Err(VoiceError::RecognizerFailed { .. })
+        ));
     }
 }

@@ -6,7 +6,7 @@
 //! - **核心优势**：在音频中断回调中采用非阻塞有界同步通道（`try_send`），彻底杜绝音频线程卡顿与爆内存。
 //! - **代价与局限**：线性重采样相比高阶带通 sinc 插值开销更低，但高频部分有轻微滤波失真，完全满足语音识别需求。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
@@ -98,6 +98,8 @@ pub struct AudioCapture {
     _stream: Stream,
     /// 音频流是否已因底层硬件断开或错误而异常中止
     is_stream_dead: Arc<AtomicBool>,
+    /// 因有界 PCM 通道满而被丢弃的音频切片数量
+    dropped_chunks: Arc<AtomicU64>,
     /// 当前所选用的音频设备名称
     device_name: String,
     /// 硬件原始采样率
@@ -106,10 +108,27 @@ pub struct AudioCapture {
     channels: u16,
 }
 
+impl Drop for AudioCapture {
+    fn drop(&mut self) {
+        let dropped = self.dropped_chunks.load(Ordering::Acquire);
+        if dropped > 0 {
+            warn!(
+                "[语音采集] 本次录音因下游处理不及时丢弃了 {} 个音频切片（设备: {}）",
+                dropped, self.device_name
+            );
+        }
+    }
+}
+
 impl AudioCapture {
     /// 检查底层麦克风硬件音频流是否已因设备拔出或严重错误而异常中断
     pub fn is_stream_dead(&self) -> bool {
         self.is_stream_dead.load(Ordering::Acquire)
+    }
+
+    /// 查询本次录音期间因下游通道拥塞而丢弃的音频切片数量
+    pub fn dropped_chunks(&self) -> u64 {
+        self.dropped_chunks.load(Ordering::Acquire)
     }
 
     /// 启动默认麦克风音频捕获，将重采样后的 16kHz PCM 音频数据块发送至 `pcm_sender`
@@ -148,11 +167,13 @@ impl AudioCapture {
         );
 
         let is_stream_dead = Arc::new(AtomicBool::new(false));
+        let dropped_chunks = Arc::new(AtomicU64::new(0));
         let stream = Self::build_input_stream_by_format(
             &device,
             &config,
             sample_format,
             is_stream_dead.clone(),
+            dropped_chunks.clone(),
             pcm_sender,
         )?;
 
@@ -165,6 +186,7 @@ impl AudioCapture {
         Ok(Self {
             _stream: stream,
             is_stream_dead,
+            dropped_chunks,
             device_name,
             native_sample_rate,
             channels,
@@ -208,13 +230,18 @@ impl AudioCapture {
         config: &StreamConfig,
         sample_format: SampleFormat,
         is_stream_dead: Arc<AtomicBool>,
+        dropped_chunks: Arc<AtomicU64>,
         pcm_sender: SyncSender<Vec<f32>>,
     ) -> Result<cpal::Stream, VoiceError> {
         let channels = config.channels;
         let native_sample_rate = config.sample_rate.0;
-        let mut resampler = LinearResampler::new(native_sample_rate, TARGET_SAMPLE_RATE);
-        let mut mono_buf = Vec::with_capacity(1024);
-        let mut resampled_buf = Vec::with_capacity(1024);
+        let mut pipeline = CapturePipeline {
+            resampler: LinearResampler::new(native_sample_rate, TARGET_SAMPLE_RATE),
+            mono_buf: Vec::with_capacity(1024),
+            resampled_buf: Vec::with_capacity(1024),
+            pcm_sender,
+            dropped_chunks,
+        };
 
         let dead_flag = is_stream_dead.clone();
         let err_fn = move |err| {
@@ -226,15 +253,7 @@ impl AudioCapture {
             SampleFormat::F32 => device.build_input_stream(
                 config,
                 move |data: &[f32], _| {
-                    convert_and_downsample(
-                        data,
-                        channels,
-                        |s| s,
-                        &mut resampler,
-                        &mut mono_buf,
-                        &mut resampled_buf,
-                        &pcm_sender,
-                    );
+                    pipeline.convert(data, channels, |s| s);
                 },
                 err_fn,
                 None,
@@ -242,15 +261,7 @@ impl AudioCapture {
             SampleFormat::I16 => device.build_input_stream(
                 config,
                 move |data: &[i16], _| {
-                    convert_and_downsample(
-                        data,
-                        channels,
-                        |s| (s as f32) / 32768.0,
-                        &mut resampler,
-                        &mut mono_buf,
-                        &mut resampled_buf,
-                        &pcm_sender,
-                    );
+                    pipeline.convert(data, channels, |s| (s as f32) / 32768.0);
                 },
                 err_fn,
                 None,
@@ -258,15 +269,7 @@ impl AudioCapture {
             SampleFormat::U16 => device.build_input_stream(
                 config,
                 move |data: &[u16], _| {
-                    convert_and_downsample(
-                        data,
-                        channels,
-                        |s| (s as f32 - 32768.0) / 32768.0,
-                        &mut resampler,
-                        &mut mono_buf,
-                        &mut resampled_buf,
-                        &pcm_sender,
-                    );
+                    pipeline.convert(data, channels, |s| (s as f32 - 32768.0) / 32768.0);
                 },
                 err_fn,
                 None,
@@ -299,41 +302,59 @@ impl AudioCapture {
     }
 }
 
-/// 通用音频采样转换、多通道合并与重采样分发辅助函数
-fn convert_and_downsample<T: Copy, F: Fn(T) -> f32>(
-    data: &[T],
-    channels: u16,
-    converter: F,
-    resampler: &mut LinearResampler,
-    mono_buf: &mut Vec<f32>,
-    resampled_buf: &mut Vec<f32>,
-    pcm_sender: &SyncSender<Vec<f32>>,
-) {
-    mono_buf.clear();
-    resampled_buf.clear();
+/// 音频回调复用的转换、下混与重采样工作区
+struct CapturePipeline {
+    resampler: LinearResampler,
+    mono_buf: Vec<f32>,
+    resampled_buf: Vec<f32>,
+    pcm_sender: SyncSender<Vec<f32>>,
+    dropped_chunks: Arc<AtomicU64>,
+}
 
-    if channels > 1 {
-        let ch = channels as usize;
-        let frames = data.len() / ch;
-        mono_buf.reserve(frames);
-        for i in 0..frames {
-            let mut sum = 0.0;
-            for c in 0..ch {
-                sum += converter(data[i * ch + c]);
+impl CapturePipeline {
+    /// 转换单个硬件音频回调切片并投递至下游有界通道
+    fn convert<T: Copy, F: Fn(T) -> f32>(&mut self, data: &[T], channels: u16, converter: F) {
+        self.mono_buf.clear();
+        self.resampled_buf.clear();
+
+        if channels > 1 {
+            let ch = channels as usize;
+            let frames = data.len() / ch;
+            self.mono_buf.reserve(frames);
+            for i in 0..frames {
+                let mut sum = 0.0;
+                for c in 0..ch {
+                    sum += converter(data[i * ch + c]);
+                }
+                self.mono_buf.push(sum / channels as f32);
             }
-            mono_buf.push(sum / channels as f32);
+        } else {
+            self.mono_buf.reserve(data.len());
+            for &sample in data {
+                self.mono_buf.push(converter(sample));
+            }
         }
-    } else {
-        mono_buf.reserve(data.len());
-        for &sample in data {
-            mono_buf.push(converter(sample));
+
+        self.resampler
+            .process(&self.mono_buf, &mut self.resampled_buf);
+
+        if !self.resampled_buf.is_empty() {
+            // 移动所有权而非整段复制；通道拥塞时数据明确计入丢弃计数，避免静默丢音。
+            let chunk = std::mem::take(&mut self.resampled_buf);
+            match self.pcm_sender.try_send(chunk) {
+                Ok(()) => {
+                    self.resampled_buf.reserve(1024);
+                }
+                Err(std::sync::mpsc::TrySendError::Full(chunk)) => {
+                    self.resampled_buf = chunk;
+                    self.dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(chunk)) => {
+                    self.resampled_buf = chunk;
+                    self.dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
-    }
-
-    resampler.process(mono_buf, resampled_buf);
-
-    if !resampled_buf.is_empty() {
-        let _ = pcm_sender.try_send(resampled_buf.clone());
     }
 }
 

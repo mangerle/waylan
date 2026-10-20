@@ -87,6 +87,7 @@ pub(super) struct ActiveRecordingContext<'a> {
     pub punct_restorer: Option<&'a PunctuationRestorer>,
     pub voice_config: &'a VoiceConfig,
     pub is_active: &'a Arc<AtomicBool>,
+    pub shutdown_requested: &'a Arc<AtomicBool>,
 }
 
 /// 识别流式馈送处理上下文参数结构体

@@ -33,6 +33,10 @@ pub enum VoiceError {
         message: String,
     },
 
+    /// 本地语音识别模型缺失或初始化失败
+    #[error("本地语音识别模型不可用，原因: {reason}")]
+    RecognizerUnavailable { reason: String },
+
     /// 创建语音后台常驻工作线程失败
     #[error("创建语音后台工作线程失败，原因: {message}")]
     WorkerThreadSpawnFailed { message: String },

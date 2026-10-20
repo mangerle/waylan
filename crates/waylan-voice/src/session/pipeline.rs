@@ -62,16 +62,29 @@ pub(super) fn active_recording_loop(mut ctx: ActiveRecordingContext<'_>) -> bool
     let mut state = ActiveRecordingState::new(ctx.voice_config);
     let mut is_shutdown = false;
 
-    while ctx.is_active.load(Ordering::Acquire) {
+    loop {
+        if ctx.shutdown_requested.load(Ordering::Acquire) {
+            info!("[语音会话] 录音过程中收到全局停机请求，立即释放音频采集并退出");
+            drop(ctx.capture.take());
+            is_shutdown = true;
+            break;
+        }
+
         // 1. 优先检查外部主动停止、提交或取消命令
-        if let Ok(cmd) = ctx.cmd_rx.try_recv() {
-            match handle_recording_command(cmd, &mut state, &mut ctx) {
+        match ctx.cmd_rx.try_recv() {
+            Ok(cmd) => match handle_recording_command(cmd, &mut state, &mut ctx) {
                 RecordingCommandOutcome::Continue => {}
                 RecordingCommandOutcome::StopRecording => break,
                 RecordingCommandOutcome::Shutdown => {
                     is_shutdown = true;
                     break;
                 }
+            },
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                info!("[语音会话] 控制命令通道已断开，主动结束录音会话");
+                drop(ctx.capture.take());
+                break;
             }
         }
 

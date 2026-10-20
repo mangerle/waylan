@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
@@ -19,16 +19,24 @@ use super::types::{ActiveRecordingContext, VoiceEvent, VoiceSessionOptions, Work
 use crate::capture::AudioCapture;
 use crate::vad::WaveformVisualizer;
 
+/// 空闲等待期间检查停机标志的最大间隔
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
 /// 语音后台常驻工作循环持久状态
 struct VoiceWorkerLoopState<'a> {
     cache: &'a mut WorkerModelCache,
     visualizer: &'a mut WaveformVisualizer,
     cmd_rx: &'a Receiver<WorkerCommand>,
     is_active: &'a Arc<AtomicBool>,
+    shutdown_requested: &'a Arc<AtomicBool>,
 }
 
 /// 常驻工作线程主入口：纳管模型单例生命周期与会话状态机
-pub(crate) fn run_worker_main(cmd_rx: Receiver<WorkerCommand>, is_active: Arc<AtomicBool>) {
+pub(crate) fn run_worker_main(
+    cmd_rx: Receiver<WorkerCommand>,
+    is_active: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
+) {
     let mut visualizer = WaveformVisualizer::new();
     let mut cache = WorkerModelCache::default();
     let mut last_activity_time = Instant::now();
@@ -36,7 +44,14 @@ pub(crate) fn run_worker_main(cmd_rx: Receiver<WorkerCommand>, is_active: Arc<At
     info!("[语音会话] 后台常驻语音工作线程启动完成，进入就绪待命状态");
 
     loop {
-        let timeout = check_idle_timeout_and_calculate_deadline(&mut cache, last_activity_time);
+        if shutdown_requested.load(Ordering::Acquire) {
+            info!("[语音会话] 检测到全局停机标志，后台常驻语音工作线程退出");
+            break;
+        }
+
+        let idle_timeout =
+            check_idle_timeout_and_calculate_deadline(&mut cache, last_activity_time);
+        let timeout = idle_timeout.min(SHUTDOWN_POLL_INTERVAL);
         let cmd = match cmd_rx.recv_timeout(timeout) {
             Ok(c) => c,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -51,6 +66,7 @@ pub(crate) fn run_worker_main(cmd_rx: Receiver<WorkerCommand>, is_active: Arc<At
                     visualizer: &mut visualizer,
                     cmd_rx: &cmd_rx,
                     is_active: &is_active,
+                    shutdown_requested: &shutdown_requested,
                 };
                 if handle_start_command(&mut loop_state, *options, event_tx) {
                     info!("[语音会话] 录音过程中收到销毁指令，后台常驻语音工作线程平滑退出");
@@ -80,9 +96,16 @@ fn handle_start_command(
     options: VoiceSessionOptions,
     event_tx: SyncSender<VoiceEvent>,
 ) -> bool {
+    if state.shutdown_requested.load(Ordering::Acquire) {
+        state.is_active.store(false, Ordering::Release);
+        return true;
+    }
+
     let Some((recognizer, vad, punct_restorer)) = state.cache.prepare_models(&options.voice_config)
     else {
-        warn!("[语音会话] 语音识别器或 VAD 模型未正确初始化，跳过本次录音");
+        let message = "语音识别模型未就绪，已取消本次录音；请检查本地模型文件或云端 API Key 配置";
+        warn!("[语音会话] {}", message);
+        let _ = event_tx.send(VoiceEvent::Error(message.to_string()));
         state.is_active.store(false, Ordering::Release);
         return false;
     };
@@ -114,5 +137,6 @@ fn handle_start_command(
         punct_restorer,
         voice_config: &options.voice_config,
         is_active: state.is_active,
+        shutdown_requested: state.shutdown_requested,
     })
 }

@@ -4,6 +4,14 @@ use crate::error::VoiceError;
 
 /// 语音识别引擎核心特型
 pub trait VoiceRecognizer: Send + Sync {
+    /// 查询识别引擎是否已具备可用的模型与运行配置
+    ///
+    /// 默认实现返回 `true`；本地离线识别器必须在模型文件完整时才返回 `true`，
+    /// 避免在模型缺失时进入录音流程并产生伪造或空结果。
+    fn is_ready(&self) -> bool {
+        true
+    }
+
     /// 输入一段 16kHz 单声道 PCM 音频采样，返回当前识别到的增量/流式候选文字（如有）
     fn feed_pcm(&mut self, samples: &[f32]) -> Result<Option<String>, VoiceError>;
 
