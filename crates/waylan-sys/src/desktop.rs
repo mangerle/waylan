@@ -11,7 +11,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{debug, info, warn};
 
@@ -103,13 +102,16 @@ fn read_extension_version(ext_dir: &Path) -> Option<u64> {
 /// 判定用户目录副本是否应让位给系统目录副本
 ///
 /// 版本读取失败时保守返回 `false`：宁可继续加载旧的用户副本，也不能把用户手工安装的
-/// 扩展移走（那会让输入法的候选框渲染彻底消失）。
+/// 扩展删除（那会让输入法的候选框渲染彻底消失）。
 #[must_use]
 fn should_retire_user_copy(user: Option<u64>, system: Option<u64>) -> bool {
     matches!((user, system), (Some(u), Some(s)) if u < s)
 }
 
-/// 若用户目录副本版本落后于系统目录副本，则将其移出 GNOME 扩展扫描目录让位
+/// 若用户目录副本版本落后于系统目录副本，则直接删除该副本让位
+///
+/// GNOME 对同一 uuid 优先加载用户目录副本，仅刷新系统副本无法让新版生效；
+/// 只有两侧版本均可判读且用户副本严格落后时才删除，版本不可判读时保留用户副本。
 fn retire_stale_user_copy(user_dir: &Path, system_dir: &Path) {
     if !user_dir.is_dir() {
         return;
@@ -125,44 +127,14 @@ fn retire_stale_user_copy(user_dir: &Path, system_dir: &Path) {
         return;
     }
 
-    // 移入扩展扫描目录之外：GNOME 按目录内 metadata.json 的 uuid 注册扩展，
-    // 若仅在本目录内改名，同 uuid 会出现两份而被重复加载。
-    let Some(staging_root) = env_var_non_empty("HOME")
-        .map(|h| PathBuf::from(h).join(".local/share/waylan/extension-stale"))
-    else {
-        return;
-    };
-    if fs::create_dir_all(&staging_root).is_err() {
-        warn!(
-            "[桌面集成] 无法创建陈旧扩展副本归档目录 {:?}，用户副本将继续遮蔽系统新版",
-            staging_root
-        );
-        return;
-    }
-
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let dir_name = user_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "waylan-extension".to_string());
-    let dst = staging_root.join(format!(
-        "{}-v{}-{}",
-        dir_name,
-        user_version.unwrap_or(0),
-        stamp
-    ));
-
-    match fs::rename(user_dir, &dst) {
+    match fs::remove_dir_all(user_dir) {
         Ok(()) => warn!(
-            "[桌面集成] 用户目录扩展副本 (版本 {:?}) 落后于系统副本 (版本 {:?})，已归档至 {:?}；\
+            "[桌面集成] 用户目录扩展副本 (版本 {:?}) 落后于系统副本 (版本 {:?})，已删除；\
              重启 GNOME Shell 后将加载系统版本扩展。",
-            user_version, system_version, dst
+            user_version, system_version
         ),
         Err(e) => warn!(
-            "[桌面集成] 移走陈旧用户扩展副本 {:?} 失败: {}，扩展行为仍将是旧版本",
+            "[桌面集成] 删除陈旧用户扩展副本 {:?} 失败: {}，扩展行为仍将是旧版本",
             user_dir, e
         ),
     }
@@ -211,10 +183,10 @@ fn install_extension_to_user_dir(target: &Path) {
 ///   原实现无条件把扩展复制进 `~/.local/share/gnome-shell/extensions`，而 GNOME 对同一 uuid
 ///   **优先加载用户目录副本**，于是包升级只刷新系统副本、用户副本永久遮蔽新版，表现为
 ///   "升级后扩展行为仍是旧的"，且复制源路径在打包布局下本就解析不到，连刷新都做不到。
-/// - **核心优势**：打包环境不再产生双副本；历史遗留的落后副本在启动期自动归档让位（可回滚、
-///   不删除）；源码运行环境仍保留回退安装通道。
+/// - **核心优势**：打包环境不再产生双副本；历史遗留的落后副本在启动期自动删除让位，
+///   家目录不残留无主文件；源码运行环境仍保留回退安装通道。
 /// - **代价与局限**：让位后需重启 GNOME Shell 才会加载系统副本（扩展仅在 shell 启动时枚举一次）；
-///   版本无法判读时保守保留用户副本，不冒险移除。
+///   版本无法判读时保守保留用户副本，不冒险删除。
 pub fn ensure_gnome_hide_indicator_extension_files(extension_uuid: &str) {
     let Some(home) = env_var_non_empty("HOME") else {
         return;
@@ -593,7 +565,7 @@ mod tests {
         );
         assert!(
             !should_retire_user_copy(Some(3), Some(3)),
-            "版本相同不让位，避免每次启动反复搬移"
+            "版本相同不让位，避免每次启动反复删除"
         );
         assert!(
             !should_retire_user_copy(Some(5), Some(3)),
@@ -607,5 +579,50 @@ mod tests {
             !should_retire_user_copy(Some(1), None),
             "系统副本版本不可判读时不让位"
         );
+    }
+
+    #[test]
+    fn test_retire_stale_user_copy_deletes_older_user_copy() {
+        let tmp = tempfile::tempdir().expect("创建临时目录失败");
+        let user_root = tmp.path().join("user-extensions");
+        let system_root = tmp.path().join("system-extensions");
+        let user_dir = make_extension_dir(&user_root, "x@y.org", "{\"version\": 1}");
+        let system_dir = make_extension_dir(&system_root, "x@y.org", "{\"version\": 3}");
+
+        retire_stale_user_copy(&user_dir, &system_dir);
+
+        assert!(!user_dir.exists(), "落后的用户副本应被直接删除");
+        assert!(
+            system_dir.join("metadata.json").is_file(),
+            "系统副本不得被触碰"
+        );
+    }
+
+    #[test]
+    fn test_retire_stale_user_copy_keeps_not_older_or_unknown() {
+        let tmp = tempfile::tempdir().expect("创建临时目录失败");
+
+        // 用户副本更新：必须保留，不能被系统旧副本反向覆盖
+        let newer_user_root = tmp.path().join("newer-user");
+        let newer_user = make_extension_dir(&newer_user_root, "x@y.org", "{\"version\": 5}");
+        let old_system = make_extension_dir(
+            &tmp.path().join("old-system"),
+            "x@y.org",
+            "{\"version\": 3}",
+        );
+        retire_stale_user_copy(&newer_user, &old_system);
+        assert!(newer_user.exists(), "版本更新的用户副本不得被删除");
+
+        // 版本不可判读：保守保留用户副本
+        let unknown_user_root = tmp.path().join("unknown-user");
+        let unknown_user =
+            make_extension_dir(&unknown_user_root, "x@y.org", "{\"name\": \"WayLan\"}");
+        let known_system = make_extension_dir(
+            &tmp.path().join("known-system"),
+            "x@y.org",
+            "{\"version\": 3}",
+        );
+        retire_stale_user_copy(&unknown_user, &known_system);
+        assert!(unknown_user.exists(), "版本不可判读时不得删除用户副本");
     }
 }
