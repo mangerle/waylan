@@ -7,6 +7,7 @@
 //!   任何按键处理的改进或修复仅需在此单一模块中维护即可全局生效。
 //! - **代价与局限**：协议适配层需将平台特定事件参数包装为 [`KeyProcessContext`] 并消费 [`ImeOutputAction`]。
 
+use log::debug;
 use waylan_core::input::*;
 use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
 
@@ -63,6 +64,12 @@ impl ImeCoreSession {
     /// 密码框、PIN 码或系统锁屏上下文下的按键直通处理
     fn handle_protected_context_key(&mut self, keycode: u32, is_press: bool) -> ImeOutputAction {
         self.shift_sm.reset();
+        if is_press {
+            debug!(
+                "[会话调度] 处于受保护上下文（密码框或锁屏直通），透传物理按键: 键码={}",
+                keycode
+            );
+        }
         if !is_press {
             let was_consumed = self.consumed_keys.take_release(keycode);
             return if was_consumed {

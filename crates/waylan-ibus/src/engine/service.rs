@@ -5,6 +5,7 @@
 //! - **核心优势**：纯内存瞬时加锁变更状态并提取不可变快照，所有信号发送在释放互斥锁后异步执行。
 //! - **代价与局限**：必须严格遵循 IBus D-Bus 信号契约。
 
+use log::{debug, info};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -57,9 +58,7 @@ impl IbusEngineService {
         let (outcome, snap, is_caps_locked) = {
             let mut guard = self.core.lock();
             guard.active_engine_path = Some(ctxt.path().to_string());
-            if self.is_password.load(Ordering::Acquire) {
-                guard.is_password_context = true;
-            }
+            guard.is_password_context = self.is_password.load(Ordering::Acquire);
 
             // 按键级锁屏直通残留即时自愈
             self.lock_healer.maybe_heal_on_key(
@@ -142,6 +141,10 @@ impl IbusEngineService {
 
     /// 焦点进入输入上下文
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
+        debug!(
+            "[微澜 IBus] 输入上下文获得焦点 (FocusIn): 路径={}",
+            ctxt.path()
+        );
         let (mode, is_caps, trad, punct, char_full, snap) = {
             let mut guard = self.core.lock();
             guard.active_engine_path = Some(ctxt.path().to_string());
@@ -193,6 +196,10 @@ impl IbusEngineService {
 
     /// 焦点离开输入上下文
     async fn focus_out(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
+        debug!(
+            "[微澜 IBus] 输入上下文失去焦点 (FocusOut): 路径={}",
+            ctxt.path()
+        );
         self.reset_and_hide_ui(&ctxt).await;
     }
 
@@ -343,7 +350,10 @@ impl IbusEngineService {
 impl IbusEngineService {
     /// 更新当前引擎实例与核心会话的密码框感知标记（内部辅助方法，不暴露为 D-Bus 方法）
     pub(crate) fn update_password_state(&self, is_pwd: bool) {
-        self.is_password.store(is_pwd, Ordering::Release);
+        let prev = self.is_password.swap(is_pwd, Ordering::AcqRel);
+        if prev != is_pwd {
+            info!("[微澜 IBus] 输入框密码保护状态变迁: {} -> {}", prev, is_pwd);
+        }
         let mut guard = self.core.lock();
         guard.is_password_context = is_pwd;
         if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
@@ -353,7 +363,10 @@ impl IbusEngineService {
 
     /// 清除密码输入感知标记（内部辅助方法，不暴露为 D-Bus 方法）
     pub(crate) fn clear_password_state(&self) {
-        self.is_password.store(false, Ordering::Release);
+        let prev = self.is_password.swap(false, Ordering::AcqRel);
+        if prev {
+            info!("[微澜 IBus] 输入框密码保护状态已清除并复位为普通模式");
+        }
     }
 }
 

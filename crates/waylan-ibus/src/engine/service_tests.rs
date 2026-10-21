@@ -83,3 +83,34 @@ fn test_screen_locked_recovery_on_plain_context() {
     // 3. 验证锁屏直通保护已正确解除
     assert!(!core.lock().is_screen_locked);
 }
+
+#[test]
+fn test_plain_engine_resets_stale_password_context_on_key() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let core = Arc::new(Mutex::new(IbusSessionCore::new(engine)));
+    // 模拟共享核心此前滞留了密码上下文标记（例如上一窗口未发重置信号）
+    core.lock().is_password_context = true;
+
+    // 当前普通窗口的引擎实例（is_password = false）
+    let is_password = Arc::new(AtomicBool::new(false));
+    let service = IbusEngineService {
+        core: Arc::clone(&core),
+        reload_requested: None,
+        loop_wakeup: None,
+        menu_handler: None,
+        settings_running: Arc::new(AtomicBool::new(false)),
+        suppress_properties: false,
+        is_password,
+        lock_healer: Arc::new(ScreenLockHealer::default()),
+    };
+
+    // 验证当普通窗口引擎准备处理按键前，精准同步能清除滞留的密码保护状态
+    {
+        let mut guard = service.core.lock();
+        guard.is_password_context = service.is_password.load(Ordering::Acquire);
+        assert!(
+            !guard.is_password_context,
+            "普通窗口引擎必须即时复位残留的 is_password_context"
+        );
+    }
+}
