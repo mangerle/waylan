@@ -80,7 +80,11 @@ impl ImeRuntime {
             is_password_or_locked,
             surrounding_prefix: context_prefix,
         };
+        let prev_caps = self.core.is_caps_locked();
         let action = self.core.process_key(key_ctx, now);
+        if self.core.is_caps_locked() != prev_caps {
+            self.broadcast_state_snapshot();
+        }
 
         // 3. 翻译并消费决策动作
         self.dispatch_ime_action(&mut ctx, action)
@@ -232,6 +236,7 @@ impl ImeRuntime {
         new_mode: InputMode,
         committed: &Option<String>,
     ) {
+        self.window_tracker.update_active_mode(new_mode);
         self.broadcast_state_snapshot();
         ctx.frontend.sync_input_mode(new_mode);
         if let Some(text) = committed {

@@ -37,6 +37,8 @@ impl WaylanV2Session {
         if now_active {
             self.focus.surrounding_text = self.focus.pending_surrounding_text.clone();
             self.focus.is_password_context = self.focus.pending_is_password;
+            self.runtime
+                .set_protected_context(self.focus.is_password_context);
             if !was_active || focus_reset {
                 self.sync_external_state();
                 self.reset_focus_state();
@@ -53,6 +55,7 @@ impl WaylanV2Session {
             self.focus.surrounding_text = None;
             self.focus.pending_is_password = false;
             self.focus.is_password_context = false;
+            self.runtime.set_protected_context(false);
             if was_active || focus_reset {
                 if self.runtime.core.mods_depressed() != 0 && self.protocol.has_virtual_keymap {
                     if let Some(ref vk) = self.protocol.virtual_keyboard {

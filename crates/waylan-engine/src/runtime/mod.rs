@@ -21,12 +21,14 @@ pub mod key_dispatcher;
 pub mod state_sync;
 pub mod types;
 pub mod ui_adapter;
+pub mod window_tracker;
 
 #[cfg(test)]
 mod tests;
 
 pub use candidate_builder::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 pub use types::ProcessKeyEventParams;
+pub use window_tracker::WindowModeTracker;
 
 use crate::session::{ImeCoreSession, InputDecorationFlags};
 
@@ -34,6 +36,10 @@ use crate::session::{ImeCoreSession, InputDecorationFlags};
 pub struct ImeRuntime {
     /// 核心算法与按键决策会话状态机
     pub core: ImeCoreSession,
+    /// 窗口级输入模式状态跟踪器（实现多窗口独立记忆）
+    pub window_tracker: WindowModeTracker,
+    /// 当前是否处于受保护安全上下文（密码框、PIN 码或系统锁屏）
+    is_protected_context: bool,
     /// 统一语音按键交互与录音流式提供者（抽象特型对象）
     voice_manager: Option<Box<dyn VoiceProvider>>,
     /// 与系统托盘和外部进程共享的原子状态标志集合
@@ -55,6 +61,8 @@ impl ImeRuntime {
     pub fn new(core: ImeCoreSession) -> Self {
         Self {
             core,
+            window_tracker: WindowModeTracker::default(),
+            is_protected_context: false,
             voice_manager: None,
             shared_flags: None,
             mode_notify_tx: None,
@@ -203,5 +211,58 @@ impl ImeRuntime {
         if let Some(ref mut vm) = self.voice_manager {
             vm.update_config(&cfg.voice);
         }
+    }
+
+    /// 查询当前是否处于受保护安全上下文（密码框或锁屏）
+    #[inline]
+    pub fn is_protected_context(&self) -> bool {
+        self.is_protected_context
+    }
+
+    /// 设置受保护安全上下文状态，若发生状态改变则自动单向广播最新状态快照
+    ///
+    /// # 设计原理
+    /// - 进入受保护上下文时清空未提交的拼音缓冲，并向外广播投影后的英文状态；
+    /// - 离开受保护上下文时天然露出当前窗口原本记录的基础模式并向外广播。
+    pub fn set_protected_context(&mut self, is_protected: bool) -> bool {
+        if self.is_protected_context != is_protected {
+            self.is_protected_context = is_protected;
+            if is_protected && !self.core.engine.raw_input().is_empty() {
+                self.core.reset_input_state();
+            }
+            self.broadcast_state_snapshot();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 计算当前在外部指示器与状态决策中生效的实际输入模式（纯函数有效状态投影）
+    #[inline]
+    pub fn effective_input_mode(&self) -> waylan_core::InputMode {
+        if self.is_protected_context {
+            waylan_core::InputMode::English
+        } else {
+            self.core.input_mode()
+        }
+    }
+
+    /// 窗口获得焦点时切换当前活动上下文并恢复该窗口记录的基础模式
+    pub fn focus_window(&mut self, window_id: &str) {
+        let base_mode = self.window_tracker.focus_window(window_id);
+        if self.core.input_mode() != base_mode {
+            self.core.set_input_mode(base_mode);
+        }
+        self.broadcast_state_snapshot();
+    }
+
+    /// 窗口失去焦点时通知跟踪器
+    pub fn blur_window(&mut self, window_id: &str) {
+        self.window_tracker.blur_window(window_id);
+    }
+
+    /// 窗口销毁时从跟踪器移除
+    pub fn remove_window(&mut self, window_id: &str) {
+        self.window_tracker.remove_window(window_id);
     }
 }

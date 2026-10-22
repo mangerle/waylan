@@ -44,10 +44,7 @@ mod lifecycle;
 mod voice_stream;
 
 pub(crate) use engine_listener::spawn_engine_change_listener;
-pub(crate) use lifecycle::{
-    ensure_global_engine_active, handle_screen_saver_transition,
-    maybe_heal_engine_desynchronization,
-};
+pub(crate) use lifecycle::{ensure_global_engine_active, handle_screen_saver_transition};
 pub(crate) use voice_stream::{
     handle_voice_stream_cycle, query_voice_active_and_path, VoiceStreamCycleParams,
 };
@@ -210,8 +207,6 @@ struct MonitorLoopState {
     last_voice_active: bool,
     /// 上次锁屏状态探活时刻
     last_lock_probe_instant: Instant,
-    /// 上次输入源状态一致性校验时刻（用于防抖节流）
-    last_engine_probe_instant: Instant,
     /// 上次配置热重载触发时刻（用于防抖窗口判定）
     last_reload_instant: Instant,
     /// 系统锁屏状态共享标记
@@ -226,7 +221,6 @@ impl MonitorLoopState {
             last_screen_locked: initial_screen_locked,
             last_voice_active: false,
             last_lock_probe_instant: Instant::now(),
-            last_engine_probe_instant: Instant::now(),
             last_reload_instant: Instant::now()
                 .checked_sub(Duration::from_secs(10))
                 .unwrap_or_else(Instant::now),
@@ -297,12 +291,6 @@ fn monitor_poll_phase(
         last_screen_locked: &mut state.last_screen_locked,
         last_lock_probe_instant: &mut state.last_lock_probe_instant,
     });
-
-    // 输入源状态撕裂自愈：当总线捕获到全局引擎变更信号唤醒主循环时，毫秒级即时校验并拉回微澜（50ms 轻量防抖）
-    if state.last_engine_probe_instant.elapsed() >= Duration::from_millis(50) {
-        state.last_engine_probe_instant = Instant::now();
-        maybe_heal_engine_desynchronization(ctx.conn, current_locked);
-    }
 
     let (is_voice_active, target_engine_path) = query_voice_active_and_path(ctx.shared_core);
     let poll_timeout_ms = compute_monitor_poll_timeout(

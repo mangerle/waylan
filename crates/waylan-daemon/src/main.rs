@@ -58,10 +58,50 @@ fn run() -> Result<(), DaemonError> {
     }
 }
 
+/// 判定当前进程是否处于系统登录管理器 (Greeter) 或受限系统级会话中
+///
+/// # 设计原理
+/// - 微澜属于用户级图形桌面输入法，绝不应当在 GDM / LightDM 等系统登录管理器的密码界面驻留，
+///   避免与登录界面原生英文密码输入产生状态冲突。
+fn is_greeter_or_system_session() -> bool {
+    // 1. UID < 1000 判定（系统服务用户，如 gdm、lightdm、systemd 等）
+    if rustix::process::getuid().as_raw() < 1000 {
+        return true;
+    }
+
+    // 2. 环境变量判定：XDG_SESSION_CLASS 明确标记为 greeter 或 lock-screen
+    if let Ok(class) = env::var("XDG_SESSION_CLASS") {
+        if class.eq_ignore_ascii_case("greeter") || class.eq_ignore_ascii_case("lock-screen") {
+            return true;
+        }
+    }
+
+    // 3. 用户名或会话名称敏感词过滤
+    for var in &["USER", "USERNAME", "LOGNAME", "GDMSESSION"] {
+        if let Ok(val) = env::var(var) {
+            let lower = val.to_ascii_lowercase();
+            if lower.contains("gdm")
+                || lower.contains("greeter")
+                || lower.contains("lightdm")
+                || lower.contains("sddm")
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// 启动并运行输入法常驻守护服务
 fn run_daemon(opts: DaemonOptions) -> Result<(), DaemonError> {
     if let Err(e) = logger::init_logger() {
         eprintln!("[微澜] 日志系统初始化失败: {}", e);
+    }
+
+    if is_greeter_or_system_session() {
+        info!("[微澜守护进程] 检测到当前处于登录管理器或系统受限会话 (Greeter)，微澜静默退出以保障系统密码输入纯净。");
+        return Ok(());
     }
 
     let _single_instance_lock = match acquire_daemon_instance_lock(&opts) {

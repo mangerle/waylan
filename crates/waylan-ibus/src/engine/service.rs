@@ -149,6 +149,8 @@ impl IbusEngineService {
         let (mode, is_caps, trad, punct, char_full, snap) = {
             let mut guard = self.core.lock();
             guard.active_engine_path = Some(ctxt.path().to_string());
+            // 切换窗口上下文独立记忆
+            guard.runtime.focus_window(ctxt.path().as_str());
             // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
             // 既杜绝旧普通窗口残留密码标记，又防止因先触发 SetContentType 后触发 FocusIn 导致密码标记被误冲刷
             guard.is_password_context = self.is_password.load(Ordering::Acquire);
@@ -158,12 +160,14 @@ impl IbusEngineService {
                 &mut guard.is_screen_locked,
                 self.loop_wakeup.as_ref(),
             );
+            let is_protected = guard.is_password_context || guard.is_screen_locked;
+            guard.runtime.set_protected_context(is_protected);
             let _ = guard.sync_shared_mode();
             let trad = guard.runtime.core.engine.config.traditional_chinese;
             let punct = guard.runtime.core.is_full_width_punct();
             let char_full = guard.is_full_width_char();
             (
-                guard.runtime.core.input_mode(),
+                guard.runtime.effective_input_mode(),
                 guard.is_caps_locked(),
                 trad,
                 punct,
@@ -201,6 +205,10 @@ impl IbusEngineService {
             "[微澜 IBus] 输入上下文失去焦点 (FocusOut): 路径={}",
             ctxt.path()
         );
+        {
+            let mut guard = self.core.lock();
+            guard.runtime.blur_window(ctxt.path().as_str());
+        }
         self.reset_and_hide_ui(&ctxt).await;
     }
 
@@ -266,11 +274,14 @@ impl IbusEngineService {
         (0, 0)
     }
 
-    /// 接收客户端输入框内容类型（自动识别密码与 PIN 输入框并直通按键）
+    /// 接收客户端输入框内容类型（自动识别密码、PIN 与私密输入框并直通按键）
     #[zbus(property)]
     pub(crate) fn set_content_type(&self, content_type: (u32, u32)) {
-        let (purpose, _hints) = content_type;
-        let is_pwd = purpose == IBUS_INPUT_PURPOSE_PASSWORD || purpose == IBUS_INPUT_PURPOSE_PIN;
+        let (purpose, hints) = content_type;
+        const IBUS_INPUT_HINT_PRIVATE: u32 = 1 << 3;
+        let is_pwd = purpose == IBUS_INPUT_PURPOSE_PASSWORD
+            || purpose == IBUS_INPUT_PURPOSE_PIN
+            || (hints & IBUS_INPUT_HINT_PRIVATE) != 0;
         self.update_password_state(is_pwd);
     }
 
@@ -357,6 +368,8 @@ impl IbusEngineService {
         }
         let mut guard = self.core.lock();
         guard.is_password_context = is_pwd;
+        let is_protected = is_pwd || guard.is_screen_locked;
+        guard.runtime.set_protected_context(is_protected);
         if is_pwd && !guard.runtime.core.engine.raw_input().is_empty() {
             guard.reset_context();
         }
@@ -367,6 +380,10 @@ impl IbusEngineService {
         let prev = self.is_password.swap(false, Ordering::AcqRel);
         if prev {
             info!("[微澜 IBus] 输入框密码保护状态已清除并复位为普通模式");
+            let mut guard = self.core.lock();
+            guard.is_password_context = false;
+            let is_locked = guard.is_screen_locked;
+            guard.runtime.set_protected_context(is_locked);
         }
     }
 }

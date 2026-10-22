@@ -130,3 +130,60 @@ fn test_ime_runtime_single_source_of_truth() {
     assert_eq!(runtime.state_snapshot(), flags.snapshot());
     assert!(rx.try_recv().is_ok());
 }
+
+#[test]
+fn test_effective_mode_projection_and_protected_context() {
+    let flags = SharedInputFlags::new(true, false, true, false);
+    let mut runtime = ImeRuntime::default().with_shared_flags(flags.clone());
+
+    // 1. 初始状态为中文
+    assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
+    assert!(runtime.state_snapshot().is_chinese);
+    assert!(flags.is_chinese());
+
+    // 2. 进入密码框或锁屏等受保护上下文：有效模式立即投影为英文，且共享标志同步为英文
+    runtime.set_protected_context(true);
+    assert!(runtime.is_protected_context());
+    assert_eq!(runtime.effective_input_mode(), InputMode::English);
+    assert!(!runtime.state_snapshot().is_chinese);
+    assert!(!flags.is_chinese());
+    // 验证底层基础模式未被篡改
+    assert_eq!(runtime.core.input_mode(), InputMode::Chinese);
+
+    // 3. 离开密码框或解锁：自动恢复原中文状态
+    runtime.set_protected_context(false);
+    assert!(!runtime.is_protected_context());
+    assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
+    assert!(runtime.state_snapshot().is_chinese);
+    assert!(flags.is_chinese());
+}
+
+#[test]
+fn test_window_mode_tracker_runtime_integration() {
+    let mut runtime = ImeRuntime::default();
+
+    // 1. 获焦窗口 1（终端）：切换为英文
+    runtime.focus_window("terminal_1");
+    runtime.set_input_mode(InputMode::English);
+    assert_eq!(runtime.effective_input_mode(), InputMode::English);
+
+    // 2. 获焦窗口 2（浏览器）：默认为中文
+    runtime.focus_window("browser_1");
+    assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
+
+    // 3. 切回窗口 1：自动恢复英文
+    runtime.focus_window("terminal_1");
+    assert_eq!(runtime.effective_input_mode(), InputMode::English);
+
+    // 4. 切回窗口 2：自动恢复中文
+    runtime.focus_window("browser_1");
+    assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
+
+    // 5. 在窗口 2 期间进入密码框：投影为英文
+    runtime.set_protected_context(true);
+    assert_eq!(runtime.effective_input_mode(), InputMode::English);
+
+    // 6. 退出密码框：自然恢复窗口 2 的中文
+    runtime.set_protected_context(false);
+    assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
+}

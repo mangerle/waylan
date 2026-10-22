@@ -13,12 +13,12 @@ use waylan_core::InputMode;
 use super::ImeRuntime;
 
 impl ImeRuntime {
-    /// 从底层权威核心状态提取当前完整的不可变输入状态快照
+    /// 从底层权威核心状态提取当前完整的不可变输入状态快照（依据受保护上下文自动投影有效模式）
     #[inline]
     pub fn state_snapshot(&self) -> InputStateSnapshot {
         InputStateSnapshot {
             is_chinese: matches!(
-                self.core.input_mode(),
+                self.effective_input_mode(),
                 InputMode::Chinese | InputMode::VMode
             ),
             is_caps_locked: self.core.is_caps_locked(),
@@ -39,8 +39,9 @@ impl ImeRuntime {
         }
     }
 
-    /// 设置输入语言模式并单向广播状态快照
+    /// 设置输入语言模式并单向广播状态快照（同步持久化至当前获焦窗口上下文）
     pub fn set_input_mode(&mut self, mode: InputMode) {
+        self.window_tracker.update_active_mode(mode);
         if self.core.input_mode() != mode {
             self.core.set_input_mode(mode);
             self.broadcast_state_snapshot();

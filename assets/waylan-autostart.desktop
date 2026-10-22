@@ -9,6 +9,6 @@ Terminal=false
 Type=Application
 Categories=Utility;InputMethod;
 StartupNotify=false
-NotShowIn=GNOME;
+NotShowIn=GNOME;GNOME-Greeter;GDM;
 X-GNOME-Autostart-Phase=Applications
 X-KDE-autostart-phase=1
