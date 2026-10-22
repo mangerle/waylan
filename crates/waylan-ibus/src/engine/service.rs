@@ -160,6 +160,10 @@ impl IbusEngineService {
                 &mut guard.is_screen_locked,
                 self.loop_wakeup.as_ref(),
             );
+            // 获焦状态校验：若系统当前实际处于锁屏状态，严格锁定为锁屏直通模式
+            if self.lock_healer.is_screen_locked() {
+                guard.is_screen_locked = true;
+            }
             let is_protected = guard.is_password_context || guard.is_screen_locked;
             guard.runtime.set_protected_context(is_protected);
             let _ = guard.sync_shared_mode();

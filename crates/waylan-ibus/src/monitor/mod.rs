@@ -23,7 +23,7 @@ use zbus::zvariant::Value;
 use super::engine::WAYLAN_ENGINE_OBJECT_PATH;
 use super::keys::IbusSessionCore;
 use super::screensaver::{
-    query_initial_screen_saver_active, spawn_screen_saver_listener_with_flag,
+    query_current_screen_saver_active, spawn_screen_saver_listener_with_flag,
 };
 use super::types::build_input_mode_property;
 use crate::{IbusConfigReloader, IbusShutdownCoordinator};
@@ -123,14 +123,14 @@ struct ScreensaverProbeParams<'a> {
 /// 处于锁屏保护期时的自愈探活与状态迁移处理
 fn probe_and_handle_screensaver(params: &mut ScreensaverProbeParams<'_>) -> bool {
     let mut current_locked = params.screen_locked_flag.load(Ordering::Acquire);
-    if (current_locked || *params.last_screen_locked)
-        && params.last_lock_probe_instant.elapsed() >= Duration::from_secs(3)
-    {
+    if params.last_lock_probe_instant.elapsed() >= Duration::from_secs(3) {
         *params.last_lock_probe_instant = Instant::now();
-        let real_locked = query_initial_screen_saver_active(params.conn);
-        if !real_locked && (current_locked || *params.last_screen_locked) {
-            params.screen_locked_flag.store(false, Ordering::Release);
-            current_locked = false;
+        let real_locked = query_current_screen_saver_active();
+        if real_locked != current_locked {
+            params
+                .screen_locked_flag
+                .store(real_locked, Ordering::Release);
+            current_locked = real_locked;
         }
     }
     handle_screen_saver_transition(

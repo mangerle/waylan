@@ -74,10 +74,11 @@ impl ImeRuntime {
         // 2. 组装核心状态机上下文并执行决策
         let now = current_timestamp_secs();
         let context_prefix = extract_surrounding_prefix(surrounding_text, 64);
+        let effective_is_password_or_locked = is_password_or_locked || self.is_protected_context;
         let key_ctx = KeyProcessContext {
             keycode: key,
             is_press,
-            is_password_or_locked,
+            is_password_or_locked: effective_is_password_or_locked,
             surrounding_prefix: context_prefix,
         };
         let prev_caps = self.core.is_caps_locked();

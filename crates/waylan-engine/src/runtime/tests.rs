@@ -187,3 +187,61 @@ fn test_window_mode_tracker_runtime_integration() {
     runtime.set_protected_context(false);
     assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
 }
+
+#[derive(Default)]
+struct MockFrontend {
+    committed: Vec<String>,
+}
+
+impl crate::frontend::InputMethodFrontend for MockFrontend {
+    fn commit_text(&mut self, text: &str) {
+        self.committed.push(text.to_string());
+    }
+    fn update_preedit(&mut self, _text: &str, _cursor: usize) {}
+    fn update_candidates(&mut self, _state: &waylan_core::CandidateBoxState) {}
+    fn hide_candidates(&mut self) {}
+    fn move_cursor(&mut self, _offset: i32) {}
+    fn sync_input_mode(&mut self, _mode: InputMode) {}
+}
+
+#[test]
+fn test_protected_context_forces_key_passthrough() {
+    let mut runtime = ImeRuntime::default();
+    let mut frontend = MockFrontend::default();
+
+    // 默认中文模式下敲击字母 'a'（扫描码 30）：正常组词
+    let (consumed, _) = runtime.process_key_event(
+        &mut frontend,
+        ProcessKeyEventParams {
+            key: 30,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_text: None,
+            inline_preedit: false,
+        },
+    );
+    assert!(consumed);
+    assert_eq!(runtime.core.engine.raw_input(), "a");
+
+    // 进入受保护上下文（锁屏或密码框）：缓冲被自动清理
+    runtime.set_protected_context(true);
+    assert!(runtime.core.engine.raw_input().is_empty());
+
+    // 在受保护上下文下，即使 params 中 is_password_or_locked 误传为 false，也强制全量物理直通
+    let (consumed, commit) = runtime.process_key_event(
+        &mut frontend,
+        ProcessKeyEventParams {
+            key: 30,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_text: None,
+            inline_preedit: false,
+        },
+    );
+    assert!(!consumed, "受保护上下文下物理按键必须全量直通");
+    assert_eq!(commit, None);
+    assert!(
+        runtime.core.engine.raw_input().is_empty(),
+        "受保护上下文下绝对不允许产生拼音组词"
+    );
+}

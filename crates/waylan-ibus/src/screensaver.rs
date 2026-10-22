@@ -15,6 +15,27 @@ use waylan_sys::LoopWakeup;
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Message;
 
+/// 查询 systemd-logind 系统总线中当前会话的 LockedHint 属性
+pub(crate) fn query_logind_locked_hint() -> bool {
+    let Ok(conn) = Connection::system() else {
+        return false;
+    };
+    if let Ok(reply) = conn.call_method(
+        Some("org.freedesktop.login1"),
+        "/org/freedesktop/login1/session/auto",
+        Some("org.freedesktop.DBus.Properties"),
+        "Get",
+        &("org.freedesktop.login1.Session", "LockedHint"),
+    ) {
+        if let Ok(val) = reply.body().deserialize::<zbus::zvariant::OwnedValue>() {
+            if let zbus::zvariant::Value::Bool(locked) = &*val {
+                return *locked;
+            }
+        }
+    }
+    false
+}
+
 /// 在会话启动阶段探测初始锁屏状态（优先遵循 FreeDesktop 跨桌面规范，回退至 GNOME 专属规范）
 pub(crate) fn query_initial_screen_saver_active(conn: &Connection) -> bool {
     // 1. 优先尝试 FreeDesktop 跨桌面统一规范（KDE Plasma、XFCE、Cinnamon 等通用规范）
@@ -46,8 +67,14 @@ pub(crate) fn query_initial_screen_saver_active(conn: &Connection) -> bool {
     false
 }
 
-/// 快速探测当前系统锁屏状态（自动获取用户会话连接）
+/// 快速探测当前系统锁屏状态（优先权威 systemd-logind 属性，回退至用户会话连接）
 pub(crate) fn query_current_screen_saver_active() -> bool {
+    // 1. 优先尝试 systemd-logind 的权威系统级锁屏属性（现代 Linux/Wayland/GNOME 事实标准）
+    if query_logind_locked_hint() {
+        return true;
+    }
+
+    // 2. 回退尝试 FreeDesktop 与 GNOME 用户会话规范
     Connection::session()
         .ok()
         .as_ref()
@@ -78,6 +105,10 @@ impl SystemScreenSaverQuery {
 
 impl ScreenLockQuery for SystemScreenSaverQuery {
     fn is_screen_locked(&self) -> bool {
+        // 优先检查实时系统 logind 权威锁屏状态，杜绝信号丢失或延迟
+        if query_logind_locked_hint() {
+            return true;
+        }
         if let Some(ref flag) = self.screen_locked_flag {
             flag.load(Ordering::Acquire)
         } else {
@@ -129,6 +160,12 @@ impl<Q: ScreenLockQuery> ScreenLockHealer<Q> {
         &self.query
     }
 
+    /// 查询当前系统是否真实处于锁屏状态
+    #[inline]
+    pub(crate) fn is_screen_locked(&self) -> bool {
+        self.query.is_screen_locked()
+    }
+
     /// 按键级锁屏残留即时自愈：
     /// 当当前窗口为普通输入上下文，但内部状态仍处于锁屏直通模式时，
     /// 节流探测桌面真实锁屏状态。若系统实际已解锁，立即解除直通保护并唤醒主循环。
@@ -160,7 +197,7 @@ impl<Q: ScreenLockQuery> ScreenLockHealer<Q> {
     }
 
     /// 普通窗口获焦时的即时自愈：
-    /// 若当前获焦的并非密码框，而内部仍记录为锁屏状态，说明桌面已解锁但锁屏信号丢失，自动解除锁屏直通
+    /// 若当前获焦的并非密码框，且经底层查询器严格核实系统确实已经解锁，自动解除锁屏直通
     pub(crate) fn heal_on_focus(
         &self,
         is_password_context: bool,
@@ -168,12 +205,15 @@ impl<Q: ScreenLockQuery> ScreenLockHealer<Q> {
         loop_wakeup: Option<&LoopWakeup>,
     ) -> bool {
         if !is_password_context && *is_screen_locked {
-            info!("[微澜 IBus] 普通窗口获焦，自动校准并解除残留的锁屏直通保护。");
-            *is_screen_locked = false;
-            if let Some(wakeup) = loop_wakeup {
-                wakeup.wake();
+            // 只有系统实际已经不处于锁屏状态时，才允许解除锁屏直通，严禁误解除锁屏界面密码框
+            if !self.query.is_screen_locked() {
+                info!("[微澜 IBus] 普通窗口获焦且系统已解锁，自动校准并解除残留的锁屏直通保护。");
+                *is_screen_locked = false;
+                if let Some(wakeup) = loop_wakeup {
+                    wakeup.wake();
+                }
+                return true;
             }
-            return true;
         }
         false
     }
@@ -371,6 +411,13 @@ mod tests {
         let healed = healer.heal_on_focus(false, &mut locked, None);
         assert!(!healed);
         assert!(!locked);
+
+        // 4. 系统实际仍处于锁屏状态时，即使非密码框获焦，也绝不误解除锁屏直通
+        healer.query().is_locked.store(true, Ordering::Release);
+        let mut locked = true;
+        let healed = healer.heal_on_focus(false, &mut locked, None);
+        assert!(!healed);
+        assert!(locked, "系统实际处于锁屏时绝不允许误解除锁屏直通");
     }
 
     #[test]
