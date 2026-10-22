@@ -71,34 +71,18 @@ impl IbusSessionCore {
         }
 
         // 外部状态指示的 CapsLock 锁定标志补齐：
-        // 仅当当前按键并非 CapsLock 键自身时，才允许由外部 state 掩码补齐激活。
-        // 若当前按键是 KEY_CAPSLOCK，按键抬起 (Release) 事件的 state 往往依然残留上一状态的 IBUS_LOCK_MASK，
-        // 若不排除 KEY_CAPSLOCK，将导致松开按键时被误判定为重新锁定，造成无法退出大写的死锁。
-        if evdev_key != KEY_CAPSLOCK && (state & IBUS_LOCK_MASK) != 0 && !self.is_caps_locked() {
+        // 仅当当前按键并非 CapsLock 键自身、且外部明确指示 Lock 掩码、且当前并未主动切回中文时，
+        // 才允许补齐对齐（如开机初次带大写或外部窗口切换进来的首键）。
+        // 绝不在普通按键未带掩码时误冲刷内部大写状态（因多数客户端普通键击不会附带锁定掩码）。
+        if evdev_key != KEY_CAPSLOCK
+            && (state & IBUS_LOCK_MASK) != 0
+            && !self.is_caps_locked()
+            && self.runtime.core.input_mode() != InputMode::Chinese
+        {
             self.update_caps_lock_state(true);
         }
 
         event_mods
-    }
-
-    /// 处理 CapsLock 键切换时的状态更新并计算生效的模式指示
-    fn handle_caps_lock_toggle(&mut self, evdev_key: u32, is_press: bool) -> Option<InputMode> {
-        if evdev_key != KEY_CAPSLOCK || !is_press {
-            return None;
-        }
-
-        let next_locked = !self.is_caps_locked();
-        self.update_caps_lock_state(next_locked);
-        if self.runtime.core.input_mode() != InputMode::English {
-            let effective_mode = if next_locked {
-                InputMode::English
-            } else {
-                self.runtime.core.input_mode()
-            };
-            Some(effective_mode)
-        } else {
-            None
-        }
     }
 
     /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
@@ -136,12 +120,6 @@ impl IbusSessionCore {
         outcome.consumed = consumed;
         if outcome.commit_text.is_none() {
             outcome.commit_text = commit_text;
-        }
-
-        let caps_mode_changed = self.handle_caps_lock_toggle(evdev_key, is_press);
-        if let Some(caps_mode) = caps_mode_changed {
-            outcome.mode_changed = Some(caps_mode);
-            outcome.update_ui = true;
         }
 
         outcome

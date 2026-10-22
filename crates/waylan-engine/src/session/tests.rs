@@ -187,7 +187,11 @@ fn test_process_key_capslock_commit_and_passthrough() {
     );
     assert_eq!(
         res_caps,
-        ImeOutputAction::CommitAndPassThrough("ni".to_string())
+        ImeOutputAction::ModeChanged {
+            new_mode: InputMode::English,
+            committed: Some("ni".to_string()),
+            was_consumed: false,
+        }
     );
     assert!(session.engine.raw_input().is_empty());
 }
@@ -326,5 +330,156 @@ fn test_shift_digit_selection_toggle() {
     assert!(
         matches!(enabled, Some(ImeOutputAction::Commit(_))),
         "开启 Shift 选词后 Shift+数字应选择对应候选"
+    );
+}
+
+#[test]
+fn test_caps_lock_mode_toggle_and_shift_ignored_during_caps() {
+    let mut session = make_test_session();
+    assert_eq!(session.input_mode(), InputMode::Chinese);
+    assert!(!session.is_caps_locked());
+
+    // 1. 中文状态下敲击 CapsLock：派发 ModeChanged(English)，物理按键透传，内部置为大写锁定
+    let caps_press = session.process_key(
+        KeyProcessContext {
+            keycode: KEY_CAPSLOCK,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1000,
+    );
+    assert_eq!(
+        caps_press,
+        ImeOutputAction::ModeChanged {
+            new_mode: InputMode::English,
+            committed: None,
+            was_consumed: false,
+        }
+    );
+    assert!(session.is_caps_locked());
+
+    // 2. 大写锁定下单独敲击 Shift 键：彻底静默吞掉（Handled，不透传给系统），不破坏大写锁定
+    let shift_press = session.process_key(
+        KeyProcessContext {
+            keycode: KEY_LEFTSHIFT,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1001,
+    );
+    assert_eq!(
+        shift_press,
+        ImeOutputAction::Handled { update_ui: false },
+        "大写锁定下按下 Shift 必须被彻底静默吞掉"
+    );
+
+    let shift_rel = session.process_key(
+        KeyProcessContext {
+            keycode: KEY_LEFTSHIFT,
+            is_press: false,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1002,
+    );
+    assert_eq!(
+        shift_rel,
+        ImeOutputAction::Handled { update_ui: false },
+        "大写锁定下松开 Shift 必须被彻底静默吞掉"
+    );
+    assert!(
+        session.is_caps_locked(),
+        "大写锁定下敲击 Shift 保持大写锁定不变"
+    );
+    assert_eq!(session.input_mode(), InputMode::Chinese);
+
+    // 3. 再次敲击 CapsLock 物理键：退出大写锁定并恢复中文模式
+    let caps_exit = session.process_key(
+        KeyProcessContext {
+            keycode: KEY_CAPSLOCK,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1003,
+    );
+    assert_eq!(
+        caps_exit,
+        ImeOutputAction::ModeChanged {
+            new_mode: InputMode::Chinese,
+            committed: None,
+            was_consumed: false,
+        }
+    );
+    assert!(!session.is_caps_locked(), "再次敲击 CapsLock 解除大写锁定");
+    assert_eq!(session.input_mode(), InputMode::Chinese);
+}
+
+#[test]
+fn test_caps_lock_shift_chord_preserves_caps_lock() {
+    let mut session = make_test_session();
+    session.set_caps_lock(true);
+    assert!(session.is_caps_locked());
+
+    // 按下 Shift：静默吞没
+    let shift_press = session.process_key(
+        KeyProcessContext {
+            keycode: KEY_LEFTSHIFT,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1000,
+    );
+    assert_eq!(shift_press, ImeOutputAction::Handled { update_ui: false });
+
+    // 在 Shift 保持按下期间敲击字母 'a'（扫描码 30）：无论按不按 Shift 均严格输出大写 'A'
+    let act_a = session.process_key(
+        KeyProcessContext {
+            keycode: 30,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1001,
+    );
+    assert_eq!(
+        act_a,
+        ImeOutputAction::Commit("A".to_string()),
+        "大写锁定下无论按不按 Shift 均必须输出大写字母"
+    );
+
+    // 松开字母 'a'：已消费
+    let rel_a = session.process_key(
+        KeyProcessContext {
+            keycode: 30,
+            is_press: false,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1002,
+    );
+    assert_eq!(rel_a, ImeOutputAction::Handled { update_ui: false });
+
+    // 松开 Shift：静默吞没
+    let shift_rel = session.process_key(
+        KeyProcessContext {
+            keycode: KEY_LEFTSHIFT,
+            is_press: false,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        1003,
+    );
+    assert_eq!(
+        shift_rel,
+        ImeOutputAction::Handled { update_ui: false },
+        "松开 Shift 静默吞没"
+    );
+    assert!(
+        session.is_caps_locked(),
+        "Shift 组合键操作绝不破坏大写锁定状态"
     );
 }

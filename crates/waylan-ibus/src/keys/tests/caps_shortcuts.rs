@@ -60,26 +60,66 @@ fn test_ibus_caps_lock_with_shift_interaction() {
     assert_eq!(caps_on.mode_changed, Some(InputMode::English));
     assert!(core.is_caps_locked());
 
-    // 2. 大写锁定期间，敲击 Shift 键（单按或误触），状态机不应破坏基准中文模式
+    // 2. 大写锁定期间，敲击 Shift 键（单按或误触），保持大写锁定，彻底静默吞掉（consumed=true）
     let shift_down = core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK);
+    assert!(shift_down.consumed, "大写锁定下按下 Shift 必须被静默吞没");
     assert_eq!(shift_down.mode_changed, None);
     let shift_up =
         core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK | IBUS_RELEASE_MASK);
-    assert_eq!(shift_up.mode_changed, None);
+    assert!(shift_up.consumed, "大写锁定下松开 Shift 必须被静默吞没");
+    assert_eq!(
+        shift_up.mode_changed, None,
+        "大写锁定下敲击 Shift 绝不得触发模式切换"
+    );
+    assert!(core.is_caps_locked(), "敲击 Shift 绝不改变大写锁定状态");
     assert_eq!(
         core.runtime.core.input_mode(),
         InputMode::Chinese,
-        "大写锁定时敲击 Shift 不得篡改基准中文模式"
+        "基准中文模式保持不变"
     );
 
-    // 3. 敲击 CapsLock 解除锁定：必须一次性成功回到中文模式，无需按两下
+    // 3. 大写锁定下，按住 Shift 敲击字母键：必须始终直接提交大写字母 'A'，绝不输出小写
+    let _ = core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK);
+    let letter_a = core.process_key_event(b'a' as u32, 30, IBUS_LOCK_MASK | IBUS_SHIFT_MASK);
+    assert!(letter_a.consumed, "字母事件必须被消费提交");
+    assert_eq!(
+        letter_a.commit_text,
+        Some("A".to_string()),
+        "无论是否按住 Shift，大写锁定下字母必须始终保持大写输出"
+    );
+    let _ = core.process_key_event(0xffe1, KEY_LEFTSHIFT, IBUS_LOCK_MASK | IBUS_RELEASE_MASK);
+
+    // 4. 敲击 CapsLock 解除锁定：必须一次性成功回到中文模式
+    let caps_off = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_LOCK_MASK);
+    assert_eq!(
+        caps_off.mode_changed,
+        Some(InputMode::Chinese),
+        "敲击 CapsLock 键退出大写锁定并回到中文模式"
+    );
+    assert!(!core.is_caps_locked(), "大写锁定已成功解除");
+
+    // 5. 后续输入正常进入拼音输入，绝不被旧大写掩码残留重新误锁
+    let letter = core.process_key_event(b'h' as u32, 0, IBUS_LOCK_MASK);
+    assert!(letter.consumed);
+    assert_eq!(core.runtime.core.engine.raw_input(), "h");
+}
+
+#[test]
+fn test_ibus_caps_lock_exit_via_capslock_key() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let mut core = IbusSessionCore::new(engine);
+
+    // 1. 中文模式下开启 CapsLock
+    let _ = core.process_key_event(0xffe5, KEY_CAPSLOCK, 0);
+    assert!(core.is_caps_locked());
+
+    // 2. 敲击 CapsLock 解除锁定：必须一次性成功回到中文模式
     let caps_off_press = core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_LOCK_MASK);
     assert_eq!(
         caps_off_press.mode_changed,
         Some(InputMode::Chinese),
         "仅按一次 CapsLock 必须立即切回中文"
     );
-    // 模拟真实桌面环境：松开 CapsLock 时 state 仍可能附带旧的 IBUS_LOCK_MASK 掩码
     let caps_off_rel =
         core.process_key_event(0xffe5, KEY_CAPSLOCK, IBUS_RELEASE_MASK | IBUS_LOCK_MASK);
     assert_eq!(caps_off_rel.mode_changed, None);
@@ -88,7 +128,7 @@ fn test_ibus_caps_lock_with_shift_interaction() {
         "释放 CapsLock 键时即使 state 带有旧锁定掩码，也绝不能被误判重新加锁"
     );
 
-    // 4. 后续输入正常进入拼音输入
+    // 3. 后续输入正常进入拼音输入
     let letter = core.process_key_event(b'h' as u32, 0, 0);
     assert!(letter.consumed);
     assert_eq!(core.runtime.core.engine.raw_input(), "h");

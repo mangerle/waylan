@@ -82,19 +82,34 @@ impl ImeCoreSession {
         ImeOutputAction::PassThrough
     }
 
-    /// CapsLock 按键处理（按下时若有拼音则提交拼音，物理按键一律透传给系统切换大写灯）
+    /// CapsLock 按键处理（按下时若有拼音则提交拼音，翻转大写锁定状态，物理按键一律透传给系统切换大写灯）
     fn handle_capslock_key(&mut self, is_press: bool) -> ImeOutputAction {
         self.shift_sm.reset();
         if is_press {
             let (was_consumed, committed) = self.handle_capslock(true);
-            if let Some(text) = committed {
-                return ImeOutputAction::CommitAndPassThrough(text);
-            }
-            return if was_consumed {
-                ImeOutputAction::Handled { update_ui: true }
+            let next_locked = !self.is_caps_locked();
+            self.set_caps_lock(next_locked);
+            if self.input_mode() != InputMode::English {
+                let effective_mode = if next_locked {
+                    InputMode::English
+                } else {
+                    self.input_mode()
+                };
+                return ImeOutputAction::ModeChanged {
+                    new_mode: effective_mode,
+                    committed,
+                    was_consumed,
+                };
             } else {
-                ImeOutputAction::PassThrough
-            };
+                if let Some(text) = committed {
+                    return ImeOutputAction::CommitAndPassThrough(text);
+                }
+                return if was_consumed {
+                    ImeOutputAction::Handled { update_ui: false }
+                } else {
+                    ImeOutputAction::PassThrough
+                };
+            }
         }
         let (was_consumed, _) = self.handle_capslock(false);
         if was_consumed {
@@ -104,8 +119,9 @@ impl ImeCoreSession {
         }
     }
 
-    /// 按键释放事件处理（区分 CapsLock 锁定态与常规释放语义）
+    /// 按键释放事件处理（大写锁定态严格保持物理锁定，屏蔽 Shift 模式切换）
     fn handle_key_release_event(&mut self, keycode: u32) -> ImeOutputAction {
+        // 大写锁定态属于最高优先级大写英文输入状态：单按 Shift 绝不改变大写锁定，亦不切回中文
         if self.is_caps_locked() {
             self.shift_sm.reset();
             let was_consumed = self.consumed_keys.take_release(keycode);
@@ -180,11 +196,47 @@ impl ImeCoreSession {
         ImeOutputAction::PassThrough
     }
 
-    /// 处理英文模式、CapsLock 锁定及控制键按下时的透传或全角字母转换
+    /// 处理英文模式、CapsLock 锁定及控制键按下时的透传或大写/全角字母转换
     fn dispatch_passthrough_or_fullwidth_english(&self, keycode: u32) -> Option<ImeOutputAction> {
-        if self.is_caps_locked() || self.has_ctrl_or_alt() {
+        // 1. 控制键按下时一律透传，保障系统与应用组合快捷键（如 Ctrl+C、Ctrl+Shift 等）畅通
+        if self.has_ctrl_or_alt() {
             return Some(ImeOutputAction::PassThrough);
         }
+
+        // 2. CapsLock 锁定状态下的特殊定制
+        if self.is_caps_locked() {
+            // 2.1 大写锁定下单按 Shift 键彻底静默吞掉（不透传给系统，无任何系统事件）
+            if keycode == KEY_LEFTSHIFT || keycode == KEY_RIGHTSHIFT {
+                return Some(ImeOutputAction::Handled { update_ui: false });
+            }
+
+            // 2.2 字母键处理：无论按不按 Shift，字母都必须始终保持大写，绝不允许因为按了 Shift 输出小写
+            if let Some(ch) = self.keymap_layout.get_char(keycode) {
+                if ch.is_ascii_alphabetic() {
+                    let upper = ch.to_ascii_uppercase();
+                    // 当按住 Shift 时，底层系统/XKB 默认会将 CapsLock+Shift 反转为小写字母；
+                    // 此时直接由输入法拦截并提交大写字符，彻底杜绝输出小写
+                    if self.is_shift_active() {
+                        let text = if self.is_full_width_char() {
+                            to_full_width_char(upper).to_string()
+                        } else {
+                            upper.to_string()
+                        };
+                        return Some(ImeOutputAction::Commit(text));
+                    }
+                    if self.is_full_width_char() {
+                        let text = to_full_width_char(upper).to_string();
+                        return Some(ImeOutputAction::Commit(text));
+                    }
+                    return Some(ImeOutputAction::PassThrough);
+                }
+            }
+
+            // 2.3 其他非字母键（数字、标点符号如 Shift+1->!、回车、退格等）透传
+            return Some(ImeOutputAction::PassThrough);
+        }
+
+        // 3. 常规英文模式处理
         if self.mode == InputMode::English {
             if self.is_full_width_char() && !self.is_shift_active() {
                 if let Some(ch) = self.keymap_layout.get_char(keycode) {
@@ -194,6 +246,7 @@ impl ImeCoreSession {
             }
             return Some(ImeOutputAction::PassThrough);
         }
+
         None
     }
 
