@@ -162,21 +162,20 @@ fn test_effective_mode_projection_and_protected_context() {
 fn test_window_mode_tracker_runtime_integration() {
     let mut runtime = ImeRuntime::default();
 
-    // 1. 获焦窗口 1（终端）：切换为英文
-    runtime.focus_window("terminal_1");
-    runtime.set_input_mode(InputMode::English);
+    // 1. 获焦窗口 1（终端）：开启 terminal_default_english 时初始即为英文
+    runtime.focus_window("terminal_1", Some("gnome-terminal-server"));
     assert_eq!(runtime.effective_input_mode(), InputMode::English);
 
     // 2. 获焦窗口 2（浏览器）：默认为中文
-    runtime.focus_window("browser_1");
+    runtime.focus_window("browser_1", Some("google-chrome"));
     assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
 
     // 3. 切回窗口 1：自动恢复英文
-    runtime.focus_window("terminal_1");
+    runtime.focus_window("terminal_1", Some("gnome-terminal-server"));
     assert_eq!(runtime.effective_input_mode(), InputMode::English);
 
     // 4. 切回窗口 2：自动恢复中文
-    runtime.focus_window("browser_1");
+    runtime.focus_window("browser_1", Some("google-chrome"));
     assert_eq!(runtime.effective_input_mode(), InputMode::Chinese);
 
     // 5. 在窗口 2 期间进入密码框：投影为英文

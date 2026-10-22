@@ -27,6 +27,10 @@ export component GeneralTab inherits VerticalLayout {
     in-out property <int> enable_tray_index: 0;         // 0: 自动检测, 1: 强制启用彩色托盘, 2: 强制关闭独立托盘
     in-out property <bool> exclusive_input_source: false;
 
+    // 多窗口与终端模式
+    in-out property <bool> window_mode_memory: true;
+    in-out property <bool> terminal_default_english: true;
+
     // 候选框基础排版与容量习惯
     in-out property <int> orientation_index: 0;         // 0: 水平横排, 1: 垂直竖排
     in-out property <int> index_style_index: 0;         // 0: 现代风, 1: 经典点号, 2: 圆圈序号, 3: 方括号, 4: 圆括号, 5: 极简标点, 6: 纯文本
@@ -107,6 +111,14 @@ export component GeneralTab inherits VerticalLayout {
         AppCheckBox {
             text: "启用 V 模式（支持快速四则运算计算器与快捷符号转换）";
             checked <=> root.v_mode;
+        }
+        AppCheckBox {
+            text: "多窗口输入模式独立记忆（不同应用窗口独立保持中英文状态）";
+            checked <=> root.window_mode_memory;
+        }
+        AppCheckBox {
+            text: "终端类应用新窗口默认使用英文（终端首次获焦自动设为英文模式）";
+            checked <=> root.terminal_default_english;
         }
     }
 

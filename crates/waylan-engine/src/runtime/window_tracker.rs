@@ -29,6 +29,23 @@ impl Default for WindowModeTracker {
     }
 }
 
+/// 判定给定的应用标识（app_id / client / wm_class）是否属于终端类应用
+pub fn is_terminal_app(app_identifier: &str) -> bool {
+    let lower = app_identifier.to_ascii_lowercase();
+    lower.contains("terminal")
+        || lower.contains("pty")
+        || lower.contains("alacritty")
+        || lower.contains("kitty")
+        || lower.contains("wezterm")
+        || lower.contains("konsole")
+        || lower.contains("terminator")
+        || lower.contains("tilix")
+        || lower.contains("tabby")
+        || lower.contains("xterm")
+        || lower.contains("foot")
+        || lower.contains("urxvt")
+}
+
 impl WindowModeTracker {
     /// 创建带有指定容量与默认模式的窗口跟踪器
     pub fn new(max_capacity: usize, default_mode: InputMode) -> Self {
@@ -47,8 +64,22 @@ impl WindowModeTracker {
     }
 
     /// 切换当前活动窗口并返回该窗口记录的基础输入模式
-    pub fn focus_window(&mut self, window_id: &str) -> InputMode {
+    ///
+    /// - `window_id`: 窗口或输入上下文唯一标识
+    /// - `app_name`: 可选的应用名称/类别（如 wm_class 或 client_name）
+    /// - `terminal_default_english`: 当该窗口为终端且首次创建时，是否默认使用英文模式
+    /// - `window_mode_memory`: 是否启用多窗口模式独立记忆
+    pub fn focus_window(
+        &mut self,
+        window_id: &str,
+        app_name: Option<&str>,
+        terminal_default_english: bool,
+        window_mode_memory: bool,
+    ) -> InputMode {
         self.active_window = Some(window_id.to_string());
+        if !window_mode_memory {
+            return self.default_mode;
+        }
         if let Some(&mode) = self.modes.get(window_id) {
             mode
         } else {
@@ -58,8 +89,14 @@ impl WindowModeTracker {
                     self.modes.remove(&first_key);
                 }
             }
-            self.modes.insert(window_id.to_string(), self.default_mode);
-            self.default_mode
+            let initial_mode =
+                if terminal_default_english && app_name.map(is_terminal_app).unwrap_or(false) {
+                    InputMode::English
+                } else {
+                    self.default_mode
+                };
+            self.modes.insert(window_id.to_string(), initial_mode);
+            initial_mode
         }
     }
 
@@ -103,26 +140,58 @@ mod tests {
     fn test_window_mode_tracker_isolation() {
         let mut tracker = WindowModeTracker::new(10, InputMode::Chinese);
 
-        // 1. 窗口 A 获焦，默认为中文
-        let mode_a = tracker.focus_window("win_terminal");
-        assert_eq!(mode_a, InputMode::Chinese);
+        // 1. 普通应用窗口获焦，默认为中文
+        let mode_browser = tracker.focus_window("win_1", Some("google-chrome"), true, true);
+        assert_eq!(mode_browser, InputMode::Chinese);
 
-        // 2. 在窗口 A 切换为英文
+        // 2. 切换为英文
         tracker.update_active_mode(InputMode::English);
         assert_eq!(tracker.current_base_mode(), InputMode::English);
 
-        // 3. 切换至窗口 B，默认为中文
-        let mode_b = tracker.focus_window("win_browser");
-        assert_eq!(mode_b, InputMode::Chinese);
-        assert_eq!(tracker.current_base_mode(), InputMode::Chinese);
-
-        // 4. 切回窗口 A，恢复此前保存的英文
-        let mode_a_back = tracker.focus_window("win_terminal");
-        assert_eq!(mode_a_back, InputMode::English);
+        // 3. 终端窗口获焦，因 terminal_default_english=true，初始即为英文
+        let mode_term = tracker.focus_window("win_2", Some("gnome-terminal-server"), true, true);
+        assert_eq!(mode_term, InputMode::English);
         assert_eq!(tracker.current_base_mode(), InputMode::English);
 
-        // 5. 销毁窗口 A
-        tracker.remove_window("win_terminal");
+        // 4. 切回浏览器窗口，恢复此前保存的英文
+        let mode_browser_back = tracker.focus_window("win_1", Some("google-chrome"), true, true);
+        assert_eq!(mode_browser_back, InputMode::English);
+
+        // 5. 在浏览器中切为中文
+        tracker.update_active_mode(InputMode::Chinese);
+        assert_eq!(tracker.current_base_mode(), InputMode::Chinese);
+
+        // 6. 切回终端窗口，依然保持英文
+        let mode_term_back =
+            tracker.focus_window("win_2", Some("gnome-terminal-server"), true, true);
+        assert_eq!(mode_term_back, InputMode::English);
+
+        // 7. 测试未开启终端默认英文时，终端初始为中文
+        let mode_term_disabled = tracker.focus_window("win_3", Some("alacritty"), false, true);
+        assert_eq!(mode_term_disabled, InputMode::Chinese);
+
+        // 8. 测试未开启窗口模式记忆时，始终返回默认模式
+        let mode_no_mem = tracker.focus_window("win_4", Some("code"), true, false);
+        assert_eq!(mode_no_mem, InputMode::Chinese);
+
+        // 9. 销毁当前活动窗口
+        tracker.remove_window("win_4");
         assert_eq!(tracker.active_window(), None);
+    }
+
+    #[test]
+    fn test_is_terminal_app_detection() {
+        assert!(is_terminal_app("gnome-terminal-server"));
+        assert!(is_terminal_app("Alacritty"));
+        assert!(is_terminal_app("kitty"));
+        assert!(is_terminal_app("wezterm-gui"));
+        assert!(is_terminal_app("tabby"));
+        assert!(is_terminal_app("konsole"));
+        assert!(is_terminal_app("foot"));
+        assert!(is_terminal_app("xterm"));
+        assert!(is_terminal_app("pty/1"));
+        assert!(!is_terminal_app("google-chrome"));
+        assert!(!is_terminal_app("code"));
+        assert!(!is_terminal_app("gedit"));
     }
 }

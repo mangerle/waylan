@@ -252,6 +252,8 @@ fn sync_desktop_settings(window: &SettingsWindow, desktop: &DesktopConfig) {
             _ => 0,                                // 微澜专属彩色托盘（推荐）
         },
     );
+    window.set_window_mode_memory(desktop.window_mode_memory);
+    window.set_terminal_default_english(desktop.terminal_default_english);
 }
 
 /// 从界面更新桌面托盘与指示器模式
@@ -270,4 +272,6 @@ fn update_desktop_settings(window: &SettingsWindow, desktop: &mut DesktopConfig)
             desktop.exclusive_input_source = true;
         }
     }
+    desktop.window_mode_memory = window.get_window_mode_memory();
+    desktop.terminal_default_english = window.get_terminal_default_english();
 }

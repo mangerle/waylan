@@ -286,7 +286,7 @@ pub enum TrayDisplayMode {
 }
 
 /// 桌面环境集成与系统托盘配置
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DesktopConfig {
     /// 自定义托盘图标主题目录或图标所在目录路径
@@ -299,4 +299,22 @@ pub struct DesktopConfig {
     pub enable_tray: TrayDisplayMode,
     /// 是否将微澜设为系统唯一独占输入源
     pub exclusive_input_source: bool,
+    /// 是否启用多窗口输入模式独立记忆
+    pub window_mode_memory: bool,
+    /// 终端类应用新窗口是否默认使用英文模式（如 gnome-terminal、pty、kitty、alacritty 等）
+    pub terminal_default_english: bool,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            tray_icon_theme_path: None,
+            tray_icon_zh: None,
+            tray_icon_en: None,
+            enable_tray: TrayDisplayMode::default(),
+            exclusive_input_source: false,
+            window_mode_memory: true,
+            terminal_default_english: true,
+        }
+    }
 }

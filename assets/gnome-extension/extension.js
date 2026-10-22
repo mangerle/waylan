@@ -610,7 +610,43 @@ export default class WaylanHideInputExtension extends Extension {
         // 配置通道并应用一次当前意图，具体副作用全部下沉到 _applyCurrentConfig。
         this._indicatorHidden = false;
         this._setupConfigWatcher();
+        this._setupActiveWindowTracker();
         this._applyCurrentConfig();
+    }
+
+    /**
+     * 监听 Mutter 合成器顶层焦点窗口变动，并将当前窗口标识与应用类别实时写入 tmpfs
+     *
+     * 供微澜输入法核心精准实现“多窗口输入模式独立记忆”与“终端类应用默认英文”双轨感知。
+     */
+    _setupActiveWindowTracker() {
+        if (!global.display) {
+            return;
+        }
+
+        const syncActiveWindow = () => {
+            try {
+                const win = global.display.focus_window;
+                const runtimeDir = GLib.get_user_runtime_dir();
+                const filePath = GLib.build_filenamev([runtimeDir, 'waylan_active_window.json']);
+                let data;
+                if (win) {
+                    const wmClass = win.get_wm_class ? (win.get_wm_class() || '') : '';
+                    const winId = win.get_id ? String(win.get_id() || '') : '';
+                    const title = win.get_title ? (win.get_title() || '') : '';
+                    data = JSON.stringify({ win_id: winId, wm_class: wmClass, title: title });
+                } else {
+                    data = JSON.stringify({ win_id: '', wm_class: '', title: '' });
+                }
+                GLib.file_set_contents(filePath, data);
+            } catch (e) {
+                // 忽略非致命写入异常，防止影响合成器事件循环
+            }
+        };
+
+        this._focusWindowNotifyId = global.display.connect('notify::focus-window', syncActiveWindow);
+        // 初始化时立即同步当前焦点窗口
+        syncActiveWindow();
     }
 
     /**
@@ -886,6 +922,22 @@ export default class WaylanHideInputExtension extends Extension {
                 this._restoreIndicator();
             }
             this._indicatorHidden = false;
+        }
+
+        if (this._focusWindowNotifyId && global.display) {
+            global.display.disconnect(this._focusWindowNotifyId);
+            this._focusWindowNotifyId = 0;
+        }
+
+        try {
+            const runtimeDir = GLib.get_user_runtime_dir();
+            const filePath = GLib.build_filenamev([runtimeDir, 'waylan_active_window.json']);
+            const file = Gio.File.new_for_path(filePath);
+            if (file.query_exists(null)) {
+                file.delete(null);
+            }
+        } catch (e) {
+            // 忽略临时文件清理异常
         }
 
         this._indicator = null;

@@ -38,6 +38,10 @@ pub struct ImeRuntime {
     pub core: ImeCoreSession,
     /// 窗口级输入模式状态跟踪器（实现多窗口独立记忆）
     pub window_tracker: WindowModeTracker,
+    /// 是否启用多窗口输入模式独立记忆
+    pub window_mode_memory: bool,
+    /// 终端类应用新窗口是否默认使用英文模式
+    pub terminal_default_english: bool,
     /// 当前是否处于受保护安全上下文（密码框、PIN 码或系统锁屏）
     is_protected_context: bool,
     /// 统一语音按键交互与录音流式提供者（抽象特型对象）
@@ -62,6 +66,8 @@ impl ImeRuntime {
         Self {
             core,
             window_tracker: WindowModeTracker::default(),
+            window_mode_memory: true,
+            terminal_default_english: true,
             is_protected_context: false,
             voice_manager: None,
             shared_flags: None,
@@ -207,6 +213,10 @@ impl ImeRuntime {
         self.core.full_width_punct_shortcut =
             ParsedShortcut::parse(&cfg.shortcuts.full_width_punct_shortcut);
 
+        // 桌面与窗口模式配置同步
+        self.terminal_default_english = cfg.desktop.terminal_default_english;
+        self.window_mode_memory = cfg.desktop.window_mode_memory;
+
         // 语音配置同步
         if let Some(ref mut vm) = self.voice_manager {
             vm.update_config(&cfg.voice);
@@ -248,8 +258,13 @@ impl ImeRuntime {
     }
 
     /// 窗口获得焦点时切换当前活动上下文并恢复该窗口记录的基础模式
-    pub fn focus_window(&mut self, window_id: &str) {
-        let base_mode = self.window_tracker.focus_window(window_id);
+    pub fn focus_window(&mut self, window_id: &str, app_name: Option<&str>) {
+        let base_mode = self.window_tracker.focus_window(
+            window_id,
+            app_name,
+            self.terminal_default_english,
+            self.window_mode_memory,
+        );
         if self.core.input_mode() != base_mode {
             self.core.set_input_mode(base_mode);
         }

@@ -54,6 +54,7 @@ mod tests {
                 tray_icon_en: Some("custom-en.svg".to_string()),
                 enable_tray: TrayDisplayMode::Always,
                 exclusive_input_source: true,
+                ..Default::default()
             },
             pinyin: PinyinConfig {
                 enable_u_mode: false,

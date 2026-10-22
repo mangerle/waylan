@@ -16,9 +16,7 @@ use zbus::zvariant::Value;
 
 use super::super::keys::IbusSessionCore;
 use super::super::screensaver::ScreenLockHealer;
-use super::super::types::{
-    build_ibus_prop_list, extract_text_from_ibus_variant, IbusPropListParams,
-};
+use super::super::types::extract_text_from_ibus_variant;
 use super::emitter::OutcomeDispatchParams;
 use super::snapshot::UiSnapshot;
 use crate::IbusMenuActionHandler;
@@ -140,67 +138,20 @@ impl IbusEngineService {
         self.handle_candidate_clicked(&ctxt, index).await;
     }
 
-    /// 焦点进入输入上下文
+    /// 焦点进入输入上下文（遗留接口兜底）
     async fn focus_in(&self, #[zbus(signal_context)] ctxt: SignalContext<'_>) {
-        debug!(
-            "[微澜 IBus] 输入上下文获得焦点 (FocusIn): 路径={}",
-            ctxt.path()
-        );
-        let (mode, is_caps, trad, punct, char_full, snap) = {
-            let mut guard = self.core.lock();
-            guard.active_engine_path = Some(ctxt.path().to_string());
-            // 切换窗口上下文独立记忆
-            guard.runtime.focus_window(ctxt.path().as_str());
-            // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
-            // 既杜绝旧普通窗口残留密码标记，又防止因先触发 SetContentType 后触发 FocusIn 导致密码标记被误冲刷
-            guard.is_password_context = self.is_password.load(Ordering::Acquire);
-            // 自愈保护：若当前获焦的并非密码框，而内部仍记录为锁屏状态，自动解除锁屏直通
-            self.lock_healer.heal_on_focus(
-                guard.is_password_context,
-                &mut guard.is_screen_locked,
-                self.loop_wakeup.as_ref(),
-            );
-            // 获焦状态校验：若系统当前实际处于锁屏状态，严格锁定为锁屏直通模式
-            if self.lock_healer.is_screen_locked() {
-                guard.is_screen_locked = true;
-            }
-            let is_protected = guard.is_password_context || guard.is_screen_locked;
-            guard.runtime.set_protected_context(is_protected);
-            let _ = guard.sync_shared_mode();
-            let trad = guard.runtime.core.engine.config.traditional_chinese;
-            let punct = guard.runtime.core.is_full_width_punct();
-            let char_full = guard.is_full_width_char();
-            (
-                guard.runtime.effective_input_mode(),
-                guard.is_caps_locked(),
-                trad,
-                punct,
-                char_full,
-                UiSnapshot::capture(&guard),
-            )
-        };
-        if !self.suppress_properties {
-            if let Ok(prop_list) = build_ibus_prop_list(&IbusPropListParams {
-                mode,
-                is_caps_locked: is_caps,
-                traditional_chinese: trad,
-                full_width_punct: punct,
-                full_width_char: char_full,
-            }) {
-                let _ = Self::register_properties(&ctxt, Value::from(prop_list)).await;
-            }
-        }
-        Self::emit_ui_snapshot(&ctxt, &snap).await;
+        self.handle_focus_in_internal(&ctxt, None, None).await;
     }
 
     /// 带对象标识的焦点进入事件
     async fn focus_in_id(
         &self,
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
-        _object_path: &str,
-        _client: &str,
+        object_path: &str,
+        client: &str,
     ) {
-        self.focus_in(ctxt).await;
+        self.handle_focus_in_internal(&ctxt, Some(object_path), Some(client))
+            .await;
     }
 
     /// 焦点离开输入上下文
@@ -211,7 +162,12 @@ impl IbusEngineService {
         );
         {
             let mut guard = self.core.lock();
-            guard.runtime.blur_window(ctxt.path().as_str());
+            let active_path = guard.active_engine_path.clone();
+            if let Some(ref path) = active_path {
+                guard.runtime.blur_window(path);
+            } else {
+                guard.runtime.blur_window(ctxt.path().as_str());
+            }
         }
         self.reset_and_hide_ui(&ctxt).await;
     }
@@ -220,8 +176,16 @@ impl IbusEngineService {
     async fn focus_out_id(
         &self,
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
-        _object_path: &str,
+        object_path: &str,
     ) {
+        debug!(
+            "[微澜 IBus] 输入上下文失去焦点 (FocusOutId): 对象路径={}",
+            object_path
+        );
+        {
+            let mut guard = self.core.lock();
+            guard.runtime.blur_window(object_path);
+        }
         self.reset_and_hide_ui(&ctxt).await;
     }
 
@@ -292,7 +256,7 @@ impl IbusEngineService {
     /// 声明是否启用带焦点路径标识的 `FocusInId` / `FocusOutId`
     #[zbus(property)]
     fn focus_id(&self) -> (bool,) {
-        (false,)
+        (true,)
     }
 
     /// 声明是否启用周围文本感知

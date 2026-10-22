@@ -54,6 +54,8 @@ export component SettingsWindow inherits Window {
     in-out property <bool> auto_complete_pairs: true;
     in-out property <int> enable_tray_index: 0;
     in-out property <bool> exclusive_input_source: false;
+    in-out property <bool> window_mode_memory: true;
+    in-out property <bool> terminal_default_english: true;
 
     // 拼音模式属性
     in-out property <bool> enable_acronym: true;
@@ -357,6 +359,8 @@ export component SettingsWindow inherits Window {
                         auto_complete_pairs <=> root.auto_complete_pairs;
                         enable_tray_index <=> root.enable_tray_index;
                         exclusive_input_source <=> root.exclusive_input_source;
+                        window_mode_memory <=> root.window_mode_memory;
+                        terminal_default_english <=> root.terminal_default_english;
                         orientation_index <=> root.orientation_index;
                         index_style_index <=> root.index_style_index;
                         page_size_val <=> root.page_size_val;
