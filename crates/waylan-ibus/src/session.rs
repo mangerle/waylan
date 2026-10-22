@@ -41,7 +41,7 @@ struct AssembledIbusServices {
 }
 
 /// 基于外部参数装配并初始化 IBus 共享状态、服务实例与循环参数
-fn assemble_ibus_services(opts: IbusSessionOptions) -> AssembledIbusServices {
+fn assemble_ibus_services(opts: IbusSessionOptions, ibus_addr: &str) -> AssembledIbusServices {
     let loop_wakeup = opts.coordinator.loop_wakeup().cloned();
     let shared_core = Arc::new(Mutex::new(opts.session_core));
 
@@ -74,6 +74,7 @@ fn assemble_ibus_services(opts: IbusSessionOptions) -> AssembledIbusServices {
         coordinator: opts.coordinator,
         config_reloader: opts.config_reloader,
         screen_locked_flag,
+        ibus_address: ibus_addr.to_string(),
     };
 
     AssembledIbusServices {
@@ -97,7 +98,7 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
         engine_srv,
         monitor_params,
         is_child,
-    } = assemble_ibus_services(opts);
+    } = assemble_ibus_services(opts, &ibus_addr);
     let conn = build_ibus_connection(&ibus_addr, &shared_core, engine_srv)?;
     register_or_activate_ibus_engine(&conn, is_child)?;
 

@@ -69,7 +69,8 @@ impl IbusEngineService {
 
             let prev_voice = guard.is_voice_active();
             let out = guard.process_key_event(keyval, keycode, state);
-            if guard.is_voice_active() != prev_voice {
+            // 语音状态变迁或输入模式切换时即刻唤醒事件循环，杜绝图标与属性刷新的事件延迟
+            if guard.is_voice_active() != prev_voice || out.mode_changed.is_some() {
                 if let Some(ref wakeup) = self.loop_wakeup {
                     wakeup.wake();
                 }

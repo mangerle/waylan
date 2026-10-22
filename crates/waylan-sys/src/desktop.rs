@@ -307,12 +307,15 @@ pub fn ensure_gnome_input_source_registered(exclusive: bool) {
     }
 }
 
-/// 将微澜设为 GNOME 首选输入源并保留底层必须的 XKB 键盘布局
+/// 将微澜设为 GNOME 独占单输入源（全套中英文状态由微澜自闭环管理）
 ///
-/// GNOME 规范严格要求必须存在至少一项底层 XKB 键盘布局以处理基础硬件按键映射。
-/// 独占托盘模式将微澜设为首位并保留兜底英文 XKB，原生白色指示器则交由微澜 GNOME 扩展彻底隐藏。
+/// # 设计原理
+/// - **实现初衷**：当系统存在多个输入源（如同时包含微澜与 xkb:us）时，GNOME Shell 在弹窗认证或窗口切换时
+///   可能由于异步取消将引擎遗漏在 xkb:us，引发状态撕裂与打字掉落。
+/// - **核心优势**：微澜已实现完善的 Shift 中英文切换与 CapsLock 大写穿透，单输入源从根源上彻底消除了
+///   GNOME 漂移至其他底层键盘的物理可能性。
 pub fn set_waylan_as_exclusive_input_source() {
-    let exclusive_sources = "[('ibus', 'waylan'), ('xkb', 'us')]";
+    let exclusive_sources = "[('ibus', 'waylan')]";
 
     for key in ["sources", "mru-sources"] {
         safe_gsettings_set(
@@ -329,7 +332,7 @@ pub fn set_waylan_as_exclusive_input_source() {
         DEFAULT_COMMAND_TIMEOUT,
     );
     info!(
-        "[桌面集成] 已将微澜设为 GNOME 首选输入源并保留 XKB 硬件按键基础映射: {}",
+        "[桌面集成] 已将微澜设为 GNOME 独占单输入源（全套中英文由微澜自闭环）: {}",
         exclusive_sources
     );
 }

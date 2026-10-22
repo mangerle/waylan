@@ -36,11 +36,14 @@ pub(crate) struct IbusMonitorParams {
     pub(crate) coordinator: IbusShutdownCoordinator,
     pub(crate) config_reloader: Option<Arc<dyn IbusConfigReloader>>,
     pub(crate) screen_locked_flag: Arc<AtomicBool>,
+    pub(crate) ibus_address: String,
 }
 
+mod engine_listener;
 mod lifecycle;
 mod voice_stream;
 
+pub(crate) use engine_listener::spawn_engine_change_listener;
 pub(crate) use lifecycle::{
     ensure_global_engine_active, handle_screen_saver_transition,
     maybe_heal_engine_desynchronization,
@@ -178,6 +181,8 @@ pub(crate) fn run_ibus_monitor_loop(
         Arc::clone(&screen_locked_flag),
         params.coordinator.clone(),
     );
+    let mut engine_listener_handle =
+        spawn_engine_change_listener(&params.ibus_address, params.coordinator.clone());
     let mut state = MonitorLoopState::new(initial_screen_locked, screen_locked_flag);
 
     loop {
@@ -187,6 +192,7 @@ pub(crate) fn run_ibus_monitor_loop(
         }
     }
 
+    engine_listener_handle.stop();
     listener_handle.stop();
 }
 
@@ -292,8 +298,8 @@ fn monitor_poll_phase(
         last_lock_probe_instant: &mut state.last_lock_probe_instant,
     });
 
-    // 输入源状态撕裂自愈：当系统提权或弹窗关闭导致引擎异常掉落时，精准自愈回微澜
-    if state.last_engine_probe_instant.elapsed() >= Duration::from_millis(1000) {
+    // 输入源状态撕裂自愈：当总线捕获到全局引擎变更信号唤醒主循环时，毫秒级即时校验并拉回微澜（50ms 轻量防抖）
+    if state.last_engine_probe_instant.elapsed() >= Duration::from_millis(50) {
         state.last_engine_probe_instant = Instant::now();
         maybe_heal_engine_desynchronization(ctx.conn, current_locked);
     }
