@@ -147,3 +147,75 @@ fn test_engine_typo_guard_suppression_on_valid_prefix() {
         );
     }
 }
+
+#[test]
+fn test_engine_habitual_alias_en_and_adaptive_boost() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+
+    // 1. 首次冷启动输入 en：标准全拼“恩”排第 1，“嗯”作为习惯音排第 2
+    for ch in "en".chars() {
+        engine.push_char(ch);
+    }
+    let candidates = engine.candidates();
+    assert!(candidates.len() >= 2);
+    assert_eq!(candidates[0].text, "恩");
+    assert_eq!(candidates[1].text, "嗯");
+    assert_eq!(candidates[1].comment.as_deref(), Some("[习惯音]"));
+
+    // 2. 用户选择“嗯”上屏（索引 1）
+    let (committed, remaining) = engine.select_candidate(1, 1_700_000_000).expect("选中‘嗯’");
+    assert_eq!(committed, "嗯");
+    assert_eq!(remaining, 0);
+    assert!(engine.raw_input().is_empty());
+
+    // 3. 用户再次输入 en：在用户自适应模型加权驱动下，“嗯”成功跃升置顶至第 1 位
+    for ch in "en".chars() {
+        engine.push_char(ch);
+    }
+    let candidates_after = engine.candidates();
+    assert!(!candidates_after.is_empty());
+    assert_eq!(
+        candidates_after[0].text, "嗯",
+        "经过一次选择后，用户自适应模型应将‘嗯’置顶至首选第 1 位"
+    );
+}
+
+#[test]
+fn test_engine_habitual_alias_compound_words_enen_and_enhao() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+
+    // 1. 测试连打词组 enen => “嗯嗯”
+    for ch in "enen".chars() {
+        engine.push_char(ch);
+    }
+    let candidates_enen = engine.candidates();
+    assert!(!candidates_enen.is_empty());
+    assert_eq!(candidates_enen[0].text, "嗯嗯");
+    let (committed, rem) = engine
+        .select_candidate(0, 1_700_000_000)
+        .expect("选中‘嗯嗯’");
+    assert_eq!(committed, "嗯嗯");
+    assert_eq!(rem, 0);
+
+    // 2. 测试复合词组 enhao => “嗯好”
+    for ch in "enhao".chars() {
+        engine.push_char(ch);
+    }
+    let candidates_enhao = engine.candidates();
+    assert!(!candidates_enhao.is_empty());
+    assert_eq!(candidates_enhao[0].text, "嗯好");
+    let (committed2, rem2) = engine
+        .select_candidate(0, 1_700_000_000)
+        .expect("选中‘嗯好’");
+    assert_eq!(committed2, "嗯好");
+    assert_eq!(rem2, 0);
+
+    // 3. 测试其他叹词音别名 me => 召回“么”与“呣”
+    for ch in "me".chars() {
+        engine.push_char(ch);
+    }
+    let cands_me = engine.candidates();
+    let texts_me: Vec<&str> = cands_me.iter().map(|c| c.text.as_str()).collect();
+    assert!(texts_me.contains(&"么"));
+    assert!(texts_me.contains(&"呣"));
+}

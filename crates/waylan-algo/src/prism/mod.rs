@@ -2,6 +2,7 @@ use crate::entity::EntityProtectionManager;
 use crate::syllables::{has_strictly_longer_syllable, has_syllable_prefix, is_valid_syllable};
 use crate::types::FuzzyConfig;
 use waylan_core::config::TypoCorrectionRules;
+pub mod alias;
 pub mod fsa;
 pub mod fuzzy;
 pub mod traversal;
@@ -10,6 +11,10 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
+pub use alias::{
+    calibrate_habitual_alias_score, get_habitual_alias_targets, is_habitual_alias_key,
+    is_habitual_alias_target, HabitualAliasRule, HABITUAL_ALIAS_RULES,
+};
 pub use fsa::PrismFsa;
 pub use fuzzy::PrismFuzzy;
 pub use traversal::{dfs_dag, DfsContext};
@@ -112,6 +117,7 @@ impl PrismEngine {
     fn push_unresolved_path(input: &str, paths: &mut Vec<SegmentPath>) {
         paths.push(SegmentPath {
             syllables: Vec::new(),
+            raw_syllables: Vec::new(),
             remaining: input.to_string(),
             cost: 100,
             origin: PathOrigin::Exact,
@@ -125,12 +131,14 @@ impl PrismEngine {
         current: &mut Vec<String>,
         results: &mut Vec<SegmentPath>,
     ) {
+        let mut current_raw = Vec::new();
         let mut ctx = DfsContext {
             input: params.input,
             fuzzy: params.fuzzy,
             typo_rules: params.typo_rules,
             exploration,
             current,
+            current_raw: &mut current_raw,
             results,
         };
         dfs_dag(&mut ctx, 0, 0, PathOrigin::Exact);
@@ -145,7 +153,8 @@ impl PrismEngine {
         if let Some(mgr) = entity_mgr {
             if let Some(entity) = mgr.match_exact(input) {
                 paths.push(SegmentPath {
-                    syllables: vec![entity],
+                    syllables: vec![entity.clone()],
+                    raw_syllables: vec![entity],
                     remaining: String::new(),
                     cost: 0,
                     origin: PathOrigin::Exact,
@@ -269,8 +278,10 @@ impl PrismEngine {
         Self::push_tail_prefix_paths(&tail, &mut paths);
 
         if paths.is_empty() {
+            let syls: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
             paths.push(SegmentPath {
-                syllables: parts.iter().map(|s| s.to_string()).collect(),
+                raw_syllables: syls.clone(),
+                syllables: syls,
                 remaining: String::new(),
                 cost: parts.len() as u32,
                 origin: PathOrigin::Exact,
@@ -311,6 +322,7 @@ impl PrismEngine {
             syls.push(tail.last_part.to_string());
             let cost = syls.len() as u32;
             paths.push(SegmentPath {
+                raw_syllables: syls.clone(),
                 syllables: syls,
                 remaining: String::new(),
                 cost,
@@ -322,6 +334,8 @@ impl PrismEngine {
                 if !sub.syllables.is_empty() {
                     let mut syls = tail.base_syllables.to_vec();
                     syls.extend(sub.syllables);
+                    let mut raw_syls = tail.base_syllables.to_vec();
+                    raw_syls.extend(sub.raw_syllables);
                     let remaining = if tail.is_trailing_quote && !sub.remaining.is_empty() {
                         syls.push(sub.remaining);
                         String::new()
@@ -331,6 +345,7 @@ impl PrismEngine {
                     let cost = (syls.len() as u32).saturating_add(sub.cost / 10);
                     paths.push(SegmentPath {
                         syllables: syls,
+                        raw_syllables: raw_syls,
                         remaining,
                         cost,
                         origin: sub.origin,
@@ -349,6 +364,7 @@ impl PrismEngine {
             let cost = (tail.base_syllables.len() + 1) as u32;
             paths.push(SegmentPath {
                 syllables: tail.base_syllables.to_vec(),
+                raw_syllables: tail.base_syllables.to_vec(),
                 remaining: tail.last_part.to_string(),
                 cost,
                 origin: PathOrigin::Exact,

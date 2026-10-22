@@ -7,6 +7,7 @@
 
 use std::str;
 
+use crate::prism::alias::get_habitual_alias_targets;
 use crate::prism::fsa::PrismFsa;
 use crate::prism::fuzzy::PrismFuzzy;
 use crate::prism::types::{PathOrigin, SegmentPath, TypoExploration, STANDARD_INITIALS};
@@ -24,6 +25,7 @@ pub struct DfsContext<'a> {
     /// 本轮搜索的容错虚边强度
     pub exploration: TypoExploration,
     pub current: &'a mut Vec<String>,
+    pub current_raw: &'a mut Vec<String>,
     pub results: &'a mut Vec<SegmentPath>,
 }
 
@@ -53,8 +55,10 @@ fn explore_fuzzy_syllables(
                 }
             }
             ctx.current.push(slice.to_string());
+            ctx.current_raw.push(slice.to_string());
             dfs_dag(ctx, end, params.current_cost + step_cost, params.origin);
             ctx.current.pop();
+            ctx.current_raw.pop();
         }
     }
 }
@@ -98,6 +102,7 @@ fn explore_typo_edges(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
         for (std_syl, edit_cost, edge_origin) in corrections {
             if !params.fsa_matches.iter().any(|m| m.0 == std_syl) {
                 ctx.current.push(std_syl);
+                ctx.current_raw.push(slice.to_string());
                 dfs_dag(
                     ctx,
                     end,
@@ -105,6 +110,7 @@ fn explore_typo_edges(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
                     params.origin.max(edge_origin),
                 );
                 ctx.current.pop();
+                ctx.current_raw.pop();
             }
         }
     }
@@ -122,11 +128,14 @@ fn explore_initials_transitions(
             let len = initial.len();
             if start + len < ctx.input.len() {
                 ctx.current.push(initial.to_string());
+                ctx.current_raw.push(initial.to_string());
                 dfs_dag(ctx, start + len, current_cost + 25, origin);
                 ctx.current.pop();
+                ctx.current_raw.pop();
             } else if !ctx.current.is_empty() {
                 ctx.results.push(SegmentPath {
                     syllables: ctx.current.clone(),
+                    raw_syllables: ctx.current_raw.clone(),
                     remaining: initial.to_string(),
                     cost: current_cost + 30,
                     origin,
@@ -217,10 +226,45 @@ fn explore_all_branches(
         explore_typo_edges(ctx, params);
     }
 
+    // 1.5 探索拼音习惯音与叹词音别名衍生分支（如 en -> n, ng; me -> m; mu -> m）
+    if params.origin <= PathOrigin::RuleNormalized {
+        explore_habitual_aliases(ctx, params, &mut matched_full);
+    }
+
     // 2. 声母简拼混合转移边
     explore_initials_transitions(ctx, params.start, params.current_cost, params.origin);
 
     matched_full
+}
+
+/// 探索拼音习惯音与叹词音别名衍生分支（如 en -> n, ng; me -> m; mu -> m）
+fn explore_habitual_aliases(
+    ctx: &mut DfsContext<'_>,
+    params: &DfsExploreParams<'_>,
+    matched_full: &mut bool,
+) {
+    for len in (1..=params.max_len).rev() {
+        let end = params.start + len;
+        if !ctx.input.is_char_boundary(end) {
+            continue;
+        }
+        let slice = &ctx.input[params.start..end];
+        if let Some((targets, penalty)) = get_habitual_alias_targets(slice) {
+            *matched_full = true;
+            for &target in targets {
+                ctx.current.push(target.to_string());
+                ctx.current_raw.push(slice.to_string());
+                dfs_dag(
+                    ctx,
+                    end,
+                    params.current_cost + penalty,
+                    params.origin.max(PathOrigin::RuleNormalized),
+                );
+                ctx.current.pop();
+                ctx.current_raw.pop();
+            }
+        }
+    }
 }
 
 /// 输入已完全消费时，将当前音节序列记录为一条完整切分路径
@@ -228,6 +272,7 @@ fn push_completed_path(ctx: &mut DfsContext<'_>, current_cost: u32, origin: Path
     if !ctx.current.is_empty() {
         ctx.results.push(SegmentPath {
             syllables: ctx.current.clone(),
+            raw_syllables: ctx.current_raw.clone(),
             remaining: String::new(),
             cost: current_cost,
             origin,
@@ -248,6 +293,7 @@ fn push_remainder_path(
     if has_syllable_prefix(remaining) {
         ctx.results.push(SegmentPath {
             syllables: ctx.current.clone(),
+            raw_syllables: ctx.current_raw.clone(),
             remaining: remaining.to_string(),
             cost: params.current_cost + 50,
             origin: params.origin,
@@ -272,6 +318,7 @@ fn explore_exact_syllables(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'
             }
         }
         ctx.current.push(std_syl.to_string());
+        ctx.current_raw.push(std_syl.to_string());
         dfs_dag(
             ctx,
             params.start + len,
@@ -279,6 +326,7 @@ fn explore_exact_syllables(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'
             params.origin,
         );
         ctx.current.pop();
+        ctx.current_raw.pop();
     }
     matched_full
 }
@@ -308,7 +356,9 @@ pub fn explore_transpose_typo(
         let swapped_matches = fsa.match_syllables(swapped_str, 0);
         for &(std_syl, len) in swapped_matches.iter().rev() {
             if len > idx2 && ctx.input.is_char_boundary(start + len) {
+                let slice = &ctx.input[start..start + len];
                 ctx.current.push(std_syl.to_string());
+                ctx.current_raw.push(slice.to_string());
                 dfs_dag(
                     ctx,
                     start + len,
@@ -316,13 +366,18 @@ pub fn explore_transpose_typo(
                     PathOrigin::SpatialTypo,
                 );
                 ctx.current.pop();
+                ctx.current_raw.pop();
             } else if len == idx2 {
                 let next_matches = fsa.match_syllables(swapped_str, len);
                 for &(next_syl, next_len) in next_matches.iter().rev() {
                     let total_len = len + next_len;
                     if ctx.input.is_char_boundary(start + total_len) {
+                        let slice1 = &ctx.input[start..start + len];
+                        let slice2 = &ctx.input[start + len..start + total_len];
                         ctx.current.push(std_syl.to_string());
+                        ctx.current_raw.push(slice1.to_string());
                         ctx.current.push(next_syl.to_string());
+                        ctx.current_raw.push(slice2.to_string());
                         dfs_dag(
                             ctx,
                             start + total_len,
@@ -330,7 +385,9 @@ pub fn explore_transpose_typo(
                             PathOrigin::SpatialTypo,
                         );
                         ctx.current.pop();
+                        ctx.current_raw.pop();
                         ctx.current.pop();
+                        ctx.current_raw.pop();
                     }
                 }
             }

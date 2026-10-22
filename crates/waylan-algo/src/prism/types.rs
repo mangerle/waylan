@@ -64,6 +64,8 @@ pub enum PathOrigin {
 pub struct SegmentPath {
     /// 完整音节切分列表（如 ["xi", "an"] 或 ["xian"]）
     pub syllables: Vec<String>,
+    /// 对应的用户原始键入切片列表（如 ["en", "hao"] 对应规范音节 ["ng", "hao"]）
+    pub raw_syllables: Vec<String>,
     /// 末尾未完成键入的剩余前缀（如 "h"）
     pub remaining: String,
     /// 路径代价值（段数越少、匹配越长代价越低，优先排序）
@@ -88,6 +90,28 @@ impl SegmentPath {
             parts.push(self.remaining.clone());
         }
         parts.join("'")
+    }
+
+    /// 转换为用户原始输入按键构成的带单引号展示与自适应拼音串（如 "en'hao"）
+    pub fn to_raw_key_string(&self) -> String {
+        let mut parts = if self.raw_syllables.is_empty() {
+            self.syllables.clone()
+        } else {
+            self.raw_syllables.clone()
+        };
+        if !self.remaining.is_empty() {
+            parts.push(self.remaining.clone());
+        }
+        parts.join("'")
+    }
+
+    /// 计算路径完全覆盖的原始击键字符总数
+    pub fn consumed_raw_len(&self) -> usize {
+        if self.raw_syllables.is_empty() {
+            self.syllables.iter().map(|s| s.len()).sum()
+        } else {
+            self.raw_syllables.iter().map(|s| s.len()).sum()
+        }
     }
 
     /// 判定当前非容错路径是否属于因拼写误触（邻键误按或字母倒置）而产生的断流碎切降级路径

@@ -7,7 +7,10 @@
 //! - **代价与局限**：方法间需共享 [`SegmentPath`] 音节切分上下文。
 
 use super::super::AlgoEngine;
-use crate::prism::{PathOrigin, PrismEngine, PrismFuzzy, SegmentPath};
+use crate::prism::{
+    calibrate_habitual_alias_score, is_habitual_alias_key, PathOrigin, PrismEngine, PrismFuzzy,
+    SegmentPath,
+};
 use crate::table::LENGTH_BOOST_MULTIPLIER;
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::viterbi::{BigramLanguageModel, SentenceDecodeParams, ViterbiDecoder};
@@ -16,8 +19,12 @@ use crate::viterbi::{BigramLanguageModel, SentenceDecodeParams, ViterbiDecoder};
 ///
 /// 用途：向词库检索与用户自造词检索两个子过程传递同一份路径判定结果，避免重复计算与参数膨胀。
 struct PathMatchContext {
-    /// 路径对应的词典查询键
+    /// 路径对应的词典查询键（如 "ng'hao"）
     key: String,
+    /// 路径对应用户原始击键构成的展示与自适应拼音键（如 "en'hao"）
+    raw_key: String,
+    /// 路径所完全覆盖消费的原始击键字符总数
+    consumed_len: usize,
     /// 路径来源性质（严格切分 / 确定性归一 / 概率性容错）
     origin: PathOrigin,
     /// 路径是否为相对最优路径的次优切分
@@ -93,11 +100,15 @@ impl AlgoEngine {
 
         for path in paths {
             let key = path.to_key_string();
+            let raw_key = path.to_raw_key_string();
+            let consumed_len = path.consumed_raw_len();
             let cost_penalty = path.cost.saturating_sub(best_cost).saturating_mul(100);
             let is_suboptimal = path.origin == PathOrigin::Exact
                 && (cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count);
             let path_ctx = PathMatchContext {
                 key,
+                raw_key,
+                consumed_len,
                 origin: path.origin,
                 is_suboptimal,
                 best_syl_count,
@@ -133,7 +144,16 @@ impl AlgoEngine {
     ) {
         let start_lex = results.len();
         self.resources.table.lookup_into(&ctx.key, results);
-        if let Some(tier) = Self::typo_tier(ctx.origin) {
+        if is_habitual_alias_key(&ctx.key) {
+            for m in &mut results[start_lex..] {
+                let is_single = m.text.chars().count() == 1;
+                m.tier = CandidateTier::ExactWord;
+                m.score = calibrate_habitual_alias_score(m.score, is_single);
+                m.consumed_len = Some(ctx.consumed_len);
+                m.pinyin = ctx.raw_key.clone();
+                m.comment = Some("[习惯音]".to_string());
+            }
+        } else if let Some(tier) = Self::typo_tier(ctx.origin) {
             for m in &mut results[start_lex..] {
                 m.tier = tier;
                 m.comment = Some(format!("[纠错: {}]", ctx.key));
@@ -161,7 +181,13 @@ impl AlgoEngine {
         self.adaptive
             .model
             .lookup_user_words_into(&ctx.key, eval_ts, results);
-        if let Some(tier) = Self::typo_tier(ctx.origin) {
+        if is_habitual_alias_key(&ctx.key) {
+            for m in &mut results[start_usr..] {
+                m.tier = CandidateTier::UserHistory;
+                m.consumed_len = Some(ctx.consumed_len);
+                m.pinyin = ctx.raw_key.clone();
+            }
+        } else if let Some(tier) = Self::typo_tier(ctx.origin) {
             for m in &mut results[start_usr..] {
                 m.tier = tier;
                 m.comment = Some(format!("[纠错: {}]", ctx.key));

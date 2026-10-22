@@ -136,3 +136,18 @@ fn test_fuzzy_engine_lookup_zongguo() {
         "zongguo 应当通过 z<=>zh 与 eng<=>ong 模糊音规则召回“中国”"
     );
 }
+
+#[test]
+fn test_habitual_alias_paths() {
+    let fuzzy = FuzzyConfig::default();
+    let paths_en = PrismEngine::build_paths("en", &fuzzy);
+    assert!(paths_en.iter().any(|p| p.syllables == vec!["en"]));
+    assert!(paths_en.iter().any(|p| p.syllables == vec!["n"]));
+    assert!(paths_en.iter().any(|p| p.syllables == vec!["ng"]));
+
+    let paths_enen = PrismEngine::build_paths("enen", &fuzzy);
+    assert!(paths_enen.iter().any(|p| p.syllables == vec!["ng", "ng"]));
+
+    let paths_enhao = PrismEngine::build_paths("enhao", &fuzzy);
+    assert!(paths_enhao.iter().any(|p| p.syllables == vec!["ng", "hao"]));
+}

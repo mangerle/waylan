@@ -78,18 +78,21 @@ fn test_dedup_best_paths_retains_optimal() {
     let mut paths = vec![
         SegmentPath {
             syllables: vec!["ni".to_string(), "hao".to_string()],
+            raw_syllables: vec!["ni".to_string(), "hao".to_string()],
             remaining: String::new(),
             cost: 36,
             origin: PathOrigin::SpatialTypo,
         },
         SegmentPath {
             syllables: vec!["ni".to_string(), "hao".to_string()],
+            raw_syllables: vec!["ni".to_string(), "hao".to_string()],
             remaining: "a".to_string(),
             cost: 25,
             origin: PathOrigin::Exact,
         },
         SegmentPath {
             syllables: vec!["ni".to_string(), "hao".to_string()],
+            raw_syllables: vec!["ni".to_string(), "hao".to_string()],
             remaining: String::new(),
             cost: 20,
             origin: PathOrigin::Exact,
