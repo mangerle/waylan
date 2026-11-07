@@ -58,12 +58,14 @@ impl UiSnapshot {
             return Self::from_voice_box_state(box_state);
         }
 
-        let (page_size, selected_index, orientation) = Self::resolve_page_layout(core, &box_state);
+        let candidates = core.current_candidates();
+        let (page_size, selected_index, orientation) =
+            Self::resolve_page_layout(core, &box_state, candidates.len());
         let preedit = Self::resolve_preedit(core, box_state.preedit);
 
         Self {
             preedit,
-            candidates: box_state.candidates,
+            candidates,
             page_size,
             selected_index,
             orientation,
@@ -86,19 +88,29 @@ impl UiSnapshot {
         }
     }
 
-    /// 依据卡片展开状态与候选框布局推导页大小、选中索引与候选框方向
+    /// 依据卡片或网格展开状态与候选框布局推导页大小、选中索引与候选框方向
     ///
     /// # 设计原理
-    /// - 二级卡片展开态强制纵向排列并以卡片内选中项为准；
-    ///   常规态则沿用引擎配置页大小与候选框自身的选中索引。
+    /// - 二级卡片展开态强制纵向排列并以卡片内选中项为准，页大小与展开子项条数对齐；
+    /// - 大网格展开态同样强制纵向排列并将页大小撑满展开条目数；
+    /// - 常规态则沿用引擎配置页大小与候选框自身的选中索引。
     fn resolve_page_layout(
         core: &IbusSessionCore,
         box_state: &CandidateBoxState,
+        candidates_len: usize,
     ) -> (usize, usize, i32) {
         if core.runtime.core.is_card_expanded() {
             let sel = core.runtime.core.card_selected_index();
             return (
-                box_state.candidates.len().max(1),
+                candidates_len.max(1),
+                sel,
+                super::super::types::IBUS_ORIENTATION_VERTICAL,
+            );
+        }
+        if core.runtime.core.is_grid_expanded() {
+            let sel = core.runtime.core.grid_selected_index();
+            return (
+                candidates_len.max(1),
                 sel,
                 super::super::types::IBUS_ORIENTATION_VERTICAL,
             );
@@ -165,5 +177,37 @@ mod tests {
         assert_eq!(voice_snap.candidates[0].text, "正在聆听中...");
         assert_eq!(voice_snap.candidates[0].pinyin, " ▂▃▄▅");
         assert_eq!(voice_snap.index_style, CandidateIndexStyle::None);
+    }
+
+    #[test]
+    fn test_ui_snapshot_date_tab_expansion() {
+        let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+        let mut core = IbusSessionCore::new(engine);
+
+        // 模拟输入 "riqi"
+        for ch in ['r', 'i', 'q', 'i'] {
+            let _ = core.process_key_event(ch as u32, 0, 0);
+        }
+
+        // 展开前：快照应包含普通首屏候选词（首位为“日期”，带有可展开项）
+        let initial_snap = UiSnapshot::capture(&core);
+        assert!(initial_snap.candidates.len() >= 2);
+        assert_eq!(initial_snap.candidates[0].text, "日期");
+
+        // 按 Tab 键触发展开
+        let tab_out = core.process_key_event(0xff09, waylan_core::input::constants::KEY_TAB, 0);
+        assert!(tab_out.consumed);
+        assert!(core.runtime.core.is_card_expanded());
+
+        // 展开后：快照必须提取全部 7 种细分日期格式，且强制设置为纵向排布展示
+        let expanded_snap = UiSnapshot::capture(&core);
+        assert_eq!(expanded_snap.candidates.len(), 7);
+        assert!(expanded_snap.candidates[0].text.contains('年'));
+        assert_eq!(
+            expanded_snap.orientation,
+            crate::types::IBUS_ORIENTATION_VERTICAL
+        );
+        assert_eq!(expanded_snap.page_size, 7);
+        assert_eq!(expanded_snap.selected_index, 0);
     }
 }

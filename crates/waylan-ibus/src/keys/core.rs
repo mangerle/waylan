@@ -141,19 +141,37 @@ impl IbusSessionCore {
         self.surrounding_text = None;
     }
 
-    /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表）
+    /// 获取当前页的候选词列表（若处于二级展开状态，则返回对应展开子项列表；若处于大网格展开态，则返回网格全量候选列表）
     pub fn current_candidates(&self) -> Vec<Candidate> {
         if self.runtime.core.is_card_expanded() {
             let sel = self.runtime.core.selected_global_index();
-            if let Some(cand) = self.runtime.core.engine.candidates().get(sel) {
-                if cand.is_expandable && !cand.sub_candidates.is_empty() {
-                    let mut out = Vec::with_capacity(cand.sub_candidates.len());
-                    for sub in &cand.sub_candidates {
-                        out.push(Candidate::new(sub.clone(), cand.pinyin.clone(), cand.score));
-                    }
-                    return out;
+            let cand_opt = self
+                .runtime
+                .core
+                .engine
+                .candidates()
+                .get(sel)
+                .filter(|c| c.is_expandable && !c.sub_candidates.is_empty())
+                .or_else(|| {
+                    self.runtime
+                        .core
+                        .engine
+                        .candidates()
+                        .iter()
+                        .find(|c| c.is_expandable && !c.sub_candidates.is_empty())
+                });
+            if let Some(cand) = cand_opt {
+                let mut out = Vec::with_capacity(cand.sub_candidates.len());
+                for sub in &cand.sub_candidates {
+                    out.push(Candidate::new(sub.clone(), cand.pinyin.clone(), cand.score));
                 }
+                return out;
             }
+        }
+        if self.runtime.core.is_grid_expanded() {
+            let all = self.runtime.core.engine.candidates();
+            let take_count = all.len().min(30);
+            return all[..take_count].to_vec();
         }
         self.runtime.core.current_page_candidates().to_vec()
     }
