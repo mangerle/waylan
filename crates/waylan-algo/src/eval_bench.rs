@@ -10,8 +10,8 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+use crate::decoder::ScoringWeights;
 use crate::engine::AlgoEngine;
-use crate::viterbi::ScoringWeights;
 
 /// 单条离线评测用例
 #[derive(Debug, Clone, PartialEq, Eq)]

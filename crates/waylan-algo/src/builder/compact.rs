@@ -2,7 +2,7 @@ use crate::builder::compact_writer::{write_compact_file, CompactWritePayload};
 use crate::builder::{normalize_pinyin_tones, BuildStats};
 use crate::dat::DoubleArrayTrie;
 use crate::error::AlgoError;
-use crate::prism::STANDARD_INITIALS;
+use crate::syllables::STANDARD_INITIALS;
 use crate::syllables::STANDARD_SYLLABLES;
 use crate::table::COMPACT_DICT_MAGIC;
 use crate::vocab::Vocabulary;

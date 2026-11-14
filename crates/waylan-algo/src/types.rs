@@ -1,4 +1,4 @@
-use crate::viterbi::ScoringWeights;
+use crate::decoder::ScoringWeights;
 use serde::{Deserialize, Serialize};
 use waylan_core::config::{FuzzyPinyinRules, TypoCorrectionRules};
 use waylan_core::AppConfig;

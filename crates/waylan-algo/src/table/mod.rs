@@ -1,6 +1,6 @@
 use crate::bigram::CompactMmapBigram;
 use crate::error::AlgoError;
-use crate::prism::STANDARD_INITIALS;
+use crate::syllables::STANDARD_INITIALS;
 use crate::types::AlgoCandidate;
 use crate::vocab::Vocabulary;
 use std::collections::HashMap;
@@ -43,7 +43,7 @@ pub fn extract_raw_score(boosted_score: u32) -> u32 {
 #[derive(Debug)]
 pub struct LexiconTable {
     /// 倒排拼音索引表：键为拼音序列（如 "ni'hao"），值为候选文本与基础静态分
-    entries: HashMap<String, Vec<(String, u32)>>,
+    pub(crate) entries: HashMap<String, Vec<(String, u32)>>,
     /// 简拼缩写索引表：键为首字母缩写（如 "bj"），值为候选文本与基础静态分
     pub(crate) acronym_entries: HashMap<String, Vec<(String, u32)>>,
     /// 标准声母高频单字索引表（如 "s", "d", "g"）

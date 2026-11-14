@@ -1,7 +1,8 @@
-use waylan_algo::prism::PrismEngine;
+use waylan_algo::decoder::{
+    BeamDecodeOptions, LatticeOptions, PositionalBeamDecoder, SyllableLattice,
+};
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::AlgoConfig;
-use waylan_algo::viterbi::ViterbiDecoder;
 use waylan_algo::AlgoEngine;
 
 #[test]
@@ -103,29 +104,19 @@ fn test_timing_measurement() {
         );
 
         // 阶段耗时细分测试
-        let t_p = std::time::Instant::now();
-        let paths = PrismEngine::build_paths(input, &AlgoConfig::default().fuzzy);
-        let p_dur = t_p.elapsed().as_micros();
-        println!(
-            "  [Prism 耗时]: {} µs (切分出 {} 条路径)",
-            p_dur,
-            paths.len()
+        let t_l = std::time::Instant::now();
+        let lattice = SyllableLattice::build(input, &LatticeOptions::default());
+        let l_dur = t_l.elapsed().as_micros();
+        println!("  [Lattice 耗时]: {} µs", l_dur);
+
+        let t_b = std::time::Instant::now();
+        let _ = PositionalBeamDecoder::decode(
+            &lattice,
+            engine.table(),
+            None,
+            &BeamDecodeOptions::default(),
         );
-
-        let t_v = std::time::Instant::now();
-        for p in paths.iter().take(2) {
-            let _ = ViterbiDecoder::decode_sentence(&p.syllables, &p.remaining, engine.table());
-        }
-        let v_dur = t_v.elapsed().as_micros();
-        println!("  [Viterbi 耗时]: {} µs", v_dur);
-
-        if let Some(best) = paths.first() {
-            let t_ext = std::time::Instant::now();
-            let _ = engine
-                .table()
-                .lookup_prefix_extension(&best.syllables, &best.remaining);
-            let ext_dur = t_ext.elapsed().as_micros();
-            println!("  [PrefixExt 耗时]: {} µs", ext_dur);
-        }
+        let b_dur = t_b.elapsed().as_micros();
+        println!("  [BeamV2 耗时]: {} µs", b_dur);
     }
 }

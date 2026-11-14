@@ -1,11 +1,12 @@
 //! 可序列化的语言模型与候选排序特征权重结构体
 //!
 //! # 设计原理
-//! - **实现初衷**：将原本硬编码在 `ViterbiDecoder`、`BigramLanguageModel` 与候选排序流水线中的魔法常数
+//! - **实现初衷**：将原本硬编码在束搜索解码器、`BigramLanguageModel` 与候选排序流水线中的魔法常数
 //!   （切词惩罚、词长奖励、半成品扣分、纠错代价惩罚、用户热度倍率）抽离为单一可序列化参数对象，
 //!   使离线训练（`train_weights_softmax`）输出的权重可直接挂载到线上引擎，形成完整的量化闭环。
 //! - **核心优势**：所有字段带 `#[serde(default)]` 与合理的经验证默认值，老配置文件零迁移成本；
 //!   可随时在 `eval_bench` 中做交叉熵训练拟合与回归对比。
+//! - **代价与局限**：线性加权模型无法表达高阶非线性特征交互。
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +52,9 @@ impl ScoringWeights {
     }
 
     /// 从 `key = value` 文本格式反序列化权重配置（未声明字段回落至默认值）
+    ///
+    /// # Errors
+    /// 当权重字段的值无法解析为对应整数类型时返回错误描述。
     pub fn from_kv_str(content: &str) -> Result<Self, String> {
         let mut weights = Self::default();
         for line in content.lines() {

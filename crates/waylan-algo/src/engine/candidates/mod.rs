@@ -1,16 +1,21 @@
-//! 候选词重新计算、模式分流与流水线装配
+//! 候选词重新计算、模式分流与统一束搜索流水线装配
 //!
 //! # 设计原理
-//! - **实现初衷**：负责增量拼写击键发生时，协调前缀模式分流、DAG 路径构建、多源候选聚合与后处理流水线。
-//! - **核心优势**：高内聚状态机协调，将具体的多级多源候选收集算法拆解至 `collector` 子模块，复杂度与单文件行数严格受控。
-//! - **代价与局限**：在复杂输入时需跨多层模块调度。
+//! - **实现初衷**：负责增量拼写击键发生时，协调前缀模式分流、统一音节格构建、
+//!   按字节位置同步束搜索解码与后处理流水线。
+//! - **核心优势**：以单次 `SyllableLattice` + `PositionalBeamDecoder` 取代多层路径枚举，
+//!   复杂度与单文件行数严格受控。
+//! - **代价与局限**：受束宽与单次词组最大音节数（6 音节）限制。
 
 mod collector;
 
 use super::AlgoEngine;
+use crate::decoder::{
+    BeamDecodeOptions, DecodeResult, LatticeOptions, MatcherOptions, PositionalBeamDecoder,
+    SyllableLattice,
+};
 use crate::dispatcher::ModeDispatcher;
 use crate::pipeline::CandidatePipeline;
-use crate::prism::{PrismEngine, SegmentPath};
 use crate::types::AlgoCandidate;
 
 impl AlgoEngine {
@@ -26,15 +31,20 @@ impl AlgoEngine {
             return;
         }
 
-        // 2. 拼音模式：利用 Prism 构建 DAG 音节路径与预编辑字符串
-        let (paths, preedit_str) = self.build_pinyin_paths_and_preedit();
+        // 2. 拼音模式：构建统一音节格并执行端到端束搜索解码
+        let (lattice, decode) = self.build_lattice_and_decode();
+        let preedit_str = if decode.best_preedit.is_empty() {
+            self.composition.as_str().to_string()
+        } else {
+            decode.best_preedit.clone()
+        };
         self.composition.set_cached_preedit(preedit_str);
 
-        // 3. 聚合各层级候选词 (专名、DAG路径、长句合成、简拼与用户习惯)
-        let raw_candidates = self.collect_all_raw_candidates(&paths);
+        // 3. 收集多层级候选并叠加用户学习权重
+        let raw_candidates = self.collect_all_raw_candidates(&lattice, &decode);
 
         // 4. 流水线后处理、零页扩展注入与候选发布
-        self.finalize_and_publish_candidates(&paths, raw_candidates);
+        self.finalize_and_publish_candidates(&decode, raw_candidates);
     }
 
     /// 清空所有候选词缓存与预编辑内容
@@ -70,59 +80,54 @@ impl AlgoEngine {
         true
     }
 
-    /// 基于 Prism 构建音节切分 DAG 路径与预编辑字符串
-    fn build_pinyin_paths_and_preedit(&self) -> (Vec<SegmentPath>, String) {
+    /// 构建统一音节格并执行按字节位置同步束搜索解码
+    pub(crate) fn build_lattice_and_decode(&self) -> (SyllableLattice, DecodeResult) {
         let raw = self.composition.as_str();
-        let paths = PrismEngine::build_paths_with_options(
-            raw,
-            &self.config.fuzzy,
-            &self.config.typo_rules,
-            Some(&self.resources.entity_manager),
+        let lattice_opts = LatticeOptions {
+            fuzzy: self.config.fuzzy,
+            typo_rules: self.config.typo_rules,
+            enable_mixed_jianpin: self.config.enable_acronym,
+            enable_typo_edges: self.config.typo_rules.enable,
+        };
+        let lattice = SyllableLattice::build(raw, &lattice_opts);
+
+        let beam_opts = BeamDecodeOptions {
+            beam_width: 24,
+            max_typos: 2,
+            max_sentences: 8,
+            matcher_options: MatcherOptions {
+                max_syllables: 6,
+                max_typos: 2,
+                top_k_per_key: 12,
+                max_initial_steps: 4,
+                filter_rare_ext_chars: self.config.filter_rare_ext_chars,
+            },
+            weights: self.config.scoring_weights,
+            eval_ts: self.adaptive.last_timestamp,
+            last_commit_context: self.composition.last_commit_context(),
+        };
+        let decode = PositionalBeamDecoder::decode(
+            &lattice,
+            &self.resources.table,
+            Some(&self.adaptive.model),
+            &beam_opts,
         );
-        let preedit_str = paths
-            .first()
-            .map(|p| self.format_head_path_preedit(p, &paths, raw))
-            .unwrap_or_else(|| raw.to_string());
-        (paths, preedit_str)
+        (lattice, decode)
     }
 
-    /// 格式化首条切分路径为预编辑字符串
-    ///
-    /// # 设计原理
-    /// - **实现初衷**：当首条路径为"碎切容错回退"结果时，其音节序列不可直接展示，
-    ///   必须改取第一条完整闭合的容错路径原始拼写，否则预编辑区会显示错误断句。
-    /// - **核心优势**：正常路径与碎切回退路径分别取用最适合的呈现形式，避免用户看到误导性分段。
-    /// - **代价与局限**：完整容错路径缺失时仍退回首条路径的键串呈现。
-    fn format_head_path_preedit(
-        &self,
-        head_path: &SegmentPath,
-        paths: &[SegmentPath],
-        raw: &str,
-    ) -> String {
-        if !head_path.is_broken_typo_fallback(&self.config.fuzzy) {
-            return head_path.to_key_string();
-        }
-        paths
-            .iter()
-            .find(|tp| tp.is_typo() && tp.remaining.is_empty())
-            .and_then(|tp| tp.format_raw_with_spans(raw))
-            .unwrap_or_else(|| head_path.to_key_string())
-    }
-
-    /// 候选词流水线最终处理（去重、简繁、零页扩展、标记 consumed_len）并分页生效
+    /// 候选词流水线最终处理（去重、简繁、零页扩展、标记 consumed_len）并生效
     fn finalize_and_publish_candidates(
         &mut self,
-        paths: &[SegmentPath],
+        decode: &DecodeResult,
         raw_candidates: Vec<AlgoCandidate>,
     ) {
         let raw_input = self.composition.as_str();
-        let mut best_units: Vec<String> = Vec::new();
-        if let Some(best) = paths.first() {
-            best_units.extend(best.syllables.iter().cloned());
-            if !best.remaining.is_empty() {
-                best_units.push(best.remaining.clone());
-            }
-        }
+        let best_units: Vec<String> = decode
+            .best_preedit
+            .split('\'')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
 
         let mut candidates = CandidatePipeline::process_all_with_opencc(
             raw_candidates,
@@ -132,7 +137,7 @@ impl AlgoEngine {
                 .then(|| self.resources.opencc_dict()),
         );
 
-        self.inject_page_zero_extensions(raw_input, paths, &mut candidates);
+        self.inject_page_zero_extensions(raw_input, &best_units, &mut candidates);
 
         for cand in &mut candidates {
             if cand.consumed_len.is_none() {

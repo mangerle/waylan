@@ -270,7 +270,7 @@ impl CompactMmapLexicon {
 
     /// 获取只读 DAT 视图
     #[inline]
-    fn get_dat_reader(&self) -> DatReader<'_> {
+    pub(crate) fn get_dat_reader(&self) -> DatReader<'_> {
         // SAFETY: `from_mmap` 构造期已严格验证 `mmap` 总长度覆盖 `dat_base_offset + dat_node_count * 4`
         // 且映射基地址与 `dat_base_offset` 均满足 `i32` 的 4 字节对齐要求，目标架构为小端序。
         let base_slice = unsafe {
@@ -345,7 +345,7 @@ impl CompactMmapLexicon {
     }
 
     /// 获取指定 key_idx 的候选列表（支持按需截取前 `limit` 条以减少无效堆分配，携带 word_id）
-    fn get_candidates_by_key_idx(
+    pub(crate) fn get_candidates_by_key_idx(
         &self,
         key_idx: usize,
         expected_type: Option<u8>,

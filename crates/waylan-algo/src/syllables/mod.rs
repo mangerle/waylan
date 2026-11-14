@@ -10,6 +10,12 @@ pub mod standard;
 pub use spatial::*;
 pub use standard::*;
 
+/// 汉语拼音标准声母表（含双字母翘舌声母）
+pub static STANDARD_INITIALS: &[&str] = &[
+    "zh", "ch", "sh", "b", "p", "m", "f", "d", "t", "n", "l", "g", "k", "h", "j", "q", "x", "r",
+    "z", "c", "s", "y", "w",
+];
+
 /// 将带声调的拼音字符归一化为无声调的 ASCII 拼音，并将空格转换为单引号切分符（支持大写声调字符并合并连续单引号）
 pub fn normalize_pinyin_tones(pinyin: &str) -> String {
     let mut s = String::with_capacity(pinyin.len());

@@ -4,18 +4,15 @@ use crate::user_adaptive::{CommitCountParams, UserAdaptiveModel};
 
 #[test]
 fn test_acronym_candidates_respect_configuration() {
-    use crate::prism::PrismEngine;
-
     let mut disabled = AlgoEngine::with_sample_data(AlgoConfig {
         enable_acronym: false,
         ..Default::default()
     });
-    let paths = PrismEngine::build_paths("bj", &disabled.config.fuzzy);
-    let raw = disabled.collect_all_raw_candidates(&paths);
-    println!(
-        "disabled acronym raw: {:?}",
-        raw.iter().map(|c| (&c.text, c.tier)).collect::<Vec<_>>()
-    );
+    for ch in "bj".chars() {
+        disabled.push_char(ch);
+    }
+    let (lat_dis, dec_dis) = disabled.build_lattice_and_decode();
+    let raw = disabled.collect_all_raw_candidates(&lat_dis, &dec_dis);
     assert!(
         !raw.iter()
             .any(|c| c.tier == CandidateTier::Acronym && c.text == "北京"),
@@ -23,8 +20,11 @@ fn test_acronym_candidates_respect_configuration() {
     );
 
     let mut enabled = AlgoEngine::with_sample_data(AlgoConfig::default());
-    let paths = PrismEngine::build_paths("bj", &enabled.config.fuzzy);
-    let raw = enabled.collect_all_raw_candidates(&paths);
+    for ch in "bj".chars() {
+        enabled.push_char(ch);
+    }
+    let (lat_en, dec_en) = enabled.build_lattice_and_decode();
+    let raw = enabled.collect_all_raw_candidates(&lat_en, &dec_en);
     assert!(
         raw.iter()
             .any(|c| c.tier == CandidateTier::Acronym && c.text == "北京"),

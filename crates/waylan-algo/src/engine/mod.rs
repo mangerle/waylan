@@ -3,10 +3,8 @@ pub mod candidates;
 pub mod composition_buffer;
 pub(crate) mod emoji;
 pub mod extension;
-pub(crate) mod prefix_synthesis;
 pub mod resources;
 pub mod selection;
-pub mod typo;
 
 #[cfg(test)]
 mod tests;
@@ -24,8 +22,8 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use crate::custom_phrase::AuxiliaryDict;
+use crate::decoder::{LatticeOptions, SyllableLattice};
 use crate::error::AlgoError;
-use crate::prism::PrismEngine;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, AlgoConfig, ImportedDictEntry};
 
@@ -200,17 +198,16 @@ impl AlgoEngine {
             return Cow::Borrowed(self.composition.cached_preedit());
         }
 
-        let paths = PrismEngine::build_paths_with_options(
+        let lattice = SyllableLattice::build(
             raw,
-            &self.config.fuzzy,
-            &self.config.typo_rules,
-            Some(&self.resources.entity_manager),
+            &LatticeOptions {
+                fuzzy: self.config.fuzzy,
+                typo_rules: self.config.typo_rules,
+                enable_mixed_jianpin: self.config.enable_acronym,
+                enable_typo_edges: self.config.typo_rules.enable,
+            },
         );
-        if let Some(first_path) = paths.first() {
-            return Cow::Owned(first_path.to_key_string());
-        }
-
-        Cow::Borrowed(raw)
+        Cow::Owned(lattice.best_formatted_preedit())
     }
 
     /// 获取带智能音节切分隔音符的格式化预编辑文本（由音节语言学切分直接驱动，如 "wo'men", "shan'xi", "xian"）
@@ -267,19 +264,20 @@ impl AlgoEngine {
         }
     }
 
-    /// 基于前缀切分路径长度计算光标字节偏移（逐字符对齐无法命中时的回退策略）
+    /// 基于前缀音节格最优格式化长度计算光标字节偏移（逐字符对齐无法命中时的回退策略）
     fn prefix_path_byte_offset(&self, raw_prefix: &str, formatted: &str) -> usize {
-        let prefix_paths = PrismEngine::build_paths_with_options(
+        let lattice = SyllableLattice::build(
             raw_prefix,
-            &self.config.fuzzy,
-            &self.config.typo_rules,
-            Some(&self.resources.entity_manager),
+            &LatticeOptions {
+                fuzzy: self.config.fuzzy,
+                typo_rules: self.config.typo_rules,
+                enable_mixed_jianpin: self.config.enable_acronym,
+                enable_typo_edges: self.config.typo_rules.enable,
+            },
         );
-        if let Some(first) = prefix_paths.first() {
-            let key_len = first.to_key_string().len().min(formatted.len());
-            if formatted.is_char_boundary(key_len) {
-                return key_len;
-            }
+        let key_len = lattice.best_formatted_preedit().len().min(formatted.len());
+        if formatted.is_char_boundary(key_len) {
+            return key_len;
         }
 
         formatted.len()

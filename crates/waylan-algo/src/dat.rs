@@ -95,6 +95,12 @@ impl<'a> DatReader<'a> {
         self.match_terminal_leaf(curr)
     }
 
+    /// 获取指向 DAT 根节点的渐进游标
+    #[inline]
+    pub fn root_cursor(&self) -> DatCursor {
+        DatCursor::Trie { node: 1 }
+    }
+
     /// 在 DAT 中执行单字符状态转移，命中非法分支时返回 None
     #[inline]
     fn step_to_next_state(&self, curr: usize, code: usize) -> Option<usize> {
@@ -163,6 +169,177 @@ impl<'a> DatReader<'a> {
     }
 }
 
+/// 渐进式双数组 Trie 遍历游标（统一封装节点状态与 Tail 后缀压缩段状态）
+///
+/// # 设计原理
+/// - **实现初衷**：在统一束搜索与 DAT 词组匹配期间，需要按拼音字节/音节逐步推进并在任意位置
+///   分支展开简拼或半成品前缀，而无需每次从根节点重新扫描完整字符串。
+/// - **核心优势**：零内存分配、支持 `Copy`，且在命中 Tail 压缩段后可 O(1) 完成单音节提取。
+/// - **代价与局限**：仅支持合法拼音字节（`a..=z` 与隔音符 `'`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatCursor {
+    /// 处于常规 DAT 节点状态
+    Trie { node: usize },
+    /// 处于 Tail 压缩后缀字节池状态（`offset` 为 Tail 起点，`pos` 为当前已匹配偏移）
+    Tail { offset: usize, pos: usize },
+}
+
+impl DatCursor {
+    /// 按单个 ASCII 字节在 DAT 中推进游标（支持 `a..=z` 与 `'`）
+    #[inline]
+    pub fn step_byte(&self, reader: &DatReader<'_>, byte: u8) -> Option<Self> {
+        match *self {
+            Self::Trie { node } => {
+                let code = pinyin_char_to_code(byte);
+                if code == 0 || code >= 28 {
+                    return None;
+                }
+                let next = reader.step_to_next_state(node, code)?;
+                if next >= reader.base.len() {
+                    return None;
+                }
+                let next_b_val = reader.base[next];
+                if next_b_val < 0 {
+                    Some(Self::Tail {
+                        offset: (-(next_b_val + 1)) as usize,
+                        pos: 0,
+                    })
+                } else {
+                    Some(Self::Trie { node: next })
+                }
+            }
+            Self::Tail { offset, pos } => {
+                let target = reader.tail.get(offset.checked_add(pos)?)?;
+                if *target == byte {
+                    Some(Self::Tail {
+                        offset,
+                        pos: pos + 1,
+                    })
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// 按字符串切片连续推进游标
+    #[inline]
+    pub fn step_str(&self, reader: &DatReader<'_>, s: &str) -> Option<Self> {
+        let mut cursor = *self;
+        for &b in s.as_bytes() {
+            cursor = cursor.step_byte(reader, b)?;
+        }
+        Some(cursor)
+    }
+
+    /// 若当前游标恰好可作为完整键终止，返回关联的值索引
+    #[inline]
+    pub fn terminal_value(&self, reader: &DatReader<'_>) -> Option<u32> {
+        match *self {
+            Self::Trie { node } => reader.match_terminal_leaf(node),
+            Self::Tail { offset, pos } => {
+                let idx = offset.checked_add(pos)?;
+                let slice = reader.tail.get(idx..)?;
+                if slice.len() >= 5 && slice[0] == 0 {
+                    let val_bytes: [u8; 4] = slice[1..5].try_into().ok()?;
+                    Some(u32::from_le_bytes(val_bytes))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// 判断当前游标后是否存在终结或 `'` 分隔符（即当前位置是否为完整音节终点）
+    #[inline]
+    fn is_syllable_boundary(&self, reader: &DatReader<'_>) -> bool {
+        self.terminal_value(reader).is_some() || self.step_byte(reader, b'\'').is_some()
+    }
+
+    /// 从当前游标出发，收集所有以 `prefix` 开头且在当前词典中实际存在的音节分支
+    ///
+    /// 返回的每个元素为 `(完整音节, 音节末尾且未消费后续分隔符的游标)`。
+    pub fn collect_syllable_branches(
+        &self,
+        reader: &DatReader<'_>,
+        prefix: &str,
+        max_branches: usize,
+        out: &mut Vec<(String, DatCursor)>,
+    ) {
+        let Some(after_prefix) = self.step_str(reader, prefix) else {
+            return;
+        };
+        let mut buf = Vec::with_capacity(8);
+        buf.extend_from_slice(prefix.as_bytes());
+        after_prefix.dfs_syllable_branches(reader, &mut buf, max_branches, out);
+    }
+
+    /// 在游标当前位置深度优先提取完整音节分支（深度上限 7 字节，防无效长链）
+    fn dfs_syllable_branches(
+        &self,
+        reader: &DatReader<'_>,
+        buf: &mut Vec<u8>,
+        max_branches: usize,
+        out: &mut Vec<(String, DatCursor)>,
+    ) {
+        if out.len() >= max_branches {
+            return;
+        }
+        match *self {
+            Self::Tail { offset, pos } => {
+                let Some(slice) = reader.tail.get(offset + pos..) else {
+                    return;
+                };
+                let mut end_rel = 0;
+                while end_rel < slice.len() && slice[end_rel] != b'\'' && slice[end_rel] != 0 {
+                    if !slice[end_rel].is_ascii_lowercase() || buf.len() + end_rel >= 8 {
+                        return;
+                    }
+                    end_rel += 1;
+                }
+                if buf.is_empty() && end_rel == 0 {
+                    return;
+                }
+                let prev_len = buf.len();
+                buf.extend_from_slice(&slice[..end_rel]);
+                if let Ok(syl) = std::str::from_utf8(buf) {
+                    out.push((
+                        syl.to_string(),
+                        Self::Tail {
+                            offset,
+                            pos: pos + end_rel,
+                        },
+                    ));
+                }
+                buf.truncate(prev_len);
+            }
+            Self::Trie { .. } => {
+                if !buf.is_empty() && self.is_syllable_boundary(reader) {
+                    if let Ok(syl) = std::str::from_utf8(buf) {
+                        out.push((syl.to_string(), *self));
+                    }
+                    if out.len() >= max_branches {
+                        return;
+                    }
+                }
+                if buf.len() >= 7 {
+                    return;
+                }
+                for b in b'a'..=b'z' {
+                    if let Some(next_cursor) = self.step_byte(reader, b) {
+                        buf.push(b);
+                        next_cursor.dfs_syllable_branches(reader, buf, max_branches, out);
+                        buf.pop();
+                        if out.len() >= max_branches {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +395,45 @@ mod tests {
         assert_eq!(reader.exact_match("an"), Some(30));
         assert_eq!(reader.exact_match("bei'jing"), Some(20));
         assert_eq!(reader.exact_match("zhong'guo"), Some(10));
+    }
+
+    #[test]
+    fn test_dat_cursor_and_syllable_branches() {
+        let keys = vec![
+            "wan".to_string(),
+            "wan'quan'ke'yi".to_string(),
+            "wan'qu".to_string(),
+            "wang'luo".to_string(),
+        ];
+        let values = vec![1, 2, 3, 4];
+        let dat = DoubleArrayTrie::build(&keys, &values);
+        let reader = DatReader::new(&dat.base, &dat.check, &dat.tail);
+
+        let root = reader.root_cursor();
+        let after_wan = root.step_str(&reader, "wan").expect("wan 应存在");
+        assert_eq!(after_wan.terminal_value(&reader), Some(1));
+
+        let after_sep = after_wan.step_byte(&reader, b'\'').expect("wan' 应存在");
+        let mut branches = Vec::new();
+        after_sep.collect_syllable_branches(&reader, "q", 16, &mut branches);
+        let branch_syls: Vec<&str> = branches.iter().map(|(s, _)| s.as_str()).collect();
+        assert!(branch_syls.contains(&"qu"));
+        assert!(branch_syls.contains(&"quan"));
+
+        // 继续沿着 wan'quan 推进到 ke'yi
+        let (_, quan_cursor) = branches
+            .iter()
+            .find(|(s, _)| s == "quan")
+            .expect("应找到 quan");
+        let after_ke = quan_cursor
+            .step_byte(&reader, b'\'')
+            .and_then(|c| c.step_str(&reader, "ke"))
+            .and_then(|c| c.step_byte(&reader, b'\''))
+            .expect("wan'quan'ke' 应存在");
+        let mut yi_branches = Vec::new();
+        after_ke.collect_syllable_branches(&reader, "y", 16, &mut yi_branches);
+        assert_eq!(yi_branches.len(), 1);
+        assert_eq!(yi_branches[0].0, "yi");
+        assert_eq!(yi_branches[0].1.terminal_value(&reader), Some(2));
     }
 }

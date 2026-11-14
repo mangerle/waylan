@@ -1,14 +1,14 @@
 //! 轻量级 2-gram 统计语言模型与平滑算法 (Bigram Language Model)
+//!
+//! # 设计原理
+//! - **实现初衷**：由相邻二元词对转移概率直接主导路径寻优，根除长句输入时同音词搭配失调（如“清华大雪” vs “清华大学”）。
+//! - **核心优势**：优先命中紧凑二进制 Bigram 转移矩阵，未命中时平滑回退（Back-off）至单字似然与内置规则。
+//! - **代价与局限**：内置回退规则覆盖词对有限，完整生产环境依赖外部 Bigram 统计表。
 
 use super::weights::ScoringWeights;
 use crate::table::LexiconTable;
 
-/// 轻量级 2-gram 统计语言模型与平滑算法 (Bigram Language Model)
-///
-/// # 设计原理
-/// - **实现初衷**：替换原有硬编码的分词惩罚与静态长度激励，由相邻二元词对转移概率直接主导路径寻优；
-/// - **核心优势**：根除长句输入时同音词搭配失调（如“清华大雪” vs “清华大学”）；
-/// - **平滑机制**：未命中显式二元搭配时自动回退至单字似然（Back-off），保证高鲁棒性。
+/// 轻量级 2-gram 统计语言模型与平滑算法
 #[derive(Debug, Default)]
 pub struct BigramLanguageModel;
 
@@ -17,25 +17,15 @@ impl BigramLanguageModel {
     pub const BASE_WORD_PENALTY: i64 = 12_000;
 
     /// 计算从前驱词 `prev_word` 转移到当前词 `curr_word` 的联合对数似然得分
-    ///
-    /// 优先从 `table` 的零拷贝 Bigram 转移矩阵中获取百万级大语料统计亲和度；
-    /// 若未命中或未挂载，平滑回退（Back-off）至基于规则的通用接续奖励。
     pub fn transition_score(
         prev_word: &str,
         curr_word: &str,
         curr_unigram: i64,
         table: &LexiconTable,
     ) -> i64 {
-        let prev_id = if !prev_word.is_empty() && table.compact_bigram.is_some() {
-            table.get_word_id(prev_word)
-        } else {
-            None
-        };
-        let curr_id = if !prev_word.is_empty() && table.compact_bigram.is_some() {
-            table.get_word_id(curr_word)
-        } else {
-            None
-        };
+        let has_bigram = !prev_word.is_empty() && table.compact_bigram.is_some();
+        let prev_id = has_bigram.then(|| table.get_word_id(prev_word)).flatten();
+        let curr_id = has_bigram.then(|| table.get_word_id(curr_word)).flatten();
         let char_len = curr_word.chars().count() as i64;
         Self::transition_score_cached(
             (prev_word, prev_id),
@@ -96,7 +86,6 @@ impl BigramLanguageModel {
             }
         }
 
-        // 常见虚词与助词接续模式平滑奖励
         if matches!(curr, "的" | "了" | "着" | "过" | "吗" | "呢" | "吧") {
             8_000
         } else if prev.chars().count() >= 2 && curr.chars().count() >= 2 {
@@ -108,12 +97,6 @@ impl BigramLanguageModel {
 }
 
 /// 未挂载外部大语料 Bigram 统计表时的静态内置回退亲和度表
-///
-/// # 设计原理
-/// - **实现初衷**：在轻量测试环境或未部署预编译 `bigram.table.bin` 的低内存嵌入式场景下，
-///   提供常见同音词消歧二元亲和度保底支撑。
-/// - **核心优势**：消除散落在逻辑分支中的魔法字符串和分数值，集中声明便于审核与扩展。
-/// - **代价与局限**：覆盖词对有限，完整生产环境应优先依赖百万级紧凑二进制 Bigram 语言模型。
 pub const FALLBACK_BIGRAM_RULES: &[(&str, &str, i64)] = &[
     ("你好", "世界", 18_000),
     ("我们", "来了", 16_000),

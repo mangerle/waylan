@@ -1,118 +1,121 @@
-use waylan_algo::prism::PrismEngine;
+use waylan_algo::decoder::{EdgeKind, LatticeOptions, PrismFuzzy, SyllableEdge, SyllableLattice};
 use waylan_algo::types::FuzzyConfig;
+
+fn collect_lattice_paths(lattice: &SyllableLattice) -> Vec<String> {
+    fn dfs(lattice: &SyllableLattice, pos: usize, acc: &mut Vec<String>, out: &mut Vec<String>) {
+        if out.len() >= 128 {
+            return;
+        }
+        let next = lattice.skip_separators(pos);
+        if next >= lattice.len {
+            out.push(acc.join("'"));
+            return;
+        }
+        for edge in &lattice.edges_from[next] {
+            let prev_len = acc.len();
+            acc.extend(edge.syllables.iter().cloned());
+            dfs(lattice, edge.end, acc, out);
+            acc.truncate(prev_len);
+        }
+    }
+    let mut out = Vec::new();
+    let mut acc = Vec::new();
+    dfs(lattice, 0, &mut acc, &mut out);
+    out
+}
+
+fn has_edge_matching(
+    lattice: &SyllableLattice,
+    pos: usize,
+    pred: impl Fn(&SyllableEdge) -> bool,
+) -> bool {
+    lattice
+        .edges_from
+        .get(pos)
+        .is_some_and(|edges| edges.iter().any(pred))
+}
 
 #[test]
 fn test_dag_ambiguity_xian() {
-    let fuzzy = FuzzyConfig::default();
-    let paths = PrismEngine::build_paths("xian", &fuzzy);
-    let key_strings: Vec<String> = paths.iter().map(|p| p.to_key_string()).collect();
-
-    // 必须同时包含单音节 xian 与双音节 xi'an
-    assert!(key_strings.contains(&"xian".to_string()));
-    assert!(key_strings.contains(&"xi'an".to_string()));
+    let lattice = SyllableLattice::build("xian", &LatticeOptions::default());
+    let paths = collect_lattice_paths(&lattice);
+    assert!(paths.contains(&"xian".to_string()));
+    assert!(paths.contains(&"xi'an".to_string()));
 }
 
 #[test]
 fn test_explicit_split_quote() {
-    let fuzzy = FuzzyConfig::default();
-    let paths = PrismEngine::build_paths("xi'an", &fuzzy);
-    assert!(!paths.is_empty());
-    assert_eq!(paths[0].syllables, vec!["xi", "an"]);
+    let lattice = SyllableLattice::build("xi'an", &LatticeOptions::default());
+    assert_eq!(lattice.best_formatted_preedit(), "xi'an");
+    assert!(!has_edge_matching(&lattice, 0, |e| e.syllables == vec!["xian"]));
 
-    let paths_prefix = PrismEngine::build_paths("xi'a", &fuzzy);
-    assert!(paths_prefix.iter().any(|p| p.syllables == vec!["xi", "a"]));
-    assert!(paths_prefix
-        .iter()
-        .any(|p| p.syllables == vec!["xi"] && p.remaining == "a"));
+    let lattice_prefix = SyllableLattice::build("xi'a", &LatticeOptions::default());
+    let paths = collect_lattice_paths(&lattice_prefix);
+    assert!(paths.contains(&"xi'a".to_string()));
 }
 
 #[test]
 fn test_partial_remaining() {
-    let fuzzy = FuzzyConfig::default();
-    let paths = PrismEngine::build_paths("shux", &fuzzy);
-    assert!(!paths.is_empty());
-
-    let has_shu_x = paths
-        .iter()
-        .any(|p| p.syllables == vec!["shu"] && p.remaining == "x");
-    assert!(has_shu_x, "shux 应当被切分为 syllables=[shu], remaining=x");
+    let lattice = SyllableLattice::build("shux", &LatticeOptions::default());
+    assert!(has_edge_matching(&lattice, 0, |e| e.syllables
+        == vec!["shu"]
+        && e.end == 3));
+    assert!(has_edge_matching(&lattice, 3, |e| {
+        e.kind == EdgeKind::PartialTail && e.syllables == vec!["x"] && e.end == 4
+    }));
 }
 
 #[test]
 fn test_strict_raw_initials_segmentation() {
-    let fuzzy = FuzzyConfig::default();
-    let paths = PrismEngine::build_paths("qwdwwqswsqw", &fuzzy);
-    assert!(!paths.is_empty(), "切分路径不应为空");
-    let best_path = &paths[0];
-    assert_eq!(
-        best_path.to_key_string(),
-        "q'w'd'w'w'q's'w's'q'w",
-        "声母切分音节必须严格保持用户输入的原始字母，绝不允许换字母"
-    );
+    let opts = LatticeOptions {
+        enable_mixed_jianpin: true,
+        ..Default::default()
+    };
+    let lattice = SyllableLattice::build("qwdwwqswsqw", &opts);
+    assert_eq!(lattice.best_formatted_preedit(), "q'w'd'w'w'q's'w's'q'w");
 }
 
 #[test]
 fn test_zero_initial_borrowing_split_cost() {
-    let fuzzy = FuzzyConfig::default();
-    let paths = PrismEngine::build_paths("jintianxingqitian", &fuzzy);
-    assert!(!paths.is_empty());
-    assert_eq!(paths[0].to_key_string(), "jin'tian'xing'qi'tian");
-    let sub_split_opt = paths
-        .iter()
-        .find(|p| p.to_key_string() == "jin'tian'xing'qi'ti'an");
-    if let Some(sub_path) = sub_split_opt {
-        assert!(
-            paths[0].cost < sub_path.cost,
-            "最优完整星期天路径代价值必须低于借调零声母碎切路径"
-        );
-    }
+    let lattice = SyllableLattice::build("jintianxingqitian", &LatticeOptions::default());
+    assert_eq!(lattice.best_formatted_preedit(), "jin'tian'xing'qi'tian");
 }
 
 #[test]
-fn test_typo_adjacent_transpose_graph() {
-    let fuzzy = FuzzyConfig::default();
-    let paths = PrismEngine::build_paths("cehng", &fuzzy);
-    assert!(!paths.is_empty(), "切分路径不应为空");
-    let has_cheng = paths
-        .iter()
-        .any(|p| p.syllables.contains(&"cheng".to_string()));
-    assert!(
-        has_cheng,
-        "输入 cehng 应通过相邻颠倒虚边成功容错切分出 cheng"
-    );
-}
+fn test_typo_adjacent_transpose_and_spatial_graph() {
+    let opts = LatticeOptions {
+        enable_typo_edges: true,
+        ..Default::default()
+    };
+    let lat_cehng = SyllableLattice::build("cehng", &opts);
+    assert!(has_edge_matching(&lat_cehng, 0, |e| {
+        e.syllables == vec!["cheng"] && e.typo_count == 1
+    }));
 
-#[test]
-fn test_typo_spatial_substitution_graph() {
-    let fuzzy = FuzzyConfig::default();
-    let paths = PrismEngine::build_paths("nihso", &fuzzy);
-    assert!(!paths.is_empty(), "切分路径不应为空");
-    let has_ni_hao = paths.iter().any(|p| p.to_key_string() == "ni'hao");
-    assert!(
-        has_ni_hao,
-        "输入 nihso 应通过高斯邻键虚边成功容错切分出 ni'hao"
-    );
+    let lat_nihso = SyllableLattice::build("nihso", &opts);
+    let paths = collect_lattice_paths(&lat_nihso);
+    assert!(paths.contains(&"ni'hao".to_string()));
 }
 
 #[test]
 fn test_fuzzy_nine_rules_expansion() {
     let fuzzy = FuzzyConfig::all_enabled();
-    let zong_alts = PrismEngine::expand_fuzzy_syllables("zong", &fuzzy);
+    let zong_alts = PrismFuzzy::expand_fuzzy_syllables("zong", &fuzzy);
     assert!(zong_alts.contains(&"zhong".to_string()));
 
-    let lu_alts = PrismEngine::expand_fuzzy_syllables("lu", &fuzzy);
+    let lu_alts = PrismFuzzy::expand_fuzzy_syllables("lu", &fuzzy);
     assert!(lu_alts.contains(&"nu".to_string()));
     assert!(lu_alts.contains(&"ru".to_string()));
 
-    let fa_alts = PrismEngine::expand_fuzzy_syllables("fa", &fuzzy);
+    let fa_alts = PrismFuzzy::expand_fuzzy_syllables("fa", &fuzzy);
     assert!(fa_alts.contains(&"ha".to_string()));
 
-    let lan_alts = PrismEngine::expand_fuzzy_syllables("lan", &fuzzy);
+    let lan_alts = PrismFuzzy::expand_fuzzy_syllables("lan", &fuzzy);
     assert!(lan_alts.contains(&"lang".to_string()));
     assert!(lan_alts.contains(&"nan".to_string()));
     assert!(lan_alts.contains(&"nang".to_string()));
 
-    let sen_alts = PrismEngine::expand_fuzzy_syllables("sen", &fuzzy);
+    let sen_alts = PrismFuzzy::expand_fuzzy_syllables("sen", &fuzzy);
     assert!(sen_alts.contains(&"seng".to_string()));
     assert!(sen_alts.contains(&"shen".to_string()));
     assert!(sen_alts.contains(&"sheng".to_string()));
@@ -130,24 +133,25 @@ fn test_fuzzy_engine_lookup_zongguo() {
     }
     let cands = engine.candidates();
     assert!(!cands.is_empty(), "模糊音开启时输入 zongguo 应当召回候选词");
-    let has_china = cands.iter().any(|c| c.text == "中国");
     assert!(
-        has_china,
-        "zongguo 应当通过 z<=>zh 与 eng<=>ong 模糊音规则召回“中国”"
+        cands.iter().any(|c| c.text == "中国"),
+        "zongguo 应当通过模糊音规则召回“中国”"
     );
 }
 
 #[test]
 fn test_habitual_alias_paths() {
-    let fuzzy = FuzzyConfig::default();
-    let paths_en = PrismEngine::build_paths("en", &fuzzy);
-    assert!(paths_en.iter().any(|p| p.syllables == vec!["en"]));
-    assert!(paths_en.iter().any(|p| p.syllables == vec!["n"]));
-    assert!(paths_en.iter().any(|p| p.syllables == vec!["ng"]));
+    let lat_en = SyllableLattice::build("en", &LatticeOptions::default());
+    let paths_en = collect_lattice_paths(&lat_en);
+    assert!(paths_en.contains(&"en".to_string()));
+    assert!(paths_en.contains(&"n".to_string()));
+    assert!(paths_en.contains(&"ng".to_string()));
 
-    let paths_enen = PrismEngine::build_paths("enen", &fuzzy);
-    assert!(paths_enen.iter().any(|p| p.syllables == vec!["ng", "ng"]));
+    let lat_enen = SyllableLattice::build("enen", &LatticeOptions::default());
+    let paths_enen = collect_lattice_paths(&lat_enen);
+    assert!(paths_enen.contains(&"ng'ng".to_string()));
 
-    let paths_enhao = PrismEngine::build_paths("enhao", &fuzzy);
-    assert!(paths_enhao.iter().any(|p| p.syllables == vec!["ng", "hao"]));
+    let lat_enhao = SyllableLattice::build("enhao", &LatticeOptions::default());
+    let paths_enhao = collect_lattice_paths(&lat_enhao);
+    assert!(paths_enhao.contains(&"ng'hao".to_string()));
 }
