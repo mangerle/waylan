@@ -2,6 +2,7 @@
 
 use super::language_model::BigramLanguageModel;
 use super::tail_expansion::{expand_remaining_tail, TailExpansionContext};
+use super::weights::ScoringWeights;
 use crate::pipeline::is_rare_ext_char;
 use crate::prism::STANDARD_INITIALS;
 use crate::table::LexiconTable;
@@ -29,6 +30,8 @@ pub struct SentenceDecodeParams<'a> {
     pub user_model: Option<&'a UserAdaptiveModel>,
     /// 评估时间衰减的基准时间戳（秒级 UNIX 时间）
     pub eval_ts: u64,
+    /// 可选的可训练权重参数（未传时使用默认 [`ScoringWeights`]）
+    pub weights: Option<&'a ScoringWeights>,
 }
 
 /// 词格点求解推进上下文参数对象
@@ -39,6 +42,7 @@ pub(super) struct LatticeSolveParams<'a> {
     pub(super) ctx_str: &'a str,
     pub(super) user_model: Option<&'a UserAdaptiveModel>,
     pub(super) eval_ts: u64,
+    pub(super) weights: ScoringWeights,
 }
 
 /// 单个构词条目的固有属性（与前驱束无关的部分）
@@ -191,6 +195,7 @@ impl ViterbiDecoder {
             enable_acronym: true,
             user_model: None,
             eval_ts: 0,
+            weights: None,
         })
     }
 
@@ -206,6 +211,7 @@ impl ViterbiDecoder {
             enable_acronym,
             user_model,
             eval_ts,
+            weights,
         } = *params;
 
         let n = syllables.len();
@@ -222,6 +228,7 @@ impl ViterbiDecoder {
             ctx_str,
             user_model,
             eval_ts,
+            weights: weights.copied().unwrap_or_default(),
         };
 
         // 沿音节序列向右推进求解 Viterbi 最优路径
@@ -260,6 +267,7 @@ impl ViterbiDecoder {
             enable_acronym,
             user_model,
             eval_ts,
+            weights,
         } = *params;
 
         let n = syllables.len();
@@ -276,6 +284,7 @@ impl ViterbiDecoder {
             ctx_str,
             user_model,
             eval_ts,
+            weights: weights.copied().unwrap_or_default(),
         };
         let dp = Self::solve_lattice_dp(&lattice);
 
@@ -510,15 +519,16 @@ impl ViterbiDecoder {
             } else {
                 prev_node.word.as_str()
             };
-            let base_score = BigramLanguageModel::transition_score_cached(
+            let base_score = BigramLanguageModel::transition_score_with_weights(
                 (prev_word, prev_node.last_word_id),
                 (word.text, word.word_id, word.char_len),
                 word.freq_score,
-                params.lattice.table,
+                (params.lattice.table, &params.lattice.weights),
             );
-            // 叠加用户历史词对搭配习惯加分（带 30 天半衰期衰减）
+            // 叠加用户历史词对搭配习惯加分（带 30 天半衰期衰减与可训练热度倍率）
             let pair_boost = params.lattice.user_model.map_or(0, |um| {
-                um.pair_boost_score(prev_word, word.text, params.lattice.eval_ts)
+                let raw = um.pair_boost_score(prev_word, word.text, params.lattice.eval_ts);
+                raw.saturating_mul(params.lattice.weights.user_boost_scale_permille as i64) / 1_000
             });
             let trans_score = base_score.saturating_add(pair_boost);
             let candidate_total = prev_node.total_score.saturating_add(trans_score);

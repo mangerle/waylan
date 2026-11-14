@@ -5,9 +5,11 @@
 mod decoder;
 mod language_model;
 mod tail_expansion;
+mod weights;
 
 pub use decoder::{SentenceDecodeParams, SentenceHeadSegment, ViterbiDecoder};
 pub use language_model::BigramLanguageModel;
+pub use weights::ScoringWeights;
 
 #[cfg(test)]
 mod tests;

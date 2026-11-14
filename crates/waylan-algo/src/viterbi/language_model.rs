@@ -1,5 +1,6 @@
 //! 轻量级 2-gram 统计语言模型与平滑算法 (Bigram Language Model)
 
+use super::weights::ScoringWeights;
 use crate::table::LexiconTable;
 
 /// 轻量级 2-gram 统计语言模型与平滑算法 (Bigram Language Model)
@@ -52,12 +53,29 @@ impl BigramLanguageModel {
         curr_unigram: i64,
         table: &LexiconTable,
     ) -> i64 {
+        Self::transition_score_with_weights(
+            prev,
+            curr,
+            curr_unigram,
+            (table, &ScoringWeights::default()),
+        )
+    }
+
+    /// 基于可配置权重参数计算二元转移对数得分
+    #[inline]
+    pub fn transition_score_with_weights(
+        prev: (&str, Option<u32>),
+        curr: (&str, Option<u32>, i64),
+        curr_unigram: i64,
+        context: (&LexiconTable, &ScoringWeights),
+    ) -> i64 {
+        let (table, weights) = context;
         let (prev_word, prev_id) = prev;
         let (curr_word, curr_id, curr_char_len) = curr;
-        let length_bonus = (curr_char_len - 1) * 14_000;
+        let length_bonus = (curr_char_len - 1).saturating_mul(weights.length_bonus_per_char);
 
         if prev_word.is_empty() {
-            return curr_unigram + length_bonus - Self::BASE_WORD_PENALTY;
+            return curr_unigram + length_bonus - weights.base_word_penalty;
         }
 
         let bigram_bonus = match (&table.compact_bigram, prev_id, curr_id) {
@@ -67,7 +85,7 @@ impl BigramLanguageModel {
             _ => Self::estimate_bigram_affinity(prev_word, curr_word),
         };
 
-        curr_unigram + length_bonus + bigram_bonus - Self::BASE_WORD_PENALTY
+        curr_unigram + length_bonus + bigram_bonus - weights.base_word_penalty
     }
 
     /// 估算二元词对的接续亲和度（未挂载大语料模型时的平滑回退）

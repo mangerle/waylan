@@ -35,4 +35,5 @@ pub use table::{
 };
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 pub use user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};
+pub use viterbi::ScoringWeights;
 pub use vocab::Vocabulary;

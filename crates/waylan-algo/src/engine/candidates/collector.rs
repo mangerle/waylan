@@ -102,7 +102,10 @@ impl AlgoEngine {
             let key = path.to_key_string();
             let raw_key = path.to_raw_key_string();
             let consumed_len = path.consumed_raw_len();
-            let cost_penalty = path.cost.saturating_sub(best_cost).saturating_mul(100);
+            let cost_penalty = path
+                .cost
+                .saturating_sub(best_cost)
+                .saturating_mul(self.config.scoring_weights.typo_cost_penalty);
             let is_suboptimal = path.origin == PathOrigin::Exact
                 && (cost_penalty > 0 || (path.syllables.len() as u32) > best_syl_count);
             let path_ctx = PathMatchContext {
@@ -352,14 +355,17 @@ impl AlgoEngine {
                     .model
                     .latest_timestamp()
                     .max(self.adaptive.last_timestamp),
+                weights: Some(&self.config.scoring_weights),
             })
         else {
             return;
         };
 
-        sentence.score = sentence
-            .score
-            .saturating_sub(best_path.cost.saturating_mul(100));
+        sentence.score = sentence.score.saturating_sub(
+            best_path
+                .cost
+                .saturating_mul(self.config.scoring_weights.typo_cost_penalty),
+        );
         let base_score = sentence.score;
         results.push(sentence);
 
@@ -399,6 +405,10 @@ impl AlgoEngine {
             .lookup_prefix_extension_into(prefix_syls, tail_syl, results);
         for cand in &mut results[start..] {
             cand.tier = CandidateTier::PrefixPartial;
+            cand.score = cand
+                .score
+                .saturating_sub(self.config.scoring_weights.partial_extension_penalty)
+                .max(1);
         }
     }
 
@@ -425,7 +435,10 @@ impl AlgoEngine {
                     results,
                 );
                 for fp in &mut results[start_fzp..] {
-                    fp.score = fp.score.saturating_sub(50);
+                    fp.score = fp
+                        .score
+                        .saturating_sub(self.config.scoring_weights.partial_extension_penalty)
+                        .max(1);
                 }
             }
         }

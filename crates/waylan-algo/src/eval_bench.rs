@@ -7,13 +7,17 @@
 //!   1. 批量评测（`run_eval`）：统计 Top-1 / Top-3 / Top-10 命中率及单次求值耗时；
 //!   2. 逐键探针（`run_probe`）：逐字符增量输入，检测期望词是否出现“中途出现又消失”的退化缺陷。
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use crate::engine::AlgoEngine;
+use crate::viterbi::ScoringWeights;
 
 /// 单条离线评测用例
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvalCase {
+    /// 用例所属场景分类（如 homophone / partial / jianpin / typo / sentence）
+    pub category: String,
     /// 原始按键输入序列（如 `"nihao"`）
     pub input: String,
     /// 可接受的期望候选词列表（任一命中即算成功）
@@ -35,6 +39,19 @@ pub struct EvalCaseResult {
     pub elapsed_us: u64,
 }
 
+/// 分场景汇总统计
+#[derive(Debug, Clone)]
+pub struct CategoryStat {
+    /// 场景分类名
+    pub category: String,
+    /// 该场景用例总数
+    pub total: usize,
+    /// Top-1 命中数
+    pub top1_hits: usize,
+    /// Top-3 命中数
+    pub top3_hits: usize,
+}
+
 /// 批量评测汇总报告
 #[derive(Debug, Clone)]
 pub struct EvalSummary {
@@ -50,6 +67,8 @@ pub struct EvalSummary {
     pub avg_us: f64,
     /// P99 耗时（微秒）
     pub p99_us: u64,
+    /// 各场景分项命中统计
+    pub category_stats: Vec<CategoryStat>,
     /// 逐条未进 Top-3 的失败用例明细
     pub misses: Vec<EvalCaseResult>,
 }
@@ -80,7 +99,11 @@ pub struct ProbeResult {
 
 /// 从 TSV 文本解析评测用例
 ///
-/// 格式要求：`输入<TAB>期望1|期望2`，忽略空行与 `#` 注释行。
+/// 支持两种格式：
+/// - 2 列：`输入<TAB>期望1|期望2`（默认分类 `"general"`）
+/// - 3 列：`分类<TAB>输入<TAB>期望1|期望2`
+///
+/// 自动忽略空行与 `#` 注释行。
 pub fn parse_eval_tsv(content: &str) -> Vec<EvalCase> {
     let mut cases = Vec::new();
     for line in content.lines() {
@@ -88,12 +111,11 @@ pub fn parse_eval_tsv(content: &str) -> Vec<EvalCase> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        let mut parts = trimmed.splitn(2, '\t');
-        let Some(input) = parts.next().map(str::trim) else {
-            continue;
-        };
-        let Some(expected_raw) = parts.next().map(str::trim) else {
-            continue;
+        let cols: Vec<&str> = trimmed.split('\t').map(str::trim).collect();
+        let (category, input, expected_raw) = match cols.as_slice() {
+            [inp, exp] => ("general", *inp, *exp),
+            [cat, inp, exp, ..] => (*cat, *inp, *exp),
+            _ => continue,
         };
         let expected: Vec<String> = expected_raw
             .split('|')
@@ -103,6 +125,7 @@ pub fn parse_eval_tsv(content: &str) -> Vec<EvalCase> {
             .collect();
         if !input.is_empty() && !expected.is_empty() {
             cases.push(EvalCase {
+                category: category.to_string(),
                 input: input.to_string(),
                 expected,
             });
@@ -118,6 +141,7 @@ pub fn run_eval(engine: &mut AlgoEngine, cases: &[EvalCase]) -> EvalSummary {
     let mut top10_hits = 0usize;
     let mut latencies_us = Vec::with_capacity(cases.len());
     let mut misses = Vec::new();
+    let mut cat_map: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
 
     for case in cases {
         let start = Instant::now();
@@ -131,11 +155,16 @@ pub fn run_eval(engine: &mut AlgoEngine, cases: &[EvalCase]) -> EvalSummary {
             .map(|idx| idx + 1);
         let top1_text = candidates.first().cloned().unwrap_or_default();
 
+        let entry = cat_map.entry(case.category.clone()).or_insert((0, 0, 0));
+        entry.0 += 1;
+
         if matches!(best_rank, Some(1)) {
             top1_hits += 1;
+            entry.1 += 1;
         }
         if matches!(best_rank, Some(r) if r <= 3) {
             top3_hits += 1;
+            entry.2 += 1;
         } else {
             misses.push(EvalCaseResult {
                 input: case.input.clone(),
@@ -149,6 +178,16 @@ pub fn run_eval(engine: &mut AlgoEngine, cases: &[EvalCase]) -> EvalSummary {
             top10_hits += 1;
         }
     }
+
+    let category_stats = cat_map
+        .into_iter()
+        .map(|(category, (total, c_top1, c_top3))| CategoryStat {
+            category,
+            total,
+            top1_hits: c_top1,
+            top3_hits: c_top3,
+        })
+        .collect();
 
     let total = cases.len();
     let total_us: u64 = latencies_us.iter().copied().sum();
@@ -172,6 +211,7 @@ pub fn run_eval(engine: &mut AlgoEngine, cases: &[EvalCase]) -> EvalSummary {
         top10_hits,
         avg_us,
         p99_us,
+        category_stats,
         misses,
     }
 }
@@ -233,24 +273,172 @@ fn evaluate_input(engine: &mut AlgoEngine, input: &str) -> Vec<String> {
         .collect()
 }
 
-/// 返回内置的通用回归基准用例集
+/// 离线权重训练参数
+#[derive(Debug, Clone, Copy)]
+pub struct TrainConfig {
+    /// 训练迭代轮数
+    pub epochs: usize,
+    /// Softmax 温度系数（平滑分数尺度差异）
+    pub temperature: f64,
+    /// 权重步长缩放系数
+    pub step_scale: f64,
+}
+
+impl Default for TrainConfig {
+    fn default() -> Self {
+        Self {
+            epochs: 4,
+            temperature: 50_000.0,
+            step_scale: 0.15,
+        }
+    }
+}
+
+/// 离线权重训练输出报告
+#[derive(Debug, Clone)]
+pub struct TrainReport {
+    /// 训练前 Softmax 交叉熵损失
+    pub initial_loss: f64,
+    /// 训练后 Softmax 交叉熵损失
+    pub final_loss: f64,
+    /// 训练前 Top-1 命中数
+    pub initial_top1: usize,
+    /// 训练后 Top-1 命中数
+    pub final_top1: usize,
+    /// 搜索得到的最优权重参数
+    pub best_weights: ScoringWeights,
+}
+
+/// 计算标注评测集上的平均 Softmax 交叉熵损失（目标词不在候选内则计为惩罚上限 8.0）
+pub fn compute_softmax_loss(engine: &mut AlgoEngine, cases: &[EvalCase], temperature: f64) -> f64 {
+    if cases.is_empty() {
+        return 0.0;
+    }
+    let temp = temperature.max(1.0);
+    let mut total_loss = 0.0f64;
+
+    for case in cases {
+        engine.reset();
+        for ch in case.input.chars() {
+            engine.push_char(ch);
+        }
+        let cands = engine.all_candidates();
+        let top = &cands[..cands.len().min(16)];
+        let Some(target_idx) = top
+            .iter()
+            .position(|c| case.expected.iter().any(|e| e == &c.text))
+        else {
+            total_loss += 8.0;
+            continue;
+        };
+
+        let max_score = top
+            .iter()
+            .map(|c| c.score as f64 / temp)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let sum_exp: f64 = top
+            .iter()
+            .map(|c| ((c.score as f64 / temp) - max_score).exp())
+            .sum();
+        let target_logit = top[target_idx].score as f64 / temp - max_score;
+        let loss = (sum_exp.ln() - target_logit).min(8.0);
+        total_loss += loss;
+    }
+
+    total_loss / cases.len() as f64
+}
+
+/// 基于标注集执行坐标下降 + Softmax 交叉熵拟合，自动搜索更优的 [`ScoringWeights`]
+pub fn train_weights_softmax(
+    engine: &mut AlgoEngine,
+    cases: &[EvalCase],
+    train_cfg: &TrainConfig,
+) -> TrainReport {
+    let initial_weights = engine.config.scoring_weights;
+    let initial_loss = compute_softmax_loss(engine, cases, train_cfg.temperature);
+    let initial_top1 = run_eval(engine, cases).top1_hits;
+
+    let mut best_weights = initial_weights;
+    let mut best_loss = initial_loss;
+    let mut best_top1 = initial_top1;
+
+    for _epoch in 0..train_cfg.epochs {
+        let mut improved = false;
+        for (dim, delta_base) in [(0usize, 1_500i64), (1, 1_500), (2, 15), (3, 20), (4, 150)] {
+            let step = ((delta_base as f64) * (1.0 + train_cfg.step_scale)).round() as i64;
+            for dir in [-1i64, 1i64] {
+                let candidate = perturb_weight(best_weights, dim, step * dir);
+                engine.config.scoring_weights = candidate;
+                let loss = compute_softmax_loss(engine, cases, train_cfg.temperature);
+                let top1 = run_eval(engine, cases).top1_hits;
+                if loss + 1e-4 < best_loss || (top1 > best_top1 && loss <= best_loss + 0.05) {
+                    best_loss = loss;
+                    best_top1 = top1;
+                    best_weights = candidate;
+                    improved = true;
+                }
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+
+    engine.config.scoring_weights = best_weights;
+    TrainReport {
+        initial_loss,
+        final_loss: best_loss,
+        initial_top1,
+        final_top1: best_top1,
+        best_weights,
+    }
+}
+
+fn perturb_weight(mut w: ScoringWeights, dim: usize, delta: i64) -> ScoringWeights {
+    match dim {
+        0 => w.base_word_penalty = (w.base_word_penalty + delta).clamp(2_000, 40_000),
+        1 => w.length_bonus_per_char = (w.length_bonus_per_char + delta).clamp(2_000, 40_000),
+        2 => {
+            w.partial_extension_penalty =
+                (w.partial_extension_penalty as i64 + delta).clamp(0, 500) as u32
+        }
+        3 => w.typo_cost_penalty = (w.typo_cost_penalty as i64 + delta).clamp(10, 500) as u32,
+        _ => {
+            w.user_boost_scale_permille =
+                (w.user_boost_scale_permille as i64 + delta).clamp(100, 5_000) as u32
+        }
+    }
+    w
+}
+
+/// 返回覆盖 5 大场景（同音词、半成品、简拼与混拼、四类纠错、长句）的内置回归基准用例集
 pub fn builtin_regression_cases() -> Vec<EvalCase> {
     parse_eval_tsv(
         "\
-nihao\t你好
-zhongguo\t中国
-beijing\t北京
-shanghai\t上海
-xian\t先|西安
-zhongdi\t种地
-nihaozhongguo\t你好中国
-woxiangqubeijing\t我想去北京
-jintianhao\t今天好
-wanqky\t完全可以
-yongzwen\t用中文
-zhognguo\t中国
-zhonguo\t中国
-nihaoo\t你好
+homophone\tnihao\t你好
+homophone\tzhongguo\t中国
+homophone\tbeijing\t北京
+homophone\tshanghai\t上海
+homophone\txian\t先|西安
+homophone\tzhongdi\t种地
+partial\tniha\t你好
+partial\tzhonggu\t中国
+partial\tbeiji\t北京
+partial\tshangha\t上海
+partial\tzhongd\t重点|种地
+jianpin\twanqky\t完全可以
+jianpin\tyongzwen\t用中文
+jianpin\tbj\t北京
+jianpin\tsh\t上海|是
+typo\tzhognguo\t中国
+typo\tzhonguo\t中国
+typo\tnihaoo\t你好
+typo\tnihoa\t你好
+typo\tcehnggong\t成功
+sentence\tnihaozhongguo\t你好中国
+sentence\twoxiangqubeijing\t我想去北京
+sentence\tjintianhao\t今天好
+sentence\twomendeshijie\t我们的世界
 ",
     )
 }
@@ -287,5 +475,10 @@ beijing\t北京|背景
         assert_eq!(probes.len(), 2);
         assert_eq!(probes[0].steps.len(), 4);
         assert_eq!(probes[0].steps.last().and_then(|s| s.rank), Some(1));
+
+        let loss = compute_softmax_loss(&mut engine, &cases, 50_000.0);
+        assert!(loss >= 0.0);
+        let report = train_weights_softmax(&mut engine, &cases, &TrainConfig::default());
+        assert!(report.final_loss <= report.initial_loss + 1e-6);
     }
 }

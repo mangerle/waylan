@@ -162,6 +162,7 @@ impl AlgoEngine {
                     .model
                     .latest_timestamp()
                     .max(self.adaptive.last_timestamp),
+                weights: Some(&self.config.scoring_weights),
             })
         {
             head_options.push((sentence.text, head_key.clone(), sentence.score));

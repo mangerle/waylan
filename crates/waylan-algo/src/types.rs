@@ -1,3 +1,4 @@
+use crate::viterbi::ScoringWeights;
 use serde::{Deserialize, Serialize};
 use waylan_core::config::{FuzzyPinyinRules, TypoCorrectionRules};
 use waylan_core::AppConfig;
@@ -40,6 +41,9 @@ pub struct AlgoConfig {
     /// 是否开启打字时在第三候选位实时推荐 Emoji
     #[serde(default = "default_true")]
     pub enable_emoji_suggest: bool,
+    /// 可训练的语言模型与排序特征权重参数
+    #[serde(default)]
+    pub scoring_weights: ScoringWeights,
     /// 模糊音配置
     pub fuzzy: FuzzyConfig,
     /// 拼音纠错规则配置
@@ -67,6 +71,7 @@ impl Default for AlgoConfig {
             dynamic_adjust_freq: true,
             enable_acronym: true,
             enable_emoji_suggest: true,
+            scoring_weights: ScoringWeights::default(),
             fuzzy: FuzzyConfig::default(),
             typo_rules: TypoCorrectionRules::default(),
             auto_pangu_spacing: false,
@@ -89,6 +94,7 @@ impl From<&AppConfig> for AlgoConfig {
             dynamic_adjust_freq: cfg.pinyin.dynamic_adjust_freq,
             enable_acronym: cfg.pinyin.enable_acronym,
             enable_emoji_suggest: true,
+            scoring_weights: ScoringWeights::default(),
             fuzzy: if cfg.pinyin.fuzzy_pinyin {
                 cfg.pinyin.fuzzy_rules
             } else {
