@@ -8,6 +8,7 @@ pub mod dispatcher;
 pub mod engine;
 pub mod entity;
 pub mod error;
+pub mod eval_bench;
 pub mod evaluator;
 mod fs_guard;
 pub mod opencc;
