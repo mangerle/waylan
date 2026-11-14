@@ -83,7 +83,10 @@ impl AlgoEngine {
             return;
         }
         let has_exact_or_prefix_words = candidates.iter().any(|c| {
-            c.tier == CandidateTier::ExactWord || c.tier == CandidateTier::ProtectedEntity
+            c.tier == CandidateTier::ExactWord
+                || c.tier == CandidateTier::ProtectedEntity
+                || (c.tier == CandidateTier::SentenceViterbi
+                    && c.comment.as_deref() == Some("[混拼]"))
         });
         if has_exact_or_prefix_words {
             return;

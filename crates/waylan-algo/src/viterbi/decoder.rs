@@ -3,6 +3,7 @@
 use super::language_model::BigramLanguageModel;
 use super::tail_expansion::{expand_remaining_tail, TailExpansionContext};
 use crate::pipeline::is_rare_ext_char;
+use crate::prism::STANDARD_INITIALS;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 use crate::user_adaptive::UserAdaptiveModel;
@@ -397,23 +398,70 @@ impl ViterbiDecoder {
         )
     }
 
-    /// 查询当前音节切片在词典中的候选条目（支持单字声母兜底）
+    /// 查询当前音节切片在词典中的候选条目（支持单字声母兜底与跨音节混简拼词检索）
     fn lookup_lattice_entries(
         table: &LexiconTable,
         key: &str,
-        span: usize,
+        sub_syls: &[String],
         raw_limit: usize,
     ) -> Option<Vec<(String, u32, Option<u32>)>> {
         match table.get_top_raw_entries(key, raw_limit) {
             Some(entries) if !entries.is_empty() => Some(entries),
             _ => {
-                if span == 1 {
+                if sub_syls.len() == 1 {
                     table.get_initial_raw_entries(key)
                 } else {
-                    None
+                    Self::lookup_mixed_jianpin_lattice_entries(table, sub_syls, raw_limit)
                 }
             }
         }
+    }
+
+    /// 在词格点跨度中检索包含声母简拼的混合词条（如 `["z", "wen"]` -> 「中文」）
+    fn lookup_mixed_jianpin_lattice_entries(
+        table: &LexiconTable,
+        sub_syls: &[String],
+        raw_limit: usize,
+    ) -> Option<Vec<(String, u32, Option<u32>)>> {
+        let initial_count = sub_syls
+            .iter()
+            .filter(|s| STANDARD_INITIALS.contains(&s.as_str()))
+            .count();
+        if initial_count == 0 {
+            return None;
+        }
+        let acronym: String = sub_syls.iter().filter_map(|s| s.chars().next()).collect();
+        if acronym.len() != sub_syls.len() {
+            return None;
+        }
+
+        let mut out = Vec::new();
+        for cand in table.lookup_acronym_top_k(&acronym, 128) {
+            let chars: Vec<char> = cand.text.chars().collect();
+            if chars.len() != sub_syls.len() {
+                continue;
+            }
+            let all_full_match = sub_syls.iter().enumerate().all(|(idx, syl)| {
+                if STANDARD_INITIALS.contains(&syl.as_str()) {
+                    return true;
+                }
+                let Some(entries) = table.get_raw_entries(syl) else {
+                    return false;
+                };
+                let mut buf = [0u8; 4];
+                let ch_str = chars[idx].encode_utf8(&mut buf);
+                entries.iter().any(|(t, _)| t == ch_str)
+            });
+            if all_full_match {
+                // 对混合简拼词保留合理基础分并略低于同频全拼词
+                let adjusted = cand.score.saturating_mul(3) / 4;
+                out.push((cand.text, adjusted.max(1), cand.word_id));
+                if out.len() >= raw_limit {
+                    break;
+                }
+            }
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     /// 针对单个构词条目计算从前驱束集合的最佳转移对数得分并入队目标束
@@ -538,7 +586,8 @@ impl ViterbiDecoder {
                 let sub_syls = &syllables[start_idx..end_idx];
                 let key = Self::build_span_key(sub_syls, &mut key_buf);
 
-                let Some(raw_entries) = Self::lookup_lattice_entries(table, key, span, raw_limit)
+                let Some(raw_entries) =
+                    Self::lookup_lattice_entries(table, key, sub_syls, raw_limit)
                 else {
                     continue;
                 };

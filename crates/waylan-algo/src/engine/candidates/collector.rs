@@ -283,8 +283,30 @@ impl AlgoEngine {
         };
 
         // 若最优非容错路径属于拼写误触导致的断流碎切路径（如 ying'x'ai'n'g），
-        // 禁止在该残破路径上运行 Viterbi 拼句与跨词前缀合成，避免产出“应先爱能够”等生造词挤占纠错候选
-        if best_path.is_broken_typo_fallback(&self.config.fuzzy) {
+        // 禁止在该残破路径上运行 Viterbi 拼句与跨词前缀合成，避免产出“应先爱能够”等生造词挤占纠错候选；
+        // 但若为“完整音节 + 单/双字母声母”组成的合法全拼混简拼（如 yong'z'wen），仍允许参与整句解码
+        // （显式排除 n/g 鼻音拆散与声母后接纯元音/复韵母碎切）。
+        let has_ng_split = best_path.syllables.iter().any(|s| s == "ng")
+            || best_path
+                .syllables
+                .windows(2)
+                .any(|w| (w[0] == "n" && w[1] == "g") || (w[0] == "g" && w[1] == "n"));
+        let has_initial_then_vowel_split = best_path.syllables.windows(2).any(|w| {
+            STANDARD_INITIALS.contains(&w[0].as_str()) && w[1].starts_with(['a', 'e', 'o'])
+        });
+        let is_legal_mixed_jianpin = self.config.enable_acronym
+            && !has_ng_split
+            && !has_initial_then_vowel_split
+            && best_path.syllables.len() >= 2
+            && best_path
+                .syllables
+                .iter()
+                .any(|s| s.len() >= 2 && !STANDARD_INITIALS.contains(&s.as_str()))
+            && best_path.syllables.iter().all(|s| {
+                STANDARD_INITIALS.contains(&s.as_str())
+                    || (s.len() >= 2 && crate::syllables::is_valid_syllable(s))
+            });
+        if best_path.is_broken_typo_fallback(&self.config.fuzzy) && !is_legal_mixed_jianpin {
             return;
         }
 
@@ -501,12 +523,16 @@ impl AlgoEngine {
             queried_acronyms.push(acronym_key.clone());
 
             let full_count = (syl_count - initial_count) as u32;
-            for mut cand in self.resources.table.lookup_acronym_top_k(&acronym_key, 48) {
+            for mut cand in self.resources.table.lookup_acronym_top_k(&acronym_key, 256) {
                 if !self.matches_mixed_jianpin_text(&full_syls, &cand.text) {
                     continue;
                 }
-                cand.tier = CandidateTier::Acronym;
-                cand.score = cand.score.saturating_add(full_count.saturating_mul(15_000));
+                cand.tier = CandidateTier::SentenceViterbi;
+                // 混合简拼整词给予与 Viterbi 整句可比的词长尺度加分，避免被单字强拼句压制
+                cand.score = cand
+                    .score
+                    .saturating_add(300_000)
+                    .saturating_add(full_count.saturating_mul(80_000));
                 cand.consumed_len = Some(consumed_len);
                 cand.comment = Some("[混拼]".to_string());
                 results.push(cand);

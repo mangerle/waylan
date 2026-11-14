@@ -68,10 +68,16 @@ fn explore_fuzzy_syllables(
 /// 两类虚边的可信度不对等，故由 [`TypoExploration`] 分离启用：确定性改写命中即正解，正常击键流
 /// 亦参与探索；邻键误触属概率猜测，仅在异常流全量容错阶段启用，避免污染正常打字结果。
 fn explore_typo_edges(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
-    if ctx.exploration == TypoExploration::Strict
-        || params.fsa_matches.iter().any(|m| m.1 >= 4)
-        || ctx.results.len() >= 48
-    {
+    if ctx.exploration == TypoExploration::Strict || ctx.results.len() >= 48 {
+        return;
+    }
+
+    // 跨音节尾字母共享漏按边（如 zhonguo -> zhong + guo），即使前缀已命中长音节仍可探索
+    if ctx.exploration.allows_spatial() && params.origin == PathOrigin::Exact {
+        explore_shared_boundary_missing_char(ctx, params);
+    }
+
+    if params.fsa_matches.iter().any(|m| m.1 >= 4) {
         return;
     }
 
@@ -112,6 +118,45 @@ fn explore_typo_edges(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
                 ctx.current.pop();
                 ctx.current_raw.pop();
             }
+        }
+    }
+}
+
+/// 探索跨音节边界共享字母导致的漏按边（如 `zhonguo` 中 `g` 被前音节占用，实际应为 `zhong + guo`）
+fn explore_shared_boundary_missing_char(ctx: &mut DfsContext<'_>, params: &DfsExploreParams<'_>) {
+    let fsa = PrismFsa::global();
+    for &(std_syl, len) in params.fsa_matches.iter().rev() {
+        if len < 3 {
+            continue;
+        }
+        let end = params.start + len;
+        if end >= ctx.input.len() || !ctx.input.is_char_boundary(end - 1) {
+            continue;
+        }
+        // 将当前音节最后一个字母同时借给下一音节作为首字母（等价于用户少按一次该边界字母）
+        let next_matches = fsa.match_syllables(ctx.input, end - 1);
+        for &(next_syl, next_len) in next_matches.iter().rev() {
+            if next_len < 2 {
+                continue;
+            }
+            let total_end = end - 1 + next_len;
+            if !ctx.input.is_char_boundary(total_end) {
+                continue;
+            }
+            ctx.current.push(std_syl.to_string());
+            ctx.current_raw.push(std_syl.to_string());
+            ctx.current.push(next_syl.to_string());
+            ctx.current_raw.push(ctx.input[end..total_end].to_string());
+            dfs_dag(
+                ctx,
+                total_end,
+                params.current_cost + 20 + 14,
+                params.origin.max(PathOrigin::SpatialTypo),
+            );
+            ctx.current.pop();
+            ctx.current_raw.pop();
+            ctx.current.pop();
+            ctx.current_raw.pop();
         }
     }
 }
