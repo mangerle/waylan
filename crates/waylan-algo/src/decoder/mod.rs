@@ -10,6 +10,7 @@
 
 pub mod alias;
 pub mod beam;
+pub mod beam_cache;
 pub mod fsa;
 pub mod fuzzy;
 pub mod language_model;
@@ -23,6 +24,7 @@ pub use beam::{
     score_phrase_match, to_positive_score, unigram_log_score, BeamDecodeOptions, DecodeResult,
     DecodedSentence, PositionalBeamDecoder, SentenceHeadSegment,
 };
+pub use beam_cache::{compute_decode_config_sig, IncrementalBeamCache};
 pub use fsa::PrismFsa;
 pub use fuzzy::PrismFuzzy;
 pub use language_model::BigramLanguageModel;

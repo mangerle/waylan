@@ -82,9 +82,19 @@ impl DatPhraseMatcher {
         table: &LexiconTable,
         options: &MatcherOptions,
     ) -> Vec<PhraseMatch> {
+        Self::match_from_with_reach(lattice, start_pos, table, options).0
+    }
+
+    /// 从音节格指定位置匹配词条，同时返回 DAT 前缀探索触及的最远字节位置
+    pub fn match_from_with_reach(
+        lattice: &SyllableLattice,
+        start_pos: usize,
+        table: &LexiconTable,
+        options: &MatcherOptions,
+    ) -> (Vec<PhraseMatch>, usize) {
         let mut results = Vec::new();
         if start_pos >= lattice.len {
-            return results;
+            return (results, start_pos);
         }
 
         if let Some(mmap) = &table.compact_mmap {
@@ -95,6 +105,7 @@ impl DatPhraseMatcher {
                 reader,
                 options,
                 start_pos,
+                max_reach: start_pos,
                 results: &mut results,
             };
             let state = DatWalkState {
@@ -111,6 +122,8 @@ impl DatPhraseMatcher {
                 key_parts: Vec::with_capacity(6),
             };
             dfs_dat_match(&mut ctx, state);
+            let max_reach = ctx.max_reach;
+            (results, max_reach)
         } else {
             let state = MemWalkState {
                 pos: start_pos,
@@ -125,9 +138,8 @@ impl DatPhraseMatcher {
                 patterns: Vec::with_capacity(6),
             };
             dfs_mem_match(lattice, table, options, start_pos, state, &mut results);
+            (results, lattice.len)
         }
-
-        results
     }
 }
 
@@ -137,6 +149,7 @@ struct DatSearchCtx<'a> {
     reader: DatReader<'a>,
     options: &'a MatcherOptions,
     start_pos: usize,
+    max_reach: usize,
     results: &'a mut Vec<PhraseMatch>,
 }
 
@@ -192,6 +205,7 @@ fn handle_dat_standard_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, ed
         next_parts.push(syl.clone());
     }
 
+    ctx.max_reach = ctx.max_reach.max(edge.end);
     let next_syl_count = state.syl_count + edge.syllables.len();
     let next_typo = state.typo_count.saturating_add(edge.typo_count);
     let next_cost = state.edge_cost.saturating_add(edge.cost);
@@ -254,6 +268,9 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
     }
     let mut branches = Vec::with_capacity(32);
     cursor.collect_syllable_branches(&ctx.reader, initial, 32, &mut branches);
+    if !branches.is_empty() {
+        ctx.max_reach = ctx.max_reach.max(edge.end);
+    }
 
     let next_pos = ctx.lattice.skip_separators(edge.end);
     let next_cost = state.edge_cost.saturating_add(edge.cost);

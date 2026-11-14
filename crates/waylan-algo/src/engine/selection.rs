@@ -73,6 +73,7 @@ impl AlgoEngine {
         let py_opt = (!pinyin.is_empty()).then_some(pinyin.as_str());
         let removed = self.adaptive.forget_word(&text, py_opt, current_timestamp);
         if removed {
+            self.beam_cache.invalidate();
             self.recompute_candidates();
         }
         removed
@@ -209,6 +210,7 @@ impl AlgoEngine {
             }
         }
 
+        self.beam_cache.invalidate();
         let commit_text = self.prepare_commit_text(&mut selected, should_record);
         let consumed_len = self.calculate_candidate_consumed_len(&selected);
 

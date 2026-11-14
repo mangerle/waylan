@@ -11,8 +11,8 @@ mod collector;
 
 use super::AlgoEngine;
 use crate::decoder::{
-    BeamDecodeOptions, DecodeResult, LatticeOptions, MatcherOptions, PositionalBeamDecoder,
-    SyllableLattice,
+    compute_decode_config_sig, BeamDecodeOptions, DecodeResult, LatticeOptions, MatcherOptions,
+    PositionalBeamDecoder, SyllableLattice,
 };
 use crate::dispatcher::ModeDispatcher;
 use crate::pipeline::CandidatePipeline;
@@ -81,7 +81,7 @@ impl AlgoEngine {
     }
 
     /// 构建统一音节格并执行按字节位置同步束搜索解码
-    pub(crate) fn build_lattice_and_decode(&self) -> (SyllableLattice, DecodeResult) {
+    pub(crate) fn build_lattice_and_decode(&mut self) -> (SyllableLattice, DecodeResult) {
         let raw = self.composition.as_str();
         let lattice_opts = LatticeOptions {
             fuzzy: self.config.fuzzy,
@@ -106,11 +106,30 @@ impl AlgoEngine {
             eval_ts: self.adaptive.last_timestamp,
             last_commit_context: self.composition.last_commit_context(),
         };
-        let decode = PositionalBeamDecoder::decode(
+        let f = &self.config.fuzzy;
+        let fuzzy_mask = (u16::from(f.c_ch))
+            | (u16::from(f.z_zh) << 1)
+            | (u16::from(f.s_sh) << 2)
+            | (u16::from(f.an_ang) << 3)
+            | (u16::from(f.en_eng) << 4)
+            | (u16::from(f.in_ing) << 5)
+            | (u16::from(f.l_n) << 6)
+            | (u16::from(f.f_h) << 7)
+            | (u16::from(f.r_l) << 8)
+            | (u16::from(f.g_k) << 9);
+        let config_sig = compute_decode_config_sig(
+            fuzzy_mask,
+            self.config.typo_rules.enable,
+            self.config.enable_acronym,
+            &beam_opts,
+        );
+        let decode = PositionalBeamDecoder::decode_with_cache(
             &lattice,
             &self.resources.table,
             Some(&self.adaptive.model),
             &beam_opts,
+            &mut self.beam_cache,
+            config_sig,
         );
         (lattice, decode)
     }

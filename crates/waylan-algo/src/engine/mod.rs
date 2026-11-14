@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use crate::custom_phrase::AuxiliaryDict;
-use crate::decoder::{LatticeOptions, SyllableLattice};
+use crate::decoder::{IncrementalBeamCache, LatticeOptions, SyllableLattice};
 use crate::error::AlgoError;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, AlgoConfig, ImportedDictEntry};
@@ -51,6 +51,8 @@ pub struct AlgoEngine {
     pub config: AlgoConfig,
     /// 候选词收集复用工作区缓冲（预分配容量，避免高频击键时数十次 Vec 分配与重新扩容）
     pub(crate) scratch_candidates: Vec<AlgoCandidate>,
+    /// 按字节前缀冻结的增量束搜索解码缓存
+    pub(crate) beam_cache: IncrementalBeamCache,
 }
 
 impl AlgoEngine {
@@ -75,12 +77,14 @@ impl AlgoEngine {
             composition: CompositionBuffer::new(),
             config,
             scratch_candidates: Vec::with_capacity(128),
+            beam_cache: IncrementalBeamCache::new(),
         }
     }
 
     /// 设置用户自适应词库持久化文件路径并自动重放加载已有 WAL 记录
     pub fn set_user_dict_path(&mut self, path: impl Into<std::path::PathBuf>) {
         self.adaptive.set_dict_path(path);
+        self.beam_cache.invalidate();
     }
 
     /// 强制执行用户自适应词库的归并与刷盘持久化 (WAL Compaction)
@@ -176,11 +180,13 @@ impl AlgoEngine {
     #[inline]
     pub fn reset_user_adaptive_model(&mut self) {
         self.adaptive.model = crate::user_adaptive::UserAdaptiveModel::new();
+        self.beam_cache.invalidate();
     }
 
     /// 批量导入外部词库条目到用户自适应模型
     pub fn import_dict_entries(&mut self, entries: &[ImportedDictEntry]) {
         self.adaptive.import_dict_entries(entries);
+        self.beam_cache.invalidate();
     }
 
     /// 获取当前输入缓冲区内容

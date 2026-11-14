@@ -10,6 +10,9 @@
 
 use std::collections::HashMap;
 
+use super::beam_cache::{
+    merge_crossing_matches, CacheSnapshot, IncrementalBeamCache, MAX_PHRASE_SPAN_BYTES,
+};
 use super::language_model::BigramLanguageModel;
 use super::lattice::SyllableLattice;
 use super::matcher::{DatPhraseMatcher, MatcherOptions, PhraseMatch};
@@ -104,45 +107,64 @@ impl Default for BeamDecodeOptions<'_> {
 }
 
 /// 束搜索回溯节点（存放于连续 Arena 中，避免状态扩展时复制整条词序列）
-#[derive(Clone, Copy)]
-struct ArenaNode {
-    parent: Option<usize>,
-    word_ref: Option<(usize, usize)>,
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ArenaNode {
+    pub(super) parent: Option<usize>,
+    pub(super) word_ref: Option<(usize, usize)>,
 }
 
-#[derive(Clone, Copy)]
-struct BeamState {
-    node_idx: usize,
-    score: i64,
-    typo_count: u8,
-    has_initial: bool,
-    has_partial_tail: bool,
-    is_exact_all: bool,
-    word_count: usize,
-    last_word_ref: Option<(usize, usize)>,
-    last_word_id: Option<u32>,
-    first_word_end: Option<usize>,
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BeamState {
+    pub(super) node_idx: usize,
+    pub(super) score: i64,
+    pub(super) typo_count: u8,
+    pub(super) has_initial: bool,
+    pub(super) has_partial_tail: bool,
+    pub(super) is_exact_all: bool,
+    pub(super) word_count: usize,
+    pub(super) last_word_ref: Option<(usize, usize)>,
+    pub(super) last_word_id: Option<u32>,
+    pub(super) first_word_end: Option<usize>,
 }
 
 /// 按字节位置同步的统一束搜索解码器
 pub struct PositionalBeamDecoder;
 
 impl PositionalBeamDecoder {
-    /// 在统一音节格上执行端到端束搜索解码
+    /// 在统一音节格上执行端到端束搜索解码（无缓存全量路径）
     pub fn decode(
         lattice: &SyllableLattice,
         table: &LexiconTable,
         adaptive: Option<&UserAdaptiveModel>,
         options: &BeamDecodeOptions<'_>,
     ) -> DecodeResult {
+        Self::decode_core(lattice, table, adaptive, options, None, 0)
+    }
+
+    /// 在统一音节格上执行支持前缀增量缓存的端到端束搜索解码
+    pub fn decode_with_cache(
+        lattice: &SyllableLattice,
+        table: &LexiconTable,
+        adaptive: Option<&UserAdaptiveModel>,
+        options: &BeamDecodeOptions<'_>,
+        cache: &mut IncrementalBeamCache,
+        config_sig: u64,
+    ) -> DecodeResult {
+        Self::decode_core(lattice, table, adaptive, options, Some(cache), config_sig)
+    }
+
+    fn decode_core(
+        lattice: &SyllableLattice,
+        table: &LexiconTable,
+        adaptive: Option<&UserAdaptiveModel>,
+        options: &BeamDecodeOptions<'_>,
+        mut cache: Option<&mut IncrementalBeamCache>,
+        config_sig: u64,
+    ) -> DecodeResult {
         let len = lattice.len;
         if len == 0 {
             return DecodeResult::default();
         }
-
-        let mut beam: Vec<Vec<BeamState>> = vec![Vec::new(); len + 1];
-        let mut node_arena: Vec<ArenaNode> = Vec::with_capacity(len.saturating_mul(16).max(64));
-        let mut spans_by_pos: Vec<Vec<PhraseMatch>> = vec![Vec::new(); len];
 
         let seed_word = options.last_commit_context.unwrap_or("");
         let seed_word_id = (!seed_word.is_empty())
@@ -153,28 +175,149 @@ impl PositionalBeamDecoder {
         if start_pos >= len {
             return DecodeResult::default();
         }
-        let root_idx = node_arena.len();
-        node_arena.push(ArenaNode {
-            parent: None,
-            word_ref: None,
-        });
-        beam[start_pos].push(BeamState {
-            node_idx: root_idx,
-            score: 0,
-            typo_count: 0,
-            has_initial: false,
-            has_partial_tail: false,
-            is_exact_all: true,
-            word_count: 0,
-            last_word_ref: None,
-            last_word_id: seed_word_id,
-            first_word_end: None,
-        });
 
         let mut whole_words: Vec<PhraseMatch> = Vec::new();
         let mut prefix_word_matches: Vec<PhraseMatch> = Vec::new();
 
-        for pos in start_pos..len {
+        let freeze_opt = cache
+            .as_deref()
+            .and_then(|c| c.compute_safe_freeze(lattice, options, config_sig))
+            .filter(|&f| f > start_pos);
+
+        let (
+            mut beam,
+            mut node_arena,
+            mut arena_len_before_pos,
+            mut spans_by_pos,
+            mut pos_max_reach,
+            loop_start,
+        ) = if let Some(freeze_pos) = freeze_opt {
+            let c = cache.as_deref_mut().expect("cache checked above");
+            let mut beam = vec![Vec::new(); len + 1];
+            for (slot, cached) in beam
+                .iter_mut()
+                .zip(c.beam_slots.iter_mut())
+                .take(freeze_pos + 1)
+            {
+                *slot = std::mem::take(cached);
+            }
+            let mut node_arena = std::mem::take(&mut c.node_arena);
+            node_arena.truncate(c.arena_len_before_pos[freeze_pos]);
+            let mut arena_len_before_pos = vec![0usize; len];
+            arena_len_before_pos[..freeze_pos]
+                .copy_from_slice(&c.arena_len_before_pos[..freeze_pos]);
+            let mut spans_by_pos = vec![Vec::new(); len];
+            for (slot, cached) in spans_by_pos
+                .iter_mut()
+                .zip(c.spans_by_pos.iter_mut())
+                .take(freeze_pos)
+            {
+                *slot = std::mem::take(cached);
+            }
+            let mut pos_max_reach = vec![0usize; len];
+            pos_max_reach[..freeze_pos].copy_from_slice(&c.pos_max_reach[..freeze_pos]);
+
+            // 仅对上次曾触及或跨越冻结边界的位置，补充跨边界匹配及扩展边
+            let bridge_start = freeze_pos.saturating_sub(MAX_PHRASE_SPAN_BYTES);
+            for pos in bridge_start..freeze_pos {
+                if beam[pos].is_empty() || pos_max_reach[pos] < freeze_pos {
+                    if pos == start_pos {
+                        for m in &spans_by_pos[start_pos] {
+                            if m.end < len
+                                && m.syllable_count >= 2
+                                && m.typo_count == 0
+                                && !m.has_initial
+                            {
+                                prefix_word_matches.push(m.clone());
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let (mut fresh, reach) = DatPhraseMatcher::match_from_with_reach(
+                    lattice,
+                    pos,
+                    table,
+                    &options.matcher_options,
+                );
+                pos_max_reach[pos] = reach;
+                if pos == start_pos {
+                    for m in &fresh {
+                        if m.end == len {
+                            whole_words.push(m.clone());
+                        } else if m.syllable_count >= 2 && m.typo_count == 0 && !m.has_initial {
+                            prefix_word_matches.push(m.clone());
+                        }
+                    }
+                }
+                filter_and_rank_matches(&mut fresh, len, &options.weights);
+                merge_crossing_matches(&mut spans_by_pos[pos], fresh, freeze_pos);
+
+                let cur_states = beam[pos].clone();
+                let mut ctx = ExpandContext {
+                    pos,
+                    seed_word,
+                    spans_by_pos: &spans_by_pos,
+                    table,
+                    adaptive,
+                    options,
+                    node_arena: &mut node_arena,
+                    beam: &mut beam,
+                };
+                expand_position_states(&cur_states, &mut ctx, Some(freeze_pos));
+            }
+            if start_pos < bridge_start {
+                for m in &spans_by_pos[start_pos] {
+                    if m.end < len && m.syllable_count >= 2 && m.typo_count == 0 && !m.has_initial {
+                        prefix_word_matches.push(m.clone());
+                    }
+                }
+            }
+
+            (
+                beam,
+                node_arena,
+                arena_len_before_pos,
+                spans_by_pos,
+                pos_max_reach,
+                freeze_pos,
+            )
+        } else {
+            let mut beam: Vec<Vec<BeamState>> = vec![Vec::new(); len + 1];
+            let mut node_arena: Vec<ArenaNode> = Vec::with_capacity(len.saturating_mul(16).max(64));
+            let arena_len_before_pos = vec![0usize; len];
+            let spans_by_pos: Vec<Vec<PhraseMatch>> = vec![Vec::new(); len];
+            let pos_max_reach = vec![0usize; len];
+
+            let root_idx = node_arena.len();
+            node_arena.push(ArenaNode {
+                parent: None,
+                word_ref: None,
+            });
+            beam[start_pos].push(BeamState {
+                node_idx: root_idx,
+                score: 0,
+                typo_count: 0,
+                has_initial: false,
+                has_partial_tail: false,
+                is_exact_all: true,
+                word_count: 0,
+                last_word_ref: None,
+                last_word_id: seed_word_id,
+                first_word_end: None,
+            });
+            (
+                beam,
+                node_arena,
+                arena_len_before_pos,
+                spans_by_pos,
+                pos_max_reach,
+                start_pos,
+            )
+        };
+
+        for pos in loop_start..len {
+            arena_len_before_pos[pos] = node_arena.len();
             let next_non_sep = lattice.skip_separators(pos);
             if next_non_sep > pos {
                 if !beam[pos].is_empty() {
@@ -194,8 +337,13 @@ impl PositionalBeamDecoder {
             }
 
             prune_beam_slot(&mut beam[pos], options.beam_width, &spans_by_pos, seed_word);
-            let mut matches =
-                DatPhraseMatcher::match_from(lattice, pos, table, &options.matcher_options);
+            let (mut matches, reach) = DatPhraseMatcher::match_from_with_reach(
+                lattice,
+                pos,
+                table,
+                &options.matcher_options,
+            );
+            pos_max_reach[pos] = reach;
             if matches.is_empty() {
                 continue;
             }
@@ -213,7 +361,7 @@ impl PositionalBeamDecoder {
             filter_and_rank_matches(&mut matches, len, &options.weights);
             spans_by_pos[pos] = matches;
 
-            let cur_states = std::mem::take(&mut beam[pos]);
+            let cur_states = beam[pos].clone();
             let mut ctx = ExpandContext {
                 pos,
                 seed_word,
@@ -224,18 +372,35 @@ impl PositionalBeamDecoder {
                 node_arena: &mut node_arena,
                 beam: &mut beam,
             };
-            expand_position_states(&cur_states, &mut ctx);
+            expand_position_states(&cur_states, &mut ctx, None);
         }
 
-        finalize_decode_result(
+        let result = finalize_decode_result(
             lattice,
-            beam,
+            &beam[len],
             &node_arena,
             &spans_by_pos,
             whole_words,
             prefix_word_matches,
             options,
-        )
+        );
+
+        if let Some(c) = cache {
+            c.update(
+                &lattice.raw,
+                config_sig,
+                options.last_commit_context,
+                CacheSnapshot {
+                    beam_slots: beam,
+                    node_arena,
+                    arena_len_before_pos,
+                    spans_by_pos,
+                    pos_max_reach,
+                },
+            );
+        }
+
+        result
     }
 }
 
@@ -276,7 +441,11 @@ struct ExpandContext<'a> {
     beam: &'a mut [Vec<BeamState>],
 }
 
-fn expand_position_states(cur_states: &[BeamState], ctx: &mut ExpandContext<'_>) {
+fn expand_position_states(
+    cur_states: &[BeamState],
+    ctx: &mut ExpandContext<'_>,
+    min_next_pos: Option<usize>,
+) {
     let pos = ctx.pos;
     let pos_matches = &ctx.spans_by_pos[pos];
     for state in cur_states {
@@ -286,6 +455,11 @@ fn expand_position_states(cur_states: &[BeamState], ctx: &mut ExpandContext<'_>)
         };
 
         for (idx, pm) in pos_matches.iter().enumerate() {
+            if let Some(freeze) = min_next_pos {
+                if pm.end <= freeze {
+                    continue;
+                }
+            }
             if state.has_initial && pm.has_initial && state.word_count > 0 {
                 continue;
             }
@@ -364,18 +538,17 @@ fn prune_beam_slot(
 
 fn finalize_decode_result(
     lattice: &SyllableLattice,
-    mut beam: Vec<Vec<BeamState>>,
+    end_slot: &[BeamState],
     node_arena: &[ArenaNode],
     spans_by_pos: &[Vec<PhraseMatch>],
     mut whole_words: Vec<PhraseMatch>,
     mut prefix_word_matches: Vec<PhraseMatch>,
     options: &BeamDecodeOptions<'_>,
 ) -> DecodeResult {
-    let end_slot = beam.pop().unwrap_or_default();
     let mut sentences = Vec::with_capacity(end_slot.len().min(options.max_sentences));
     let mut seen_texts: Vec<String> = Vec::with_capacity(options.max_sentences);
 
-    let mut sorted_end = end_slot;
+    let mut sorted_end = end_slot.to_vec();
     sorted_end.sort_by_key(|a| std::cmp::Reverse(a.score));
 
     let mut refs: Vec<(usize, usize)> = Vec::with_capacity(8);
