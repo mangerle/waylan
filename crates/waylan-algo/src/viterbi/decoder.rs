@@ -2,6 +2,7 @@
 
 use super::language_model::BigramLanguageModel;
 use super::tail_expansion::{expand_remaining_tail, TailExpansionContext};
+use crate::pipeline::is_rare_ext_char;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
 
@@ -303,6 +304,10 @@ impl ViterbiDecoder {
         target_beam: &mut Vec<ViterbiBeamNode>,
     ) {
         let (text, raw_score, word_id_opt) = params.entry;
+        // 非常用扩展 B+ 生僻单字不参与整句组词搜索
+        if is_rare_ext_char(text) {
+            return;
+        }
         let freq_score = unigram_log_score(*raw_score);
         let curr_word_id = word_id_opt.or_else(|| {
             if params.lattice.has_bigram {

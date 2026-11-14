@@ -2,6 +2,28 @@ use crate::opencc::OpenCcDict;
 use crate::types::{AlgoCandidate, AlgoConfig};
 use std::collections::HashSet;
 
+/// 扩展 B 区以后在常见字体（Noto CJK、思源黑体等）中可正常渲染的通用规范扩展汉字
+const COMMON_EXT_CHARS: &str = concat!(
+    "𠅤𠙶𠳐𡎚𡐓𣗋𣲗𣲘𣸣𤆵𤧛𤩽𤫉𥔲𥕢𥖨𥻗𦈡𦒍𦙶𦝼𦭜𦰡𧿹𨐈𨙸𨚕𨟠𨭉𨱇𨱏𨱑𨱔𨺙𩽾𩾃𩾌𪟝𪣻𪤗",
+    "𪨰𪨶𪩘𪾢𫄧𫄨𫄷𫄸𫇭𫌀𫍣𫍯𫍲𫍽𫐄𫐐𫐓𫑡𫓧𫓯𫓶𫓹𫔍𫔎𫔶𫖮𫖯𫖳𫗧𫗴𫘜𫘝𫘦𫘧𫘨𫘪𫘬𫚕𫚖𫚭",
+    "𫛭𫞩𫟅𫟦𫟷𫟹𫟼𫠆𫠊𫠜𫢸𫫇𫭟𫭢𫭼𫮃𫰛𫵷𫶇𫷷𫸩𬀩𬀪𬂩𬃊𬇕𬇙𬇹𬉼𬊈𬊤𬌗𬍛𬍡𬍤𬒈𬒔𬒗𬕂𬘓",
+    "𬘘𬘡𬘩𬘫𬘬𬘭𬘯𬙂𬙊𬙋𬜬𬜯𬞟𬟁𬟽𬣙𬣞𬣡𬣳𬤇𬤊𬤝𬨂𬨎𬩽𬪩𬬩𬬭𬬮𬬱𬬸𬬹𬬻𬬿𬭁𬭊𬭎𬭚𬭛𬭤",
+    "𬭩𬭬𬭯𬭳𬭶𬭸𬭼𬮱𬮿𬯀𬯎𬱖𬱟𬳵𬳶𬳽𬳿𬴂𬴃𬴊𬶋𬶍𬶏𬶐𬶟𬶠𬶨𬶭𬶮𬷕𬸘𬸚𬸣𬸦𬸪𬹼𬺈𬺓𰻝",
+);
+
+/// 判断文本是否为应当默认屏蔽的非常用 CJK 扩展 B+ 生僻单字
+///
+/// 多字词组放行；单字若码位 >= `U+20000` 且未收录于 `COMMON_EXT_CHARS`，则判定为非常用生僻扩展字。
+pub fn is_rare_ext_char(text: &str) -> bool {
+    if text.len() != 4 || text.as_bytes()[0] < 0xF0 {
+        return false;
+    }
+    let Some(ch) = text.chars().next() else {
+        return false;
+    };
+    u32::from(ch) >= 0x20000 && !COMMON_EXT_CHARS.contains(ch)
+}
+
 /// 候选词后处理流水线 (Candidate Pipeline)
 ///
 /// # 设计原理
@@ -30,9 +52,12 @@ impl CandidatePipeline {
     ) -> Vec<AlgoCandidate> {
         let mut candidates = raw_candidates;
 
-        // 1. 字符集过滤
+        // 1. 字符集过滤（先清除控制符与 PUA，再按需过滤无字体支持的扩展 B+ 非常用单字）
         if config.filter_uncommon_charset {
             candidates.retain(|c| Self::is_standard_chinese_charset(&c.text));
+        }
+        if config.filter_rare_ext_chars {
+            candidates.retain(|c| !is_rare_ext_char(&c.text));
         }
 
         // 2. 简繁体转换（基于 STPhrases 正向最大匹配 FMM + STCharacters 单字表及一简多繁展开）
@@ -202,6 +227,7 @@ mod tests {
         ];
         let config = AlgoConfig {
             filter_uncommon_charset: true,
+            filter_rare_ext_chars: false,
             ..Default::default()
         };
 
@@ -209,6 +235,21 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "常用字");
         assert_eq!(result[1].text, "\u{20000}");
+    }
+
+    #[test]
+    fn test_filter_rare_ext_chars_blocks_uncommon_ext_b() {
+        let raw = vec![
+            AlgoCandidate::new("常用字", "chang'yong'zi", 10_000),
+            AlgoCandidate::new("\u{20000}", "he", 9_000), // 非常用扩展 B 生僻单字，应屏蔽
+            AlgoCandidate::new("𰻝", "biang", 8_500),     // 通用扩展字白名单，应保留
+            AlgoCandidate::new("𩽾𩾌", "an'kang", 8_000), // 扩展字组成的多字词，应保留
+        ];
+        let config = AlgoConfig::default();
+
+        let result = CandidatePipeline::process(raw, &config, 0);
+        let texts: Vec<&str> = result.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, vec!["常用字", "𰻝", "𩽾𩾌"]);
     }
 
     #[test]

@@ -26,6 +26,9 @@ pub struct AlgoConfig {
     pub traditional_chinese: bool,
     /// 是否过滤超出常用规范汉字范围的生僻字符
     pub filter_uncommon_charset: bool,
+    /// 是否默认屏蔽无常见字体支持的 CJK 扩展 B+ 非常用单字（防止候选显示方块字）
+    #[serde(default = "default_true")]
+    pub filter_rare_ext_chars: bool,
     /// 是否在候选词旁边附加拼音/注释提示
     pub show_pinyin_comment: bool,
     /// 是否开启多路候选词自动去重
@@ -42,6 +45,10 @@ pub struct AlgoConfig {
     pub auto_pangu_spacing: bool,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for AlgoConfig {
     fn default() -> Self {
         Self {
@@ -51,6 +58,7 @@ impl Default for AlgoConfig {
             enable_i_mode: true,
             traditional_chinese: false,
             filter_uncommon_charset: false,
+            filter_rare_ext_chars: true,
             show_pinyin_comment: true,
             auto_dedup: true,
             dynamic_adjust_freq: true,
@@ -71,6 +79,7 @@ impl From<&AppConfig> for AlgoConfig {
             enable_i_mode: cfg.pinyin.enable_i_mode,
             traditional_chinese: cfg.pinyin.traditional_chinese,
             filter_uncommon_charset: cfg.pinyin.filter_uncommon_charset,
+            filter_rare_ext_chars: true,
             show_pinyin_comment: cfg.ui.show_pinyin_comment,
             auto_dedup: cfg.pinyin.auto_dedup,
             dynamic_adjust_freq: cfg.pinyin.dynamic_adjust_freq,
