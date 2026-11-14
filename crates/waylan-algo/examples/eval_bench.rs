@@ -6,8 +6,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use waylan_algo::eval_bench::{
-    builtin_regression_cases, parse_eval_tsv, run_eval, run_probe, train_weights_softmax, EvalCase,
-    TrainConfig,
+    parse_eval_tsv, run_eval, run_probe, train_weights_softmax, EvalCase, TrainConfig,
 };
 use waylan_algo::{AlgoConfig, AlgoEngine, CompactMmapBigram, LexiconTable, ScoringWeights};
 
@@ -18,13 +17,17 @@ fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
-fn load_cases_from_args(args: &[String]) -> Vec<EvalCase> {
-    if let Some(path) = arg_value(args, "--cases") {
-        if let Ok(content) = fs::read_to_string(path) {
-            return parse_eval_tsv(&content);
-        }
+fn load_cases_from_args(args: &[String]) -> Result<Vec<EvalCase>, String> {
+    let path = arg_value(args, "--cases").ok_or_else(|| {
+        "请通过 --cases <TSV文件路径> 指定评测集（例如: --cases target/eval_1000.tsv）".to_string()
+    })?;
+    let content =
+        fs::read_to_string(path).map_err(|e| format!("读取评测集文件 {path} 失败: {e}"))?;
+    let cases = parse_eval_tsv(&content);
+    if cases.is_empty() {
+        return Err(format!("评测集文件 {path} 中未解析出任何有效用例"));
     }
-    builtin_regression_cases()
+    Ok(cases)
 }
 
 fn load_engine(args: &[String]) -> Result<AlgoEngine, String> {
@@ -58,7 +61,13 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let probe_mode = args.iter().any(|a| a == "--probe");
     let train_mode = args.iter().any(|a| a == "--train");
-    let cases = load_cases_from_args(&args);
+    let cases = match load_cases_from_args(&args) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(1);
+        }
+    };
 
     let mut engine = match load_engine(&args) {
         Ok(e) => e,

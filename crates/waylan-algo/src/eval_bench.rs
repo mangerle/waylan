@@ -411,38 +411,6 @@ fn perturb_weight(mut w: ScoringWeights, dim: usize, delta: i64) -> ScoringWeigh
     w
 }
 
-/// 返回覆盖 5 大场景（同音词、半成品、简拼与混拼、四类纠错、长句）的内置回归基准用例集
-pub fn builtin_regression_cases() -> Vec<EvalCase> {
-    parse_eval_tsv(
-        "\
-homophone\tnihao\t你好
-homophone\tzhongguo\t中国
-homophone\tbeijing\t北京
-homophone\tshanghai\t上海
-homophone\txian\t先|西安
-homophone\tzhongdi\t种地
-partial\tniha\t你好
-partial\tzhonggu\t中国
-partial\tbeiji\t北京
-partial\tshangha\t上海
-partial\tzhongd\t重点|种地
-jianpin\twanqky\t完全可以
-jianpin\tyongzwen\t用中文
-jianpin\tbj\t北京
-jianpin\tsh\t上海|是
-typo\tzhognguo\t中国
-typo\tzhonguo\t中国
-typo\tnihaoo\t你好
-typo\tnihoa\t你好
-typo\tcehnggong\t成功
-sentence\tnihaozhongguo\t你好中国
-sentence\twoxiangqubeijing\t我想去北京
-sentence\tjintianhao\t今天好
-sentence\twomendeshijie\t我们的世界
-",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
