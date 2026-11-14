@@ -590,3 +590,42 @@ fn test_mixed_full_pinyin_and_jianpin_recall() {
         cands.iter().take(5).map(|c| &c.text).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn test_realtime_emoji_suggest_at_third_slot() {
+    let mut table = LexiconTable::new();
+    table.insert("kai'xin", "开心", 60_000);
+    table.insert("kai'xin", "凯新", 30_000);
+
+    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+    for ch in "kaixin".chars() {
+        engine.push_char(ch);
+    }
+    let cands = engine.all_candidates();
+    assert_eq!(cands[0].text, "开心");
+    assert!(cands.len() >= 3, "开心 候选后应在第三位插入 Emoji");
+    assert_eq!(
+        cands[2].text, "\u{1F60A}",
+        "kaixin 应在第三候选位推荐笑脸 Emoji"
+    );
+
+    // 关闭开关后不应插入 Emoji
+    let mut table2 = LexiconTable::new();
+    table2.insert("kai'xin", "开心", 60_000);
+    table2.insert("kai'xin", "凯新", 30_000);
+    let mut engine_off = AlgoEngine::new(
+        table2,
+        AlgoConfig {
+            enable_emoji_suggest: false,
+            ..Default::default()
+        },
+    );
+    for ch in "kaixin".chars() {
+        engine_off.push_char(ch);
+    }
+    let cands_off = engine_off.all_candidates();
+    assert!(
+        !cands_off.iter().any(|c| c.text == "\u{1F60A}"),
+        "关闭 enable_emoji_suggest 后不应插入 Emoji"
+    );
+}

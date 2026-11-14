@@ -1,6 +1,7 @@
 pub mod adaptive;
 pub mod candidates;
 pub mod composition_buffer;
+pub(crate) mod emoji;
 pub mod extension;
 pub(crate) mod prefix_synthesis;
 pub mod resources;

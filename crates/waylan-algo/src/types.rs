@@ -37,6 +37,9 @@ pub struct AlgoConfig {
     pub dynamic_adjust_freq: bool,
     /// 是否启用首字母简拼候选召回
     pub enable_acronym: bool,
+    /// 是否开启打字时在第三候选位实时推荐 Emoji
+    #[serde(default = "default_true")]
+    pub enable_emoji_suggest: bool,
     /// 模糊音配置
     pub fuzzy: FuzzyConfig,
     /// 拼音纠错规则配置
@@ -63,6 +66,7 @@ impl Default for AlgoConfig {
             auto_dedup: true,
             dynamic_adjust_freq: true,
             enable_acronym: true,
+            enable_emoji_suggest: true,
             fuzzy: FuzzyConfig::default(),
             typo_rules: TypoCorrectionRules::default(),
             auto_pangu_spacing: false,
@@ -84,6 +88,7 @@ impl From<&AppConfig> for AlgoConfig {
             auto_dedup: cfg.pinyin.auto_dedup,
             dynamic_adjust_freq: cfg.pinyin.dynamic_adjust_freq,
             enable_acronym: cfg.pinyin.enable_acronym,
+            enable_emoji_suggest: true,
             fuzzy: if cfg.pinyin.fuzzy_pinyin {
                 cfg.pinyin.fuzzy_rules
             } else {

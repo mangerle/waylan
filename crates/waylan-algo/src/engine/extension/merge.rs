@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use super::pipeline::ExtensionPipeline;
 use super::providers::ExtensionContext;
+use crate::engine::emoji::suggest_emoji_candidate;
 use crate::engine::typo::SpatialTypoCorrector;
 use crate::engine::AlgoEngine;
 use crate::prism::SegmentPath;
@@ -61,6 +62,14 @@ impl AlgoEngine {
 
         // 4. 按照确定的语义层级编排扩展候选
         self.merge_extensions_by_hierarchy(&extensions, candidates);
+
+        // 5. 实时 Emoji 推荐（在第三候选位插入匹配表情，受配置开关控制）
+        if self.config.enable_emoji_suggest && candidates.len() >= 2 {
+            if let Some(emoji_cand) = suggest_emoji_candidate(raw_input, candidates) {
+                let insert_pos = 2.min(candidates.len());
+                candidates.insert(insert_pos, emoji_cand);
+            }
+        }
     }
 
     /// 在无完整合法成词命中时注入物理空间键盘按键纠错候选
