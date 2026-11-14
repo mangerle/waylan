@@ -490,3 +490,37 @@ fn test_rule_normalized_candidate_stays_below_exact_word() {
     assert_eq!(candidates[niu].tier, CandidateTier::RuleNormalization);
     assert!(niu < 7, "归一候选必须落在首页可翻页范围内");
 }
+
+#[test]
+fn test_complete_tail_extension_and_exact_word_protection() {
+    let mut table = LexiconTable::new();
+    table.insert("ni", "你", 9_000);
+    table.insert("ha", "哈", 5_000);
+    table.insert("ni'hao", "你好", 50_000);
+    table.insert("zhong'di", "种地", 2_000);
+    table.insert("zhong'dian", "重点", 80_000);
+
+    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+    // 1. niha 虽已能拆为 ni'ha，仍必须保留半成品补全「你好」
+    for ch in "niha".chars() {
+        engine.push_char(ch);
+    }
+    let niha_texts: Vec<&str> = engine
+        .all_candidates()
+        .iter()
+        .map(|c| c.text.as_str())
+        .collect();
+    assert!(niha_texts.contains(&"你好"), "niha 应保留补全候选 你好");
+
+    // 2. zhongdi 精确整词「种地」词频低于「重点」，但仍必须稳居第一位
+    engine.reset();
+    for ch in "zhongdi".chars() {
+        engine.push_char(ch);
+    }
+    let cands = engine.all_candidates();
+    assert_eq!(cands[0].text, "种地", "精确全拼整词必须排在第一位");
+    assert!(
+        cands.iter().any(|c| c.text == "重点"),
+        "zhongdi 应同时给出补全候选 重点"
+    );
+}

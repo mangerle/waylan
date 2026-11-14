@@ -304,6 +304,10 @@ impl AlgoEngine {
             self.collect_prefix_extension_matches(best_path, results);
             self.collect_prefix_phrase_matches(best_path, results);
             self.collect_prefix_top_k_matches(best_path, results);
+        } else if best_path.origin == PathOrigin::Exact && best_path.syllables.len() >= 2 {
+            // 即使末尾已构成完整音节（如 `niha` -> ni+ha、`zhonggu` -> zhong+gu、`beiji` -> bei+ji），
+            // 仍将末音节视作未打完的前缀进行半成品补全召回，防止打字过程中候选突然消失。
+            self.collect_complete_tail_extension_matches(best_path, results);
         }
     }
 
@@ -326,6 +330,29 @@ impl AlgoEngine {
                 .score
                 .saturating_sub(best_path.cost.saturating_mul(100));
             results.push(sentence);
+        }
+    }
+
+    /// 对已成音节但可能是未打完前缀的末音节执行半成品补全召回
+    ///
+    /// 优先级控制：标记为 `PrefixPartial`（或低于 `ExactWord` 的次级层级），
+    /// 确保存在精确全拼整词（如 `zhongdi` -> 「种地」）时精确词稳居第一，不被高频补全词抢占。
+    fn collect_complete_tail_extension_matches(
+        &self,
+        best_path: &SegmentPath,
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        let len = best_path.syllables.len();
+        let prefix_syls = &best_path.syllables[..len - 1];
+        let Some(tail_syl) = best_path.syllables.last() else {
+            return;
+        };
+        let start = results.len();
+        self.resources
+            .table
+            .lookup_prefix_extension_into(prefix_syls, tail_syl, results);
+        for cand in &mut results[start..] {
+            cand.tier = CandidateTier::PrefixPartial;
         }
     }
 
