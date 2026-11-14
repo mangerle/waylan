@@ -217,8 +217,8 @@ fn ascii_weighted_edit_distance(s_bytes: &[u8], t_bytes: &[u8]) -> Option<u32> {
             let tc = t_bytes[j - 1] as char;
             let sub_cost = char_substitution_cost(sc, tc);
             let cost_sub = dp[i - 1][j - 1] + sub_cost;
-            let cost_del = dp[i - 1][j] + 26;
-            let cost_ins = dp[i][j - 1] + 26;
+            let cost_del = dp[i - 1][j] + 22;
+            let cost_ins = dp[i][j - 1] + 22;
             dp[i][j] = cost_sub.min(cost_del).min(cost_ins);
         }
     }
@@ -254,8 +254,8 @@ fn chars_weighted_edit_distance(s_chars: &[char], t_chars: &[char]) -> u32 {
             let tc = t_chars[j - 1];
             let sub_cost = char_substitution_cost(sc, tc);
             let cost_sub = dp[i - 1][j - 1] + sub_cost;
-            let cost_del = dp[i - 1][j] + 26;
-            let cost_ins = dp[i][j - 1] + 26;
+            let cost_del = dp[i - 1][j] + 22;
+            let cost_ins = dp[i][j - 1] + 22;
 
             dp[i][j] = cost_sub.min(cost_del).min(cost_ins);
         }

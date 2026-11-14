@@ -9,7 +9,7 @@
 use super::super::AlgoEngine;
 use crate::prism::{
     calibrate_habitual_alias_score, is_habitual_alias_key, PathOrigin, PrismEngine, PrismFuzzy,
-    SegmentPath,
+    SegmentPath, STANDARD_INITIALS,
 };
 use crate::table::LENGTH_BOOST_MULTIPLIER;
 use crate::types::{AlgoCandidate, CandidateTier};
@@ -439,18 +439,102 @@ impl AlgoEngine {
         }
     }
 
-    /// 检索首字母缩写简拼与首音节单字降级备选候选
+    /// 检索首字母缩写简拼、全拼混简拼与首音节单字降级备选候选
     fn collect_acronym_and_fallback_matches(
         &self,
         raw_input: &str,
         paths: &[SegmentPath],
         results: &mut Vec<AlgoCandidate>,
     ) {
+        // 混合全拼+简拼检索（如 wanqky -> 完全可以，yongzwen -> 用中文）
+        self.collect_mixed_jianpin_matches(paths, results);
+
         // 简拼检索（受用户配置 enable_acronym 控制）
         self.collect_acronym_matches(raw_input, results);
 
         // 首音节单字降级备选
         self.collect_first_syllable_fallback(paths, results);
+    }
+
+    /// 基于音节切分路径检索全拼与声母混合简拼候选（如 `wan'q'k'y` -> 「完全可以」）
+    fn collect_mixed_jianpin_matches(
+        &self,
+        paths: &[SegmentPath],
+        results: &mut Vec<AlgoCandidate>,
+    ) {
+        if !self.config.enable_acronym {
+            return;
+        }
+        let mut queried_acronyms = Vec::with_capacity(4);
+        for path in paths.iter().take(12) {
+            if path.origin != PathOrigin::Exact {
+                continue;
+            }
+            // 若末尾残存片段为合法声母，将其纳入混合简拼序列末尾
+            let mut full_syls: Vec<String> = path.syllables.clone();
+            let mut consumed_len = path.consumed_raw_len();
+            if !path.remaining.is_empty() {
+                if STANDARD_INITIALS.contains(&path.remaining.as_str()) {
+                    consumed_len += path.remaining.len();
+                    full_syls.push(path.remaining.clone());
+                } else {
+                    continue;
+                }
+            }
+
+            let syl_count = full_syls.len();
+            if !(2..=6).contains(&syl_count) {
+                continue;
+            }
+            let initial_count = full_syls
+                .iter()
+                .filter(|s| STANDARD_INITIALS.contains(&s.as_str()))
+                .count();
+            // 仅当同时包含完整音节与声母简拼时触发混合匹配
+            if initial_count == 0 || initial_count == syl_count {
+                continue;
+            }
+            let acronym_key: String = full_syls.iter().filter_map(|s| s.chars().next()).collect();
+            if acronym_key.len() != syl_count || queried_acronyms.contains(&acronym_key) {
+                continue;
+            }
+            queried_acronyms.push(acronym_key.clone());
+
+            let full_count = (syl_count - initial_count) as u32;
+            for mut cand in self.resources.table.lookup_acronym_top_k(&acronym_key, 48) {
+                if !self.matches_mixed_jianpin_text(&full_syls, &cand.text) {
+                    continue;
+                }
+                cand.tier = CandidateTier::Acronym;
+                cand.score = cand.score.saturating_add(full_count.saturating_mul(15_000));
+                cand.consumed_len = Some(consumed_len);
+                cand.comment = Some("[混拼]".to_string());
+                results.push(cand);
+            }
+        }
+    }
+
+    /// 校验候选词各位置汉字是否与混合全拼+简拼路径中的完整音节读音相符
+    fn matches_mixed_jianpin_text(&self, path_syls: &[String], cand_text: &str) -> bool {
+        let chars: Vec<char> = cand_text.chars().collect();
+        if chars.len() != path_syls.len() {
+            return false;
+        }
+        for (idx, path_syl) in path_syls.iter().enumerate() {
+            if STANDARD_INITIALS.contains(&path_syl.as_str()) {
+                continue;
+            }
+            let Some(entries) = self.resources.table.get_raw_entries(path_syl) else {
+                return false;
+            };
+            let target_ch = chars[idx];
+            let mut target_buf = [0u8; 4];
+            let target_str = target_ch.encode_utf8(&mut target_buf);
+            if !entries.iter().any(|(t, _)| t == target_str) {
+                return false;
+            }
+        }
+        true
     }
 
     /// 检索首字母缩写简拼候选，并对含分隔符输入标注完整消耗长度

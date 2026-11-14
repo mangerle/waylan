@@ -135,15 +135,24 @@ impl AlgoEngine {
             merged_typos,
         } = params;
 
-        for (i, mut typo_cand) in merged_typos.into_iter().take(2).enumerate() {
+        let mut inserted = 0usize;
+        for mut typo_cand in merged_typos.into_iter().take(2) {
+            // 若已有更可信层级（精确词/确定性归一/整句等）的同文本候选，保留原候选不降级覆盖
+            if candidates
+                .iter()
+                .any(|c| c.text == typo_cand.text && c.tier > CandidateTier::TypoCorrection)
+            {
+                continue;
+            }
             typo_cand.consumed_len = Some(raw_input_len);
             candidates.retain(|c| c.text != typo_cand.text);
             let target_pos = if is_broken_typo || candidates.is_empty() {
-                i.min(candidates.len())
+                inserted.min(candidates.len())
             } else {
-                (1 + i).min(candidates.len())
+                (1 + inserted).min(candidates.len())
             };
             candidates.insert(target_pos, typo_cand);
+            inserted += 1;
         }
     }
 

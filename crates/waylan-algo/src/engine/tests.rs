@@ -549,3 +549,44 @@ fn test_sentence_head_segment_partial_commit() {
     assert_eq!(committed, "你好");
     assert_eq!(engine.raw_input(), "zhongguo");
 }
+
+#[test]
+fn test_mixed_full_pinyin_and_jianpin_recall() {
+    let mut table = LexiconTable::new();
+    table.insert("wan", "完", 10_000);
+    table.insert("yong", "用", 10_000);
+    table.insert("wen", "文", 10_000);
+    table.insert("wan'quan'ke'yi", "完全可以", 50_000);
+    table.insert("wei'qu'kuan'yu", "委屈宽裕", 90_000);
+    table.insert("yong'zhong'wen", "用中文", 48_000);
+    table.insert("yong'zhe'wu", "用者无", 90_000);
+
+    let config = AlgoConfig {
+        enable_acronym: true,
+        ..Default::default()
+    };
+    let mut engine = AlgoEngine::new(table, config);
+
+    // 1. wanqky -> 完全可以 (wan'q'k'y)
+    for ch in "wanqky".chars() {
+        engine.push_char(ch);
+    }
+    let cands = engine.all_candidates();
+    assert!(
+        cands.iter().any(|c| c.text == "完全可以"),
+        "wanqky 应通过全拼混简拼召回「完全可以」，实际: {:?}",
+        cands.iter().take(5).map(|c| &c.text).collect::<Vec<_>>()
+    );
+
+    // 2. yongzwen -> 用中文 (yong'z'wen)
+    engine.reset();
+    for ch in "yongzwen".chars() {
+        engine.push_char(ch);
+    }
+    let cands = engine.all_candidates();
+    assert!(
+        cands.iter().any(|c| c.text == "用中文"),
+        "yongzwen 应通过全拼混简拼召回「用中文」，实际: {:?}",
+        cands.iter().take(5).map(|c| &c.text).collect::<Vec<_>>()
+    );
+}

@@ -49,10 +49,16 @@ impl SpatialTypoCorrector {
         // 1. 物理二维键盘空间邻键矩阵化替换
         Self::collect_spatial_matrix_candidates(raw_input, table, &mut candidates);
 
-        // 2. 邻近字母快速倒置
+        // 2. 邻近字母快速倒置（含跨音节倒置，如 nihoa -> nihao）
         Self::collect_adjacent_swap_candidates(raw_input, table, &mut candidates);
 
-        // 3. 受模糊音与纠错规则控制的方言软约束纠错
+        // 3. 多按单字符删除（如 zhognguo -> zhongguo、nihaoo -> nihao）
+        Self::collect_extra_char_delete_candidates(raw_input, table, &mut candidates);
+
+        // 4. 漏按单字符补全（如 zhonguo -> zhongguo）
+        Self::collect_missing_char_insert_candidates(raw_input, table, &mut candidates);
+
+        // 5. 受模糊音与纠错规则控制的方言软约束纠错
         Self::collect_rule_soft_corrections(
             &RuleSoftCorrectionParams {
                 raw_input,
@@ -124,6 +130,62 @@ impl SpatialTypoCorrector {
                 Self::try_push_valid_candidate(swapped, 16, table, candidates);
             }
             buf.swap(i, i + 1);
+        }
+    }
+
+    /// 尝试删除 1 个多余按键生成多按纠错候选（如 `nihaoo` -> `nihao`、`zhognguo` -> `zhongguo`）
+    fn collect_extra_char_delete_candidates(
+        raw_input: &str,
+        table: &LexiconTable,
+        candidates: &mut Vec<(AlgoCandidate, u32)>,
+    ) {
+        let bytes = raw_input.as_bytes();
+        let n = bytes.len();
+        if n <= 3 || n > 24 {
+            return;
+        }
+        let mut buf = [0u8; 24];
+        for skip in 0..n {
+            let mut out_len = 0usize;
+            for (idx, &b) in bytes.iter().enumerate() {
+                if idx != skip {
+                    buf[out_len] = b;
+                    out_len += 1;
+                }
+            }
+            // 连续重复击键多按（如 oo）给予更低物理代价
+            let is_double_tap = (skip > 0 && bytes[skip] == bytes[skip - 1])
+                || (skip + 1 < n && bytes[skip] == bytes[skip + 1]);
+            let cost = if is_double_tap { 12 } else { 20 };
+            if let Ok(mutated) = std::str::from_utf8(&buf[..out_len]) {
+                Self::try_push_valid_candidate(mutated, cost, table, candidates);
+            }
+        }
+    }
+
+    /// 尝试在各位置补入常见漏按字母（鼻音韵尾与元音）生成漏按纠错候选（如 `zhonguo` -> `zhongguo`）
+    fn collect_missing_char_insert_candidates(
+        raw_input: &str,
+        table: &LexiconTable,
+        candidates: &mut Vec<(AlgoCandidate, u32)>,
+    ) {
+        const COMMON_MISSING: &[u8; 7] = b"gnaeiou";
+        let bytes = raw_input.as_bytes();
+        let n = bytes.len();
+        if !(3..23).contains(&n) {
+            return;
+        }
+        let mut buf = [0u8; 24];
+        for pos in 1..=n {
+            buf[..pos].copy_from_slice(&bytes[..pos]);
+            buf[pos + 1..=n].copy_from_slice(&bytes[pos..]);
+            for &ch in COMMON_MISSING {
+                // 避免与前字符无关地重复试探相同字母（叠字母单独容许）
+                buf[pos] = ch;
+                if let Ok(mutated) = std::str::from_utf8(&buf[..=n]) {
+                    Self::try_push_valid_candidate(mutated, 22, table, candidates);
+                }
+            }
         }
     }
 
@@ -418,5 +480,38 @@ mod tests {
             &TypoCorrectionRules::default(),
         )
         .is_empty());
+    }
+
+    #[test]
+    fn test_four_type_typo_corrections_missing_extra_transpose_neighbor() {
+        let mut table = LexiconTable::new();
+        table.insert("zhong'guo", "中国", 60_000);
+        table.insert("ni'hao", "你好", 60_000);
+
+        // 1. 漏按：zhonguo -> 中国
+        let missing = generate("zhonguo", &table);
+        assert!(
+            missing.iter().any(|c| c.text == "中国"),
+            "zhonguo 应召回漏按纠错 中国"
+        );
+
+        // 2. 多按（尾连击 / 中间多按）：nihaoo -> 你好, zhognguo -> 中国
+        let extra_tail = generate("nihaoo", &table);
+        assert!(
+            extra_tail.iter().any(|c| c.text == "你好"),
+            "nihaoo 应召回多按纠错 你好"
+        );
+        let extra_mid = generate("zhognguo", &table);
+        assert!(
+            extra_mid.iter().any(|c| c.text == "中国"),
+            "zhognguo 应召回多按纠错 中国"
+        );
+
+        // 3. 跨音节倒置：nihoa -> 你好
+        let transpose = generate("nihoa", &table);
+        assert!(
+            transpose.iter().any(|c| c.text == "你好"),
+            "nihoa 应召回跨音节倒置纠错 你好"
+        );
     }
 }
