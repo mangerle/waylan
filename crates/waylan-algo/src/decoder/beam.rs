@@ -207,8 +207,20 @@ fn expand_position_states(
     options: &BeamDecodeOptions<'_>,
     beam: &mut [Vec<BeamState>],
 ) {
+    let target_len = beam.len().saturating_sub(1);
     let mut ranked_matches: Vec<(i64, &PhraseMatch)> = matches
         .iter()
+        .filter(|m| {
+            let is_rare_single = m.syllable_count == 1
+                && m.freq < 10
+                && m.word.chars().count() == 1
+                && (m.start > 0 || m.end < target_len);
+            if !is_rare_single {
+                return true;
+            }
+            // 同跨度存在常用单字（freq >= 10）或词组时，隔离低频生僻单字，避免其参与组句挤占束宽
+            !matches.iter().any(|o| o.end == m.end && o.freq >= 10)
+        })
         .map(|m| (score_phrase_match(m, &options.weights), m))
         .collect();
     ranked_matches.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -407,10 +419,10 @@ fn compute_edge_penalty(pm: &PhraseMatch, weights: &ScoringWeights) -> i64 {
         penalty = penalty.saturating_add((pm.typo_count as i64) * 4_500);
     }
     if pm.has_initial {
-        penalty = penalty.saturating_add(8_000);
+        penalty = penalty.saturating_add(12_000);
     }
     if pm.has_partial_tail {
-        penalty = penalty.saturating_add((weights.partial_extension_penalty as i64) * 100);
+        penalty = penalty.saturating_add((weights.partial_extension_penalty as i64) * 100 + 2_500);
     }
     penalty
 }

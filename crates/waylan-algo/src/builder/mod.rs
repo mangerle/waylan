@@ -21,6 +21,53 @@ pub use compact::CompactDictBuilder;
 pub use compact_writer::{write_compact_file, CompactWritePayload};
 pub use dat_builder::build_dat;
 
+/// 词库编译过滤与索引瘦身配置
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DictBuildOptions {
+    /// 2~3 字词条最低保留词频（0 表示不限制）
+    pub min_phrase_score: u32,
+    /// 4 字及以上长词条最低保留词频（0 表示不限制）
+    pub min_long_phrase_score: u32,
+    /// 是否剔除词频为 0 的无效条目
+    pub drop_zero_score: bool,
+    /// 简拼缩写索引最大字母长度（0 表示不限制）
+    pub max_acronym_len: usize,
+    /// 简拼缩写索引最低保留词频（0 表示沿用默认阈值）
+    pub min_acronym_score: u32,
+}
+
+impl DictBuildOptions {
+    /// 返回面向生产主词库的清洗与瘦身配置
+    ///
+    /// 过滤零频词、低频碎片拼接词以及 4 字以上低频长词，并收缩冗余长简拼键空间。
+    pub const fn production() -> Self {
+        Self {
+            min_phrase_score: 10,
+            min_long_phrase_score: 20,
+            drop_zero_score: true,
+            max_acronym_len: 4,
+            min_acronym_score: 500,
+        }
+    }
+
+    /// 判定给定词条及词频是否满足保留条件
+    #[inline]
+    pub(crate) fn should_keep_entry(&self, word: &str, score: u32) -> bool {
+        if self.drop_zero_score && score == 0 {
+            return false;
+        }
+        let char_len = word.chars().count();
+        if char_len >= 4 && self.min_long_phrase_score > 0 && score < self.min_long_phrase_score {
+            return false;
+        }
+        if (2..=3).contains(&char_len) && self.min_phrase_score > 0 && score < self.min_phrase_score
+        {
+            return false;
+        }
+        true
+    }
+}
+
 /// 词库编译统计指标
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildStats {
@@ -338,6 +385,23 @@ impl DictBuilder {
         bin_path: Q,
     ) -> Result<BuildStats, AlgoError> {
         self::compact::CompactDictBuilder::build_compact_binary_dict(input_paths, bin_path)
+    }
+
+    /// 使用指定过滤与索引配置编译紧凑二进制词库
+    ///
+    /// # Errors
+    /// 输入读取、词表解析或输出写入失败时返回 [`AlgoError`]。
+    #[inline]
+    pub fn build_compact_binary_dict_with_options<P: AsRef<Path>, Q: AsRef<Path>>(
+        input_paths: &[P],
+        bin_path: Q,
+        options: DictBuildOptions,
+    ) -> Result<BuildStats, AlgoError> {
+        self::compact::CompactDictBuilder::build_compact_binary_dict_with_options(
+            input_paths,
+            bin_path,
+            options,
+        )
     }
 }
 

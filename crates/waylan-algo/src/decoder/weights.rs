@@ -16,11 +16,11 @@ use serde::{Deserialize, Serialize};
 pub struct ScoringWeights {
     /// 切词惩罚基准（每次词转移扣除的基础代价，默认 12_000）
     pub base_word_penalty: i64,
-    /// 多字词长度奖励系数（每多一个汉字增加的得分，默认 14_000）
+    /// 多字词长度奖励系数（每多一个汉字增加的得分，默认 15_725）
     pub length_bonus_per_char: i64,
     /// 尾部半成品补全惩罚扣分（防止半成品反超精确整词，默认 50）
     pub partial_extension_penalty: u32,
-    /// 纠错路径代价缩放倍率（按切分路径代价乘以该系数扣分，默认 100）
+    /// 纠错路径代价缩放倍率（按切分路径代价乘以该系数扣分，默认 77）
     pub typo_cost_penalty: u32,
     /// 用户自适应词频提权缩放倍率（千分比，1000 表示 1.0x，默认 1000）
     pub user_boost_scale_permille: u32,
@@ -30,9 +30,9 @@ impl Default for ScoringWeights {
     fn default() -> Self {
         Self {
             base_word_penalty: 12_000,
-            length_bonus_per_char: 14_000,
+            length_bonus_per_char: 15_725,
             partial_extension_penalty: 50,
-            typo_cost_penalty: 100,
+            typo_cost_penalty: 77,
             user_boost_scale_permille: 1_000,
         }
     }

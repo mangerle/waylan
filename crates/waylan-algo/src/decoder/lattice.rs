@@ -226,23 +226,39 @@ fn find_segment_end(bytes: &[u8], start: usize) -> usize {
     end
 }
 
-/// 判断零声母音节是否是在撕裂前一个完整音节（如 ti'an -> tian, ti'ji'ao -> ti'jiao）
+/// 判断零声母音节是否是在撕裂前一个完整音节（如 ti'an -> tian, ti'ji'ao -> ti'jiao, ti'a'n -> tian）
 #[inline]
 fn is_syllable_split_borrowing(raw: &str, start: usize, syl: &str) -> bool {
     let mut buf = [0u8; 8];
+    let raw_bytes = raw.as_bytes();
     let syl_bytes = syl.as_bytes();
-    if syl_bytes.len() > 4 {
+    let syl_end = start + syl_bytes.len();
+    if syl_bytes.len() > 4 || syl_end > raw_bytes.len() {
         return false;
     }
+    let max_extra = 2.min(raw_bytes.len() - syl_end);
     for prev_len in 1..=4.min(start) {
         let prev = &raw[start - prev_len..start];
         if !prev.bytes().all(|b| b.is_ascii_lowercase()) || !is_valid_syllable(prev) {
             continue;
         }
-        let total = prev_len + syl_bytes.len();
-        if total <= buf.len() {
-            buf[..prev_len].copy_from_slice(prev.as_bytes());
-            buf[prev_len..total].copy_from_slice(syl_bytes);
+        let base_total = prev_len + syl_bytes.len();
+        if base_total > buf.len() {
+            continue;
+        }
+        buf[..prev_len].copy_from_slice(prev.as_bytes());
+        buf[prev_len..base_total].copy_from_slice(syl_bytes);
+        for extra in 0..=max_extra {
+            if extra > 0 && !raw_bytes[syl_end + extra - 1].is_ascii_lowercase() {
+                break;
+            }
+            let total = base_total + extra;
+            if total > buf.len() {
+                break;
+            }
+            if extra > 0 {
+                buf[total - 1] = raw_bytes[syl_end + extra - 1];
+            }
             if let Ok(merged) = std::str::from_utf8(&buf[..total]) {
                 if is_valid_syllable(merged) {
                     return true;
@@ -267,7 +283,7 @@ fn populate_exact_and_fuzzy_edges(
         let end = start + rel_end;
         let borrowing_penalty = if has_prev_letter && PrismFuzzy::is_zero_initial_syllable(syl) {
             if is_syllable_split_borrowing(raw, start, syl) {
-                160
+                240
             } else {
                 20
             }

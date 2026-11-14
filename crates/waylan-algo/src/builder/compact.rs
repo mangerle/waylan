@@ -1,3 +1,4 @@
+use super::DictBuildOptions;
 use crate::builder::compact_writer::{write_compact_file, CompactWritePayload};
 use crate::builder::{normalize_pinyin_tones, BuildStats};
 use crate::dat::DoubleArrayTrie;
@@ -21,6 +22,12 @@ type KeyCandidateMap = HashMap<String, Vec<CandidateScore>>;
 /// 合并后的键表（存储键类型标记与候选词列表）
 type CombinedKeyMap = HashMap<String, (u8, Vec<CandidateScore>)>;
 
+/// 词表状态容器（保证 Word ID 映射与词表数组同步）
+struct VocabState {
+    word_to_id: HashMap<String, u32>,
+    words: Vec<String>,
+}
+
 /// 文本词典解析结果摘要
 struct ParsedTextSources {
     dict_map: KeyCandidateMap,
@@ -32,7 +39,7 @@ struct ParsedTextSources {
 pub struct CompactDictBuilder;
 
 impl CompactDictBuilder {
-    /// 由多个文本词库源编译紧凑二进制词库
+    /// 由多个文本词库源编译紧凑二进制词库（保留全部词条的默认配置）
     ///
     /// # Errors
     /// 当输入文件读取失败、词表解析异常或输出文件写入失败时返回 [`AlgoError`]。
@@ -40,17 +47,35 @@ impl CompactDictBuilder {
         input_paths: &[P],
         output_path: Q,
     ) -> Result<BuildStats, AlgoError> {
+        Self::build_compact_binary_dict_with_options(
+            input_paths,
+            output_path,
+            DictBuildOptions::default(),
+        )
+    }
+
+    /// 使用指定过滤与索引配置编译紧凑二进制词库
+    ///
+    /// # Errors
+    /// 当输入文件读取失败、词表解析异常或输出文件写入失败时返回 [`AlgoError`]。
+    pub fn build_compact_binary_dict_with_options<P: AsRef<Path>, Q: AsRef<Path>>(
+        input_paths: &[P],
+        output_path: Q,
+        options: DictBuildOptions,
+    ) -> Result<BuildStats, AlgoError> {
         let start = Instant::now();
         let out_ref = output_path.as_ref();
 
         // 1. 初始化或继承全局 Word ID 词表
-        let (mut word_to_id, mut words) = Self::init_vocab(out_ref);
+        let (word_to_id, words) = Self::init_vocab(out_ref);
+        let mut vocab = VocabState { word_to_id, words };
 
         // 2. 解析文本词库源文件并更新词表
-        let parsed = Self::parse_text_sources(input_paths, &mut word_to_id, &mut words)?;
+        let parsed = Self::parse_text_sources(input_paths, &mut vocab, options)?;
 
         // 3. 生成全拼、简拼、声母三类隔离索引键并严格排序
-        let (combined_keys, sorted_keys) = Self::build_combined_keys(parsed.dict_map, &words);
+        let (combined_keys, sorted_keys) =
+            Self::build_combined_keys(parsed.dict_map, &vocab.words, options);
 
         // 4. 构建双数组 Trie (DAT + Tail 压缩)
         let key_values: Vec<u32> = (0..sorted_keys.len() as u32).collect();
@@ -66,7 +91,7 @@ impl CompactDictBuilder {
             dat: &dat,
             key_metas_data: &key_metas_data,
             candidates_data: &candidates_data,
-            words: &words,
+            words: &vocab.words,
             num_keys: sorted_keys.len(),
             num_candidates,
         })?;
@@ -162,8 +187,8 @@ impl CompactDictBuilder {
     /// 解析文本词典源文件并去重排序
     fn parse_text_sources<P: AsRef<Path>>(
         input_paths: &[P],
-        word_to_id: &mut HashMap<String, u32>,
-        words: &mut Vec<String>,
+        vocab: &mut VocabState,
+        options: DictBuildOptions,
     ) -> Result<ParsedTextSources, AlgoError> {
         let mut dict_map: KeyCandidateMap = HashMap::new();
         let mut total_lines = 0usize;
@@ -171,7 +196,7 @@ impl CompactDictBuilder {
 
         for in_path in input_paths {
             let (file_lines, file_words) =
-                Self::parse_text_source_file(in_path.as_ref(), &mut dict_map, word_to_id, words)?;
+                Self::parse_text_source_file(in_path.as_ref(), &mut dict_map, vocab, options)?;
             total_lines = total_lines.saturating_add(file_lines);
             total_words = total_words.saturating_add(file_words);
         }
@@ -203,8 +228,8 @@ impl CompactDictBuilder {
     fn parse_text_source_file(
         path_ref: &Path,
         dict_map: &mut KeyCandidateMap,
-        word_to_id: &mut HashMap<String, u32>,
-        words: &mut Vec<String>,
+        vocab: &mut VocabState,
+        options: DictBuildOptions,
     ) -> Result<(usize, usize), AlgoError> {
         let file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
             path: PathBuf::from(path_ref),
@@ -240,7 +265,11 @@ impl CompactDictBuilder {
                     1000
                 };
 
-                let wid = Self::intern_word(word, word_to_id, words);
+                if !options.should_keep_entry(&word, score) {
+                    continue;
+                }
+
+                let wid = Self::intern_word(word, &mut vocab.word_to_id, &mut vocab.words);
 
                 dict_map.entry(pinyin).or_default().push((wid, score));
                 total_words = total_words.saturating_add(1);
@@ -279,9 +308,10 @@ impl CompactDictBuilder {
     fn build_combined_keys(
         dict_map: KeyCandidateMap,
         words: &[String],
+        options: DictBuildOptions,
     ) -> (CombinedKeyMap, Vec<String>) {
         // 提取简拼缩写索引 (key_type = 1)
-        let acronym_map = Self::extract_acronym_map(&dict_map);
+        let acronym_map = Self::extract_acronym_map(&dict_map, options);
 
         // 提取声母单字索引 (key_type = 2)
         let initial_map = Self::extract_initial_map(&dict_map, words);
@@ -296,7 +326,10 @@ impl CompactDictBuilder {
     }
 
     /// 提取简拼缩写索引（对隔音符分隔的多音节拼音取各段首字母并拼成缩写键）
-    fn extract_acronym_map(dict_map: &KeyCandidateMap) -> KeyCandidateMap {
+    fn extract_acronym_map(
+        dict_map: &KeyCandidateMap,
+        options: DictBuildOptions,
+    ) -> KeyCandidateMap {
         let mut acronym_map: KeyCandidateMap = HashMap::new();
         for (pinyin, cand_list) in dict_map {
             if !pinyin.contains('\'') {
@@ -312,10 +345,18 @@ impl CompactDictBuilder {
                     acronym.push(ch);
                 }
             }
-            if acronym.len() < 2 {
+            if acronym.len() < 2
+                || (options.max_acronym_len > 0 && acronym.len() > options.max_acronym_len)
+            {
                 continue;
             }
-            let min_score = if acronym.len() == 2 { 200 } else { 50 };
+            let min_score = if options.min_acronym_score > 0 {
+                options.min_acronym_score
+            } else if acronym.len() == 2 {
+                200
+            } else {
+                50
+            };
             let list = acronym_map.entry(acronym).or_default();
             for &(wid, score) in cand_list.iter().take(8) {
                 if score >= min_score {
