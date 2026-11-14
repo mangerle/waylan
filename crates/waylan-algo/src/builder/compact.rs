@@ -259,10 +259,8 @@ impl CompactDictBuilder {
                     continue;
                 }
 
-                let score: u32 = if parts.len() >= 3 {
-                    parts[2].trim().parse().unwrap_or(1000)
-                } else {
-                    1000
+                let Some(score) = super::parse_dict_entry_score(&parts) else {
+                    continue;
                 };
 
                 if !options.should_keep_entry(&word, score) {

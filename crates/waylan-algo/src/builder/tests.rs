@@ -99,3 +99,56 @@ fn test_build_and_load_compact_mmap() {
     let _ = std::fs::remove_file(txt_path);
     let _ = std::fs::remove_file(compact_bin_path);
 }
+
+#[test]
+fn test_parse_dict_entry_score_and_negative_filter() {
+    use crate::table::LexiconTable;
+
+    assert_eq!(
+        parse_dict_entry_score(&["地标", "di biao"]),
+        Some(DEFAULT_MISSING_SCORE)
+    );
+    assert_eq!(
+        parse_dict_entry_score(&["地标", "di biao", ""]),
+        Some(DEFAULT_MISSING_SCORE)
+    );
+    assert_eq!(
+        parse_dict_entry_score(&["地标", "di biao", "abc"]),
+        Some(DEFAULT_MISSING_SCORE)
+    );
+    assert_eq!(
+        parse_dict_entry_score(&["柏香镇", "bai xiang zhen", "-1"]),
+        None
+    );
+    assert_eq!(
+        parse_dict_entry_score(&["中国", "zhong guo", "20000"]),
+        Some(20000)
+    );
+
+    let temp_dir = std::env::temp_dir();
+    let txt_path = temp_dir.join("test_neg_score_dict.txt");
+    let bin_path = temp_dir.join("test_neg_score_dict.bin");
+
+    let mut file = File::create(&txt_path).expect("创建临时文件");
+    writeln!(file, "柏香镇\tbai xiang zhen\t-1").unwrap();
+    writeln!(file, "白香镇\tbai xiang zhen\t500").unwrap();
+    writeln!(file, "地标\tdi biao").unwrap();
+    writeln!(file, "地标二\tdi biao\t100").unwrap();
+    drop(file);
+
+    let stats = DictBuilder::build_compact_binary_dict(&[&txt_path], &bin_path).expect("编译成功");
+    assert_eq!(stats.total_words, 3, "负词频词条应当被跳过");
+
+    let table = LexiconTable::load_binary(&bin_path).expect("加载成功");
+    let bx = table.lookup("bai'xiang'zhen");
+    assert_eq!(bx.len(), 1);
+    assert_eq!(bx[0].text, "白香镇");
+
+    let db = table.lookup("di'biao");
+    assert_eq!(db.len(), 2);
+    assert_eq!(db[0].text, "地标二", "缺词频条目应低于显式词频 100");
+    assert_eq!(db[1].text, "地标");
+
+    let _ = std::fs::remove_file(txt_path);
+    let _ = std::fs::remove_file(bin_path);
+}

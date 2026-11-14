@@ -21,6 +21,24 @@ pub use compact::CompactDictBuilder;
 pub use compact_writer::{write_compact_file, CompactWritePayload};
 pub use dat_builder::build_dat;
 
+/// 词条缺失词频或词频字段损坏时的保守默认值（避免误抬高至高频区）
+pub(crate) const DEFAULT_MISSING_SCORE: u32 = 20;
+
+/// 解析文本词典条目中的词频字段
+///
+/// - 缺失第 3 列或第 3 列为空/非数字时，返回保守低分 [`DEFAULT_MISSING_SCORE`]；
+/// - 显式为负数（如 `-1`）时返回 `None`，表示该词条应当跳过，避免被误解析成高分。
+pub(crate) fn parse_dict_entry_score(parts: &[&str]) -> Option<u32> {
+    let Some(raw) = parts.get(2).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return Some(DEFAULT_MISSING_SCORE);
+    };
+    match raw.parse::<i64>() {
+        Ok(val) if val < 0 => None,
+        Ok(val) => Some(val.min(i64::from(u32::MAX)) as u32),
+        Err(_) => Some(DEFAULT_MISSING_SCORE),
+    }
+}
+
 /// 词库编译过滤与索引瘦身配置
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DictBuildOptions {
@@ -53,7 +71,7 @@ impl DictBuildOptions {
     /// 判定给定词条及词频是否满足保留条件
     #[inline]
     pub(crate) fn should_keep_entry(&self, word: &str, score: u32) -> bool {
-        if self.drop_zero_score && score == 0 {
+        if self.drop_zero_score && (score == 0 || has_noise_punctuation(word)) {
             return false;
         }
         let char_len = word.chars().count();
@@ -66,6 +84,18 @@ impl DictBuildOptions {
         }
         true
     }
+}
+
+/// 检测词条中是否混入破折号、标点等语料噪声符号
+#[inline]
+fn has_noise_punctuation(word: &str) -> bool {
+    word.chars().any(|ch| {
+        ch.is_ascii_punctuation()
+            || matches!(
+                ch,
+                '—' | '…' | '～' | '、' | '，' | '。' | '：' | '；' | '！' | '？'
+            )
+    })
 }
 
 /// 词库编译统计指标
@@ -168,10 +198,8 @@ impl DictBuilder {
             if parts.len() >= 2 {
                 let word = parts[0].trim().to_string();
                 let pinyin = normalize_pinyin_tones(parts[1].trim());
-                let score: u32 = if parts.len() >= 3 {
-                    parts[2].trim().parse().unwrap_or(1000)
-                } else {
-                    1000
+                let Some(score) = parse_dict_entry_score(&parts) else {
+                    continue;
                 };
 
                 dict_map.entry(pinyin).or_default().push((word, score));
