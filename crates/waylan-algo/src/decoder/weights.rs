@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScoringWeights {
-    /// 切词惩罚基准（每次词转移扣除的基础代价，默认 12_000）
+    /// 切词惩罚基准（每次词转移扣除的基础代价，默认 18_000）
     pub base_word_penalty: i64,
-    /// 多字词长度奖励系数（每多一个汉字增加的得分，默认 15_725）
+    /// 多字词长度奖励系数（每多一个汉字增加的得分，默认 16_000）
     pub length_bonus_per_char: i64,
     /// 尾部半成品补全惩罚扣分（防止半成品反超精确整词，默认 50）
     pub partial_extension_penalty: u32,
@@ -29,8 +29,8 @@ pub struct ScoringWeights {
 impl Default for ScoringWeights {
     fn default() -> Self {
         Self {
-            base_word_penalty: 12_000,
-            length_bonus_per_char: 15_725,
+            base_word_penalty: 18_000,
+            length_bonus_per_char: 16_000,
             partial_extension_penalty: 50,
             typo_cost_penalty: 77,
             user_boost_scale_permille: 1_000,
