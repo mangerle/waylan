@@ -8,13 +8,19 @@
 
 use crate::decoder::alias::is_habitual_alias_key;
 use crate::decoder::{
-    score_phrase_match, to_positive_score, BigramLanguageModel, DecodeResult, PhraseMatch,
-    PrismFsa, SyllableLattice,
+    score_phrase_match, to_positive_score, BigramLanguageModel, DatPhraseMatcher, DecodeResult,
+    LatticeOptions, MatcherOptions, PhraseMatch, PrismFsa, SyllableLattice,
 };
 use crate::engine::AlgoEngine;
 use crate::pipeline::is_rare_ext_char;
 use crate::table::extract_raw_score;
-use crate::types::{AlgoCandidate, CandidateTier};
+use crate::types::{AlgoCandidate, CandidateTier, FuzzyConfig};
+use waylan_core::config::TypoCorrectionRules;
+
+/// 未开启模糊音时，模糊整词需领先当前精确最高分至少该阈值才触发兜底
+const FUZZY_FALLBACK_LEAD: i64 = 6_000;
+/// 模糊音兜底整词的最低静态词频门槛
+const FUZZY_FALLBACK_MIN_FREQ: u32 = 500;
 
 /// 判断解码结果中是否存在无容错、无混简拼的干净全拼（含合法尾部半成品）锚点
 #[inline]
@@ -66,7 +72,10 @@ impl AlgoEngine {
         // 5. 纯简拼缩写与单声母/首音节单字兜底补全
         self.collect_acronym_and_single_char_fallbacks(raw_input, lattice, &mut all_candidates);
 
-        // 6. 叠加用户自适应词频、词对与上下文提权
+        // 5.5 未开启模糊音时，针对明显误拼的高频常用整词提供模糊音兜底（如 zidao -> 知道）
+        self.collect_fuzzy_fallback_candidates(raw_input, decode, &mut all_candidates);
+
+        // 6. 叠加用户自适应词频权重、词对权重与上一轮上屏上下文
         self.apply_user_and_context_boost(&mut all_candidates);
 
         all_candidates
@@ -384,6 +393,123 @@ impl AlgoEngine {
                     cand.score = cand.score.max(raw_freq);
                 }
             }
+        }
+    }
+
+    /// 未开启模糊音时，对精确解码偏弱的输入探查常用模糊音高频整词兜底
+    fn collect_fuzzy_fallback_candidates(
+        &self,
+        raw_input: &str,
+        decode: &DecodeResult,
+        out: &mut Vec<AlgoCandidate>,
+    ) {
+        if self.config.fuzzy.has_active_rules() || !should_probe_fuzzy_fallback(raw_input, decode) {
+            return;
+        }
+
+        let fuzzy_opts = LatticeOptions {
+            fuzzy: FuzzyConfig::recommended(),
+            typo_rules: TypoCorrectionRules::default(),
+            enable_mixed_jianpin: false,
+            enable_typo_edges: false,
+        };
+        let fuzzy_lattice = SyllableLattice::build(raw_input, &fuzzy_opts);
+        let matcher_opts = MatcherOptions {
+            max_syllables: 6,
+            max_typos: 0,
+            top_k_per_key: 8,
+            max_initial_steps: 0,
+            filter_rare_ext_chars: self.config.filter_rare_ext_chars,
+        };
+
+        let mut matches =
+            DatPhraseMatcher::match_from(&fuzzy_lattice, 0, &self.resources.table, &matcher_opts);
+        matches.retain(|m| {
+            m.end == raw_input.len()
+                && m.syllable_count >= 2
+                && !m.is_exact_all
+                && !m.has_partial_tail
+                && m.freq >= FUZZY_FALLBACK_MIN_FREQ
+        });
+        if matches.is_empty() {
+            return;
+        }
+
+        let best_exact_score = decode
+            .whole_words
+            .iter()
+            .filter(|m| m.typo_count == 0 && !m.has_initial)
+            .map(|m| score_phrase_match(m, &self.config.scoring_weights))
+            .max()
+            .or_else(|| {
+                decode
+                    .sentences
+                    .iter()
+                    .filter(|s| s.typo_count == 0 && !s.has_initial && s.word_count == 1)
+                    .map(|s| s.score)
+                    .max()
+            });
+
+        matches.sort_by_key(|m| {
+            std::cmp::Reverse(score_phrase_match(m, &self.config.scoring_weights))
+        });
+
+        let mut added = 0usize;
+        for m in matches {
+            let m_score = score_phrase_match(&m, &self.config.scoring_weights);
+            if let Some(exact_score) = best_exact_score {
+                if m_score < exact_score.saturating_add(FUZZY_FALLBACK_LEAD) {
+                    continue;
+                }
+            }
+            if out.iter().any(|c| c.text == m.word) {
+                continue;
+            }
+            out.push(AlgoCandidate {
+                text: m.word,
+                pinyin: m.matched_key.clone(),
+                score: to_positive_score(m_score),
+                comment: Some(format!("[模糊: {}]", m.matched_key)),
+                tier: CandidateTier::RuleNormalization,
+                is_expandable: false,
+                consumed_len: Some(raw_input.len()),
+                sub_candidates: Vec::new(),
+                word_id: m.word_id,
+            });
+            added += 1;
+            if added >= 2 {
+                break;
+            }
+        }
+    }
+}
+
+/// 判断精确解码结果是否偏弱，值得触发模糊音高频整词兜底
+#[inline]
+fn should_probe_fuzzy_fallback(raw_input: &str, decode: &DecodeResult) -> bool {
+    if raw_input.len() < 4 || !raw_input.bytes().all(|b| b.is_ascii_lowercase()) {
+        return false;
+    }
+    let max_exact_whole_freq = decode
+        .whole_words
+        .iter()
+        .filter(|m| m.typo_count == 0 && !m.has_initial)
+        .map(|m| m.freq)
+        .max();
+
+    if let Some(freq) = max_exact_whole_freq {
+        // 精确整词本身不够高频时，才探查是否有压倒性的模糊高频整词（如 dansi -> 但是）
+        return freq < 50_000;
+    }
+
+    match decode.sentences.first() {
+        None => true,
+        Some(best) => {
+            best.word_count >= 2
+                || best.typo_count > 0
+                || best.has_initial
+                || best.has_partial_tail
+                || !best.is_exact_all
         }
     }
 }

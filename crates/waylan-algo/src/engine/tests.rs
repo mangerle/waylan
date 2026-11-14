@@ -629,3 +629,40 @@ fn test_realtime_emoji_suggest_at_third_slot() {
         "关闭 enable_emoji_suggest 后不应插入 Emoji"
     );
 }
+
+#[test]
+fn test_fuzzy_fallback_when_fuzzy_disabled() {
+    let mut table = LexiconTable::new();
+    table.insert("zi", "自", 1000);
+    table.insert("dao", "到", 1000);
+    table.insert("zhi'dao", "知道", 80_000);
+    table.insert("dan'si", "单丝", 200);
+    table.insert("dan'shi", "但是", 120_000);
+
+    // 默认关闭模糊音
+    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+    assert!(!engine.config.fuzzy.has_active_rules());
+
+    // 1. zidao 无精确整词，应兜底召回高频模糊整词「知道」
+    for ch in "zidao".chars() {
+        engine.push_char(ch);
+    }
+    let cands = engine.all_candidates();
+    assert!(
+        cands.iter().any(|c| c.text == "知道"),
+        "关闭模糊音时 zidao 应兜底召回「知道」，实际: {:?}",
+        cands.iter().take(5).map(|c| &c.text).collect::<Vec<_>>()
+    );
+
+    // 2. dansi 仅有低频精确整词「单丝」，应兜底召回高频模糊整词「但是」
+    engine.reset();
+    for ch in "dansi".chars() {
+        engine.push_char(ch);
+    }
+    let cands2 = engine.all_candidates();
+    assert!(
+        cands2.iter().any(|c| c.text == "但是"),
+        "关闭模糊音时 dansi 应兜底召回「但是」，实际: {:?}",
+        cands2.iter().take(5).map(|c| &c.text).collect::<Vec<_>>()
+    );
+}

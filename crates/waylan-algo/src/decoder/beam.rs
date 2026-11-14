@@ -103,17 +103,24 @@ impl Default for BeamDecodeOptions<'_> {
     }
 }
 
-#[derive(Clone)]
+/// 束搜索回溯节点（存放于连续 Arena 中，避免状态扩展时复制整条词序列）
+#[derive(Clone, Copy)]
+struct ArenaNode {
+    parent: Option<usize>,
+    word_ref: Option<(usize, usize)>,
+}
+
+#[derive(Clone, Copy)]
 struct BeamState {
+    node_idx: usize,
     score: i64,
     typo_count: u8,
     has_initial: bool,
     has_partial_tail: bool,
     is_exact_all: bool,
-    last_word: String,
+    word_count: usize,
+    last_word_ref: Option<(usize, usize)>,
     last_word_id: Option<u32>,
-    words: Vec<String>,
-    pinyin_parts: Vec<String>,
     first_word_end: Option<usize>,
 }
 
@@ -134,25 +141,33 @@ impl PositionalBeamDecoder {
         }
 
         let mut beam: Vec<Vec<BeamState>> = vec![Vec::new(); len + 1];
-        let seed_word = options.last_commit_context.unwrap_or("").to_string();
+        let mut node_arena: Vec<ArenaNode> = Vec::with_capacity(len.saturating_mul(16).max(64));
+        let mut spans_by_pos: Vec<Vec<PhraseMatch>> = vec![Vec::new(); len];
+
+        let seed_word = options.last_commit_context.unwrap_or("");
         let seed_word_id = (!seed_word.is_empty())
-            .then(|| table.get_word_id(&seed_word))
+            .then(|| table.get_word_id(seed_word))
             .flatten();
 
         let start_pos = lattice.skip_separators(0);
         if start_pos >= len {
             return DecodeResult::default();
         }
+        let root_idx = node_arena.len();
+        node_arena.push(ArenaNode {
+            parent: None,
+            word_ref: None,
+        });
         beam[start_pos].push(BeamState {
+            node_idx: root_idx,
             score: 0,
             typo_count: 0,
             has_initial: false,
             has_partial_tail: false,
             is_exact_all: true,
-            last_word: seed_word,
+            word_count: 0,
+            last_word_ref: None,
             last_word_id: seed_word_id,
-            words: Vec::new(),
-            pinyin_parts: Vec::new(),
             first_word_end: None,
         });
 
@@ -165,7 +180,12 @@ impl PositionalBeamDecoder {
                 if !beam[pos].is_empty() {
                     let carried = std::mem::take(&mut beam[pos]);
                     beam[next_non_sep].extend(carried);
-                    prune_beam_slot(&mut beam[next_non_sep], options.beam_width);
+                    prune_beam_slot(
+                        &mut beam[next_non_sep],
+                        options.beam_width,
+                        &spans_by_pos,
+                        seed_word,
+                    );
                 }
                 continue;
             }
@@ -173,8 +193,8 @@ impl PositionalBeamDecoder {
                 continue;
             }
 
-            prune_beam_slot(&mut beam[pos], options.beam_width);
-            let matches =
+            prune_beam_slot(&mut beam[pos], options.beam_width, &spans_by_pos, seed_word);
+            let mut matches =
                 DatPhraseMatcher::match_from(lattice, pos, table, &options.matcher_options);
             if matches.is_empty() {
                 continue;
@@ -190,97 +210,146 @@ impl PositionalBeamDecoder {
                 }
             }
 
+            filter_and_rank_matches(&mut matches, len, &options.weights);
+            spans_by_pos[pos] = matches;
+
             let cur_states = std::mem::take(&mut beam[pos]);
-            expand_position_states(&cur_states, &matches, table, adaptive, options, &mut beam);
-            beam[pos] = cur_states;
+            let mut ctx = ExpandContext {
+                pos,
+                seed_word,
+                spans_by_pos: &spans_by_pos,
+                table,
+                adaptive,
+                options,
+                node_arena: &mut node_arena,
+                beam: &mut beam,
+            };
+            expand_position_states(&cur_states, &mut ctx);
         }
 
-        finalize_decode_result(lattice, beam, whole_words, prefix_word_matches, options)
+        finalize_decode_result(
+            lattice,
+            beam,
+            &node_arena,
+            &spans_by_pos,
+            whole_words,
+            prefix_word_matches,
+            options,
+        )
     }
 }
 
-fn expand_position_states(
-    cur_states: &[BeamState],
-    matches: &[PhraseMatch],
-    table: &LexiconTable,
-    adaptive: Option<&UserAdaptiveModel>,
-    options: &BeamDecodeOptions<'_>,
-    beam: &mut [Vec<BeamState>],
+/// 过滤低频生僻单字并按局部得分截取当前位置 Top-48 词匹配
+fn filter_and_rank_matches(
+    matches: &mut Vec<PhraseMatch>,
+    target_len: usize,
+    weights: &ScoringWeights,
 ) {
-    let target_len = beam.len().saturating_sub(1);
-    let mut ranked_matches: Vec<(i64, &PhraseMatch)> = matches
+    let has_common_at_end: Vec<usize> = matches
         .iter()
-        .filter(|m| {
-            let is_rare_single = m.syllable_count == 1
-                && m.freq < 10
-                && m.word.chars().count() == 1
-                && (m.start > 0 || m.end < target_len);
-            if !is_rare_single {
-                return true;
-            }
-            // 同跨度存在常用单字（freq >= 10）或词组时，隔离低频生僻单字，避免其参与组句挤占束宽
-            !matches.iter().any(|o| o.end == m.end && o.freq >= 10)
-        })
-        .map(|m| (score_phrase_match(m, &options.weights), m))
+        .filter(|o| o.freq >= 10)
+        .map(|o| o.end)
         .collect();
-    ranked_matches.sort_by_key(|a| std::cmp::Reverse(a.0));
-    ranked_matches.truncate(48);
+    matches.retain(|m| {
+        let is_rare_single = m.syllable_count == 1
+            && m.freq < 10
+            && m.word.chars().count() == 1
+            && (m.start > 0 || m.end < target_len);
+        if !is_rare_single {
+            return true;
+        }
+        // 同跨度存在常用单字（freq >= 10）或词组时，隔离低频生僻单字，避免其参与组句挤占束宽
+        !has_common_at_end.contains(&m.end)
+    });
+    matches.sort_by_key(|m| std::cmp::Reverse(score_phrase_match(m, weights)));
+    matches.truncate(48);
+}
 
+struct ExpandContext<'a> {
+    pos: usize,
+    seed_word: &'a str,
+    spans_by_pos: &'a [Vec<PhraseMatch>],
+    table: &'a LexiconTable,
+    adaptive: Option<&'a UserAdaptiveModel>,
+    options: &'a BeamDecodeOptions<'a>,
+    node_arena: &'a mut Vec<ArenaNode>,
+    beam: &'a mut [Vec<BeamState>],
+}
+
+fn expand_position_states(cur_states: &[BeamState], ctx: &mut ExpandContext<'_>) {
+    let pos = ctx.pos;
+    let pos_matches = &ctx.spans_by_pos[pos];
     for state in cur_states {
-        for &(_, pm) in &ranked_matches {
-            if state.has_initial && pm.has_initial && !state.words.is_empty() {
+        let last_word = match state.last_word_ref {
+            Some((p, idx)) => ctx.spans_by_pos[p][idx].word.as_str(),
+            None => ctx.seed_word,
+        };
+
+        for (idx, pm) in pos_matches.iter().enumerate() {
+            if state.has_initial && pm.has_initial && state.word_count > 0 {
                 continue;
             }
             let next_typo = state.typo_count.saturating_add(pm.typo_count);
-            if next_typo > options.max_typos {
+            if next_typo > ctx.options.max_typos {
                 continue;
             }
             let next_pos = pm.end;
             let char_len = pm.word.chars().count() as i64;
             let curr_unigram = unigram_log_score(pm.freq);
             let lm_delta = BigramLanguageModel::transition_score_with_weights(
-                (&state.last_word, state.last_word_id),
+                (last_word, state.last_word_id),
                 (&pm.word, pm.word_id, char_len),
                 curr_unigram,
-                (table, &options.weights),
+                (ctx.table, &ctx.options.weights),
             );
-            let pair_boost = adaptive
-                .filter(|_| !state.last_word.is_empty())
-                .map(|a| a.pair_boost_score(&state.last_word, &pm.word, options.eval_ts))
+            let pair_boost = ctx
+                .adaptive
+                .filter(|_| !last_word.is_empty())
+                .map(|a| a.pair_boost_score(last_word, &pm.word, ctx.options.eval_ts))
                 .unwrap_or(0);
-            let edge_penalty = compute_edge_penalty(pm, &options.weights);
+            let edge_penalty = compute_edge_penalty(pm, &ctx.options.weights);
 
-            let mut next_words = state.words.clone();
-            next_words.push(pm.word.clone());
-            let mut next_pinyins = state.pinyin_parts.clone();
-            next_pinyins.push(pm.matched_key.clone());
+            let node_idx = ctx.node_arena.len();
+            ctx.node_arena.push(ArenaNode {
+                parent: Some(state.node_idx),
+                word_ref: Some((pos, idx)),
+            });
 
-            beam[next_pos].push(BeamState {
+            ctx.beam[next_pos].push(BeamState {
+                node_idx,
                 score: state.score + lm_delta + pair_boost - edge_penalty,
                 typo_count: next_typo,
                 has_initial: state.has_initial || pm.has_initial,
                 has_partial_tail: state.has_partial_tail || pm.has_partial_tail,
                 is_exact_all: state.is_exact_all && pm.is_exact_all,
-                last_word: pm.word.clone(),
+                word_count: state.word_count + 1,
+                last_word_ref: Some((pos, idx)),
                 last_word_id: pm.word_id,
-                words: next_words,
-                pinyin_parts: next_pinyins,
                 first_word_end: state.first_word_end.or(Some(pm.end)),
             });
         }
     }
 }
 
-fn prune_beam_slot(slot: &mut Vec<BeamState>, beam_width: usize) {
+fn prune_beam_slot(
+    slot: &mut Vec<BeamState>,
+    beam_width: usize,
+    spans_by_pos: &[Vec<PhraseMatch>],
+    seed_word: &str,
+) {
     if slot.len() <= 1 {
         return;
     }
     slot.sort_by_key(|a| std::cmp::Reverse(a.score));
 
-    let mut best_by_key: HashMap<(String, u8), usize> = HashMap::with_capacity(slot.len().min(64));
+    let mut best_by_key: HashMap<(&str, u8), usize> = HashMap::with_capacity(slot.len().min(64));
     let mut kept = Vec::with_capacity(beam_width.min(slot.len()));
     for state in slot.drain(..) {
-        let key = (state.last_word.clone(), state.typo_count);
+        let last_word = match state.last_word_ref {
+            Some((p, idx)) => spans_by_pos[p][idx].word.as_str(),
+            None => seed_word,
+        };
+        let key = (last_word, state.typo_count);
         if best_by_key.contains_key(&key) {
             continue;
         }
@@ -296,6 +365,8 @@ fn prune_beam_slot(slot: &mut Vec<BeamState>, beam_width: usize) {
 fn finalize_decode_result(
     lattice: &SyllableLattice,
     mut beam: Vec<Vec<BeamState>>,
+    node_arena: &[ArenaNode],
+    spans_by_pos: &[Vec<PhraseMatch>],
     mut whole_words: Vec<PhraseMatch>,
     mut prefix_word_matches: Vec<PhraseMatch>,
     options: &BeamDecodeOptions<'_>,
@@ -307,23 +378,55 @@ fn finalize_decode_result(
     let mut sorted_end = end_slot;
     sorted_end.sort_by_key(|a| std::cmp::Reverse(a.score));
 
+    let mut refs: Vec<(usize, usize)> = Vec::with_capacity(8);
     for st in sorted_end {
-        let text: String = st.words.concat();
+        refs.clear();
+        let mut cursor = Some(st.node_idx);
+        while let Some(idx) = cursor {
+            let node = node_arena[idx];
+            if let Some(wref) = node.word_ref {
+                refs.push(wref);
+            }
+            cursor = node.parent;
+        }
+        refs.reverse();
+
+        let text: String = refs
+            .iter()
+            .map(|&(p, idx)| spans_by_pos[p][idx].word.as_str())
+            .collect();
         if seen_texts.contains(&text) {
             continue;
         }
         seen_texts.push(text.clone());
+
+        let mut pinyin = String::new();
+        for (i, &(p, idx)) in refs.iter().enumerate() {
+            if i > 0 {
+                pinyin.push('\'');
+            }
+            pinyin.push_str(&spans_by_pos[p][idx].matched_key);
+        }
+        let first_word = refs
+            .first()
+            .map(|&(p, idx)| spans_by_pos[p][idx].word.clone())
+            .unwrap_or_default();
+        let first_word_pinyin = refs
+            .first()
+            .map(|&(p, idx)| spans_by_pos[p][idx].matched_key.clone())
+            .unwrap_or_default();
+
         sentences.push(DecodedSentence {
             text,
-            pinyin: st.pinyin_parts.join("'"),
+            pinyin,
             score: st.score,
-            word_count: st.words.len(),
+            word_count: refs.len(),
             typo_count: st.typo_count,
             has_initial: st.has_initial,
             has_partial_tail: st.has_partial_tail,
             is_exact_all: st.is_exact_all,
-            first_word: st.words.first().cloned().unwrap_or_default(),
-            first_word_pinyin: st.pinyin_parts.first().cloned().unwrap_or_default(),
+            first_word,
+            first_word_pinyin,
             first_word_end: st.first_word_end.unwrap_or(lattice.len),
         });
         if sentences.len() >= options.max_sentences {
