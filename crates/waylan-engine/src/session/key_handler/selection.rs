@@ -10,6 +10,7 @@ use waylan_core::input::constants::{
 };
 use waylan_core::input::conversion::{keycode_to_digit, keycode_to_v_mode_char};
 
+use super::CompositionKeyParams;
 use crate::session::{ImeCoreSession, ImeOutputAction};
 
 /// 处理 V模式字符输入
@@ -99,6 +100,24 @@ pub(crate) fn handle_action_keys(
         return Some(ImeOutputAction::Reset);
     }
     None
+}
+
+/// 处理 Ctrl+Delete 或 Shift+Delete 精准忘词快捷键
+///
+/// 遗忘当前高亮选中的用户自造词或用户词对权重，并立即刷新候选列表。
+pub(crate) fn handle_forget_candidate_key(
+    session: &mut ImeCoreSession,
+    params: CompositionKeyParams,
+) -> Option<ImeOutputAction> {
+    if params.key != KEY_DELETE || (!params.ctrl_active && !params.shift_active) {
+        return None;
+    }
+
+    let global_idx = session.selected_global_index();
+    let _forgotten = session.engine.forget_candidate(global_idx, params.now);
+    session.page_index = 0;
+    session.selected_index = 0;
+    Some(ImeOutputAction::Handled { update_ui: true })
 }
 
 /// 处理退格删除与分词单引号

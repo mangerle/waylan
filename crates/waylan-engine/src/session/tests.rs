@@ -307,6 +307,7 @@ fn test_shift_digit_selection_toggle() {
         CompositionKeyParams {
             key: KEY_1,
             shift_active: true,
+            ctrl_active: false,
             page_keys: PageKeyConfig::default(),
             now: 100,
         },
@@ -323,6 +324,7 @@ fn test_shift_digit_selection_toggle() {
         CompositionKeyParams {
             key: KEY_1,
             shift_active: true,
+            ctrl_active: false,
             page_keys: PageKeyConfig::default(),
             now: 101,
         },
@@ -481,5 +483,46 @@ fn test_caps_lock_shift_chord_preserves_caps_lock() {
     assert!(
         session.is_caps_locked(),
         "Shift 组合键操作绝不破坏大写锁定状态"
+    );
+}
+
+#[test]
+fn test_ctrl_delete_forgets_candidate() {
+    let mut session = make_test_session();
+    // 键入 "nihao" 并提交候选词，触发用户自适应记录
+    for ch in "nihao".chars() {
+        session.engine.push_char(ch);
+    }
+    let committed = session.engine.select_candidate(0, 100);
+    assert!(committed.is_some(), "测试夹具应能提交候选词");
+
+    // 再次键入 "nihao"，确认候选非空且定位到第 0 项
+    for ch in "nihao".chars() {
+        session.engine.push_char(ch);
+    }
+    assert!(!session.engine.candidates().is_empty());
+
+    // 按下 LeftCtrl + Delete 触发精准忘词
+    session.update_modifier_by_key(KEY_LEFTCTRL, true);
+    session.selected_index = 0;
+
+    let action = session.process_key(
+        KeyProcessContext {
+            keycode: KEY_DELETE,
+            is_press: true,
+            is_password_or_locked: false,
+            surrounding_prefix: None,
+        },
+        200,
+    );
+    assert_eq!(
+        action,
+        ImeOutputAction::Handled { update_ui: true },
+        "组词态下 Ctrl+Delete 应触发忘词并刷新界面"
+    );
+    assert_eq!(
+        session.engine.raw_input(),
+        "nihao",
+        "Ctrl+Delete 忘词不应误删拼音编码"
     );
 }

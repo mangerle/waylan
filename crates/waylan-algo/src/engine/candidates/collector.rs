@@ -324,6 +324,12 @@ impl AlgoEngine {
                 table: &self.resources.table,
                 prev_context: self.composition.last_commit_context(),
                 enable_acronym: self.config.enable_acronym,
+                user_model: Some(&self.adaptive.model),
+                eval_ts: self
+                    .adaptive
+                    .model
+                    .latest_timestamp()
+                    .max(self.adaptive.last_timestamp),
             })
         else {
             return;

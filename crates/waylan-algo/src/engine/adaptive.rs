@@ -60,6 +60,41 @@ impl UserAdaptiveState {
         }
     }
 
+    /// 记录用户词对搭配并持久化追加至 WAL
+    pub fn record_pair(&mut self, prev: &str, curr: &str, current_timestamp: u64) {
+        if prev.is_empty() || curr.is_empty() {
+            return;
+        }
+        self.last_timestamp = self.last_timestamp.max(current_timestamp);
+        if let Some(ref path) = self.dict_path {
+            let _ = self
+                .wal
+                .append_pair(&mut self.model, path, prev, curr, self.last_timestamp);
+        } else {
+            self.model.record_pair(prev, curr, self.last_timestamp);
+        }
+    }
+
+    /// 忘记指定用户词及其关联词对搭配，并同步写入 WAL 遗忘帧
+    pub fn forget_word(
+        &mut self,
+        text: &str,
+        pinyin: Option<&str>,
+        current_timestamp: u64,
+    ) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.last_timestamp = self.last_timestamp.max(current_timestamp);
+        if let Some(ref path) = self.dict_path {
+            self.wal
+                .append_forget(&mut self.model, path, text, pinyin, self.last_timestamp)
+                .unwrap_or_else(|_| self.model.forget_word(text, pinyin))
+        } else {
+            self.model.forget_word(text, pinyin)
+        }
+    }
+
     /// 强制执行用户自适应词库的归并与刷盘持久化 (WAL Compaction)
     pub fn compact(&mut self) -> Result<(), AlgoError> {
         if let Some(ref path) = self.dict_path {

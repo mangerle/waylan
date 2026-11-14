@@ -299,6 +299,18 @@ impl ImeCoreSession {
         self.modifiers.has_ctrl_or_alt()
     }
 
+    /// 查询当前是否按下了 Ctrl 修饰键
+    #[inline]
+    pub fn is_ctrl_active(&self) -> bool {
+        self.modifiers.is_ctrl_active()
+    }
+
+    /// 查询当前是否按下了 Alt 修饰键
+    #[inline]
+    pub fn is_alt_active(&self) -> bool {
+        self.modifiers.is_alt_active()
+    }
+
     /// 根据按下的物理按键更新修饰键掩码与防误触状态机
     pub fn update_modifier_by_key(&mut self, keycode: u32, is_press: bool) {
         self.modifiers.update(keycode, is_press);

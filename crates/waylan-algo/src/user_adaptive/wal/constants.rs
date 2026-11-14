@@ -12,3 +12,9 @@ pub const WAL_MAGIC: &[u8; 16] = b"WAYLAN_USERWAL02";
 
 /// 校验和初始种子（非零常数，防止全零填充块通过校验和检查）
 pub const WAL_CHECKSUM_SEED: u32 = 0x5a5a_a5a5;
+
+/// WAL 词对搭配控制帧拼音键前缀
+pub const WAL_PAIR_PREFIX: &str = "\x01PAIR\x01";
+
+/// WAL 精准忘词控制帧拼音键前缀（count = 0）
+pub const WAL_FORGET_PREFIX: &str = "\x01FORGET\x01";

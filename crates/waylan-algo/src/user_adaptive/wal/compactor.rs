@@ -15,7 +15,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::error::AlgoError;
-use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC};
+use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_PAIR_PREFIX};
 use crate::user_adaptive::wal::lock::ProcessFileLock;
 use crate::user_adaptive::{UserAdaptiveModel, UserEntry};
 
@@ -65,6 +65,25 @@ fn write_compact_model_to_temp(
     for list in model.entries.values() {
         for entry in list {
             let Some(buf) = encode_wal_frame(entry) else {
+                continue;
+            };
+            file.write_all(&buf)
+                .map_err(|e| AlgoError::UserDictPersistFailed {
+                    path: temp_path.to_path_buf(),
+                    source: e,
+                })?;
+        }
+    }
+
+    for (prev, next_map) in &model.pairs {
+        for (curr, pair_entry) in next_map {
+            let synthetic = UserEntry {
+                text: curr.clone(),
+                pinyin: format!("{WAL_PAIR_PREFIX}{prev}"),
+                commit_count: pair_entry.count,
+                last_used_timestamp: pair_entry.last_used_timestamp,
+            };
+            let Some(buf) = encode_wal_frame(&synthetic) else {
                 continue;
             };
             file.write_all(&buf)

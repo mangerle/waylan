@@ -28,7 +28,9 @@ use crate::user_adaptive::UserAdaptiveModel;
 use lock::ProcessFileLock;
 
 pub use compactor::compact_model;
-pub use constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1};
+pub use constants::{
+    WAL_CHECKSUM_SEED, WAL_FORGET_PREFIX, WAL_MAGIC, WAL_MAGIC_V1, WAL_PAIR_PREFIX,
+};
 pub use replay::load_or_replay;
 
 /// 单条用户上屏记录的 WAL 追加参数
@@ -268,7 +270,12 @@ impl UserAdaptiveWal {
     }
 
     /// 序列化单条用户上屏 WAL 帧二进制数据包（包含校验和）
-    fn serialize_wal_frame(text: &str, pinyin: &str, timestamp: u64) -> Option<Vec<u8>> {
+    fn serialize_wal_frame(
+        text: &str,
+        pinyin: &str,
+        timestamp: u64,
+        count: u32,
+    ) -> Option<Vec<u8>> {
         let py_bytes = pinyin.as_bytes();
         let text_bytes = text.as_bytes();
         if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
@@ -282,7 +289,6 @@ impl UserAdaptiveWal {
 
         let py_len = py_bytes.len() as u16;
         let text_len = text_bytes.len() as u16;
-        let count: u32 = 1;
 
         let mut buf = Vec::with_capacity(20 + py_bytes.len() + text_bytes.len());
         buf.extend_from_slice(&timestamp.to_le_bytes());
@@ -301,20 +307,13 @@ impl UserAdaptiveWal {
         Some(buf)
     }
 
-    /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
-    pub fn append(
+    /// 将已序列化的 WAL 帧在跨进程排他锁保护下追加写入磁盘
+    fn write_frame_locked(
         &mut self,
         model: &mut UserAdaptiveModel,
-        params: &UserDictAppendParams<'_>,
+        path_ref: &Path,
+        frame_buf: &[u8],
     ) -> Result<(), AlgoError> {
-        let path_ref = params.path;
-        let frame_buf =
-            match Self::serialize_wal_frame(params.text, params.pinyin, params.timestamp) {
-                Some(buf) => buf,
-                None => return Ok(()),
-            };
-
-        // 跨进程排他锁保护：从检查打开文件到写入单条帧均受排他互斥保护
         let _process_lock = ProcessFileLock::acquire_exclusive(path_ref).map_err(|e| {
             AlgoError::UserDictPersistFailed {
                 path: PathBuf::from(path_ref),
@@ -325,24 +324,77 @@ impl UserAdaptiveWal {
         self.ensure_wal_file_opened(model, path_ref)?;
 
         let mut guard = self.wal_file.lock();
-
         if let Some((_, ref mut file)) = *guard {
-            file.write_all(&frame_buf)
+            file.write_all(frame_buf)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: PathBuf::from(path_ref),
                     source: e,
                 })?;
         }
-
         drop(guard);
 
-        // 同步更新内存模型状态机（遵循 WAL 先写日志后更新内存的设计原则）
-        model.record_commit(params.text, params.pinyin, params.timestamp);
-
-        // 运行期累计写入流水计数（解耦打字按键热路径与重度磁盘 IO，由外部在失焦或退出时调用 maybe_compact）
         self.wal_append_counter += 1;
-
         Ok(())
+    }
+
+    /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
+    pub fn append(
+        &mut self,
+        model: &mut UserAdaptiveModel,
+        params: &UserDictAppendParams<'_>,
+    ) -> Result<(), AlgoError> {
+        let Some(frame_buf) =
+            Self::serialize_wal_frame(params.text, params.pinyin, params.timestamp, 1)
+        else {
+            return Ok(());
+        };
+
+        self.write_frame_locked(model, params.path, &frame_buf)?;
+        model.record_commit(params.text, params.pinyin, params.timestamp);
+        Ok(())
+    }
+
+    /// 追加单条用户词对搭配记录到 WAL 中，并同步更新传入的内存领域模型
+    pub fn append_pair(
+        &mut self,
+        model: &mut UserAdaptiveModel,
+        path: &Path,
+        prev: &str,
+        curr: &str,
+        timestamp: u64,
+    ) -> Result<(), AlgoError> {
+        if prev.is_empty() || curr.is_empty() {
+            return Ok(());
+        }
+        let encoded_prev = format!("{WAL_PAIR_PREFIX}{prev}");
+        let Some(frame_buf) = Self::serialize_wal_frame(curr, &encoded_prev, timestamp, 1) else {
+            return Ok(());
+        };
+        self.write_frame_locked(model, path, &frame_buf)?;
+        model.record_pair(prev, curr, timestamp);
+        Ok(())
+    }
+
+    /// 追加单条精准忘词记录到 WAL 中，并同步从内存领域模型中擦除该词及其关联搭配
+    pub fn append_forget(
+        &mut self,
+        model: &mut UserAdaptiveModel,
+        path: &Path,
+        text: &str,
+        pinyin: Option<&str>,
+        timestamp: u64,
+    ) -> Result<bool, AlgoError> {
+        if text.is_empty() {
+            return Ok(false);
+        }
+        let encoded_py = match pinyin {
+            Some(py) => format!("{WAL_FORGET_PREFIX}{py}"),
+            None => WAL_FORGET_PREFIX.to_string(),
+        };
+        if let Some(frame_buf) = Self::serialize_wal_frame(text, &encoded_py, timestamp, 0) {
+            self.write_frame_locked(model, path, &frame_buf)?;
+        }
+        Ok(model.forget_word(text, pinyin))
     }
 
     /// 检查并在达到压缩阈值时执行 WAL 文件的原子压缩归并 (Compaction)

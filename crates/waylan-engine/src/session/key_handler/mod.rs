@@ -20,6 +20,7 @@ pub use crate::session::ImeOutputAction;
 pub struct CompositionKeyParams {
     pub key: u32,
     pub shift_active: bool,
+    pub ctrl_active: bool,
     pub page_keys: PageKeyConfig,
     pub now: u64,
 }
@@ -61,9 +62,15 @@ fn handle_composition_selection_keys(
     let CompositionKeyParams {
         key,
         shift_active,
+        ctrl_active: _,
         page_keys,
         now,
     } = params;
+
+    if let Some(act) = selection::handle_forget_candidate_key(session, params) {
+        session.collapse_card();
+        return Some(act);
+    }
 
     if let Some(act) = selection::handle_v_mode_key(session, key, shift_active) {
         session.collapse_card();

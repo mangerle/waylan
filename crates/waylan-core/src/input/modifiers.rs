@@ -82,6 +82,18 @@ impl ModifierState {
         (self.depressed & MOD_SHIFT) != 0
     }
 
+    /// 查询 Ctrl 是否处于按下状态（左右任一侧均计入）
+    #[inline]
+    pub fn is_ctrl_active(&self) -> bool {
+        (self.depressed & MOD_CTRL) != 0
+    }
+
+    /// 查询 Alt 是否处于按下状态（左右任一侧均计入）
+    #[inline]
+    pub fn is_alt_active(&self) -> bool {
+        (self.depressed & MOD_ALT) != 0
+    }
+
     /// 查询 CapsLock 是否处于锁定状态
     #[inline]
     pub fn is_caps_locked(&self) -> bool {

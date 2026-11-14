@@ -5,6 +5,7 @@ use super::tail_expansion::{expand_remaining_tail, TailExpansionContext};
 use crate::pipeline::is_rare_ext_char;
 use crate::table::LexiconTable;
 use crate::types::{AlgoCandidate, CandidateTier};
+use crate::user_adaptive::UserAdaptiveModel;
 
 /// 整句动态规划求解的输入参数对象
 ///
@@ -23,6 +24,10 @@ pub struct SentenceDecodeParams<'a> {
     pub prev_context: Option<&'a str>,
     /// 是否启用简拼尾部扩展
     pub enable_acronym: bool,
+    /// 可选的用户自适应词对搭配模型（用于融合个人习惯搭配加分）
+    pub user_model: Option<&'a UserAdaptiveModel>,
+    /// 评估时间衰减的基准时间戳（秒级 UNIX 时间）
+    pub eval_ts: u64,
 }
 
 /// 词格点求解推进上下文参数对象
@@ -31,6 +36,8 @@ pub(super) struct LatticeSolveParams<'a> {
     pub(super) table: &'a LexiconTable,
     pub(super) has_bigram: bool,
     pub(super) ctx_str: &'a str,
+    pub(super) user_model: Option<&'a UserAdaptiveModel>,
+    pub(super) eval_ts: u64,
 }
 
 /// 单个构词条目的固有属性（与前驱束无关的部分）
@@ -181,6 +188,8 @@ impl ViterbiDecoder {
             table,
             prev_context,
             enable_acronym: true,
+            user_model: None,
+            eval_ts: 0,
         })
     }
 
@@ -194,6 +203,8 @@ impl ViterbiDecoder {
             table,
             prev_context,
             enable_acronym,
+            user_model,
+            eval_ts,
         } = *params;
 
         let n = syllables.len();
@@ -203,9 +214,17 @@ impl ViterbiDecoder {
 
         let has_bigram = table.compact_bigram.is_some();
         let ctx_str = prev_context.unwrap_or("");
+        let lattice = LatticeSolveParams {
+            syllables,
+            table,
+            has_bigram,
+            ctx_str,
+            user_model,
+            eval_ts,
+        };
 
         // 沿音节序列向右推进求解 Viterbi 最优路径
-        let dp = Self::solve_lattice_dp(syllables, table, has_bigram, ctx_str);
+        let dp = Self::solve_lattice_dp(&lattice);
 
         // 末尾残缺音节与声母扩展（处理未完成键入态）
         if !remaining.is_empty() {
@@ -238,6 +257,8 @@ impl ViterbiDecoder {
             table,
             prev_context,
             enable_acronym,
+            user_model,
+            eval_ts,
         } = *params;
 
         let n = syllables.len();
@@ -247,7 +268,15 @@ impl ViterbiDecoder {
 
         let has_bigram = table.compact_bigram.is_some();
         let ctx_str = prev_context.unwrap_or("");
-        let dp = Self::solve_lattice_dp(syllables, table, has_bigram, ctx_str);
+        let lattice = LatticeSolveParams {
+            syllables,
+            table,
+            has_bigram,
+            ctx_str,
+            user_model,
+            eval_ts,
+        };
+        let dp = Self::solve_lattice_dp(&lattice);
 
         if !remaining.is_empty() {
             if let Some(cand) = expand_remaining_tail(
@@ -320,15 +349,10 @@ impl ViterbiDecoder {
     }
 
     /// 构建词格点状态容器并沿音节序列推进求解 Viterbi 最优路径
-    fn solve_lattice_dp(
-        syllables: &[String],
-        table: &LexiconTable,
-        has_bigram: bool,
-        ctx_str: &str,
-    ) -> Vec<Vec<ViterbiBeamNode>> {
-        let n = syllables.len();
-        let ctx_word_id = if has_bigram && !ctx_str.is_empty() {
-            table.get_word_id(ctx_str)
+    fn solve_lattice_dp(lattice: &LatticeSolveParams<'_>) -> Vec<Vec<ViterbiBeamNode>> {
+        let n = lattice.syllables.len();
+        let ctx_word_id = if lattice.has_bigram && !lattice.ctx_str.is_empty() {
+            lattice.table.get_word_id(lattice.ctx_str)
         } else {
             None
         };
@@ -346,15 +370,7 @@ impl ViterbiDecoder {
         });
 
         // 沿音节序列向右推进求解 Viterbi 最优路径
-        Self::solve_syllable_lattice(
-            &LatticeSolveParams {
-                syllables,
-                table,
-                has_bigram,
-                ctx_str,
-            },
-            &mut dp,
-        );
+        Self::solve_syllable_lattice(lattice, &mut dp);
 
         dp
     }
@@ -446,12 +462,17 @@ impl ViterbiDecoder {
             } else {
                 prev_node.word.as_str()
             };
-            let trans_score = BigramLanguageModel::transition_score_cached(
+            let base_score = BigramLanguageModel::transition_score_cached(
                 (prev_word, prev_node.last_word_id),
                 (word.text, word.word_id, word.char_len),
                 word.freq_score,
                 params.lattice.table,
             );
+            // 叠加用户历史词对搭配习惯加分（带 30 天半衰期衰减）
+            let pair_boost = params.lattice.user_model.map_or(0, |um| {
+                um.pair_boost_score(prev_word, word.text, params.lattice.eval_ts)
+            });
+            let trans_score = base_score.saturating_add(pair_boost);
             let candidate_total = prev_node.total_score.saturating_add(trans_score);
             if candidate_total > best_total {
                 best_total = candidate_total;

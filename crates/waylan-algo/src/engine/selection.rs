@@ -63,6 +63,21 @@ impl AlgoEngine {
         self.select_candidate(global_index, current_timestamp)
     }
 
+    /// 忘记指定索引处的候选词（清除其在用户自适应词库中的记忆与前后搭配）并刷新候选
+    pub fn forget_candidate(&mut self, index: usize, current_timestamp: u64) -> bool {
+        let Some(cand) = self.candidates.get(index) else {
+            return false;
+        };
+        let text = cand.text.clone();
+        let pinyin = cand.pinyin.clone();
+        let py_opt = (!pinyin.is_empty()).then_some(pinyin.as_str());
+        let removed = self.adaptive.forget_word(&text, py_opt, current_timestamp);
+        if removed {
+            self.recompute_candidates();
+        }
+        removed
+    }
+
     /// 准备上屏文本并根据盘古之白规则注入空格，同时更新跨句历史上下文
     fn prepare_commit_text(&mut self, selected: &mut AlgoCandidate, should_record: bool) -> String {
         let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
@@ -183,10 +198,15 @@ impl AlgoEngine {
     ) -> (String, usize) {
         self.adaptive.last_timestamp = self.adaptive.last_timestamp.max(current_timestamp);
         let should_record = self.should_record_to_user_dict(&selected);
+        let prev_context = self.composition.last_commit_context().map(str::to_string);
 
         if should_record {
             self.adaptive
                 .record_commit(&selected.text, &selected.pinyin, current_timestamp);
+            if let Some(ref prev) = prev_context {
+                self.adaptive
+                    .record_pair(prev, &selected.text, current_timestamp);
+            }
         }
 
         let commit_text = self.prepare_commit_text(&mut selected, should_record);

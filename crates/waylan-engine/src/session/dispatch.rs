@@ -198,8 +198,13 @@ impl ImeCoreSession {
 
     /// 处理英文模式、CapsLock 锁定及控制键按下时的透传或大写/全角字母转换
     fn dispatch_passthrough_or_fullwidth_english(&self, keycode: u32) -> Option<ImeOutputAction> {
-        // 1. 控制键按下时一律透传，保障系统与应用组合快捷键（如 Ctrl+C、Ctrl+Shift 等）畅通
-        if self.has_ctrl_or_alt() {
+        // 0. 组词态下的 Ctrl+Delete 放行给候选忘词逻辑，其余控制组合键一律透传
+        let is_forget_shortcut = self.mode == InputMode::Chinese
+            && !self.engine.raw_input().is_empty()
+            && keycode == KEY_DELETE
+            && self.is_ctrl_active()
+            && !self.is_alt_active();
+        if self.has_ctrl_or_alt() && !is_forget_shortcut {
             return Some(ImeOutputAction::PassThrough);
         }
 
@@ -261,6 +266,7 @@ impl ImeCoreSession {
         let params = CompositionKeyParams {
             key: keycode,
             shift_active: self.is_shift_active(),
+            ctrl_active: self.is_ctrl_active(),
             page_keys: self.page_keys,
             now,
         };

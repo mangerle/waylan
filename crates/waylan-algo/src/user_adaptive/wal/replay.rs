@@ -13,9 +13,11 @@ use log::warn;
 
 use crate::error::AlgoError;
 use crate::user_adaptive::wal::compactor::compact_model;
-use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_MAGIC_V1};
+use crate::user_adaptive::wal::constants::{
+    WAL_CHECKSUM_SEED, WAL_FORGET_PREFIX, WAL_MAGIC, WAL_MAGIC_V1, WAL_PAIR_PREFIX,
+};
 use crate::user_adaptive::wal::lock::ProcessFileLock;
-use crate::user_adaptive::{CommitCountParams, UserAdaptiveModel};
+use crate::user_adaptive::{CommitCountParams, UserAdaptiveModel, UserPairEntry};
 
 /// 从二进制缓冲区重放 WAL 记录帧（公共重放逻辑）
 pub(crate) fn replay_wal_records(buf: &[u8], is_v2: bool) -> (UserAdaptiveModel, bool, usize) {
@@ -33,7 +35,29 @@ pub(crate) fn replay_wal_records(buf: &[u8], is_v2: bool) -> (UserAdaptiveModel,
                 py,
                 text,
             } => {
-                if !py.is_empty() && !text.is_empty() {
+                if count == 0 {
+                    if let Some(target_py) = py.strip_prefix(WAL_FORGET_PREFIX) {
+                        let py_opt = (!target_py.is_empty()).then_some(target_py);
+                        model.forget_word(text, py_opt);
+                        record_count += 1;
+                    }
+                } else if let Some(prev) = py.strip_prefix(WAL_PAIR_PREFIX) {
+                    if !prev.is_empty() && !text.is_empty() {
+                        if count == 1 {
+                            model.record_pair(prev, text, timestamp);
+                        } else {
+                            model.max_timestamp = model.max_timestamp.max(timestamp);
+                            model.pairs.entry(prev.to_string()).or_default().insert(
+                                text.to_string(),
+                                UserPairEntry {
+                                    count,
+                                    last_used_timestamp: timestamp,
+                                },
+                            );
+                        }
+                        record_count += 1;
+                    }
+                } else if !py.is_empty() && !text.is_empty() {
                     model.record_commit_count(&CommitCountParams {
                         text,
                         pinyin: py,
