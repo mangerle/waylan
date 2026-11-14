@@ -114,6 +114,23 @@ impl SegmentPath {
         }
     }
 
+    /// 计算路径前 `syllable_count` 个音节对应的原始击键字符长度
+    pub fn consumed_prefix_raw_len(&self, syllable_count: usize) -> usize {
+        if self.raw_syllables.is_empty() {
+            self.syllables
+                .iter()
+                .take(syllable_count)
+                .map(|s| s.len())
+                .sum()
+        } else {
+            self.raw_syllables
+                .iter()
+                .take(syllable_count)
+                .map(|s| s.len())
+                .sum()
+        }
+    }
+
     /// 判定当前非容错路径是否属于因拼写误触（邻键误按或字母倒置）而产生的断流碎切降级路径
     ///
     /// # 设计原理

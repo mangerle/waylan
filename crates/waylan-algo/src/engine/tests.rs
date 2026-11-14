@@ -524,3 +524,28 @@ fn test_complete_tail_extension_and_exact_word_protection() {
         "zhongdi 应同时给出补全候选 重点"
     );
 }
+
+#[test]
+fn test_sentence_head_segment_partial_commit() {
+    let mut table = LexiconTable::new();
+    table.insert("ni'hao", "你好", 50_000);
+    table.insert("zhong'guo", "中国", 50_000);
+    let mut engine = AlgoEngine::new(table, AlgoConfig::default());
+    for ch in "nihaozhongguo".chars() {
+        engine.push_char(ch);
+    }
+
+    let cands = engine.all_candidates();
+    assert_eq!(cands[0].text, "你好中国");
+    let head_idx = cands
+        .iter()
+        .position(|c| c.text == "你好" && c.consumed_len == Some(5))
+        .expect("长句应包含句首词段候选 你好 且 consumed_len 为 5");
+    assert!(head_idx <= 2, "句首词段候选应紧跟在整句之后");
+
+    let (committed, _) = engine
+        .select_candidate(head_idx, 1000)
+        .expect("选中句首词段应成功");
+    assert_eq!(committed, "你好");
+    assert_eq!(engine.raw_input(), "zhongguo");
+}

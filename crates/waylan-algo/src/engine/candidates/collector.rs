@@ -311,25 +311,43 @@ impl AlgoEngine {
         }
     }
 
-    /// 基于 Viterbi 整句动态规划合成最佳长句候选，并按路径切分代价惩罚其得分
+    /// 基于 Viterbi 整句动态规划合成最佳长句候选，并附加用于局部上屏的句首词段候选
     fn collect_viterbi_sentence_match(
         &self,
         best_path: &SegmentPath,
         results: &mut Vec<AlgoCandidate>,
     ) {
-        if let Some(mut sentence) =
-            ViterbiDecoder::decode_sentence_with_context_options(&SentenceDecodeParams {
+        let (Some(mut sentence), heads) =
+            ViterbiDecoder::decode_sentence_with_heads(&SentenceDecodeParams {
                 syllables: &best_path.syllables,
                 remaining: &best_path.remaining,
                 table: &self.resources.table,
                 prev_context: self.composition.last_commit_context(),
                 enable_acronym: self.config.enable_acronym,
             })
-        {
-            sentence.score = sentence
-                .score
-                .saturating_sub(best_path.cost.saturating_mul(100));
-            results.push(sentence);
+        else {
+            return;
+        };
+
+        sentence.score = sentence
+            .score
+            .saturating_sub(best_path.cost.saturating_mul(100));
+        let base_score = sentence.score;
+        results.push(sentence);
+
+        for (idx, head) in heads.into_iter().enumerate() {
+            let consumed = best_path.consumed_prefix_raw_len(head.syllable_count);
+            if consumed == 0 || consumed >= best_path.consumed_raw_len() {
+                continue;
+            }
+            let mut head_cand = AlgoCandidate::new(
+                head.text,
+                head.pinyin,
+                base_score.saturating_sub(idx as u32 + 1),
+            )
+            .with_tier(CandidateTier::SentenceViterbi);
+            head_cand.consumed_len = Some(consumed);
+            results.push(head_cand);
         }
     }
 

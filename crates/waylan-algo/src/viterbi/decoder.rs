@@ -96,6 +96,17 @@ pub(super) struct ViterbiBeamNode {
     pub(super) total_score: i64,
 }
 
+/// 整句回溯提取的句首词段候选元数据
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentenceHeadSegment {
+    /// 句首词段文本（如 `nihaozhongguo` 的句首段「你好」）
+    pub text: String,
+    /// 对应的拼音键串
+    pub pinyin: String,
+    /// 覆盖的音节数
+    pub syllable_count: usize,
+}
+
 /// 沿反向指针逆向回溯拼装整句文本，仅在选出全局最优解时触发一次聚合
 pub(super) fn backtrack_sentence(
     dp: &[Vec<ViterbiBeamNode>],
@@ -215,6 +226,97 @@ impl ViterbiDecoder {
 
         // 若无 remaining 或扩展未命中，直接提取到达第 n 个音节的全局最优解
         Self::extract_best_sentence(&dp, n, syllables)
+    }
+
+    /// 求解最优整句候选的同时，沿音节边界提取用于局部上屏的句首词段列表
+    pub fn decode_sentence_with_heads(
+        params: &SentenceDecodeParams<'_>,
+    ) -> (Option<AlgoCandidate>, Vec<SentenceHeadSegment>) {
+        let SentenceDecodeParams {
+            syllables,
+            remaining,
+            table,
+            prev_context,
+            enable_acronym,
+        } = *params;
+
+        let n = syllables.len();
+        if n == 0 && remaining.is_empty() {
+            return (None, Vec::new());
+        }
+
+        let has_bigram = table.compact_bigram.is_some();
+        let ctx_str = prev_context.unwrap_or("");
+        let dp = Self::solve_lattice_dp(syllables, table, has_bigram, ctx_str);
+
+        if !remaining.is_empty() {
+            if let Some(cand) = expand_remaining_tail(
+                &TailExpansionContext {
+                    syllables,
+                    remaining,
+                    table,
+                    has_bigram,
+                    prev_context,
+                    enable_acronym,
+                },
+                &dp,
+            ) {
+                return (Some(cand), Vec::new());
+            }
+        }
+
+        let sentence = Self::extract_best_sentence(&dp, n, syllables);
+        let heads = Self::extract_head_segments(&dp, n, syllables);
+        (sentence, heads)
+    }
+
+    /// 从最优路径回溯提取句首词段（仅在整句由 2 个及以上词组成且音节数 >= 3 时生成）
+    fn extract_head_segments(
+        dp: &[Vec<ViterbiBeamNode>],
+        n: usize,
+        syllables: &[String],
+    ) -> Vec<SentenceHeadSegment> {
+        if n < 3 || dp.get(n).is_none_or(Vec::is_empty) {
+            return Vec::new();
+        }
+        let mut segments: Vec<(&str, usize)> = Vec::new();
+        let mut step = n;
+        let mut beam_idx = 0usize;
+        while step > 0 {
+            let node = &dp[step][beam_idx];
+            segments.push((node.word.as_str(), step));
+            step = node.prev_step;
+            beam_idx = node.prev_beam_idx;
+        }
+        if segments.len() < 2 {
+            return Vec::new();
+        }
+        segments.reverse();
+
+        let mut out = Vec::new();
+        // 4 音节及以上优先给出最长句首前缀（去掉最后一个词），随后给出首词本身
+        if segments.len() >= 3 {
+            let long_idx = segments.len() - 2;
+            let long_syl_count = segments[long_idx].1;
+            let long_text: String = segments[..=long_idx].iter().map(|(w, _)| *w).collect();
+            out.push(SentenceHeadSegment {
+                text: long_text,
+                pinyin: syllables[..long_syl_count].join("'"),
+                syllable_count: long_syl_count,
+            });
+        }
+        let (first_word, first_syl_count) = segments[0];
+        if first_syl_count >= 1 && first_syl_count < n {
+            let first_text = first_word.to_string();
+            if !out.iter().any(|h| h.text == first_text) {
+                out.push(SentenceHeadSegment {
+                    text: first_text,
+                    pinyin: syllables[..first_syl_count].join("'"),
+                    syllable_count: first_syl_count,
+                });
+            }
+        }
+        out
     }
 
     /// 构建词格点状态容器并沿音节序列推进求解 Viterbi 最优路径
