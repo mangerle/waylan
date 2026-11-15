@@ -104,8 +104,8 @@ fn apply_start_edit_cloud_profile(ctx: &CloudProfileCallbackContext, idx: i32) {
     let Some(win) = ctx.window_weak.upgrade() else {
         return;
     };
-    let cfg = ctx.cfg_cell.lock().clone();
-    let Some(profile) = cfg.voice.cloud_profiles.get(idx as usize) else {
+    let guard = ctx.cfg_cell.lock();
+    let Some(profile) = guard.voice.cloud_profiles.get(idx as usize) else {
         return;
     };
     *ctx.editing_id.borrow_mut() = Some(profile.id.clone());
@@ -225,6 +225,38 @@ fn apply_cloud_profile_insert(cfg: &mut AppConfig, values: &CloudProfileValues) 
     });
 }
 
+/// 统一执行配置修改、磁盘持久化、内存回写与窗口同步事务
+///
+/// 在写盘成功后才覆盖共享内存状态并同步界面，写盘失败时自动保留原内存配置并提示错误。
+fn commit_config_change<F>(
+    win: &SettingsWindow,
+    cfg_cell: &Arc<Mutex<AppConfig>>,
+    error_prefix: &str,
+    mutate: F,
+) -> Option<String>
+where
+    F: FnOnce(&mut AppConfig) -> Option<String>,
+{
+    let mut next_cfg = cfg_cell.lock().clone();
+    update_config_from_window(win, &mut next_cfg);
+    let success_msg = mutate(&mut next_cfg)?;
+
+    match next_cfg.save_default() {
+        Ok(()) => {
+            sync_config_to_window(win, &next_cfg);
+            *cfg_cell.lock() = next_cfg;
+            win.set_global_status_is_error(false);
+            win.set_global_status(SharedString::from(&success_msg));
+            Some(success_msg)
+        }
+        Err(e) => {
+            win.set_global_status_is_error(true);
+            win.set_global_status(SharedString::from(format!("{}: {}", error_prefix, e)));
+            None
+        }
+    }
+}
+
 /// 处理保存/更新云端语音服务配置
 fn handle_save_cloud_profile(
     win: &SettingsWindow,
@@ -236,30 +268,21 @@ fn handle_save_cloud_profile(
         return;
     };
 
-    let mut cfg = current_cfg_cell.lock().clone();
-    update_config_from_window(win, &mut cfg);
     let target_id = editing_id_save.borrow_mut().take();
-    if let Some(ref tid) = target_id {
-        apply_cloud_profile_update(&mut cfg, tid, &values);
+    let display_name = values.name.clone();
+    let saved = commit_config_change(win, current_cfg_cell, "保存云端服务失败", |cfg| {
+        if let Some(ref tid) = target_id {
+            apply_cloud_profile_update(cfg, tid, &values);
+        } else {
+            apply_cloud_profile_insert(cfg, &values);
+        }
+        Some(format!("云端服务 [{}] 已保存生效！", display_name))
+    });
+    if saved.is_some() {
+        win.set_is_editing_cloud(false);
     } else {
-        apply_cloud_profile_insert(&mut cfg, &values);
-    }
-
-    match cfg.save_default() {
-        Ok(()) => {
-            win.set_is_editing_cloud(false);
-            *current_cfg_cell.lock() = cfg.clone();
-            sync_config_to_window(win, &cfg);
-            win.set_global_status_is_error(false);
-            win.set_global_status(SharedString::from(format!(
-                "云端服务 [{}] 已保存生效！",
-                values.name
-            )));
-        }
-        Err(e) => {
-            win.set_global_status_is_error(true);
-            win.set_global_status(SharedString::from(format!("保存云端服务失败: {}", e)));
-        }
+        // 保存失败时恢复编辑 ID，避免用户重试时误变成新增条目
+        *editing_id_save.borrow_mut() = target_id;
     }
 }
 
@@ -270,31 +293,20 @@ fn handle_delete_cloud_profile(
     editing_id: &Rc<RefCell<Option<String>>>,
     index: usize,
 ) {
-    let mut cfg = current_cfg_cell.lock().clone();
-    update_config_from_window(win, &mut cfg);
-    if index < cfg.voice.cloud_profiles.len() {
+    let deleted = commit_config_change(win, current_cfg_cell, "保存删除状态失败", |cfg| {
+        if index >= cfg.voice.cloud_profiles.len() {
+            return None;
+        }
         let removed = cfg.voice.cloud_profiles.remove(index);
         if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", removed.id)) {
             cfg.voice.selected_asr = None;
             cfg.voice.engine_type = VoiceEngineType::Offline;
         }
+        Some(format!("已删除云端服务: {}", removed.name))
+    });
+    if deleted.is_some() {
         editing_id.borrow_mut().take();
         win.set_is_editing_cloud(false);
-        match cfg.save_default() {
-            Ok(()) => {
-                *current_cfg_cell.lock() = cfg.clone();
-                sync_config_to_window(win, &cfg);
-                win.set_global_status_is_error(false);
-                win.set_global_status(SharedString::from(format!(
-                    "已删除云端服务: {}",
-                    removed.name
-                )));
-            }
-            Err(e) => {
-                win.set_global_status_is_error(true);
-                win.set_global_status(SharedString::from(format!("保存删除状态失败: {}", e)));
-            }
-        }
     }
 }
 
