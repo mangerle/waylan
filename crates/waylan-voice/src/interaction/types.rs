@@ -38,4 +38,9 @@ pub enum VoiceSessionState {
         /// 是否已在录音停止瞬间提前将流式预览文字提交上屏
         fallback_committed: bool,
     },
+    /// 识别已完成，短暂展示「识别完成」提示并平滑淡出
+    Completed {
+        /// 进入完成态的时间戳（用于到期自动收起）
+        start_time: Instant,
+    },
 }

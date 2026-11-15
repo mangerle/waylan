@@ -42,12 +42,14 @@ fn test_voice_interaction_manager_poll_events() {
     assert_eq!(mgr.poll_events().as_deref(), Some("分句一"));
     assert!(mgr.partial_text.is_none());
 
-    // 4. 测试最终完成结算
+    // 4. 测试最终完成结算：上屏后进入「识别完成」短暂展示态
     tx.send(VoiceEvent::FinalCommit("最终识别文本。".to_string()))
         .unwrap();
     assert_eq!(mgr.poll_events().as_deref(), Some("最终识别文本。"));
-    assert!(!mgr.is_active());
-    assert!(matches!(mgr.state, VoiceSessionState::Idle));
+    assert!(mgr.is_active());
+    assert!(mgr.is_completed());
+    assert_eq!(mgr.display_text.as_deref(), Some("识别完成"));
+    assert!(matches!(mgr.state, VoiceSessionState::Completed { .. }));
 }
 
 #[test]
@@ -61,10 +63,11 @@ fn test_voice_interaction_manager_finalize_and_fallback() {
     };
     mgr.partial_text = Some("保底预览文字".to_string());
 
-    // 当最终结果为空时，自动启用流式预览作为保底上屏
+    // 当最终结果为空时，自动启用流式预览作为保底上屏，并进入完成提示态
     tx.send(VoiceEvent::FinalCommit("   ".to_string())).unwrap();
     assert_eq!(mgr.poll_events().as_deref(), Some("保底预览文字"));
-    assert!(!mgr.is_active());
+    assert!(mgr.is_active());
+    assert!(mgr.is_completed());
     assert!(!mgr.is_finalizing());
 }
 
@@ -81,7 +84,8 @@ fn test_voice_interaction_manager_finalize_timeout_fallback() {
     mgr.partial_text = Some("超时保底文本".to_string());
 
     assert_eq!(mgr.poll_events().as_deref(), Some("超时保底文本"));
-    assert!(!mgr.is_active());
+    assert!(mgr.is_active());
+    assert!(mgr.is_completed());
     assert!(!mgr.is_finalizing());
 }
 
@@ -138,4 +142,44 @@ fn test_dispatch_voice_key_tracks_consumed_keys() {
     });
     assert_eq!(action_rel, VoiceKeyAction::Consumed);
     assert!(!tracker.is_consumed(KEY_SPACE));
+}
+
+#[test]
+fn test_voice_completed_state_expires_and_interrupts_on_key_press() {
+    let mut mgr = VoiceInteractionManager::new(VoiceConfig::default());
+    mgr.config.enabled = true;
+
+    // 1. 超过淡出停留窗口后轮询应自动回到 Idle
+    mgr.state = VoiceSessionState::Completed {
+        start_time: Instant::now() - Duration::from_millis(VOICE_COMPLETED_DISPLAY_MS + 50),
+    };
+    mgr.display_text = Some("识别完成".to_string());
+    assert!(mgr.poll_events().is_none());
+    assert!(!mgr.is_active());
+    assert!(matches!(mgr.state, VoiceSessionState::Idle));
+
+    // 2. 处于淡出展示期间按下普通按键，应立即打断淡出并放行按键
+    mgr.enter_completed_state();
+    assert!(mgr.is_completed());
+    let action = mgr.handle_key_event(KEY_SPACE, true, 0);
+    assert_eq!(action, VoiceKeyAction::PassThrough);
+    assert!(!mgr.is_active());
+    assert!(matches!(mgr.state, VoiceSessionState::Idle));
+}
+
+#[test]
+fn test_voice_empty_final_commit_skips_completed_state() {
+    let mut mgr = VoiceInteractionManager::new(VoiceConfig::default());
+    let (tx, rx) = sync_channel(16);
+    mgr.state = VoiceSessionState::Finalizing {
+        rx,
+        start_time: Instant::now(),
+        fallback_committed: false,
+    };
+
+    tx.send(VoiceEvent::FinalCommit("   ".to_string())).unwrap();
+    assert!(mgr.poll_events().is_none());
+    assert!(!mgr.is_active());
+    assert!(!mgr.is_completed());
+    assert!(matches!(mgr.state, VoiceSessionState::Idle));
 }

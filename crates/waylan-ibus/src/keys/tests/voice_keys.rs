@@ -157,12 +157,15 @@ fn test_ibus_voice_input_commit_on_enter() {
         .voice_manager()
         .expect("语音管理器应存在")
         .is_recording());
-    assert!(core
+    let display_text = core
         .runtime
         .voice_manager()
         .expect("语音管理器应存在")
-        .display_text()
-        .is_none());
+        .display_text();
+    assert!(matches!(
+        display_text.as_deref(),
+        Some("正在识别...") | Some("识别完成")
+    ));
 }
 
 #[test]

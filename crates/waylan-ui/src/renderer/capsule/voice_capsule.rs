@@ -314,9 +314,17 @@ pub fn render_voice_capsule_bar(
 
     let voice_text = resolve_voice_text(voice);
     let ratios = parse_waveform_ratios(&voice.waveform);
+    let effective_effect = if voice.waveform.is_empty()
+        && (voice_text == "识别完成" || voice_text.starts_with("正在识别"))
+        && matches!(voice.visual_effect, VoiceVisualEffect::DynamicWaveform)
+    {
+        VoiceVisualEffect::BreathingPulse
+    } else {
+        voice.visual_effect
+    };
 
     let wave_total_w = compute_voice_wave_total_width(ratios.len(), s);
-    let leading_width = resolve_voice_leading_width(voice.visual_effect, wave_total_w, s);
+    let leading_width = resolve_voice_leading_width(effective_effect, wave_total_w, s);
     let text_w = renderer.measure_text(voice_text, metrics.font_size);
     let total_bar_width = (metrics.padding_h * 2.0 + leading_width + text_w).max(140.0 * s);
 
@@ -330,7 +338,7 @@ pub fn render_voice_capsule_bar(
         renderer,
         &mut pixmap,
         &VoiceContentParams {
-            effect: voice.visual_effect,
+            effect: effective_effect,
             ratios: &ratios,
             voice_text,
             scale: s,

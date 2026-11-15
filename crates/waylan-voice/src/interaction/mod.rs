@@ -21,6 +21,9 @@ use crate::session::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 
 pub use types::{VoiceKeyAction, VoiceSessionState};
 
+/// 「识别完成」提示浮条的默认停留时长（毫秒），涵盖展示与淡出动画窗口
+const VOICE_COMPLETED_DISPLAY_MS: u64 = 750;
+
 /// 统一语音按键交互状态机与控制器 (Voice Interaction Manager)
 pub struct VoiceInteractionManager {
     /// 语音识别与采集底层会话控制器
@@ -97,6 +100,26 @@ impl VoiceInteractionManager {
         matches!(self.state, VoiceSessionState::Finalizing { .. })
     }
 
+    /// 查询当前是否处于识别完成后的淡出展示态
+    #[inline]
+    pub fn is_completed(&self) -> bool {
+        matches!(self.state, VoiceSessionState::Completed { .. })
+    }
+
+    /// 进入「识别完成」短暂展示与淡出过渡态（若未开启浮条则直接重置为空闲）
+    pub fn enter_completed_state(&mut self) {
+        self.waveform = None;
+        self.partial_text = None;
+        if self.config.interaction.show_floating_bar {
+            self.display_text = Some("识别完成".to_string());
+            self.state = VoiceSessionState::Completed {
+                start_time: Instant::now(),
+            };
+        } else {
+            self.clear_state();
+        }
+    }
+
     /// 清空语音运行状态与临时缓存
     pub fn clear_state(&mut self) {
         self.state = VoiceSessionState::Idle;
@@ -132,7 +155,7 @@ impl VoiceInteractionManager {
                 }
                 evts
             }
-            VoiceSessionState::Idle => Vec::new(),
+            VoiceSessionState::Idle | VoiceSessionState::Completed { .. } => Vec::new(),
         }
     }
 
@@ -160,8 +183,8 @@ impl VoiceInteractionManager {
         };
 
         if fallback_already {
-            debug!("[微澜语音] 收到后台最终结算，此前已保底上屏，静默同步状态");
-            self.clear_state();
+            debug!("[微澜语音] 收到后台最终结算，此前已保底上屏，切换至识别完成展示态");
+            self.enter_completed_state();
             return None;
         }
 
@@ -180,11 +203,12 @@ impl VoiceInteractionManager {
             String::new()
         };
 
-        self.clear_state();
         if !commit_text.is_empty() {
             info!("[微澜语音] 成功生成文字上屏: \"{}\"", commit_text);
+            self.enter_completed_state();
             Some(commit_text)
         } else {
+            self.clear_state();
             None
         }
     }
@@ -200,15 +224,16 @@ impl VoiceInteractionManager {
             if start_time.elapsed() >= Duration::from_millis(2000) {
                 warn!("[微澜语音] 等待最终结算超时(2s)，启用流式预览兜底并强制重置状态");
                 let fallback = self.partial_text.take();
-                self.clear_state();
                 if !fallback_committed {
                     if let Some(fb) = fallback {
                         let trimmed = fb.trim().to_string();
                         if !trimmed.is_empty() {
+                            self.enter_completed_state();
                             return Some(trimmed);
                         }
                     }
                 }
+                self.clear_state();
             }
         }
         None
@@ -216,6 +241,13 @@ impl VoiceInteractionManager {
 
     /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字（完全非阻塞）
     pub fn poll_events(&mut self) -> Option<String> {
+        if let VoiceSessionState::Completed { start_time } = self.state {
+            if start_time.elapsed() >= Duration::from_millis(VOICE_COMPLETED_DISPLAY_MS) {
+                self.clear_state();
+            }
+            return None;
+        }
+
         let is_finalizing_before = self.is_finalizing();
         let mut final_commit = None;
 
@@ -289,7 +321,11 @@ impl VoiceInteractionManager {
     pub fn stop_and_resolve_commit(&mut self) -> Option<String> {
         self.controller.stop_and_commit();
         self.waveform = None;
-        self.display_text = None;
+        if self.config.interaction.show_floating_bar {
+            self.display_text = Some("正在识别...".to_string());
+        } else {
+            self.display_text = None;
+        }
 
         // 立即尝试一次非阻塞轮询，若后台工作线程已就绪则直接返回上屏文字
         if let Some(text) = self.poll_events() {
@@ -301,7 +337,7 @@ impl VoiceInteractionManager {
             VoiceSessionState::PushToTalkRecording { rx, .. }
             | VoiceSessionState::ToggleRecording { rx } => Some(rx),
             VoiceSessionState::Finalizing { rx, .. } => Some(rx),
-            VoiceSessionState::Idle => None,
+            VoiceSessionState::Idle | VoiceSessionState::Completed { .. } => None,
         };
 
         if let Some(rx) = active_rx {
@@ -309,6 +345,9 @@ impl VoiceInteractionManager {
             if let Some(preview) = self.partial_text.take() {
                 let trimmed = preview.trim().to_string();
                 if !trimmed.is_empty() {
+                    if self.config.interaction.show_floating_bar {
+                        self.display_text = Some("识别完成".to_string());
+                    }
                     self.state = VoiceSessionState::Finalizing {
                         rx,
                         start_time: Instant::now(),

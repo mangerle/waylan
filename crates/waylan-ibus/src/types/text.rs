@@ -121,9 +121,12 @@ pub fn build_ibus_lookup_table(
             display_text.push_str(" ⇥ Tab");
         }
         cand_vec.push(build_ibus_text(&display_text)?);
-        // 关键隔离防护：仅在语音录入单条目状态下，允许通过 label 传递波形元数据；
+        // 关键隔离防护：仅在语音录入/结算/完成提示单条目状态下，允许通过 label 传递波形元数据；
         // 普通键盘组词打字时，100% 严禁暴露拼音到 label 中，必须使用零宽空格 (\u{200B}) 阻断原生序号
-        let is_voice_session = candidates.len() == 1 && candidates[0].text.starts_with("正在聆听");
+        let is_voice_session = candidates.len() == 1
+            && (candidates[0].text.starts_with("正在聆听")
+                || candidates[0].text.starts_with("正在识别")
+                || candidates[0].text.starts_with("识别完成"));
         let label_text = if is_voice_session && !cand.pinyin.is_empty() {
             cand.pinyin.as_str()
         } else {

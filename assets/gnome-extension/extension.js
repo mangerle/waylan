@@ -396,10 +396,12 @@ class WaylanCandidateView {
     }
 
     updateCandidates(indexes, candidates, cursorPosition, cursorVisible) {
-        // 判断是否为语音录入状态（候选词以“正在聆听”开头）
+        // 判断是否为语音录入/结算/完成提示状态
         const isVoiceState = candidates.length > 0 &&
             candidates[0] &&
-            candidates[0].includes('正在聆听');
+            (candidates[0].includes('正在聆听')
+                || candidates[0].includes('正在识别')
+                || candidates[0].includes('识别完成'));
 
         if (isVoiceState && this._config.voiceVisual !== 'classic_text') {
             const waveform = (indexes && indexes.length > 0) ? indexes[0] : '';
@@ -454,6 +456,49 @@ class WaylanCandidateView {
         // 彻底清洗过滤可能附带的字符，文字标题永远保持纯净
         const cleanText = candidateText.replace(/[\u2580-\u259f\u2500-\u257f\s\-_—~]+$/, '').trim();
 
+        // 识别完成状态：停止动态波形，展示完成态并平滑淡出
+        if (cleanText.includes('识别完成')) {
+            this._stopVoiceAnimation();
+            this._waveContainer.visible = false;
+            this._pulseDot.visible = true;
+            this._pulseDot.opacity = 255;
+            this._voiceLabel.text = '识别完成';
+            if (!this._isVoiceCompleted) {
+                this._isVoiceCompleted = true;
+                this._voiceCapsule.remove_all_transitions();
+                this._voiceCapsule.opacity = 255;
+                this._clearFadeTimer();
+                this._fadeTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 280, () => {
+                    this._fadeTimerId = 0;
+                    if (this._voiceCapsule && this._voiceCapsule.visible && this._isVoiceCompleted) {
+                        this._voiceCapsule.ease({
+                            opacity: 0,
+                            duration: 420,
+                            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                        });
+                    }
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+            return;
+        }
+
+        // 若从完成淡出态重新进入语音录音/识别，立即恢复不透明并取消淡出
+        this._isVoiceCompleted = false;
+        this._clearFadeTimer();
+        this._voiceCapsule.remove_all_transitions();
+        this._voiceCapsule.opacity = 255;
+
+        // 正在识别结算状态：显示呼吸圆点与结算文案
+        if (cleanText.includes('正在识别')) {
+            this._stopWaveAnimationOnly();
+            this._waveContainer.visible = false;
+            this._pulseDot.visible = true;
+            this._voiceLabel.text = cleanText || '正在识别...';
+            this._startPulseAnimation();
+            return;
+        }
+
         // 从 waveform (优先) 或 candidateText 提取 5 根音波柱的真实声音能量
         const waveSource = (waveform && waveform.length > 0) ? waveform : candidateText;
         const levels = [];
@@ -505,12 +550,18 @@ class WaylanCandidateView {
 
     _hideVoiceVisual() {
         this._stopVoiceAnimation();
+        this._clearFadeTimer();
+        this._isVoiceCompleted = false;
+        if (this._voiceCapsule) {
+            this._voiceCapsule.remove_all_transitions();
+            this._voiceCapsule.opacity = 255;
+            this._voiceCapsule.visible = false;
+        }
         this._targetHeights = [4, 4, 4, 4, 4];
         this._currentHeights = [4, 4, 4, 4, 4];
         for (let i = 0; i < this._waveBars.length; i++) {
             this._waveBars[i].height = 4;
         }
-        this._voiceCapsule.visible = false;
         this._mainRow.visible = true;
     }
 
@@ -551,11 +602,22 @@ class WaylanCandidateView {
         });
     }
 
-    _stopVoiceAnimation() {
+    _clearFadeTimer() {
+        if (this._fadeTimerId) {
+            GLib.source_remove(this._fadeTimerId);
+            this._fadeTimerId = 0;
+        }
+    }
+
+    _stopWaveAnimationOnly() {
         if (this._waveTimerId) {
             GLib.source_remove(this._waveTimerId);
             this._waveTimerId = 0;
         }
+    }
+
+    _stopVoiceAnimation() {
+        this._stopWaveAnimationOnly();
         if (this._pulseTimerId) {
             GLib.source_remove(this._pulseTimerId);
             this._pulseTimerId = 0;
@@ -594,6 +656,7 @@ class WaylanCandidateView {
 
     destroy() {
         this._stopVoiceAnimation();
+        this._clearFadeTimer();
         if (this._settings && this._settingsWatchId) {
             this._settings.disconnect(this._settingsWatchId);
             this._settingsWatchId = 0;

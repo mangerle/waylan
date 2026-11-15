@@ -103,7 +103,7 @@ fn emit_voice_stream_exit(conn: &Connection, target_engine_path: &str) {
     }
 }
 
-/// 自动断句文字上屏提交
+/// 自动断句或最终结算文字上屏提交（保留语音状态浮条以衔接「识别完成」淡出）
 fn commit_voice_text(conn: &Connection, target_engine_path: &str, commit_text: &str) {
     if commit_text.is_empty() {
         return;
@@ -112,7 +112,20 @@ fn commit_voice_text(conn: &Connection, target_engine_path: &str, commit_text: &
         "[微澜 IBus 语音] 自动断句文字上屏 (目标路径: {}): \"{}\"",
         target_engine_path, commit_text
     );
-    emit_voice_stream_exit(conn, target_engine_path);
+    if let Ok(empty_preedit) = build_ibus_preedit_text("") {
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            "org.freedesktop.IBus.Engine",
+            "UpdatePreeditText",
+            &(
+                Value::from(empty_preedit),
+                0u32,
+                false,
+                IBUS_ENGINE_PREEDIT_CLEAR,
+            ),
+        );
+    }
     if let Ok(text_val) = build_ibus_text(commit_text) {
         let _ = conn.emit_signal(
             None::<&str>,
@@ -153,10 +166,10 @@ pub(crate) fn handle_voice_stream_cycle(params: &mut VoiceStreamCycleParams<'_>)
             let snap = UiSnapshot::capture(&guard);
             (snap, commit)
         };
-        emit_voice_stream_update(params.conn, params.target_engine_path, &voice_snap);
         if let Some(ref commit_text) = voice_commit {
             commit_voice_text(params.conn, params.target_engine_path, commit_text);
         }
+        emit_voice_stream_update(params.conn, params.target_engine_path, &voice_snap);
     } else if *params.last_voice_active {
         emit_voice_stream_exit(params.conn, params.target_engine_path);
     }

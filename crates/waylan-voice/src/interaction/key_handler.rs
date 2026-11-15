@@ -42,8 +42,12 @@ impl VoiceInteractionManager {
             return self.handle_active_key_press(evdev_key, mods_depressed);
         }
 
-        // 3. 空闲待命时的启动快捷键匹配
-        self.handle_idle_key_press(evdev_key, mods_depressed)
+        // 3. 空闲或识别完成淡出态下的启动快捷键匹配；若用户按下普通键则立即打断淡出让出焦点
+        let action = self.handle_idle_key_press(evdev_key, mods_depressed);
+        if matches!(action, VoiceKeyAction::PassThrough) && self.is_completed() {
+            self.clear_state();
+        }
+        action
     }
 
     /// 检测对讲机模式下的主键或修饰键松开事件并结算上屏
