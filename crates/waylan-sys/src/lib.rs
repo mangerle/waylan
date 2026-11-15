@@ -19,7 +19,8 @@ pub use assets::{detect_default_assets_path, resolve_icon_path_or_name};
 pub use desktop::{
     activate_ibus_engine, enqueue_desktop_task, ensure_gnome_extension_files,
     ensure_input_source_prioritized, is_gnome_desktop, prioritize_source_entry,
-    set_exclusive_input_source, set_gnome_extension_enabled,
+    set_exclusive_input_source, set_gnome_extension_enabled, GnomeExtensionIntent,
+    WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_ENGINE_NAME, WAYLAN_IBUS_SOURCE_ENTRY,
 };
 pub use fs_watcher::{
     check_reload_requested_or_files_changed, check_watched_paths_changed,

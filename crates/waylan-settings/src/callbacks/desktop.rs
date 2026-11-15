@@ -10,13 +10,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use waylan_core::config::AppConfig;
-use waylan_core::{
-    GnomeExtensionIntent, WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_ENGINE_NAME,
-    WAYLAN_IBUS_SOURCE_ENTRY,
-};
 use waylan_sys::desktop::{
     activate_ibus_engine, enqueue_desktop_task, ensure_gnome_extension_files,
     ensure_input_source_prioritized, is_gnome_desktop, set_gnome_extension_enabled,
+    GnomeExtensionIntent, WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_ENGINE_NAME,
+    WAYLAN_IBUS_SOURCE_ENTRY,
 };
 use waylan_sys::process::run_command_with_timeout;
 

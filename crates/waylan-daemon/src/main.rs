@@ -181,7 +181,7 @@ fn activate_desktop_input_source() {
         desktop::ensure_gnome_input_source_registered(false);
     }
 
-    waylan_sys::desktop::activate_ibus_engine(waylan_core::WAYLAN_IBUS_ENGINE_NAME);
+    waylan_sys::desktop::activate_ibus_engine(waylan_sys::WAYLAN_IBUS_ENGINE_NAME);
 }
 
 /// 决策并派发 Wayland 或 IBus 前端会话

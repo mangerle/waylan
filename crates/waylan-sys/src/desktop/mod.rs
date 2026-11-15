@@ -24,6 +24,36 @@ pub use gsettings::{
     ensure_input_source_prioritized, prioritize_source_entry, set_exclusive_input_source,
 };
 
+/// 微澜 GNOME Shell 集成扩展 UUID
+pub const WAYLAN_GNOME_EXTENSION_UUID: &str = "waylan-hide-input-source@waylan.org";
+
+/// 微澜在 GNOME `org.gnome.desktop.input-sources` 中的输入源项标识
+pub const WAYLAN_IBUS_SOURCE_ENTRY: &str = "('ibus', 'waylan')";
+
+/// 微澜在 IBus 守护进程中的引擎名称
+pub const WAYLAN_IBUS_ENGINE_NAME: &str = "waylan";
+
+/// 微澜 GNOME Shell 扩展启用意图
+///
+/// # 设计原理
+/// - **实现初衷**：配套 GNOME 扩展同时承担“隐藏顶栏原生输入源指示器”与“接管渲染微澜自定义候选框”两项职责，
+///   任一职责启用即须加载扩展，两项设置互不蕴含、互不牵连。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GnomeExtensionIntent {
+    /// 是否需要隐藏顶栏原生输入源指示器（对应独占输入源模式）
+    pub hide_indicator: bool,
+    /// 是否需要由扩展渲染微澜自定义候选框（对应候选框模式为微澜专属）
+    pub custom_candidate_view: bool,
+}
+
+impl GnomeExtensionIntent {
+    /// 扩展是否应当处于加载状态：两职任一需要即须加载
+    #[must_use]
+    pub fn should_enable(self) -> bool {
+        self.hide_indicator || self.custom_candidate_view
+    }
+}
+
 /// 桌面后台串行任务类型
 type DesktopTask = Box<dyn FnOnce() + Send + 'static>;
 

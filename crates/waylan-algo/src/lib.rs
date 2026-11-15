@@ -9,6 +9,7 @@ pub mod dispatcher;
 pub mod engine;
 pub mod entity;
 pub mod error;
+#[cfg(any(test, feature = "eval-bench"))]
 pub mod eval_bench;
 pub mod evaluator;
 mod fs_guard;

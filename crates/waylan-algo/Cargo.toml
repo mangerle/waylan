@@ -10,6 +10,12 @@ description = "微澜 (WayLan) - 纯 Rust 现代中文拼音输入核心算法�
 default = []
 dict-builder = []
 tools = ["dict-builder"]
+eval-bench = []
+
+[[example]]
+name = "eval_bench"
+path = "examples/eval_bench.rs"
+required-features = ["eval-bench"]
 
 [[example]]
 name = "build_aux_dict"

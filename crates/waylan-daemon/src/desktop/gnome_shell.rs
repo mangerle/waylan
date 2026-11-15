@@ -6,11 +6,11 @@
 //!   配置到扩展意图的映射集中在本模块，`waylan-sys` 保持不感知应用配置层。
 
 use waylan_core::config::AppConfig;
-pub use waylan_core::GnomeExtensionIntent;
-use waylan_core::{WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_SOURCE_ENTRY};
+pub use waylan_sys::desktop::GnomeExtensionIntent;
 use waylan_sys::desktop::{
     enqueue_desktop_task, ensure_gnome_extension_files, ensure_input_source_prioritized,
-    is_gnome_desktop, set_gnome_extension_enabled,
+    is_gnome_desktop, set_gnome_extension_enabled, WAYLAN_GNOME_EXTENSION_UUID,
+    WAYLAN_IBUS_SOURCE_ENTRY,
 };
 
 /// 微澜扩展资源子目录名

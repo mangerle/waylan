@@ -6,10 +6,8 @@
 //! - **核心优势**：纯 Wayland 会话与守护进程系统生命周期调度不再反直觉地跨层调用 IBus 内部实现。
 //! - **代价与局限**：桌面集成操作依赖外部命令工具（`gsettings`、`gnome-extensions`）。
 
-pub mod executor;
 pub mod gnome_shell;
 
-pub use executor::{run_command_with_timeout, DEFAULT_DESKTOP_COMMAND_TIMEOUT};
 pub use gnome_shell::{
     ensure_gnome_input_source_registered, gnome_extension_intent, sync_gnome_extension_state_async,
     sync_gnome_hide_indicator_extension, GnomeExtensionIntent,
