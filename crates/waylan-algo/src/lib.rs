@@ -1,9 +1,11 @@
 pub mod bigram;
 #[cfg(any(feature = "dict-builder", test))]
 pub mod builder;
+pub(crate) mod compact_writer;
 pub mod composition;
 pub mod custom_phrase;
 pub mod dat;
+pub(crate) mod dat_builder;
 pub mod decoder;
 pub mod dispatcher;
 pub mod engine;

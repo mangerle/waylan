@@ -20,7 +20,6 @@ pub mod language_model;
 pub mod lattice;
 mod lattice_typo;
 pub mod matcher;
-mod mem_matcher;
 pub mod weights;
 
 pub use beam::{

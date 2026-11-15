@@ -111,52 +111,19 @@ impl LexiconTable {
         }
     }
 
-    /// 检索指定单字母声母对应的高频单字原始词库条目列表（合并紧凑词库与内存动态索引，保留 word_id）
+    /// 检索指定单字母声母对应的高频单字原始词库条目列表（保留 word_id）
     pub fn get_initial_raw_entries(
         &self,
         initial: &str,
     ) -> Option<Vec<(String, u32, Option<u32>)>> {
-        let compact_res = self
-            .compact_mmap
-            .as_ref()
-            .and_then(|c| c.lookup_initial(initial));
-        let mem_res = self.initial_entries.get(initial);
-
-        match (compact_res, mem_res) {
-            (Some(c_list), Some(m_list)) => {
-                let mut res: Vec<(String, u32, Option<u32>)> = c_list
-                    .into_iter()
+        self.compact_mmap
+            .as_ref()?
+            .lookup_initial(initial)
+            .map(|list| {
+                list.into_iter()
                     .map(|(t, s, wid)| (t, s, Some(wid)))
-                    .collect();
-                for (text, score) in m_list {
-                    if let Some(existing) = res.iter_mut().find(|(t, _, _)| t == text) {
-                        if *score > existing.1 {
-                            existing.1 = *score;
-                        }
-                    } else {
-                        res.push((text.clone(), *score, None));
-                    }
-                }
-                res.sort_by_key(|b| std::cmp::Reverse(b.1));
-                res.truncate(16);
-                Some(res)
-            }
-            (Some(c_list), None) => Some(
-                c_list
-                    .into_iter()
-                    .map(|(t, s, wid)| (t, s, Some(wid)))
-                    .collect(),
-            ),
-            (None, Some(m_list)) => {
-                let mut top: Vec<(String, u32, Option<u32>)> =
-                    m_list.iter().map(|(t, s)| (t.clone(), *s, None)).collect();
-                if top.len() > 1 {
-                    top.sort_by_key(|b| std::cmp::Reverse(b.1));
-                }
-                Some(top)
-            }
-            (None, None) => None,
-        }
+                    .collect()
+            })
     }
 
     /// 检索首字母缩写简拼候选词（如 "bj" 匹配 "北京"）
@@ -176,18 +143,6 @@ impl LexiconTable {
             }
         }
 
-        if let Some(matches) = self.acronym_entries.get(key) {
-            candidates.reserve(matches.len());
-            for (text, score) in matches {
-                candidates.push(
-                    AlgoCandidate::new(text.clone(), key, *score)
-                        .with_tier(CandidateTier::Acronym)
-                        .with_comment("[简拼]"),
-                );
-            }
-        }
-
-        candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
         candidates
     }
 
@@ -208,18 +163,6 @@ impl LexiconTable {
             }
         }
 
-        if let Some(matches) = self.acronym_entries.get(key) {
-            for (text, score) in matches.iter().take(k) {
-                candidates.push(
-                    AlgoCandidate::new(text.clone(), key, *score)
-                        .with_tier(CandidateTier::Acronym)
-                        .with_comment("[简拼]"),
-                );
-            }
-        }
-
-        candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
-        candidates.truncate(k);
         candidates
     }
 }

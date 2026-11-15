@@ -1,0 +1,430 @@
+//! 紧凑词典二进制文件段对齐与底层持久化写入器
+//!
+//! # 设计原理
+//! - **实现初衷**：将紧凑双数组 Trie 词库文件的段对齐计算、二进制头部编码与磁盘流式写入
+//!   从主构建器中分离，实现关注点解耦。
+//! - **核心优势**：职责单一，隔离纯数据结构内存构建与底层文件 I/O；
+//!   细化对齐边界与偏移量校验，便于独立进行二进制兼容性测试。
+//! - **代价与局限**：调用方需通过装配参数对象传递待写入的切片引用。
+
+use crate::dat::DoubleArrayTrie;
+#[cfg(any(feature = "dict-builder", test))]
+use crate::error::AlgoError;
+use crate::syllables::{STANDARD_INITIALS, STANDARD_SYLLABLES};
+use crate::table::COMPACT_DICT_MAGIC;
+use std::collections::HashMap;
+#[cfg(any(feature = "dict-builder", test))]
+use std::fs::File;
+#[cfg(any(feature = "dict-builder", test))]
+use std::io::BufWriter;
+use std::io::Write;
+#[cfg(any(feature = "dict-builder", test))]
+use std::path::{Path, PathBuf};
+
+/// 候选词二元组（词汇 ID, 频次分值）
+pub(crate) type CandidateScore = (u32, u32);
+
+/// 键名到候选词元组列表的映射
+pub(crate) type KeyCandidateMap = HashMap<String, Vec<CandidateScore>>;
+
+/// 合并后的键表（存储键类型标记与候选词列表）
+pub(crate) type CombinedKeyMap = HashMap<String, (u8, Vec<CandidateScore>)>;
+
+/// 紧凑词库二进制持久化装配参数对象
+#[cfg(any(feature = "dict-builder", test))]
+pub struct CompactWritePayload<'a> {
+    pub output_path: &'a Path,
+    pub dat: &'a DoubleArrayTrie,
+    pub key_metas_data: &'a [u8],
+    pub candidates_data: &'a [u8],
+    pub words: &'a [String],
+    pub num_keys: usize,
+    pub num_candidates: usize,
+}
+
+/// 紧凑词库二进制编码核心切片视图（同时服务于磁盘写入与纯内存编译）
+struct CompactSectionPayload<'a> {
+    dat: &'a DoubleArrayTrie,
+    key_metas_data: &'a [u8],
+    candidates_data: &'a [u8],
+    words: &'a [String],
+    num_keys: usize,
+    num_candidates: usize,
+}
+
+/// 词表序列化数据包
+struct VocabSerializedData {
+    vocab_offsets: Vec<u32>,
+    sorted_vocab_ids: Vec<u32>,
+    vocab_strings: Vec<u8>,
+}
+
+/// 各数据段绝对偏移量与填充计算结果
+struct SectionOffsets {
+    pad1: usize,
+    pad2: usize,
+    key_metas_offset: u64,
+    candidates_offset: u64,
+    vocab_offset: u64,
+}
+
+/// 组装文件头与各段数据并写入目标磁盘文件
+#[cfg(any(feature = "dict-builder", test))]
+pub fn write_compact_file(payload: CompactWritePayload<'_>) -> Result<(), AlgoError> {
+    let section_payload = CompactSectionPayload {
+        dat: payload.dat,
+        key_metas_data: payload.key_metas_data,
+        candidates_data: payload.candidates_data,
+        words: payload.words,
+        num_keys: payload.num_keys,
+        num_candidates: payload.num_candidates,
+    };
+    let vocab_data = serialize_vocab_data(section_payload.words);
+    let offsets = compute_section_offsets(
+        section_payload.dat,
+        section_payload.key_metas_data.len(),
+        section_payload.candidates_data.len(),
+    );
+
+    let out_file = File::create(payload.output_path).map_err(|e| AlgoError::DictionaryIo {
+        path: PathBuf::from(payload.output_path),
+        source: e,
+    })?;
+    let mut writer = BufWriter::new(out_file);
+    let io_err = |e| AlgoError::DictionaryIo {
+        path: PathBuf::from(payload.output_path),
+        source: e,
+    };
+
+    write_sections(&mut writer, &section_payload, &vocab_data, &offsets).map_err(io_err)?;
+    writer.flush().map_err(io_err)?;
+    Ok(())
+}
+
+/// 在纯内存中将已编码的词库段组装为完整紧凑词典字节缓冲区
+fn write_compact_bytes(payload: &CompactSectionPayload<'_>) -> Vec<u8> {
+    let vocab_data = serialize_vocab_data(payload.words);
+    let offsets = compute_section_offsets(
+        payload.dat,
+        payload.key_metas_data.len(),
+        payload.candidates_data.len(),
+    );
+    let estimated_size = (offsets.vocab_offset as usize)
+        .saturating_add(vocab_data.vocab_offsets.len().saturating_mul(4))
+        .saturating_add(vocab_data.sorted_vocab_ids.len().saturating_mul(4))
+        .saturating_add(vocab_data.vocab_strings.len());
+    let mut buf = Vec::with_capacity(estimated_size);
+    // 写入内存 Vec<u8> 不会触发底层 I/O 错误
+    let _ = write_sections(&mut buf, payload, &vocab_data, &offsets);
+    buf
+}
+
+/// 序列化词表偏移、排序索引与字符串池
+fn serialize_vocab_data(words: &[String]) -> VocabSerializedData {
+    let vocab_size = words.len();
+    let mut vocab_offsets: Vec<u32> = Vec::with_capacity(vocab_size.saturating_add(1));
+    let mut vocab_strings: Vec<u8> = Vec::new();
+    let mut current_str_offset: u32 = 0;
+
+    for w in words {
+        vocab_offsets.push(current_str_offset);
+        let b = w.as_bytes();
+        vocab_strings.extend_from_slice(b);
+        current_str_offset = current_str_offset.saturating_add(b.len() as u32);
+    }
+    vocab_offsets.push(current_str_offset);
+
+    let mut sorted_vocab_ids: Vec<u32> = (0..vocab_size as u32).collect();
+    sorted_vocab_ids.sort_by(|&a, &b| words[a as usize].cmp(&words[b as usize]));
+
+    VocabSerializedData {
+        vocab_offsets,
+        sorted_vocab_ids,
+        vocab_strings,
+    }
+}
+
+/// 计算各段数据在二进制文件中的绝对偏移与 4 字节边界对齐填充
+fn compute_section_offsets(
+    dat: &DoubleArrayTrie,
+    key_metas_len: usize,
+    candidates_len: usize,
+) -> SectionOffsets {
+    let header_len = 64usize;
+    let dat_base_bytes = dat.base.len().saturating_mul(4);
+    let dat_check_bytes = dat.check.len().saturating_mul(4);
+    let dat_tail_bytes = dat.tail.len();
+
+    let mut current_offset = header_len
+        .saturating_add(dat_base_bytes)
+        .saturating_add(dat_check_bytes)
+        .saturating_add(dat_tail_bytes);
+    let pad1 = (4 - (current_offset % 4)) % 4;
+    current_offset = current_offset.saturating_add(pad1);
+
+    let key_metas_offset = current_offset as u64;
+    current_offset = current_offset.saturating_add(key_metas_len);
+
+    let candidates_offset = current_offset as u64;
+    current_offset = current_offset.saturating_add(candidates_len);
+
+    let pad2 = (4 - (current_offset % 4)) % 4;
+    current_offset = current_offset.saturating_add(pad2);
+
+    let vocab_offset = current_offset as u64;
+
+    SectionOffsets {
+        pad1,
+        pad2,
+        key_metas_offset,
+        candidates_offset,
+        vocab_offset,
+    }
+}
+
+/// 构建二进制词库头部 64 字节数据
+fn build_compact_header(payload: &CompactSectionPayload<'_>, offsets: &SectionOffsets) -> [u8; 64] {
+    let mut header = [0u8; 64];
+    header[0..16].copy_from_slice(COMPACT_DICT_MAGIC);
+    header[16..20].copy_from_slice(&3u32.to_le_bytes());
+    header[20..24].copy_from_slice(&(payload.num_keys as u32).to_le_bytes());
+    header[24..28].copy_from_slice(&(payload.num_candidates as u32).to_le_bytes());
+    header[28..32].copy_from_slice(&(payload.words.len() as u32).to_le_bytes());
+    header[32..36].copy_from_slice(&(payload.dat.base.len() as u32).to_le_bytes());
+    header[36..40].copy_from_slice(&(payload.dat.tail.len() as u32).to_le_bytes());
+    header[40..48].copy_from_slice(&offsets.key_metas_offset.to_le_bytes());
+    header[48..56].copy_from_slice(&offsets.candidates_offset.to_le_bytes());
+    header[56..64].copy_from_slice(&offsets.vocab_offset.to_le_bytes());
+    header
+}
+
+/// 按字节序列化写入各分段至任意 `Write` 目标
+fn write_sections<W: Write>(
+    writer: &mut W,
+    payload: &CompactSectionPayload<'_>,
+    vocab_data: &VocabSerializedData,
+    offsets: &SectionOffsets,
+) -> std::io::Result<()> {
+    let header = build_compact_header(payload, offsets);
+    writer.write_all(&header)?;
+
+    for &b in &payload.dat.base {
+        writer.write_all(&b.to_le_bytes())?;
+    }
+    for &c in &payload.dat.check {
+        writer.write_all(&c.to_le_bytes())?;
+    }
+    writer.write_all(&payload.dat.tail)?;
+    if offsets.pad1 > 0 {
+        writer.write_all(&vec![0u8; offsets.pad1])?;
+    }
+
+    writer.write_all(payload.key_metas_data)?;
+    writer.write_all(payload.candidates_data)?;
+    if offsets.pad2 > 0 {
+        writer.write_all(&vec![0u8; offsets.pad2])?;
+    }
+
+    for &off in &vocab_data.vocab_offsets {
+        writer.write_all(&off.to_le_bytes())?;
+    }
+    for &id in &vocab_data.sorted_vocab_ids {
+        writer.write_all(&id.to_le_bytes())?;
+    }
+    writer.write_all(&vocab_data.vocab_strings)?;
+    Ok(())
+}
+
+/// 生成全拼、简拼、声母三类隔离索引键并按字典序严格排序
+pub(crate) fn build_combined_keys(
+    dict_map: KeyCandidateMap,
+    words: &[String],
+    max_acronym_len: usize,
+    min_acronym_score: u32,
+) -> (CombinedKeyMap, Vec<String>) {
+    let acronym_map = extract_acronym_map(&dict_map, max_acronym_len, min_acronym_score);
+    let initial_map = extract_initial_map(&dict_map, words);
+    let combined_keys = merge_isolated_key_spaces(dict_map, acronym_map, initial_map);
+
+    let mut sorted_keys: Vec<String> = combined_keys.keys().cloned().collect();
+    sorted_keys.sort();
+
+    (combined_keys, sorted_keys)
+}
+
+/// 提取简拼缩写索引（对隔音符分隔的多音节拼音取各段首字母并拼成缩写键）
+fn extract_acronym_map(
+    dict_map: &KeyCandidateMap,
+    max_acronym_len: usize,
+    min_acronym_score: u32,
+) -> KeyCandidateMap {
+    let mut acronym_map: KeyCandidateMap = HashMap::new();
+    for (pinyin, cand_list) in dict_map {
+        if !pinyin.contains('\'') {
+            continue;
+        }
+        let mut acronym = String::with_capacity(6);
+        let mut part_count = 0usize;
+        for part in pinyin.split('\'') {
+            part_count += 1;
+            if let Some(ch) = part.chars().next() {
+                acronym.push(ch);
+            }
+        }
+        if part_count < 2
+            || acronym.len() < 2
+            || (max_acronym_len > 0 && acronym.len() > max_acronym_len)
+        {
+            continue;
+        }
+        let min_score = if min_acronym_score > 0 {
+            min_acronym_score
+        } else if acronym.len() == 2 {
+            200
+        } else {
+            50
+        };
+        let list = acronym_map.entry(acronym).or_default();
+        for &(wid, score) in cand_list.iter().take(8) {
+            if score >= min_score {
+                list.push((wid, score));
+            }
+        }
+    }
+    for list in acronym_map.values_mut() {
+        list.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+        list.dedup_by(|a, b| a.0 == b.0);
+        list.sort_by_key(|b| std::cmp::Reverse(b.1));
+        list.truncate(8);
+    }
+    acronym_map
+}
+
+/// 提取声母单字索引（仅收录以指定声母开头的标准音节所对应的单字词条）
+fn extract_initial_map(dict_map: &KeyCandidateMap, words: &[String]) -> KeyCandidateMap {
+    let mut initial_map: KeyCandidateMap = HashMap::new();
+    for &initial in STANDARD_INITIALS {
+        let mut list = Vec::new();
+        for &syl in STANDARD_SYLLABLES {
+            if !syl.starts_with(initial) {
+                continue;
+            }
+            let Some(matches) = dict_map.get(syl) else {
+                continue;
+            };
+            for &(wid, score) in matches {
+                if let Some(text) = words.get(wid as usize) {
+                    if text.chars().count() == 1 {
+                        list.push((wid, score));
+                    }
+                }
+            }
+        }
+        list.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+        list.dedup_by(|a, b| a.0 == b.0);
+        list.sort_by_key(|r| std::cmp::Reverse(r.1));
+        list.truncate(16);
+        if !list.is_empty() {
+            initial_map.insert(initial.to_string(), list);
+        }
+    }
+    initial_map
+}
+
+/// 汇总三类前缀隔离的键空间：全拼("{k}")、简拼("'{k}")、声母("''{k}")
+fn merge_isolated_key_spaces(
+    dict_map: KeyCandidateMap,
+    acronym_map: KeyCandidateMap,
+    initial_map: KeyCandidateMap,
+) -> CombinedKeyMap {
+    let mut combined_keys: CombinedKeyMap = HashMap::new();
+    for (k, v) in dict_map {
+        combined_keys.insert(k, (0, v));
+    }
+    for (k, v) in acronym_map {
+        if !v.is_empty() {
+            combined_keys.insert(format!("'{}", k), (1, v));
+        }
+    }
+    for (k, v) in initial_map {
+        if !v.is_empty() {
+            combined_keys.insert(format!("''{}", k), (2, v));
+        }
+    }
+    combined_keys
+}
+
+/// 编码键元数据与紧凑候选值数组
+pub(crate) fn encode_keys_and_candidates(
+    combined_keys: &CombinedKeyMap,
+    sorted_keys: &[String],
+) -> (Vec<u8>, Vec<u8>, usize) {
+    let num_keys = sorted_keys.len();
+    let mut key_metas_data = Vec::with_capacity(num_keys * 8);
+    let mut candidates_data = Vec::new();
+    let mut cand_counter: u32 = 0;
+
+    for k in sorted_keys {
+        let Some((k_type, cands)) = combined_keys.get(k) else {
+            continue;
+        };
+        let c_start = cand_counter;
+        let capped_len = cands.len().min(64);
+        let c_count = capped_len as u16;
+
+        for &(wid, score) in cands.iter().take(capped_len) {
+            candidates_data.extend_from_slice(&wid.to_le_bytes());
+            candidates_data.extend_from_slice(&score.to_le_bytes());
+            cand_counter += 1;
+        }
+
+        key_metas_data.extend_from_slice(&c_start.to_le_bytes());
+        key_metas_data.extend_from_slice(&c_count.to_le_bytes());
+        key_metas_data.push(*k_type);
+        key_metas_data.push(0); // 对齐 padding
+    }
+
+    (key_metas_data, candidates_data, cand_counter as usize)
+}
+
+/// 在纯内存中将词条映射编译为紧凑词典二进制字节流（用于内存样例库与单测 fixture）
+pub(crate) fn compile_entries_to_compact_bytes(
+    entries: &HashMap<String, Vec<(String, u32)>>,
+) -> Vec<u8> {
+    let mut word_to_id: HashMap<&str, u32> = HashMap::new();
+    let mut words: Vec<String> = Vec::new();
+    let mut dict_map: KeyCandidateMap = HashMap::with_capacity(entries.len());
+
+    for (pinyin, list) in entries {
+        let mut cands = Vec::with_capacity(list.len());
+        for (text, score) in list {
+            let wid = if let Some(&id) = word_to_id.get(text.as_str()) {
+                id
+            } else {
+                let id = words.len() as u32;
+                words.push(text.clone());
+                word_to_id.insert(text.as_str(), id);
+                id
+            };
+            cands.push((wid, *score));
+        }
+        cands.sort_by_key(|b| std::cmp::Reverse(b.1));
+        dict_map.insert(pinyin.clone(), cands);
+    }
+
+    // 内存 fixture 保留全部简拼候选（min_acronym_score = 1），不设 200 分阈值截断
+    let (combined_keys, sorted_keys) = build_combined_keys(dict_map, &words, 0, 1);
+    let key_values: Vec<u32> = (0..sorted_keys.len() as u32).collect();
+    let dat = DoubleArrayTrie::build(&sorted_keys, &key_values);
+    let (key_metas_data, candidates_data, num_candidates) =
+        encode_keys_and_candidates(&combined_keys, &sorted_keys);
+
+    write_compact_bytes(&CompactSectionPayload {
+        dat: &dat,
+        key_metas_data: &key_metas_data,
+        candidates_data: &candidates_data,
+        words: &words,
+        num_keys: sorted_keys.len(),
+        num_candidates,
+    })
+}

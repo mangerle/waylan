@@ -4,13 +4,11 @@
 //! - **实现初衷**：在统一音节格的任意字节起点出发，沿音节边同步推进 `DatCursor`，
 //!   直接匹配 1..=6 音节的词典词条。遇到混简拼声母边 (`Initial`) 或末尾半成品边 (`PartialTail`)
 //!   时直接在当前 DAT 节点展开真实存在的音节分支，彻底消除旧版 `acronym_entries` 的 Top-K 截断问题。
-//! - **核心优势**：零多余堆分配，无效前缀在 Trie 层立即剪枝；同时保留内存 `HashMap` 回退路径
-//!   以兼容轻量级单元测试词表。
+//! - **核心优势**：零多余堆分配，无效前缀在 Trie 层立即剪枝；全量检索与测试均统一运行在零拷贝 DAT 视图上。
 //! - **代价与局限**：单次词匹配最多跨越 6 个音节与 4 个混简拼步进，以防止极端输入组合扩散。
 
 use super::alias::calibrate_habitual_alias_score;
 use super::lattice::{EdgeKind, SyllableEdge, SyllableLattice};
-use super::mem_matcher::{dfs_mem_match, MemWalkState};
 use crate::dat::{DatCursor, DatReader};
 use crate::pipeline::is_rare_ext_char;
 use crate::table::{CompactMmapLexicon, LexiconTable};
@@ -97,49 +95,35 @@ impl DatPhraseMatcher {
             return (results, start_pos);
         }
 
-        if let Some(mmap) = &table.compact_mmap {
-            let reader = mmap.get_dat_reader();
-            let mut ctx = DatSearchCtx {
-                lattice,
-                mmap,
-                reader,
-                options,
-                start_pos,
-                max_reach: start_pos,
-                results: &mut results,
-            };
-            let state = DatWalkState {
-                pos: start_pos,
-                cursor: reader.root_cursor(),
-                syl_count: 0,
-                initial_steps: 0,
-                typo_count: 0,
-                edge_cost: 0,
-                has_initial: false,
-                has_partial_tail: false,
-                is_exact_all: true,
-                has_habitual_alias: false,
-                key_parts: Vec::with_capacity(6),
-            };
-            dfs_dat_match(&mut ctx, state);
-            let max_reach = ctx.max_reach;
-            (results, max_reach)
-        } else {
-            let state = MemWalkState {
-                pos: start_pos,
-                syl_count: 0,
-                initial_steps: 0,
-                typo_count: 0,
-                edge_cost: 0,
-                has_initial: false,
-                has_partial_tail: false,
-                is_exact_all: true,
-                has_habitual_alias: false,
-                patterns: Vec::with_capacity(6),
-            };
-            dfs_mem_match(lattice, table, options, start_pos, state, &mut results);
-            (results, lattice.len)
-        }
+        let Some(mmap) = &table.compact_mmap else {
+            return (results, start_pos);
+        };
+        let reader = mmap.get_dat_reader();
+        let mut ctx = DatSearchCtx {
+            lattice,
+            mmap,
+            reader,
+            options,
+            start_pos,
+            max_reach: start_pos,
+            results: &mut results,
+        };
+        let state = DatWalkState {
+            pos: start_pos,
+            cursor: reader.root_cursor(),
+            syl_count: 0,
+            initial_steps: 0,
+            typo_count: 0,
+            edge_cost: 0,
+            has_initial: false,
+            has_partial_tail: false,
+            is_exact_all: true,
+            has_habitual_alias: false,
+            key_parts: Vec::with_capacity(6),
+        };
+        dfs_dat_match(&mut ctx, state);
+        let max_reach = ctx.max_reach;
+        (results, max_reach)
     }
 }
 

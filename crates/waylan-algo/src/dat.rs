@@ -35,10 +35,9 @@ pub struct DoubleArrayTrie {
 impl DoubleArrayTrie {
     /// 从已按字典序排序且去重的拼音键及其关联值索引构建带 Tail 压缩的 DAT
     ///
-    /// 离线构建逻辑委托给 [`crate::builder::dat_builder::build_dat`]。
-    #[cfg(any(feature = "dict-builder", test))]
+    /// 构建逻辑委托给 [`crate::dat_builder::build_dat`]。
     pub fn build(sorted_keys: &[String], values: &[u32]) -> Self {
-        crate::builder::dat_builder::build_dat(sorted_keys, values)
+        crate::dat_builder::build_dat(sorted_keys, values)
     }
 
     /// 返回空状态的 DAT

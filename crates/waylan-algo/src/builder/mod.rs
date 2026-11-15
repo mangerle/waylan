@@ -15,11 +15,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod compact;
-pub mod compact_writer;
-pub mod dat_builder;
+pub use crate::compact_writer::{write_compact_file, CompactWritePayload};
+pub use crate::dat_builder::build_dat;
 pub use compact::CompactDictBuilder;
-pub use compact_writer::{write_compact_file, CompactWritePayload};
-pub use dat_builder::build_dat;
 
 /// 词条缺失词频或词频字段损坏时的保守默认值（避免误抬高至高频区）
 pub(crate) const DEFAULT_MISSING_SCORE: u32 = 20;

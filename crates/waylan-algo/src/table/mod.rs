@@ -1,8 +1,7 @@
 use crate::bigram::CompactMmapBigram;
+use crate::compact_writer::compile_entries_to_compact_bytes;
 use crate::error::AlgoError;
-use crate::syllables::STANDARD_INITIALS;
 use crate::types::AlgoCandidate;
-use crate::vocab::Vocabulary;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -42,18 +41,12 @@ pub fn extract_raw_score(boosted_score: u32) -> u32 {
 /// - 兼容动态用户词表与单元测试内置字典。
 #[derive(Debug)]
 pub struct LexiconTable {
-    /// 倒排拼音索引表：键为拼音序列（如 "ni'hao"），值为候选文本与基础静态分
-    pub(crate) entries: HashMap<String, Vec<(String, u32)>>,
-    /// 简拼缩写索引表：键为首字母缩写（如 "bj"），值为候选文本与基础静态分
-    pub(crate) acronym_entries: HashMap<String, Vec<(String, u32)>>,
-    /// 标准声母高频单字索引表（如 "s", "d", "g"）
-    pub(crate) initial_entries: HashMap<String, Vec<(String, u32)>>,
+    /// 动态内存构建缓冲（仅在通过 `insert` 增量构建测试 fixture 时使用，查询始终走 DAT）
+    pub(crate) dynamic_entries: HashMap<String, Vec<(String, u32)>>,
     /// 零拷贝紧凑只读词典（DAT + 单源只读词表）
     pub compact_mmap: Option<CompactMmapLexicon>,
     /// 零拷贝紧凑只读转移概率矩阵 (CSR 架构)
     pub compact_bigram: Option<CompactMmapBigram>,
-    /// 向后兼容的内存词表（仅在无底库文件时作为纯内存回退）
-    pub vocab: Option<Vocabulary>,
 }
 
 impl Default for LexiconTable {
@@ -66,12 +59,9 @@ impl LexiconTable {
     /// 创建空的词典表
     pub fn new() -> Self {
         Self {
-            entries: HashMap::new(),
-            acronym_entries: HashMap::new(),
-            initial_entries: HashMap::new(),
+            dynamic_entries: HashMap::new(),
             compact_mmap: None,
             compact_bigram: None,
-            vocab: None,
         }
     }
 
@@ -87,40 +77,16 @@ impl LexiconTable {
         list.sort_by_key(|b| std::cmp::Reverse(b.1));
     }
 
-    /// 插入一条字词条目（内存动态词库）
+    /// 插入一条字词条目并即时重编译内存 DAT 视图（用于动态测试 fixture 构建）
     pub fn insert(&mut self, pinyin: impl Into<String>, text: impl Into<String>, score: u32) {
         let key = pinyin.into();
         let val_text = text.into();
-        let entry_list = self.entries.entry(key.clone()).or_default();
-        Self::upsert_entry(entry_list, val_text.clone(), score);
+        let entry_list = self.dynamic_entries.entry(key).or_default();
+        Self::upsert_entry(entry_list, val_text, score);
 
-        // 维护声母高频单字索引
-        if !key.contains('\'') && val_text.chars().count() == 1 {
-            for &initial in STANDARD_INITIALS {
-                if key.starts_with(initial) {
-                    let list = self.initial_entries.entry(initial.to_string()).or_default();
-                    Self::upsert_entry(list, val_text.clone(), score);
-                    list.truncate(5);
-                    break;
-                }
-            }
-        }
-
-        // 提取多音节词的首字母缩写作为简拼
-        if key.contains('\'') {
-            let parts: Vec<&str> = key.split('\'').collect();
-            if parts.len() >= 2 {
-                let mut acronym = String::with_capacity(parts.len());
-                for part in parts {
-                    if let Some(ch) = part.chars().next() {
-                        acronym.push(ch);
-                    }
-                }
-                if acronym.len() >= 2 {
-                    let list = self.acronym_entries.entry(acronym).or_default();
-                    Self::upsert_entry(list, val_text, score);
-                }
-            }
+        let bytes = compile_entries_to_compact_bytes(&self.dynamic_entries);
+        if let Ok(compact) = CompactMmapLexicon::from_bytes(&bytes) {
+            self.compact_mmap = Some(compact);
         }
     }
 
@@ -143,29 +109,16 @@ impl LexiconTable {
         };
 
         Ok(Self {
-            entries: HashMap::new(),
-            acronym_entries: HashMap::new(),
-            initial_entries: HashMap::new(),
+            dynamic_entries: HashMap::new(),
             compact_mmap: Some(compact),
             compact_bigram,
-            vocab: None,
         })
     }
 
-    /// 反查词条的唯一整数 ID（纳秒级二分反查或哈希表索引）
+    /// 反查词条的唯一整数 ID（纳秒级二分反查）
     #[inline]
     pub fn get_word_id(&self, word: &str) -> Option<u32> {
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(id) = compact.get_id(word) {
-                return Some(id);
-            }
-        }
-        if let Some(vocab) = &self.vocab {
-            if let Some(id) = vocab.get_id(word) {
-                return Some(id);
-            }
-        }
-        None
+        self.compact_mmap.as_ref()?.get_id(word)
     }
 
     /// 直接根据两个词的唯一 ID 查询二元转移亲和度得分（零字符串查找，微秒级 CSR 查找）
@@ -204,7 +157,6 @@ impl LexiconTable {
 
     /// 根据归一化拼音键检索候选词并写入指定的复用容器中（避免堆重新分配）
     pub fn lookup_into(&self, key: &str, out: &mut Vec<AlgoCandidate>) {
-        // 1. 若挂载了零拷贝 DAT 一体化紧凑词库，直接状态跳转检索
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup(key) {
                 out.reserve(matches.len());
@@ -218,17 +170,6 @@ impl LexiconTable {
                 }
             }
         }
-
-        // 2. 检索内存动态词表
-        if let Some(matches) = self.entries.get(key) {
-            out.reserve(matches.len());
-            for (text, score) in matches {
-                let char_len = text.chars().count() as u32;
-                let boost = calculate_length_boost(char_len);
-                let final_score = score.saturating_add(boost);
-                out.push(AlgoCandidate::new(text.clone(), key, final_score));
-            }
-        }
     }
 
     /// 根据归一化拼音键检索按需截取 Top-K 候选词（避免全量同音词解码与分配）
@@ -240,9 +181,6 @@ impl LexiconTable {
 
     /// 根据归一化拼音键检索按需截取 Top-K 候选词并写入指定的复用容器中（避免堆重新分配）
     pub fn lookup_top_k_into(&self, key: &str, k: usize, out: &mut Vec<AlgoCandidate>) {
-        let start_len = out.len();
-
-        // 1. 若挂载了零拷贝 DAT 一体化紧凑词库，按需获取 Top-K
         if let Some(compact) = &self.compact_mmap {
             if let Some(matches) = compact.lookup_top_k(key, k) {
                 out.reserve(matches.len());
@@ -256,98 +194,35 @@ impl LexiconTable {
                 }
             }
         }
-
-        // 2. 检索内存动态词表
-        if let Some(matches) = self.entries.get(key) {
-            for (text, score) in matches.iter().take(k) {
-                let char_len = text.chars().count() as u32;
-                let boost = calculate_length_boost(char_len);
-                let final_score = score.saturating_add(boost);
-                out.push(AlgoCandidate::new(text.clone(), key, final_score));
-            }
-        }
-
-        if out.len() > start_len + k {
-            out.truncate(start_len + k);
-        }
     }
 
-    /// 获取指定拼音键的原始词库条目（合并紧凑词库与内存增量词表）
+    /// 获取指定拼音键的原始词库条目
     pub fn get_raw_entries(&self, key: &str) -> Option<Vec<(String, u32)>> {
-        let compact_res = self.compact_mmap.as_ref().and_then(|c| c.lookup(key));
-        let mem_res = self.entries.get(key);
-
-        match (compact_res, mem_res) {
-            (Some(c_list), Some(m_list)) => {
-                let mut res: Vec<(String, u32)> =
-                    c_list.into_iter().map(|(t, s, _)| (t, s)).collect();
-                for (text, score) in m_list {
-                    Self::upsert_entry(&mut res, text.clone(), *score);
-                }
-                Some(res)
-            }
-            (Some(c_list), None) => Some(c_list.into_iter().map(|(t, s, _)| (t, s)).collect()),
-            (None, Some(m_list)) => Some(m_list.clone()),
-            (None, None) => None,
-        }
+        self.compact_mmap
+            .as_ref()?
+            .lookup(key)
+            .map(|list| list.into_iter().map(|(t, s, _)| (t, s)).collect())
     }
 
-    /// 按需获取指定拼音键的前 `k` 条高频原始词条（合并紧凑词库与内存增量词表并截取 Top-K，保留 word_id）
+    /// 按需获取指定拼音键的前 `k` 条高频原始词条（保留 word_id）
     pub fn get_top_raw_entries(
         &self,
         key: &str,
         k: usize,
     ) -> Option<Vec<(String, u32, Option<u32>)>> {
-        let compact_res = self
-            .compact_mmap
-            .as_ref()
-            .and_then(|c| c.lookup_top_k(key, k));
-        let mem_res = self.entries.get(key);
-
-        match (compact_res, mem_res) {
-            (Some(c_list), Some(m_list)) => {
-                let mut res: Vec<(String, u32, Option<u32>)> = c_list
-                    .into_iter()
+        self.compact_mmap
+            .as_ref()?
+            .lookup_top_k(key, k)
+            .map(|list| {
+                list.into_iter()
                     .map(|(t, s, wid)| (t, s, Some(wid)))
-                    .collect();
-                for (text, score) in m_list.iter().take(k) {
-                    if let Some(existing) = res.iter_mut().find(|(t, _, _)| t == text) {
-                        if *score > existing.1 {
-                            existing.1 = *score;
-                        }
-                    } else {
-                        res.push((text.clone(), *score, None));
-                    }
-                }
-                res.sort_by_key(|b| std::cmp::Reverse(b.1));
-                res.truncate(k);
-                Some(res)
-            }
-            (Some(c_list), None) => Some(
-                c_list
-                    .into_iter()
-                    .map(|(t, s, wid)| (t, s, Some(wid)))
-                    .collect(),
-            ),
-            (None, Some(m_list)) => {
-                let mut top: Vec<(String, u32, Option<u32>)> = m_list
-                    .iter()
-                    .take(k)
-                    .map(|(t, s)| (t.clone(), *s, None))
-                    .collect();
-                if top.len() > 1 {
-                    top.sort_by_key(|b| std::cmp::Reverse(b.1));
-                }
-                Some(top)
-            }
-            (None, None) => None,
-        }
+                    .collect()
+            })
     }
 
     /// 获取索引中词条总数
     pub fn len(&self) -> usize {
-        let compact_len = self.compact_mmap.as_ref().map(|c| c.num_keys).unwrap_or(0);
-        compact_len + self.entries.len()
+        self.compact_mmap.as_ref().map(|c| c.num_keys).unwrap_or(0)
     }
 
     /// 词库是否为空

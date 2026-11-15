@@ -1,6 +1,6 @@
 use crate::dat::DatReader;
 use crate::error::AlgoError;
-use memmap2::Mmap;
+use memmap2::{Mmap, MmapOptions};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -245,6 +245,35 @@ impl CompactMmapLexicon {
             })?
         };
         Self::from_mmap(mmap, path_ref)
+    }
+
+    /// 从内存字节切片构建零拷贝只读词典（通过匿名只读内存映射实现，零磁盘 I/O）
+    ///
+    /// # Errors
+    /// 当字节长度不足、匿名内存映射失败或紧凑词典头部/段校验失败时返回 [`AlgoError`]。
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, AlgoError> {
+        let mem_path = Path::new("<memory>");
+        if bytes.len() < 64 {
+            return Err(AlgoError::deserialize_failed(
+                mem_path,
+                "紧凑词典字节数据不足 64 字节",
+            ));
+        }
+        let mut mmap_mut = MmapOptions::new()
+            .len(bytes.len())
+            .map_anon()
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: mem_path.to_path_buf(),
+                source: e,
+            })?;
+        mmap_mut.copy_from_slice(bytes);
+        let mmap = mmap_mut
+            .make_read_only()
+            .map_err(|e| AlgoError::DictionaryIo {
+                path: mem_path.to_path_buf(),
+                source: e,
+            })?;
+        Self::from_mmap(mmap, mem_path)
     }
 
     /// 从已就绪的内存切片解析紧凑只读词典结构
