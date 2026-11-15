@@ -197,8 +197,18 @@ impl WaylanV1Session {
 
 impl WaylandSessionLifecycle for WaylanV1Session {
     #[inline]
+    fn runtime_ref(&self) -> &ImeRuntime {
+        &self.runtime
+    }
+
+    #[inline]
     fn runtime(&mut self) -> &mut ImeRuntime {
         &mut self.runtime
+    }
+
+    #[inline]
+    fn watcher_ref(&self) -> &WaylandWatcherContext<Self> {
+        &self.watcher
     }
 
     #[inline]

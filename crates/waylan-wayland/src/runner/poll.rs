@@ -127,127 +127,93 @@ pub(super) fn poll_and_read_events(
 use crate::session_common::WaylandSessionLifecycle;
 
 /// Wayland 会话事件驱动调度抽象特型
+///
+/// 基于 [`WaylandSessionLifecycle`] 提供退出检查、超时基准、文件/唤醒描述符读取与排空等
+/// 通用默认实现，各协议版本只需覆写有差异的轮询后钩子或超时裁剪逻辑。
 pub(super) trait WaylandLoopSession: WaylandSessionLifecycle + Sized {
     /// 检查是否收到外部优雅退出请求
-    fn is_exit_requested(&self) -> bool;
+    #[inline]
+    fn is_exit_requested(&self) -> bool {
+        self.watcher_ref()
+            .exit_requested
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Acquire))
+    }
+
+    /// 根据各版本特有定时器（如 V2 按键连击）调整 poll 超时毫秒数
+    #[inline]
+    fn adjust_poll_timeout_ms(&self, default_ms: i32) -> i32 {
+        default_ms
+    }
 
     /// 计算下一次 poll 的超时毫秒数
-    fn compute_poll_timeout_ms(&self) -> i32;
+    #[inline]
+    fn compute_poll_timeout_ms(&self) -> i32 {
+        let default_poll_timeout = if self.runtime_ref().is_voice_active() {
+            40
+        } else if self.watcher_ref().inotify_watcher.is_some() {
+            -1
+        } else {
+            2000
+        };
+        self.adjust_poll_timeout_ms(default_poll_timeout)
+    }
 
     /// 获取 inotify 文件监控描述符（若已开启）
-    fn inotify_fd(&self) -> Option<BorrowedFd<'_>>;
+    #[inline]
+    fn inotify_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.watcher_ref()
+            .inotify_watcher
+            .as_ref()
+            .map(|w| w.as_fd())
+    }
 
     /// 获取跨线程唤醒描述符（若已配置）
-    fn wakeup_fd(&self) -> Option<BorrowedFd<'_>>;
+    #[inline]
+    fn wakeup_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.watcher_ref().loop_wakeup.as_ref().map(|w| w.as_fd())
+    }
 
     /// 排空并重置跨线程唤醒事件
-    fn drain_wakeup(&mut self);
+    #[inline]
+    fn drain_wakeup(&mut self) {
+        if let Some(ref wakeup) = self.watcher().loop_wakeup {
+            wakeup.drain();
+        }
+    }
 
     /// 执行每次 poll 结束后的驱动钩子（如语音周期、按键连击）
     fn on_poll_completed(&mut self);
 
     /// 当前会话是否拥有活跃的 inotify 监听器
-    fn has_inotify(&self) -> bool;
+    #[inline]
+    fn has_inotify(&self) -> bool {
+        self.watcher_ref().inotify_watcher.is_some()
+    }
 }
 
 impl WaylandLoopSession for WaylanV1Session {
     #[inline]
-    fn is_exit_requested(&self) -> bool {
-        self.watcher
-            .exit_requested
-            .as_ref()
-            .map(|f| f.load(Ordering::Acquire))
-            .unwrap_or(false)
-    }
-
-    #[inline]
-    fn compute_poll_timeout_ms(&self) -> i32 {
-        let default_poll_timeout = if self.is_voice_active() {
-            40
-        } else if self.watcher.inotify_watcher.is_some() {
-            -1
-        } else {
-            2000
-        };
-        self.next_poll_timeout_ms(default_poll_timeout)
-    }
-
-    #[inline]
-    fn inotify_fd(&self) -> Option<BorrowedFd<'_>> {
-        self.watcher.inotify_watcher.as_ref().map(|w| w.as_fd())
-    }
-
-    #[inline]
-    fn wakeup_fd(&self) -> Option<BorrowedFd<'_>> {
-        self.watcher.loop_wakeup.as_ref().map(|w| w.as_fd())
-    }
-
-    #[inline]
-    fn drain_wakeup(&mut self) {
-        if let Some(ref wakeup) = self.watcher.loop_wakeup {
-            wakeup.drain();
-        }
+    fn adjust_poll_timeout_ms(&self, default_ms: i32) -> i32 {
+        self.next_poll_timeout_ms(default_ms)
     }
 
     #[inline]
     fn on_poll_completed(&mut self) {
         self.poll_voice_cycle();
     }
-
-    #[inline]
-    fn has_inotify(&self) -> bool {
-        self.watcher.inotify_watcher.is_some()
-    }
 }
 
 impl WaylandLoopSession for WaylanV2Session {
     #[inline]
-    fn is_exit_requested(&self) -> bool {
-        self.watcher
-            .exit_requested
-            .as_ref()
-            .map(|f| f.load(Ordering::Acquire))
-            .unwrap_or(false)
-    }
-
-    #[inline]
-    fn compute_poll_timeout_ms(&self) -> i32 {
-        let default_poll_timeout = if self.is_voice_active() {
-            40
-        } else if self.watcher.inotify_watcher.is_some() {
-            -1
-        } else {
-            2000
-        };
-        self.next_poll_timeout_ms(default_poll_timeout)
-    }
-
-    #[inline]
-    fn inotify_fd(&self) -> Option<BorrowedFd<'_>> {
-        self.watcher.inotify_watcher.as_ref().map(|w| w.as_fd())
-    }
-
-    #[inline]
-    fn wakeup_fd(&self) -> Option<BorrowedFd<'_>> {
-        self.watcher.loop_wakeup.as_ref().map(|w| w.as_fd())
-    }
-
-    #[inline]
-    fn drain_wakeup(&mut self) {
-        if let Some(ref wakeup) = self.watcher.loop_wakeup {
-            wakeup.drain();
-        }
+    fn adjust_poll_timeout_ms(&self, default_ms: i32) -> i32 {
+        self.next_poll_timeout_ms(default_ms)
     }
 
     #[inline]
     fn on_poll_completed(&mut self) {
         self.drive_key_repeat();
         self.poll_voice_cycle();
-    }
-
-    #[inline]
-    fn has_inotify(&self) -> bool {
-        self.watcher.inotify_watcher.is_some()
     }
 }
 

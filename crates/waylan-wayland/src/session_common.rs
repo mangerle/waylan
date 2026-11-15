@@ -115,10 +115,16 @@ pub fn apply_session_setup<S: 'static>(
 /// 统一处理热重载检测、原子状态同步、输入模式切换与 inotify 初始化，协议会话只负责
 /// 提供运行时/监控上下文访问器以及模式切换后的协议侧清理动作。
 pub trait WaylandSessionLifecycle: Sized {
-    /// 获取统一输入法运行时
+    /// 获取统一输入法运行时只读引用
+    fn runtime_ref(&self) -> &ImeRuntime;
+
+    /// 获取统一输入法运行时可变引用
     fn runtime(&mut self) -> &mut ImeRuntime;
 
-    /// 获取外部环境监控上下文
+    /// 获取外部环境监控上下文只读引用
+    fn watcher_ref(&self) -> &WaylandWatcherContext<Self>;
+
+    /// 获取外部环境监控上下文可变引用
     fn watcher(&mut self) -> &mut WaylandWatcherContext<Self>;
 
     /// 会话日志标签（V1 / V2）
