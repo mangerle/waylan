@@ -5,12 +5,15 @@
 //! - **核心优势**：锁保护范围被极限压缩为纯内存快照提取，耗时的 D-Bus 序列化与信号发送均在锁外完成。
 //! - **代价与局限**：每次 UI 刷新需要浅克隆当前的候选列表与预编辑字符串。
 
-use waylan_core::{Candidate, CandidateBoxState, CandidateIndexStyle, CandidateOrientation};
+use waylan_core::{
+    Candidate, CandidateBoxState, CandidateExpansion, CandidateIndexStyle, CandidateOrientation,
+};
 use waylan_engine::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 
 use super::super::keys::IbusSessionCore;
 
 /// 锁外发射 UI 刷新信号所需的轻量状态快照
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UiSnapshot {
     pub(crate) preedit: String,
     pub(crate) candidates: Vec<Candidate>,
@@ -33,11 +36,91 @@ impl UiSnapshot {
         }
     }
 
-    /// 从当前会话核心提取 UI 快照
+    /// 由统一核心渲染状态 [`CandidateBoxState`] 直接映射构建 IBus 界面快照
     ///
     /// # 设计原理
-    /// - 快照提取全程只读且在锁外完成，语音激活态与常规组词态分别走独立的快照构造路径，
-    ///   确保语音波形绝不会污染输入框预编辑区。
+    /// - 彻底消除 `IbusFrontend` 丢弃 `CandidateBoxState` 后再由 `UiSnapshot::capture` 二次重算的冗余路径。
+    pub(crate) fn from_candidate_box_state(
+        box_state: &CandidateBoxState,
+        page_size: usize,
+        orientation: CandidateOrientation,
+        index_style: CandidateIndexStyle,
+    ) -> Self {
+        if box_state.voice.is_some() {
+            return Self {
+                preedit: box_state.preedit.clone(),
+                candidates: box_state.candidates.clone(),
+                page_size: 1,
+                selected_index: 0,
+                orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
+                index_style: CandidateIndexStyle::None,
+            };
+        }
+
+        match box_state.expansion {
+            CandidateExpansion::Card { selected_index } => {
+                let cand_opt = box_state
+                    .candidates
+                    .get(box_state.selected_index)
+                    .filter(|c| c.is_expandable && !c.sub_candidates.is_empty())
+                    .or_else(|| {
+                        box_state
+                            .candidates
+                            .iter()
+                            .find(|c| c.is_expandable && !c.sub_candidates.is_empty())
+                    });
+                let candidates: Vec<Candidate> = cand_opt
+                    .map(|cand| {
+                        cand.sub_candidates
+                            .iter()
+                            .map(|sub| Candidate::new(sub.clone(), cand.pinyin.clone(), cand.score))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let count = candidates.len().max(1);
+                Self {
+                    preedit: box_state.preedit.clone(),
+                    candidates,
+                    page_size: count,
+                    selected_index,
+                    orientation: super::super::types::IBUS_ORIENTATION_VERTICAL,
+                    index_style,
+                }
+            }
+            CandidateExpansion::Grid { selected_index } => {
+                let candidates = box_state.grid_candidates.clone();
+                let count = candidates.len().max(1);
+                Self {
+                    preedit: box_state.preedit.clone(),
+                    candidates,
+                    page_size: count,
+                    selected_index,
+                    orientation: super::super::types::IBUS_ORIENTATION_VERTICAL,
+                    index_style,
+                }
+            }
+            CandidateExpansion::None => {
+                let ibus_orientation = match orientation {
+                    CandidateOrientation::Horizontal => {
+                        super::super::types::IBUS_ORIENTATION_HORIZONTAL
+                    }
+                    CandidateOrientation::Vertical => {
+                        super::super::types::IBUS_ORIENTATION_VERTICAL
+                    }
+                };
+                Self {
+                    preedit: box_state.preedit.clone(),
+                    candidates: box_state.candidates.clone(),
+                    page_size: page_size.max(1),
+                    selected_index: box_state.selected_index,
+                    orientation: ibus_orientation,
+                    index_style,
+                }
+            }
+        }
+    }
+
+    /// 从当前会话核心提取 UI 快照（供点击选词、焦点重置等非按键直通路径使用）
     pub(crate) fn capture(core: &IbusSessionCore) -> Self {
         let is_voice = core.is_voice_active();
         if !is_voice && core.runtime.core.engine.raw_input().is_empty() {
@@ -49,80 +132,19 @@ impl UiSnapshot {
             .voice_manager()
             .and_then(|vm| vm.render_state());
 
-        let box_state = build_common_candidate_box_state(
+        let mut box_state = build_common_candidate_box_state(
             &core.runtime.core.engine,
             CandidateBoxBuildOptions::from_session(&core.runtime.core, true, false, voice_state),
         );
-
-        if is_voice {
-            return Self::from_voice_box_state(box_state);
+        if !is_voice {
+            box_state.preedit = Self::resolve_preedit(core, box_state.preedit);
         }
 
-        let candidates = core.current_candidates();
-        let (page_size, selected_index, orientation) =
-            Self::resolve_page_layout(core, &box_state, candidates.len());
-        let preedit = Self::resolve_preedit(core, box_state.preedit);
-
-        Self {
-            preedit,
-            candidates,
-            page_size,
-            selected_index,
-            orientation,
-            index_style: core.candidate_index_style,
-        }
-    }
-
-    /// 构造语音激活态下的界面快照
-    ///
-    /// # 设计原理
-    /// - 语音态固定为单条目候选列表且不带数字序号，候选区承载语音文本与波形。
-    fn from_voice_box_state(box_state: CandidateBoxState) -> Self {
-        Self {
-            preedit: box_state.preedit,
-            candidates: box_state.candidates,
-            page_size: 1,
-            selected_index: 0,
-            orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
-            index_style: CandidateIndexStyle::None,
-        }
-    }
-
-    /// 依据卡片或网格展开状态与候选框布局推导页大小、选中索引与候选框方向
-    ///
-    /// # 设计原理
-    /// - 二级卡片展开态强制纵向排列并以卡片内选中项为准，页大小与展开子项条数对齐；
-    /// - 大网格展开态同样强制纵向排列并将页大小撑满展开条目数；
-    /// - 常规态则沿用引擎配置页大小与候选框自身的选中索引。
-    fn resolve_page_layout(
-        core: &IbusSessionCore,
-        box_state: &CandidateBoxState,
-        candidates_len: usize,
-    ) -> (usize, usize, i32) {
-        if core.runtime.core.is_card_expanded() {
-            let sel = core.runtime.core.card_selected_index();
-            return (
-                candidates_len.max(1),
-                sel,
-                super::super::types::IBUS_ORIENTATION_VERTICAL,
-            );
-        }
-        if core.runtime.core.is_grid_expanded() {
-            let sel = core.runtime.core.grid_selected_index();
-            return (
-                candidates_len.max(1),
-                sel,
-                super::super::types::IBUS_ORIENTATION_VERTICAL,
-            );
-        }
-        let orientation = match core.candidate_orientation {
-            CandidateOrientation::Horizontal => super::super::types::IBUS_ORIENTATION_HORIZONTAL,
-            CandidateOrientation::Vertical => super::super::types::IBUS_ORIENTATION_VERTICAL,
-        };
-        (
+        Self::from_candidate_box_state(
+            &box_state,
             core.runtime.core.engine.config.page_size,
-            box_state.selected_index,
-            orientation,
+            core.candidate_orientation,
+            core.candidate_index_style,
         )
     }
 

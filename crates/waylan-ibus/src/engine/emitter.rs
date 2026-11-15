@@ -4,6 +4,7 @@
 //! - **实现初衷**：将预编辑文本更新、候选词表刷新、按键上屏与标点光标补偿等 D-Bus 异步信号发送逻辑从接口定义中解耦。
 //! - **核心优势**：在释放核心 Mutex 锁后进行纯异步信号发射，杜绝死锁与事件循环阻塞。
 
+use zbus::blocking::Connection;
 use zbus::object_server::SignalContext;
 use zbus::zvariant::Value;
 
@@ -115,5 +116,68 @@ impl IbusEngineService {
         Self::emit_ui_snapshot(ctxt, &snap).await;
         let _ = Self::hide_preedit_text(ctxt).await;
         let _ = Self::hide_lookup_table(ctxt).await;
+    }
+}
+
+/// IBus 引擎 D-Bus 接口名
+const IBUS_ENGINE_INTERFACE: &str = "org.freedesktop.IBus.Engine";
+
+/// 在锁作用域之外，通过阻塞式 D-Bus 连接向指定引擎路径发射文本上屏信号
+pub(crate) fn emit_commit_text_blocking(conn: &Connection, target_engine_path: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Ok(text_val) = build_ibus_text(text) {
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            IBUS_ENGINE_INTERFACE,
+            "CommitText",
+            &(Value::from(text_val),),
+        );
+    }
+}
+
+/// 在锁作用域之外，通过阻塞式 D-Bus 连接发射预编辑与候选词表快照信号
+///
+/// 与 [`IbusEngineService::emit_ui_snapshot`] 共享同一套 `UiSnapshot` 语义与载荷构造，
+/// 供后台监控线程（如语音流式刷新）复用。
+pub(crate) fn emit_ui_snapshot_blocking(
+    conn: &Connection,
+    target_engine_path: &str,
+    snap: &UiSnapshot,
+) {
+    if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
+        let char_len = snap.preedit.chars().count() as u32;
+        let visible = !snap.preedit.is_empty();
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            IBUS_ENGINE_INTERFACE,
+            "UpdatePreeditText",
+            &(
+                Value::from(preedit_val),
+                char_len,
+                visible,
+                IBUS_ENGINE_PREEDIT_CLEAR,
+            ),
+        );
+    }
+
+    let table_visible = !snap.candidates.is_empty();
+    if let Ok(table_val) = build_ibus_lookup_table(&IbusLookupTableParams {
+        candidates: &snap.candidates,
+        page_size: snap.page_size,
+        selected_index: snap.selected_index,
+        orientation: snap.orientation,
+        index_style: snap.index_style,
+    }) {
+        let _ = conn.emit_signal(
+            None::<&str>,
+            target_engine_path,
+            IBUS_ENGINE_INTERFACE,
+            "UpdateLookupTable",
+            &(Value::from(table_val), table_visible),
+        );
     }
 }

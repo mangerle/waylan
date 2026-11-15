@@ -5,6 +5,7 @@
 //! - **核心优势**：纯内存数据结构，加锁保护仅限于单次按键决策的微秒级临界区内。
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
+use super::super::engine::UiSnapshot;
 use std::sync::mpsc::SyncSender;
 use waylan_core::input::VoiceProvider;
 use waylan_core::state::SharedInputFlags;
@@ -24,6 +25,8 @@ pub struct IbusKeyOutcome {
     pub mode_changed: Option<InputMode>,
     /// 成对标点补全后需模拟方向键移动光标的偏移量（负数表示向左）
     pub cursor_offset: i32,
+    /// 由 `InputMethodFrontend` 直接产出的界面渲染快照
+    pub(crate) ui_snapshot: Option<UiSnapshot>,
 }
 
 /// 微澜 IBus 会话内部核心状态机（受互斥锁保护，组合底层 ImeRuntime 并扩展协议特定状态）

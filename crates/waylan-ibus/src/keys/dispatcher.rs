@@ -8,9 +8,10 @@
 //! - **代价与局限**：需将 X11 修饰键状态位映射至统一修饰键位掩码。
 
 use waylan_core::input::*;
-use waylan_core::{CandidateBoxState, InputMode};
+use waylan_core::{CandidateBoxState, CandidateIndexStyle, CandidateOrientation, InputMode};
 use waylan_engine::InputMethodFrontend;
 
+use super::super::engine::UiSnapshot;
 use super::core::{IbusKeyOutcome, IbusSessionCore};
 use super::keyval::{
     ibus_keyval_to_evdev, IBUS_CONTROL_MASK, IBUS_LOCK_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK,
@@ -20,6 +21,11 @@ use super::keyval::{
 /// 针对 IBus 会话结果收集的轻量前端管道适配器
 pub struct IbusFrontend<'a> {
     pub outcome: &'a mut IbusKeyOutcome,
+    pub page_size: usize,
+    pub orientation: CandidateOrientation,
+    pub index_style: CandidateIndexStyle,
+    /// V 模式等场景下需保留原始输入串作为预编辑文本时的显式覆盖
+    pub raw_v_preedit: Option<String>,
 }
 
 impl<'a> InputMethodFrontend for IbusFrontend<'a> {
@@ -27,16 +33,37 @@ impl<'a> InputMethodFrontend for IbusFrontend<'a> {
         self.outcome.commit_text = Some(text.to_string());
     }
 
-    fn update_preedit(&mut self, _text: &str, _cursor_byte_idx: usize) {
+    fn update_preedit(&mut self, text: &str, _cursor_byte_idx: usize) {
         self.outcome.update_ui = true;
+        let effective = self.raw_v_preedit.as_deref().unwrap_or(text);
+        if let Some(ref mut snap) = self.outcome.ui_snapshot {
+            snap.preedit = effective.to_string();
+        } else {
+            let mut snap = UiSnapshot::empty();
+            snap.preedit = effective.to_string();
+            self.outcome.ui_snapshot = Some(snap);
+        }
     }
 
-    fn update_candidates(&mut self, _state: &CandidateBoxState) {
+    fn update_candidates(&mut self, state: &CandidateBoxState) {
         self.outcome.update_ui = true;
+        let mut snap = UiSnapshot::from_candidate_box_state(
+            state,
+            self.page_size,
+            self.orientation,
+            self.index_style,
+        );
+        if state.voice.is_none() {
+            if let Some(ref v_preedit) = self.raw_v_preedit {
+                snap.preedit = v_preedit.clone();
+            }
+        }
+        self.outcome.ui_snapshot = Some(snap);
     }
 
     fn hide_candidates(&mut self) {
         self.outcome.update_ui = true;
+        self.outcome.ui_snapshot = Some(UiSnapshot::empty());
     }
 
     fn move_cursor(&mut self, offset: i32) {
@@ -93,12 +120,19 @@ impl IbusSessionCore {
         let mut outcome = IbusKeyOutcome::default();
         let is_password_or_locked = self.is_screen_locked || self.is_password_context;
         let surrounding = self.surrounding_text.clone();
+        let page_size = self.runtime.core.engine.config.page_size;
+        let orientation = self.candidate_orientation;
+        let index_style = self.candidate_index_style;
 
         let (consumed, commit_text) = {
             let mut frontend = IbusFrontend {
                 outcome: &mut outcome,
+                page_size,
+                orientation,
+                index_style,
+                raw_v_preedit: None,
             };
-            self.runtime.process_key_event(
+            let res = self.runtime.process_key_event(
                 &mut frontend,
                 waylan_engine::ProcessKeyEventParams {
                     key: evdev_key,
@@ -107,7 +141,15 @@ impl IbusSessionCore {
                     surrounding_text: surrounding.as_ref(),
                     inline_preedit: false,
                 },
-            )
+            );
+            // 若当前处于 V 模式动态输入，预编辑区保留原始输入串以与历史行为对齐
+            let raw = self.runtime.core.engine.raw_input();
+            if raw.starts_with('v') && !self.runtime.is_voice_active() {
+                if let Some(ref mut snap) = frontend.outcome.ui_snapshot {
+                    snap.preedit = raw.to_string();
+                }
+            }
+            res
         };
 
         outcome.consumed = consumed;
