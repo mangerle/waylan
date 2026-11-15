@@ -30,7 +30,6 @@ pub struct IbusKeyOutcome {
 pub struct IbusSessionCore {
     /// 统一输入法交互运行时 (IME Runtime)
     pub(crate) runtime: ImeRuntime,
-    pub(crate) phys_mods: u8,
     pub(crate) is_password_context: bool,
     pub(crate) is_screen_locked: bool,
     pub(crate) surrounding_text: Option<(String, u32, u32)>,
@@ -45,7 +44,6 @@ impl IbusSessionCore {
     pub fn new(engine: AlgoEngine) -> Self {
         Self {
             runtime: ImeRuntime::with_engine(engine),
-            phys_mods: 0,
             is_password_context: false,
             is_screen_locked: false,
             surrounding_text: None,
@@ -136,7 +134,6 @@ impl IbusSessionCore {
             vm.clear_state();
         }
         self.runtime.core.reset_input_state();
-        self.phys_mods = 0;
         self.is_password_context = false;
         self.surrounding_text = None;
     }

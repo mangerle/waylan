@@ -76,6 +76,27 @@ impl ModifierState {
         update_modifier_masks(&mut self.depressed, &mut self.phys_mods, keycode, is_press);
     }
 
+    /// 将外部协议层（如 IBus X11 state 掩码）的修饰键状态与内部物理按键状态对齐
+    ///
+    /// 以内部 `phys_mods` 追踪的物理按键为下界，叠加外部协议层传入的修饰键掩码，
+    /// 避免在未收到前导物理修饰键事件时丢失组合键，也避免单次外部掩码在后续按键中残留。
+    pub fn sync_external_depressed(&mut self, external_depressed: u32) {
+        let mut phys_depressed = 0u32;
+        if (self.phys_mods & 0b0000_0011) != 0 {
+            phys_depressed |= MOD_SHIFT;
+        }
+        if (self.phys_mods & 0b0000_1100) != 0 {
+            phys_depressed |= MOD_CTRL;
+        }
+        if (self.phys_mods & 0b0011_0000) != 0 {
+            phys_depressed |= MOD_ALT;
+        }
+        if (self.phys_mods & 0b1100_0000) != 0 {
+            phys_depressed |= MOD_SUPER;
+        }
+        self.depressed = phys_depressed | external_depressed;
+    }
+
     /// 查询 Shift 是否处于按下状态（左右任一侧均计入）
     #[inline]
     pub fn is_shift_active(&self) -> bool {

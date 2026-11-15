@@ -194,14 +194,16 @@ impl ImeCoreSession {
         self.modifiers.depressed = depressed;
     }
 
-    /// 使用物理修饰键跟踪位图更新修饰键掩码
-    pub fn update_modifier_masks(&mut self, phys_mods: &mut u8, keycode: u32, is_press: bool) {
-        waylan_core::input::update_modifier_masks(
-            &mut self.modifiers.depressed,
-            phys_mods,
-            keycode,
-            is_press,
-        );
+    /// 将外部协议层修饰键状态与内部物理按键状态对齐（不驱动 Shift 状态机，避免重复触发）
+    #[inline]
+    pub fn sync_external_modifiers(
+        &mut self,
+        keycode: u32,
+        is_press: bool,
+        external_depressed: u32,
+    ) {
+        self.modifiers.update(keycode, is_press);
+        self.modifiers.sync_external_depressed(external_depressed);
     }
 
     /// 获取当前翻页与选词热键配置

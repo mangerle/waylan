@@ -50,25 +50,24 @@ impl<'a> InputMethodFrontend for IbusFrontend<'a> {
 }
 
 impl IbusSessionCore {
-    /// 同步并计算最终的修饰键位掩码与 CapsLock 状态
-    fn sync_and_calculate_modifiers(&mut self, evdev_key: u32, is_press: bool, state: u32) -> u32 {
-        self.runtime
-            .core
-            .update_modifier_masks(&mut self.phys_mods, evdev_key, is_press);
-
-        let mut event_mods = self.runtime.core.mods_depressed();
+    /// 同步外部 IBus 修饰键状态与 CapsLock 锁定状态至核心会话
+    fn sync_modifiers_from_ibus(&mut self, evdev_key: u32, is_press: bool, state: u32) {
+        let mut external_mods = 0u32;
         if (state & IBUS_SHIFT_MASK) != 0 {
-            event_mods |= MOD_SHIFT;
+            external_mods |= MOD_SHIFT;
         }
         if (state & IBUS_CONTROL_MASK) != 0 {
-            event_mods |= MOD_CTRL;
+            external_mods |= MOD_CTRL;
         }
         if (state & IBUS_MOD1_MASK) != 0 {
-            event_mods |= MOD_ALT;
+            external_mods |= MOD_ALT;
         }
         if (state & IBUS_SUPER_MASK) != 0 {
-            event_mods |= MOD_SUPER;
+            external_mods |= MOD_SUPER;
         }
+        self.runtime
+            .core
+            .sync_external_modifiers(evdev_key, is_press, external_mods);
 
         // 外部状态指示的 CapsLock 锁定标志补齐：
         // 仅当当前按键并非 CapsLock 键自身、且外部明确指示 Lock 掩码、且当前并未主动切回中文时，
@@ -81,8 +80,6 @@ impl IbusSessionCore {
         {
             self.update_caps_lock_state(true);
         }
-
-        event_mods
     }
 
     /// 处理 IBus `ProcessKeyEvent(keyval, keycode, state)` 请求
@@ -91,10 +88,7 @@ impl IbusSessionCore {
         let is_press = (state & IBUS_RELEASE_MASK) == 0;
         let evdev_key = ibus_keyval_to_evdev(keyval, keycode);
 
-        let event_mods = self.sync_and_calculate_modifiers(evdev_key, is_press, state);
-
-        let saved_mods = self.runtime.core.mods_depressed();
-        self.runtime.core.set_mods_depressed(event_mods);
+        self.sync_modifiers_from_ibus(evdev_key, is_press, state);
 
         let mut outcome = IbusKeyOutcome::default();
         let is_password_or_locked = self.is_screen_locked || self.is_password_context;
@@ -115,7 +109,6 @@ impl IbusSessionCore {
                 },
             )
         };
-        self.runtime.core.set_mods_depressed(saved_mods);
 
         outcome.consumed = consumed;
         if outcome.commit_text.is_none() {

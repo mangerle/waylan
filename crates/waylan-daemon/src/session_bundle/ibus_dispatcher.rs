@@ -28,6 +28,7 @@ use crate::tray::TrayService;
 /// IBus 会话派发参数包
 pub struct IbusDispatchOptions<'a> {
     pub engine: AlgoEngine,
+    pub cfg: &'a AppConfig,
     pub is_ibus_arg: bool,
     pub should_spawn_tray: bool,
     pub watched_paths: Vec<PathBuf>,
@@ -191,12 +192,11 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
         }
     );
 
-    let initial_cfg = AppConfig::load_or_create();
-    let initial_intent = gnome_extension_intent(&initial_cfg);
+    let initial_intent = gnome_extension_intent(opts.cfg);
     // 启动即后台对齐一次扩展加载状态：扩展可能因系统升级、用户在扩展管理器中手动关闭或首次
     // 安装而与配置脱节，原实现只在配置值变化时才同步，会让脱节状态永久保留。
     sync_gnome_extension_state_async(initial_intent);
-    let session_core = build_ibus_session_core(opts.engine, opts.tray, &initial_cfg);
+    let session_core = build_ibus_session_core(opts.engine, opts.tray, opts.cfg);
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {
         subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),

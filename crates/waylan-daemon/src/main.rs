@@ -205,6 +205,7 @@ fn dispatch_active_session(
     if use_ibus {
         dispatch_ibus_session(IbusDispatchOptions {
             engine,
+            cfg: &cfg,
             is_ibus_arg: opts.ibus_backend,
             should_spawn_tray,
             watched_paths,
