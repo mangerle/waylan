@@ -15,8 +15,7 @@ use super::ModelSubdirectory;
 
 /// 获取用户个人模型存储根目录 (`~/.local/share/waylan/models/`)
 pub fn user_models_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".local/share/waylan/models"))
+    waylan_core::config::user_models_dir()
 }
 
 /// 确保用户模型目录及其四个类型子目录全部创建就绪

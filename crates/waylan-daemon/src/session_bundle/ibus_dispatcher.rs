@@ -6,7 +6,6 @@
 //! - **代价与局限**：宿主配置变更需通过适配器回调映射至 `IbusSessionCore`。
 
 use crate::error::DaemonError;
-use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -102,9 +101,7 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn reload(&self, core: &mut IbusSessionCore) -> bool {
         let new_cfg = AppConfig::load_or_create();
         let current_has_tray = core.has_tray();
-        let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-            .map(|d| d.to_uppercase().contains("GNOME"))
-            .unwrap_or(false);
+        let is_gnome = waylan_sys::desktop::is_gnome_desktop();
         let expected_tray = match new_cfg.desktop.enable_tray {
             waylan_core::TrayDisplayMode::Always => true,
             waylan_core::TrayDisplayMode::Never => false,

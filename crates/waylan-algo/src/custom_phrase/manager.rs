@@ -31,14 +31,9 @@ impl CustomPhraseManager {
 
     /// 获取默认自定义短语配置文件路径
     pub fn default_path() -> PathBuf {
-        if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home)
-                .join(".config")
-                .join("waylan")
-                .join("phrases.txt")
-        } else {
-            PathBuf::from("phrases.txt")
-        }
+        waylan_core::config::user_config_dir()
+            .map(|dir| dir.join("phrases.txt"))
+            .unwrap_or_else(|| PathBuf::from("phrases.txt"))
     }
 
     /// 从文件加载自定义短语，若不存在可自动创建模板

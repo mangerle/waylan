@@ -1,6 +1,7 @@
 use cosmic_text::FontSystem;
 use log::{debug, info};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use waylan_core::config::user_data_dir_opt;
 
 /// 系统字体加载与探测模块
 ///
@@ -46,9 +47,8 @@ impl FontManager {
             }
         }
 
-        if let Ok(home) = std::env::var("HOME") {
-            let user_font = PathBuf::from(home).join(".local/share/fonts");
-            let user_noto = user_font.join("NotoSansCJK-Regular.ttc");
+        if let Some(data_dir) = user_data_dir_opt() {
+            let user_noto = data_dir.join("fonts/NotoSansCJK-Regular.ttc");
             if user_noto.exists() {
                 let _ = font_system.db_mut().load_font_file(&user_noto);
             }

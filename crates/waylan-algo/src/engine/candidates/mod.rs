@@ -8,6 +8,7 @@
 //! - **代价与局限**：受束宽与单次词组最大音节数（6 音节）限制。
 
 mod collector;
+mod fallback;
 
 use super::AlgoEngine;
 use crate::decoder::{

@@ -95,23 +95,7 @@ impl NoiseSuppressor for GtcrnSuppressor {
     }
 }
 
-/// 解析 GTCRN 模型文件路径（支持用户目录、系统共享目录与源码本地目录）
+/// 解析 GTCRN 模型文件路径（支持 XDG 用户目录、系统共享目录与源码本地目录）
 pub fn resolve_gtcrn_model_path() -> Option<PathBuf> {
-    let sub = "ns/gtcrn/gtcrn_simple.onnx";
-    let mut search_roots = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        search_roots.push(PathBuf::from(home).join(".local/share/waylan/models"));
-    }
-    search_roots.push(PathBuf::from("/usr/share/waylan/models"));
-    search_roots.push(PathBuf::from("models"));
-    search_roots.push(PathBuf::from("../../models"));
-    search_roots.push(PathBuf::from("../models"));
-
-    for root in &search_roots {
-        let p = root.join(sub);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+    waylan_core::config::resolve_model_path(None, &["ns/gtcrn/gtcrn_simple.onnx"])
 }

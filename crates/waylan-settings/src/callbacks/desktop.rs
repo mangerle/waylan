@@ -10,7 +10,14 @@ use std::process::Command;
 use std::time::Duration;
 
 use waylan_core::config::AppConfig;
-use waylan_sys::desktop::{safe_sync_desktop_input_sources, GnomeExtensionIntent};
+use waylan_core::{
+    GnomeExtensionIntent, WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_ENGINE_NAME,
+    WAYLAN_IBUS_SOURCE_ENTRY,
+};
+use waylan_sys::desktop::{
+    activate_ibus_engine, enqueue_desktop_task, ensure_gnome_extension_files,
+    ensure_input_source_prioritized, is_gnome_desktop, set_gnome_extension_enabled,
+};
 use waylan_sys::process::run_command_with_timeout;
 
 /// 默认系统原生对话框等待超时时间（2分钟）
@@ -28,9 +35,21 @@ pub fn gnome_extension_intent(cfg: &AppConfig) -> GnomeExtensionIntent {
     }
 }
 
-/// 同步更新 GNOME 输入源列表与配套扩展加载状态（委托底层系统抽象统一安全执行）
+/// 同步更新 GNOME 输入源列表与配套扩展加载状态（通过串行后台任务队列安全执行）
 pub fn sync_gnome_indicator_mode(intent: GnomeExtensionIntent) {
-    safe_sync_desktop_input_sources(intent);
+    if !is_gnome_desktop() {
+        return;
+    }
+    enqueue_desktop_task(move || {
+        ensure_input_source_prioritized(
+            WAYLAN_IBUS_SOURCE_ENTRY,
+            "('xkb', 'us')",
+            intent.hide_indicator,
+        );
+        ensure_gnome_extension_files(WAYLAN_GNOME_EXTENSION_UUID, "gnome-extension");
+        set_gnome_extension_enabled(WAYLAN_GNOME_EXTENSION_UUID, intent.should_enable());
+        activate_ibus_engine(WAYLAN_IBUS_ENGINE_NAME);
+    });
 }
 
 /// 调用系统原生对话框 (zenity) 选择外部词库文件（具备超时保护）

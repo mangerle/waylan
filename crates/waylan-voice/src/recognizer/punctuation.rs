@@ -67,22 +67,9 @@ impl PunctuationRestorer {
 
     /// 定位系统官方内置标点模型权重文件
     fn resolve_builtin_punct_model_path() -> Option<PathBuf> {
-        let filename = "punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.onnx";
-        let mut candidates = Vec::new();
-        candidates.push(PathBuf::from("/usr/share/waylan/models/punct").join(filename));
-        candidates.push(PathBuf::from("models/punct").join(filename));
-        if let Ok(home) = std::env::var("HOME") {
-            candidates.push(
-                PathBuf::from(&home)
-                    .join(".local/share/waylan/models/punct")
-                    .join(filename),
-            );
-        }
-        // 向前兼容旧版全精度文件名
-        candidates.push(PathBuf::from("/usr/share/waylan/models/punct/model.onnx"));
-        candidates.push(PathBuf::from("models/punct/model.onnx"));
-
-        candidates.into_iter().find(|p| p.is_file())
+        let primary = "punct/punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.onnx";
+        let legacy = "punct/model.onnx";
+        waylan_core::config::resolve_model_path(None, &[primary, legacy])
     }
 
     /// 为文本预测并添加标点符号；若无可用模型，执行基础句末补全

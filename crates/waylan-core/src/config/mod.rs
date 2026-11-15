@@ -11,7 +11,9 @@ use std::path::PathBuf;
 pub use error::ConfigError;
 pub use paths::{
     aux_dict_search_paths, base_dict_search_paths, config_path, env_var_non_empty,
-    fallback_runtime_dir, opencc_dict_search_paths, user_aux_dict_path, user_dict_path,
+    fallback_runtime_dir, opencc_dict_search_paths, resolve_model_path, user_aux_dict_path,
+    user_config_dir, user_data_dir, user_data_dir_opt, user_dict_path, user_models_dir,
+    user_state_dir,
 };
 use serde::{Deserialize, Serialize};
 

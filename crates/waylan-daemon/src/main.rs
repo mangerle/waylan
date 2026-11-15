@@ -177,17 +177,11 @@ fn handle_instance_conflict(opts: &DaemonOptions) {
 
 /// 激活当前桌面会话的微澜输入源并置顶为首选
 fn activate_desktop_input_source() {
-    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_uppercase().contains("GNOME"))
-        .unwrap_or(false);
-
-    if is_gnome {
+    if waylan_sys::desktop::is_gnome_desktop() {
         desktop::ensure_gnome_input_source_registered(false);
     }
 
-    let mut cmd = process::Command::new("ibus");
-    cmd.args(["engine", "waylan"]);
-    let _ = desktop::run_command_with_timeout(cmd, desktop::DEFAULT_DESKTOP_COMMAND_TIMEOUT);
+    waylan_sys::desktop::activate_ibus_engine(waylan_core::WAYLAN_IBUS_ENGINE_NAME);
 }
 
 /// 决策并派发 Wayland 或 IBus 前端会话

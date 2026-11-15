@@ -134,9 +134,7 @@ pub fn collect_watched_paths() -> (Vec<PathBuf>, Option<waylan_sys::FileSignatur
 
 /// 计算守护进程是否需要拉起专属彩色托盘
 pub fn determine_tray_should_spawn(cfg: &AppConfig, use_ibus_backend: bool) -> bool {
-    let is_gnome = env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_uppercase().contains("GNOME"))
-        .unwrap_or(false);
+    let is_gnome = waylan_sys::desktop::is_gnome_desktop();
     match cfg.desktop.enable_tray {
         waylan_core::TrayDisplayMode::Always => true,
         waylan_core::TrayDisplayMode::Never => false,
@@ -161,12 +159,20 @@ pub fn effective_exclusive_source(cfg: &AppConfig) -> bool {
             .unwrap_or(false)
 }
 
-/// 唤起独立的微澜偏好设置中心图形界面
+/// 唤起独立的微澜偏好设置中心图形界面并派生收割线程避免僵尸进程残留
 pub fn launch_settings_gui() -> Result<(), DaemonError> {
     info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
     let mut cmd = build_settings_command();
     cmd.stdin(Stdio::null());
-    let _child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
+    if let Err(e) = std::thread::Builder::new()
+        .name("waylan-settings-reaper".to_string())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+    {
+        warn!("[微澜守护进程 警告] 创建设置界面子进程收割线程失败: {}", e);
+    }
     Ok(())
 }
 
@@ -189,6 +195,7 @@ pub fn try_acquire_single_instance_lock() -> std::io::Result<Option<SingleInstan
     let lock_dir = env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(waylan_core::config::fallback_runtime_dir);
+    let _ = fs::create_dir_all(&lock_dir);
     let lock_path = lock_dir.join(format!(
         "waylan_{}.lock",
         rustix::process::getuid().as_raw()
@@ -240,11 +247,13 @@ pub fn check_another_instance_running() -> bool {
                 if pid == current_pid {
                     continue;
                 }
-                // 仅匹配同属当前用户的实例，杜绝 Linux 多用户环境下的误判拦截
-                if let Ok(meta) = entry.metadata() {
-                    if meta.uid() != current_uid {
-                        continue;
-                    }
+                // 仅匹配同属当前用户的实例，杜绝 Linux 多用户环境下的误判拦截；
+                // 若读取 metadata 失败（如进程瞬间退出或权限受限），直接跳过该目录。
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if meta.uid() != current_uid {
+                    continue;
                 }
                 if let Ok(comm) = fs::read_to_string(path.join("comm")) {
                     if comm.trim() == "waylan" {

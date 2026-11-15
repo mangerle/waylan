@@ -6,10 +6,39 @@
 //!   配置到扩展意图的映射集中在本模块，`waylan-sys` 保持不感知应用配置层。
 
 use waylan_core::config::AppConfig;
-pub use waylan_sys::desktop::{
-    ensure_gnome_input_source_registered, sync_gnome_extension_state_async,
-    sync_gnome_hide_indicator_extension, GnomeExtensionIntent,
+pub use waylan_core::GnomeExtensionIntent;
+use waylan_core::{WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_SOURCE_ENTRY};
+use waylan_sys::desktop::{
+    enqueue_desktop_task, ensure_gnome_extension_files, ensure_input_source_prioritized,
+    is_gnome_desktop, set_gnome_extension_enabled,
 };
+
+/// 微澜扩展资源子目录名
+const EXTENSION_ASSETS_SUBDIR: &str = "gnome-extension";
+/// 默认兜底 XKB 输入源条目
+const FALLBACK_XKB_ENTRY: &str = "('xkb', 'us')";
+
+/// 检查并在 GNOME `org.gnome.desktop.input-sources` 中将微澜注册并置顶为首选输入源
+pub fn ensure_gnome_input_source_registered(exclusive: bool) {
+    ensure_input_source_prioritized(WAYLAN_IBUS_SOURCE_ENTRY, FALLBACK_XKB_ENTRY, exclusive);
+}
+
+/// 同步微澜 GNOME Shell 扩展的加载状态
+pub fn sync_gnome_hide_indicator_extension(intent: GnomeExtensionIntent) {
+    if !is_gnome_desktop() {
+        return;
+    }
+    ensure_gnome_extension_files(WAYLAN_GNOME_EXTENSION_UUID, EXTENSION_ASSETS_SUBDIR);
+    set_gnome_extension_enabled(WAYLAN_GNOME_EXTENSION_UUID, intent.should_enable());
+}
+
+/// 后台串行派发扩展加载状态对齐（不触碰输入源与当前引擎选择）
+pub fn sync_gnome_extension_state_async(intent: GnomeExtensionIntent) {
+    if !is_gnome_desktop() {
+        return;
+    }
+    enqueue_desktop_task(move || sync_gnome_hide_indicator_extension(intent));
+}
 
 /// 由应用配置解析 GNOME 扩展启用意图
 ///

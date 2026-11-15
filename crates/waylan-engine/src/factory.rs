@@ -6,11 +6,9 @@
 //! - **核心优势**：高内聚资源装配，统一规范多级词库查找顺序与自动回退兜底，100% 保障冷启动与热重载一致性。
 //! - **代价与局限**：首次加载全量主词库需消耗数十毫秒级内存映射与解析时间。
 
-use std::env;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -25,10 +23,9 @@ use waylan_core::config::AppConfig;
 
 /// 自动建立用户数据目录 (~/.local/share/waylan/) 与外部全量词库的符号链接
 pub fn ensure_user_dictionaries_linked() {
-    let Some(home) = env::var("HOME").ok().filter(|s| !s.is_empty()) else {
+    let Some(user_data_dir) = waylan_core::config::user_data_dir_opt() else {
         return;
     };
-    let user_data_dir = PathBuf::from(home).join(".local/share/waylan");
     if fs::create_dir_all(&user_data_dir).is_err() {
         return;
     }

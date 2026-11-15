@@ -7,11 +7,10 @@
 
 pub mod filler;
 pub mod numbers;
-pub mod pangu;
 
 pub use filler::filter_filler_words;
 pub use numbers::convert_chinese_numbers;
-pub use pangu::apply_pangu_spacing;
+pub use waylan_core::apply_pangu_spacing;
 
 use waylan_core::VoiceItnConfig;
 

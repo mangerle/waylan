@@ -12,28 +12,12 @@ use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// 解析指定的 VAD 模型文件路径（支持自定义路径、用户家目录与系统目录）
+/// 解析指定的 VAD 模型文件路径（支持自定义路径、XDG 用户目录与系统目录）
 pub fn resolve_vad_model_path(custom_path: Option<&PathBuf>) -> Option<PathBuf> {
-    if let Some(p) = custom_path {
-        if p.exists() {
-            return Some(p.clone());
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home).join(".local/share/waylan/models/vad/silero_vad.onnx");
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    let sys_p = PathBuf::from("/usr/share/waylan/models/vad/silero_vad.onnx");
-    if sys_p.exists() {
-        return Some(sys_p);
-    }
-    let local_p = PathBuf::from("models/vad/silero_vad.onnx");
-    if local_p.exists() {
-        return Some(local_p);
-    }
-    None
+    waylan_core::config::resolve_model_path(
+        custom_path.map(PathBuf::as_path),
+        &["vad/silero_vad.onnx"],
+    )
 }
 
 /// 神经网络 ONNX VAD 模型适配器（基于 sherpa-onnx Silero VAD 原生推理引擎）

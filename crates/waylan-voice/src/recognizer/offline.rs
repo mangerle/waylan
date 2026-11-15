@@ -14,37 +14,17 @@ pub fn resolve_asr_model_dir(
     custom_dir: Option<&str>,
     _model_type: OfflineModelType,
 ) -> Option<PathBuf> {
-    if let Some(dir_str) = custom_dir {
-        let p = PathBuf::from(dir_str);
-        if p.exists() {
-            return Some(p);
-        }
-    }
     let subnames = [
         "asr/zipformer-zh",
         "asr/sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01",
         "asr/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
         "asr/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
     ];
-
-    let mut search_roots = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        search_roots.push(PathBuf::from(home).join(".local/share/waylan/models"));
-    }
-    search_roots.push(PathBuf::from("/usr/share/waylan/models"));
-    search_roots.push(PathBuf::from("models"));
-    search_roots.push(PathBuf::from("../../models"));
-    search_roots.push(PathBuf::from("../models"));
-
-    for root in &search_roots {
-        for sub in &subnames {
-            let p = root.join(sub);
-            if p.exists() {
-                return Some(p);
-            }
-        }
-    }
-    None
+    let custom = custom_dir
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(std::path::Path::new);
+    waylan_core::config::resolve_model_path(custom, &subnames)
 }
 
 /// sherpa-onnx 流式识别会话运行时

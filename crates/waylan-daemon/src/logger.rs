@@ -1,4 +1,4 @@
-use crate::config::{env_var_non_empty, AppConfig};
+use crate::config::env_var_non_empty;
 use crate::error::DaemonError;
 use chrono::Local;
 use log::LevelFilter;
@@ -185,20 +185,7 @@ pub fn log_file_path() -> PathBuf {
         return PathBuf::from(custom_path);
     }
 
-    if let Some(state_home) = env_var_non_empty("XDG_STATE_HOME") {
-        return PathBuf::from(state_home).join("waylan").join("waylan.log");
-    }
-
-    if let Some(home) = env_var_non_empty("HOME") {
-        return PathBuf::from(home)
-            .join(".local")
-            .join("state")
-            .join("waylan")
-            .join("waylan.log");
-    }
-
-    // 无 HOME 环境下统一回退至受控安全的运行时目录
-    AppConfig::fallback_runtime_dir().join("waylan.log")
+    waylan_core::config::user_state_dir().join("waylan.log")
 }
 
 #[cfg(test)]

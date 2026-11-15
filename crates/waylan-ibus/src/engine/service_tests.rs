@@ -21,7 +21,9 @@ fn test_password_capabilities_and_reset_lifecycle() {
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: false,
         is_password: Arc::clone(&is_password),
-        lock_healer: Arc::new(ScreenLockHealer::default()),
+        lock_healer: Arc::new(ScreenLockHealer::new(
+            crate::screensaver::SystemScreenSaverQuery::with_flag(Arc::new(AtomicBool::new(false))),
+        )),
     };
 
     // 1. 模拟进入密码框，设置密码能力位
@@ -59,7 +61,9 @@ fn test_screen_locked_recovery_on_plain_context() {
         settings_running: Arc::new(AtomicBool::new(false)),
         suppress_properties: false,
         is_password: Arc::clone(&is_password),
-        lock_healer: Arc::new(ScreenLockHealer::default()),
+        lock_healer: Arc::new(ScreenLockHealer::new(
+            crate::screensaver::SystemScreenSaverQuery::with_flag(Arc::new(AtomicBool::new(false))),
+        )),
     };
 
     // 1. 模拟系统此前记录为锁屏直通状态

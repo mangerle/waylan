@@ -45,15 +45,15 @@ fn assemble_ibus_services(opts: IbusSessionOptions, ibus_addr: &str) -> Assemble
     let loop_wakeup = opts.coordinator.loop_wakeup().cloned();
     let shared_core = Arc::new(Mutex::new(opts.session_core));
 
-    let initial_screen_locked = Connection::session()
-        .ok()
-        .as_ref()
-        .map(super::screensaver::query_initial_screen_saver_active)
-        .unwrap_or(false);
+    let initial_screen_locked = super::screensaver::query_current_screen_saver_active();
     let screen_locked_flag = Arc::new(AtomicBool::new(initial_screen_locked));
+    let (probe_tx, probe_rx) = std::sync::mpsc::sync_channel::<()>(1);
 
     let lock_healer = Arc::new(ScreenLockHealer::new(
-        super::screensaver::SystemScreenSaverQuery::with_flag(Arc::clone(&screen_locked_flag)),
+        super::screensaver::SystemScreenSaverQuery::with_flag_and_probe(
+            Arc::clone(&screen_locked_flag),
+            probe_tx,
+        ),
     ));
 
     let engine_srv = IbusEngineService {
@@ -74,6 +74,7 @@ fn assemble_ibus_services(opts: IbusSessionOptions, ibus_addr: &str) -> Assemble
         coordinator: opts.coordinator,
         config_reloader: opts.config_reloader,
         screen_locked_flag,
+        probe_rx: Some(probe_rx),
         ibus_address: ibus_addr.to_string(),
     };
 

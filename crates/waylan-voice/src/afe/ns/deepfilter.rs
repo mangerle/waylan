@@ -94,29 +94,9 @@ impl NoiseSuppressor for DeepFilterSuppressor {
 
 /// 解析指定的 DeepFilterNet3 降噪模型路径
 pub fn resolve_ns_model_path(custom_path: Option<&str>) -> Option<PathBuf> {
-    if let Some(p) = custom_path.filter(|s| !s.trim().is_empty()) {
-        let path = PathBuf::from(p);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home).join(".local/share/waylan/models/ns/deepfilternet3");
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    let sys_p = PathBuf::from("/usr/share/waylan/models/ns/deepfilternet3");
-    if sys_p.exists() {
-        return Some(sys_p);
-    }
-    let local_p = PathBuf::from("models/ns/deepfilternet3");
-    if local_p.exists() {
-        return Some(local_p);
-    }
-    let parent_p = PathBuf::from("../../models/ns/deepfilternet3");
-    if parent_p.exists() {
-        return Some(parent_p);
-    }
-    None
+    let custom = custom_path
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(std::path::Path::new);
+    waylan_core::config::resolve_model_path(custom, &["ns/deepfilternet3"])
 }

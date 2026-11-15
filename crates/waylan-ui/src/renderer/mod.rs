@@ -5,6 +5,7 @@ pub mod font;
 mod geometry;
 mod glyph_blend;
 pub mod grid;
+mod grid_layout;
 pub mod layout;
 pub mod measure_cache;
 pub mod style;

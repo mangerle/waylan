@@ -21,8 +21,9 @@ pub use config::{
     VoiceConfig, VoiceEngineType, VoiceInteractionConfig, VoiceItnConfig, VoiceVisualEffect,
 };
 pub use constants::{
-    MAX_CONFIG_FILE_BYTES, MAX_CONVERT_DICT_BYTES, MAX_IMPORT_FILE_BYTES, MAX_PHRASE_FILE_BYTES,
-    MAX_USER_DICT_BYTES,
+    GnomeExtensionIntent, MAX_CONFIG_FILE_BYTES, MAX_CONVERT_DICT_BYTES, MAX_IMPORT_FILE_BYTES,
+    MAX_PHRASE_FILE_BYTES, MAX_USER_DICT_BYTES, WAYLAN_GNOME_EXTENSION_UUID,
+    WAYLAN_IBUS_ENGINE_NAME, WAYLAN_IBUS_SOURCE_ENTRY,
 };
 pub use input::*;
 pub use state::{InputStateSnapshot, SharedInputFlags};

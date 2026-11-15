@@ -23,7 +23,7 @@ use zbus::zvariant::Value;
 use super::engine::WAYLAN_ENGINE_OBJECT_PATH;
 use super::keys::IbusSessionCore;
 use super::screensaver::{
-    query_current_screen_saver_active, spawn_screen_saver_listener_with_flag,
+    query_current_screen_saver_active, spawn_screen_saver_listener_with_probe,
 };
 use super::types::build_input_mode_property;
 use crate::{IbusConfigReloader, IbusShutdownCoordinator};
@@ -36,6 +36,7 @@ pub(crate) struct IbusMonitorParams {
     pub(crate) coordinator: IbusShutdownCoordinator,
     pub(crate) config_reloader: Option<Arc<dyn IbusConfigReloader>>,
     pub(crate) screen_locked_flag: Arc<AtomicBool>,
+    pub(crate) probe_rx: Option<std::sync::mpsc::Receiver<()>>,
     pub(crate) ibus_address: String,
 }
 
@@ -174,9 +175,10 @@ pub(crate) fn run_ibus_monitor_loop(
     }
 
     let screen_locked_flag = Arc::clone(&params.screen_locked_flag);
-    let mut listener_handle = spawn_screen_saver_listener_with_flag(
+    let mut listener_handle = spawn_screen_saver_listener_with_probe(
         Arc::clone(&screen_locked_flag),
         params.coordinator.clone(),
+        params.probe_rx.take(),
     );
     let mut engine_listener_handle =
         spawn_engine_change_listener(&params.ibus_address, params.coordinator.clone());

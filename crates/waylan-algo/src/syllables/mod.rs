@@ -5,6 +5,7 @@
 //! - `spatial`: 基于标准 QWERTY 键盘物理坐标高斯衰减计算的按键空间代价矩阵与加权编辑距离纠错。
 
 pub mod spatial;
+pub mod spatial_data;
 pub mod standard;
 
 pub use spatial::*;

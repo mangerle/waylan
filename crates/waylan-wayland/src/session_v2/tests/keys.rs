@@ -247,14 +247,14 @@ fn test_v2_grid_expanded_key_navigation_and_selection() {
     assert!(!session.is_grid_expanded(), "选词后应自动折叠大网格");
     assert_eq!(session.grid_selected_index(), 0);
 
-    // 4. 测试空格选词
+    // 4. 测试空格选词（选取当前网格末位候选，兼容单音节 Top-K 截断上限）
     session.runtime.core.engine.push_char('n');
     session.runtime.core.engine.push_char('i');
     session.runtime.core.expand_grid();
-    session.runtime.core.set_grid_selected_index(12); // 第 3 行第 1 个词
-    let expected_text_3 = session.runtime.core.engine.all_candidates()[12]
-        .text
-        .clone();
+    let cands_4 = session.runtime.core.engine.all_candidates();
+    let target_idx = cands_4.len().saturating_sub(1).min(11);
+    let expected_text_3 = cands_4[target_idx].text.clone();
+    session.runtime.core.set_grid_selected_index(target_idx);
     let (consumed, committed) = process_key_event(&mut session, KEY_SPACE, true);
     assert!(consumed);
     assert_eq!(committed, Some(expected_text_3));
