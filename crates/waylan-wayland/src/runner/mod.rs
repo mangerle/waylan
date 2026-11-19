@@ -151,11 +151,10 @@ impl ReloadableWaylandSession for WaylanV2Session {
 
 /// 执行通用的 Wayland 会话运行配置与词库热重载
 pub fn reload_wayland_session<S: ReloadableWaylandSession>(session: &mut S) {
-    let cfg = AppConfig::load_or_create();
+    let cfg = session.runtime_mut().reload_from_disk();
     session
         .renderer_mut()
         .apply_ui_config(&cfg.ui, cfg.ui.theme);
-    session.runtime_mut().reload_config(&cfg);
     if !session.runtime_mut().core.engine.raw_input().is_empty() {
         session.refresh_surface();
     }

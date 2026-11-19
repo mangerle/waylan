@@ -113,7 +113,7 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
             return true;
         }
 
-        apply_config_to_ibus_core(&new_cfg, core);
+        core.runtime_mut().reload_config(&new_cfg);
         if self.update_intent(gnome_extension_intent(&new_cfg)) {
             // 标记待在锁守卫释放后的 post_reload 中安全执行桌面集成外部命令
             self.pending_sync.store(true, Ordering::Release);
@@ -130,16 +130,6 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
     }
 }
 
-/// 将统一配置包映射并应用到 IBus 核心会话中
-fn apply_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
-    core.runtime_mut().reload_config(cfg);
-}
-
-/// 应用 IBus 会话启动阶段的初始配置（仅调用一次，负责初始化中英文模式）
-fn apply_initial_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
-    core.runtime_mut().apply_initial_config(cfg);
-}
-
 /// 构建 IBus 会话核心实例，并按需挂载托盘状态联动与初始输入配置
 fn build_ibus_session_core(
     engine: AlgoEngine,
@@ -152,7 +142,7 @@ fn build_ibus_session_core(
     if let Some(tray) = tray {
         session_core.attach_tray(tray.shared_flags().clone(), Some(tray.icon_notifier()));
     }
-    apply_initial_config_to_ibus_core(initial_cfg, &mut session_core);
+    session_core.runtime_mut().apply_initial_config(initial_cfg);
     session_core
 }
 

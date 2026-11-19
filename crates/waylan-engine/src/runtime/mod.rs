@@ -209,6 +209,13 @@ impl ImeRuntime {
         self.core.set_input_mode(initial_mode);
     }
 
+    /// 从磁盘重新加载配置并热更新运行时与词库资源，返回最新配置供前端同步界面外观或桌面集成状态
+    pub fn reload_from_disk(&mut self) -> waylan_core::AppConfig {
+        let cfg = waylan_core::AppConfig::load_or_create();
+        self.reload_config(&cfg);
+        cfg
+    }
+
     /// 热重载应用程序配置与词库资源（使输入法交互运行时自闭环更新）
     pub fn reload_config(&mut self, cfg: &waylan_core::AppConfig) {
         crate::factory::reload_engine_resources(&mut self.core.engine, cfg);
