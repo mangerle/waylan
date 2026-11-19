@@ -1,5 +1,5 @@
 use crate::{CloudProfileItem, SettingsWindow};
-use waylan_core::config::AppConfig;
+use waylan_core::config::{AppConfig, UiIndexEnum};
 use waylan_voice::{NsEngineType, VadModelType, VoiceEngineType, VoiceVisualEffect};
 
 /// 对敏感 API Key 做字符级脱敏，避免按字节截断多字节字符导致 panic
@@ -49,11 +49,7 @@ fn sync_voice_switches_to_window(window: &SettingsWindow, cfg: &AppConfig) {
     // 阶段六 交互展现与流式上屏
     window.set_voice_real_time_preview(cfg.voice.interaction.real_time_preview);
     window.set_voice_show_floating_bar(cfg.voice.interaction.show_floating_bar);
-    window.set_voice_visual_effect_index(match cfg.voice.interaction.visual_effect {
-        VoiceVisualEffect::DynamicWaveform => 0,
-        VoiceVisualEffect::BreathingPulse => 1,
-        VoiceVisualEffect::ClassicText => 2,
-    });
+    window.set_voice_visual_effect_index(cfg.voice.interaction.visual_effect.as_ui_index());
 }
 
 /// 同步云端服务 Profile 列表至 Slint 界面属性
@@ -219,12 +215,7 @@ fn sync_ns_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
         .filter(|m| m.path.as_deref() != Some("__bypass__"))
         .map(|m| slint::SharedString::from(&m.display_name))
         .collect();
-    let ns_idx = match cfg.voice.afe.ns_engine {
-        NsEngineType::Rnnoise => 0,
-        NsEngineType::DeepFilterNet => 1,
-        NsEngineType::Gtcrn => 2,
-        _ => 0,
-    };
+    let ns_idx = cfg.voice.afe.ns_engine.as_ui_index();
     window.set_ns_model_names(slint::ModelRc::from(std::rc::Rc::new(
         slint::VecModel::from(ns_names),
     )));
@@ -274,11 +265,8 @@ pub(super) fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppCon
     // 阶段六 交互展现与流式上屏
     cfg.voice.interaction.real_time_preview = window.get_voice_real_time_preview();
     cfg.voice.interaction.show_floating_bar = window.get_voice_show_floating_bar();
-    cfg.voice.interaction.visual_effect = match window.get_voice_visual_effect_index() {
-        1 => VoiceVisualEffect::BreathingPulse,
-        2 => VoiceVisualEffect::ClassicText,
-        _ => VoiceVisualEffect::DynamicWaveform,
-    };
+    cfg.voice.interaction.visual_effect =
+        VoiceVisualEffect::from_ui_index(window.get_voice_visual_effect_index());
 
     update_voice_models_from_window(window, cfg);
 }

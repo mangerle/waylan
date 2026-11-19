@@ -4,7 +4,7 @@ use crate::SettingsWindow;
 use waylan_core::config::{
     AppConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
     CandidateWindowMode, DesktopConfig, FuzzyPinyinRules, PageKeys, PinyinConfig, ShortcutConfig,
-    SwitchKey, TrayDisplayMode, UiConfig,
+    SwitchKey, TrayDisplayMode, UiConfig, UiIndexEnum,
 };
 
 /// 同步常规输入、按键习惯与外观排版属性至 Slint 界面属性
@@ -45,10 +45,7 @@ fn update_pinyin_basic(window: &SettingsWindow, pinyin: &mut PinyinConfig) {
 
 /// 同步快捷键与翻页按键
 fn sync_shortcuts(window: &SettingsWindow, shortcuts: &ShortcutConfig) {
-    window.set_switch_key_index(match shortcuts.switch_key {
-        SwitchKey::Shift => 0,
-        SwitchKey::Ctrl => 1,
-    });
+    window.set_switch_key_index(shortcuts.switch_key.as_ui_index());
     window.set_page_keys_minus_equal(shortcuts.page_keys.minus_equal);
     window.set_page_keys_bracket(shortcuts.page_keys.bracket);
     window.set_page_keys_comma_period(shortcuts.page_keys.comma_period);
@@ -66,10 +63,7 @@ fn sync_shortcuts(window: &SettingsWindow, shortcuts: &ShortcutConfig) {
 
 /// 从界面更新快捷键与翻页按键
 fn update_shortcuts(window: &SettingsWindow, shortcuts: &mut ShortcutConfig) {
-    shortcuts.switch_key = match window.get_switch_key_index() {
-        1 => SwitchKey::Ctrl,
-        _ => SwitchKey::Shift,
-    };
+    shortcuts.switch_key = SwitchKey::from_ui_index(window.get_switch_key_index());
     shortcuts.page_keys = PageKeys {
         minus_equal: window.get_page_keys_minus_equal(),
         bracket: window.get_page_keys_bracket(),
@@ -95,61 +89,26 @@ fn sanitize_shortcut_string(val: slint::SharedString) -> String {
 
 /// 同步候选框外观排版与主题渲染参数
 fn sync_ui_appearance(window: &SettingsWindow, ui: &UiConfig) {
-    window.set_window_mode_index(match ui.candidate_window_mode {
-        CandidateWindowMode::WaylanCustom => 0,
-        CandidateWindowMode::Native => 1,
-    });
-    window.set_density_index(match ui.candidate_density {
-        CandidateDensity::Compact => 0,
-        CandidateDensity::Normal => 1,
-        CandidateDensity::Spacious => 2,
-    });
+    window.set_window_mode_index(ui.candidate_window_mode.as_ui_index());
+    window.set_density_index(ui.candidate_density.as_ui_index());
     window.set_candidate_item_spacing(ui.candidate_item_spacing);
     window.set_candidate_padding_v(ui.candidate_padding_v);
     window.set_candidate_padding_h(ui.candidate_padding_h);
     window.set_candidate_corner_radius(ui.candidate_corner_radius);
     window.set_candidate_opacity(ui.candidate_opacity as f32);
-    window.set_theme_preset_index(match ui.candidate_theme {
-        CandidateThemePreset::Emerald => 0,
-        CandidateThemePreset::Monochrome => 1,
-        CandidateThemePreset::IceBlue => 2,
-        CandidateThemePreset::WarmLatte => 3,
-    });
+    window.set_theme_preset_index(ui.candidate_theme.as_ui_index());
     window.set_page_size_val(ui.page_size as f32);
     window.set_font_size_val(ui.font_size);
-    window.set_orientation_index(match ui.candidate_orientation {
-        CandidateOrientation::Horizontal => 0,
-        CandidateOrientation::Vertical => 1,
-    });
-    window.set_index_style_index(match ui.candidate_index_style {
-        CandidateIndexStyle::ModernSpace => 0,
-        CandidateIndexStyle::ClassicDot => 1,
-        CandidateIndexStyle::Circled => 2,
-        CandidateIndexStyle::SquareBracket => 3,
-        CandidateIndexStyle::Parenthesis => 4,
-        CandidateIndexStyle::MinimalFirstDot => 5,
-        CandidateIndexStyle::None => 6,
-    });
+    window.set_orientation_index(ui.candidate_orientation.as_ui_index());
+    window.set_index_style_index(ui.candidate_index_style.as_ui_index());
     window.set_show_pinyin_comment(ui.show_pinyin_comment);
 }
 
 /// 从界面更新候选框外观排版与主题渲染参数
 fn update_ui_appearance(window: &SettingsWindow, ui: &mut UiConfig) {
-    ui.candidate_window_mode = match window.get_window_mode_index() {
-        1 => CandidateWindowMode::Native,
-        _ => CandidateWindowMode::WaylanCustom,
-    };
-    ui.candidate_density = match window.get_density_index() {
-        0 => CandidateDensity::Compact,
-        2 => CandidateDensity::Spacious,
-        _ => CandidateDensity::Normal,
-    };
-    ui.candidate_theme = match window.get_theme_preset_index() {
-        1 => CandidateThemePreset::Monochrome,
-        2 => CandidateThemePreset::IceBlue,
-        3 => CandidateThemePreset::WarmLatte,
-        _ => CandidateThemePreset::Emerald,
-    };
+    ui.candidate_window_mode = CandidateWindowMode::from_ui_index(window.get_window_mode_index());
+    ui.candidate_density = CandidateDensity::from_ui_index(window.get_density_index());
+    ui.candidate_theme = CandidateThemePreset::from_ui_index(window.get_theme_preset_index());
     ui.candidate_item_spacing = window.get_candidate_item_spacing();
     ui.candidate_padding_v = window.get_candidate_padding_v();
     ui.candidate_padding_h = window.get_candidate_padding_h();
@@ -157,19 +116,8 @@ fn update_ui_appearance(window: &SettingsWindow, ui: &mut UiConfig) {
     ui.candidate_opacity = window.get_candidate_opacity().round() as u32;
     ui.page_size = window.get_page_size_val().round() as usize;
     ui.font_size = window.get_font_size_val().round();
-    ui.candidate_orientation = match window.get_orientation_index() {
-        1 => CandidateOrientation::Vertical,
-        _ => CandidateOrientation::Horizontal,
-    };
-    ui.candidate_index_style = match window.get_index_style_index() {
-        1 => CandidateIndexStyle::ClassicDot,
-        2 => CandidateIndexStyle::Circled,
-        3 => CandidateIndexStyle::SquareBracket,
-        4 => CandidateIndexStyle::Parenthesis,
-        5 => CandidateIndexStyle::MinimalFirstDot,
-        6 => CandidateIndexStyle::None,
-        _ => CandidateIndexStyle::ModernSpace,
-    };
+    ui.candidate_orientation = CandidateOrientation::from_ui_index(window.get_orientation_index());
+    ui.candidate_index_style = CandidateIndexStyle::from_ui_index(window.get_index_style_index());
     ui.show_pinyin_comment = window.get_show_pinyin_comment();
 }
 
