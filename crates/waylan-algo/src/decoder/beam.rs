@@ -241,18 +241,19 @@ fn init_beam_from_cache(
         filter_and_rank_matches(&mut fresh, len, &ctx.options.weights);
         merge_crossing_matches(&mut spans_by_pos[pos], fresh, freeze_pos);
 
-        let cur_states = beam[pos].clone();
+        let (left, right) = beam.split_at_mut(pos + 1);
         let mut expand_ctx = ExpandContext {
             pos,
+            beam_offset: pos + 1,
             seed_word: ctx.seed_word,
             spans_by_pos: &spans_by_pos,
             table: ctx.table,
             adaptive: ctx.adaptive,
             options: ctx.options,
             node_arena: &mut node_arena,
-            beam: &mut beam,
+            beam: right,
         };
-        expand_position_states(&cur_states, &mut expand_ctx, Some(freeze_pos));
+        expand_position_states(&left[pos], &mut expand_ctx, Some(freeze_pos));
     }
 
     if ctx.start_pos < bridge_start {
@@ -363,23 +364,25 @@ fn advance_beam(
         filter_and_rank_matches(&mut matches, len, &ctx.options.weights);
         ws.spans_by_pos[pos] = matches;
 
-        let cur_states = ws.beam[pos].clone();
+        let (left, right) = ws.beam.split_at_mut(pos + 1);
         let mut expand_ctx = ExpandContext {
             pos,
+            beam_offset: pos + 1,
             seed_word: ctx.seed_word,
             spans_by_pos: &ws.spans_by_pos,
             table: ctx.table,
             adaptive: ctx.adaptive,
             options: ctx.options,
             node_arena: &mut ws.node_arena,
-            beam: &mut ws.beam,
+            beam: right,
         };
-        expand_position_states(&cur_states, &mut expand_ctx, None);
+        expand_position_states(&left[pos], &mut expand_ctx, None);
     }
 }
 
 struct ExpandContext<'a> {
     pos: usize,
+    beam_offset: usize,
     seed_word: &'a str,
     spans_by_pos: &'a [Vec<PhraseMatch>],
     table: &'a LexiconTable,
@@ -437,7 +440,7 @@ fn expand_position_states(
                 word_ref: Some((pos, idx)),
             });
 
-            ctx.beam[next_pos].push(BeamState {
+            ctx.beam[next_pos - ctx.beam_offset].push(BeamState {
                 node_idx,
                 score: state.score + lm_delta + pair_boost - edge_penalty,
                 typo_count: next_typo,
