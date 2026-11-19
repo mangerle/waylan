@@ -30,6 +30,9 @@ pub use beam_scoring::{score_phrase_match, to_positive_score, unigram_log_score}
 pub use fsa::PrismFsa;
 pub use fuzzy::PrismFuzzy;
 pub use language_model::BigramLanguageModel;
-pub use lattice::{EdgeKind, LatticeOptions, SyllableEdge, SyllableLattice, TypoKind};
+pub use lattice::{
+    EdgeKind, EdgeSyllables, InlineSyllable, LatticeOptions, SyllableEdge, SyllableLattice,
+    TypoKind,
+};
 pub use matcher::{DatPhraseMatcher, MatcherOptions, PhraseMatch};
 pub use weights::ScoringWeights;

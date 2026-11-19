@@ -40,12 +40,28 @@ pub struct IncrementalBeamCache {
     pub(super) spans_by_pos: Vec<Vec<PhraseMatch>>,
     /// 上一次各位置 DAT 前缀探索触及的最远字节位置
     pub(super) pos_max_reach: Vec<usize>,
+    /// 上一次构建的音节格（用于前缀追加时的增量复用）
+    pub(super) last_lattice: Option<SyllableLattice>,
 }
 
 impl IncrementalBeamCache {
     /// 创建一个空的增量解码缓存
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 获取与指定配置签名匹配的缓存音节格
+    #[inline]
+    pub fn cached_lattice(&self, config_sig: u64) -> Option<&SyllableLattice> {
+        (self.config_sig == config_sig)
+            .then_some(self.last_lattice.as_ref())
+            .flatten()
+    }
+
+    /// 保存最新构建的音节格供下一轮增量复用
+    #[inline]
+    pub fn store_lattice(&mut self, lattice: SyllableLattice) {
+        self.last_lattice = Some(lattice);
     }
 
     /// 主动清空增量缓存（当用户自适应模型变更或重置时调用）
@@ -56,6 +72,7 @@ impl IncrementalBeamCache {
         self.arena_len_before_pos.clear();
         self.spans_by_pos.clear();
         self.pos_max_reach.clear();
+        self.last_lattice = None;
     }
 
     /// 判定是否可复用前缀缓存，若命中则返回可安全冻结的字节边界 `freeze_pos`

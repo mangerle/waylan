@@ -186,7 +186,7 @@ fn handle_dat_standard_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, ed
             return;
         };
         cursor = syl_c;
-        next_parts.push(syl.clone());
+        next_parts.push(syl.to_string());
     }
 
     ctx.max_reach = ctx.max_reach.max(edge.end);

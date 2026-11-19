@@ -90,7 +90,6 @@ impl AlgoEngine {
             enable_mixed_jianpin: self.config.enable_acronym,
             enable_typo_edges: self.config.typo_rules.enable,
         };
-        let lattice = SyllableLattice::build(raw, &lattice_opts);
 
         let beam_opts = BeamDecodeOptions {
             beam_width: 24,
@@ -124,6 +123,11 @@ impl AlgoEngine {
             self.config.enable_acronym,
             &beam_opts,
         );
+        let lattice = SyllableLattice::build_incremental(
+            raw,
+            &lattice_opts,
+            self.beam_cache.cached_lattice(config_sig),
+        );
         let decode = PositionalBeamDecoder::decode_with_cache(
             &lattice,
             &self.resources.table,
@@ -132,6 +136,7 @@ impl AlgoEngine {
             &mut self.beam_cache,
             config_sig,
         );
+        self.beam_cache.store_lattice(lattice.clone());
         (lattice, decode)
     }
 

@@ -7,7 +7,7 @@
 //! - **代价与局限**：跨音节倒置窗口限制在 12 字节以内，以控制长串构造开销。
 
 use super::fsa::PrismFsa;
-use super::lattice::{EdgeKind, LatticeOptions, SyllableEdge, TypoKind};
+use super::lattice::{EdgeKind, EdgeSyllables, LatticeOptions, SyllableEdge, TypoKind};
 use crate::syllables::is_valid_syllable;
 use crate::syllables::spatial::{
     get_spatial_typo_corrections, get_typo_corrections_with_rules, weighted_edit_distance,
@@ -37,7 +37,7 @@ pub(super) fn populate_typo_edges(
             out.push(SyllableEdge {
                 start,
                 end: start + l,
-                syllables: vec![corrected],
+                syllables: EdgeSyllables::from_one(&corrected),
                 kind: EdgeKind::Typo(kind),
                 typo_count: 1,
                 cost,
@@ -47,7 +47,7 @@ pub(super) fn populate_typo_edges(
             out.push(SyllableEdge {
                 start,
                 end: start + l,
-                syllables: vec![corrected],
+                syllables: EdgeSyllables::from_one(&corrected),
                 kind: EdgeKind::RuleNormalized,
                 typo_count: 0,
                 cost: 14,
@@ -109,7 +109,7 @@ fn populate_single_syllable_transpose(start: usize, seg: &str, out: &mut Vec<Syl
                     out.push(SyllableEdge {
                         start,
                         end: start + len,
-                        syllables: vec![swapped.to_string()],
+                        syllables: EdgeSyllables::from_one(swapped),
                         kind: EdgeKind::Typo(TypoKind::Transpose),
                         typo_count: 1,
                         cost: 16,
@@ -150,7 +150,7 @@ fn populate_cross_syllable_transpose(start: usize, seg: &str, out: &mut Vec<Syll
                         out.push(SyllableEdge {
                             start,
                             end: start + span,
-                            syllables: vec![s1.to_string(), s2.to_string()],
+                            syllables: EdgeSyllables::from_two(s1, s2),
                             kind: EdgeKind::Typo(TypoKind::Transpose),
                             typo_count: 1,
                             cost: 18,
@@ -184,7 +184,7 @@ fn populate_shared_boundary_missing(start: usize, seg: &str, out: &mut Vec<Sylla
             out.push(SyllableEdge {
                 start,
                 end: end2,
-                syllables: vec![syl1.to_string(), syl2.to_string()],
+                syllables: EdgeSyllables::from_two(syl1, syl2),
                 kind: EdgeKind::Typo(TypoKind::Missing),
                 typo_count: 1,
                 cost: 22,

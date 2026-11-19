@@ -13,7 +13,7 @@ fn collect_lattice_paths(lattice: &SyllableLattice) -> Vec<String> {
         }
         for edge in &lattice.edges_from[next] {
             let prev_len = acc.len();
-            acc.extend(edge.syllables.iter().cloned());
+            acc.extend(edge.syllables.iter().map(str::to_string));
             dfs(lattice, edge.end, acc, out);
             acc.truncate(prev_len);
         }
@@ -154,4 +154,26 @@ fn test_habitual_alias_paths() {
     let lat_enhao = SyllableLattice::build("enhao", &LatticeOptions::default());
     let paths_enhao = collect_lattice_paths(&lat_enhao);
     assert!(paths_enhao.contains(&"ng'hao".to_string()));
+}
+
+#[test]
+fn test_incremental_lattice_matches_full_build() {
+    let opts = LatticeOptions {
+        fuzzy: FuzzyConfig::all_enabled(),
+        enable_mixed_jianpin: true,
+        enable_typo_edges: true,
+        ..Default::default()
+    };
+    let full_seq = "jintianxingqitianzhonguogood";
+    let mut prev: Option<SyllableLattice> = None;
+    for end in 1..=full_seq.len() {
+        let prefix = &full_seq[..end];
+        let inc = SyllableLattice::build_incremental(prefix, &opts, prev.as_ref());
+        let full = SyllableLattice::build(prefix, &opts);
+        assert_eq!(
+            inc.edges_from, full.edges_from,
+            "前缀 {prefix} 增量音节格应与全量构建一致"
+        );
+        prev = Some(inc);
+    }
 }

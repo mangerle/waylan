@@ -48,15 +48,114 @@ pub enum EdgeKind {
     PartialTail,
 }
 
+/// 栈内定长单音节存储（标准拼音音节与容错音节最长不超过 7 字节，零堆分配）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InlineSyllable {
+    bytes: [u8; 8],
+    len: u8,
+}
+
+impl InlineSyllable {
+    /// 从字符串切片构造栈内定长音节
+    #[inline]
+    pub fn new(s: &str) -> Self {
+        let raw = s.as_bytes();
+        let copy_len = raw.len().min(8);
+        let mut bytes = [0u8; 8];
+        bytes[..copy_len].copy_from_slice(&raw[..copy_len]);
+        Self {
+            bytes,
+            len: copy_len as u8,
+        }
+    }
+
+    /// 以 `&str` 视图访问音节文本
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        // Safety: 构造时仅从合法 UTF-8/ASCII 音节切片拷贝而来
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+}
+
+/// 单条音节格边携带的音节序列（栈内定长 `Copy`，最多 2 个音节，消除堆分配）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EdgeSyllables {
+    items: [InlineSyllable; 2],
+    len: u8,
+}
+
+impl EdgeSyllables {
+    /// 构造仅包含 1 个音节的边音节序列
+    #[inline]
+    pub fn from_one(s: &str) -> Self {
+        let empty = InlineSyllable {
+            bytes: [0u8; 8],
+            len: 0,
+        };
+        Self {
+            items: [InlineSyllable::new(s), empty],
+            len: 1,
+        }
+    }
+
+    /// 构造包含 2 个音节的复合边音节序列
+    #[inline]
+    pub fn from_two(s1: &str, s2: &str) -> Self {
+        Self {
+            items: [InlineSyllable::new(s1), InlineSyllable::new(s2)],
+            len: 2,
+        }
+    }
+
+    /// 返回包含的音节数量（1 或 2）
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    /// 判断是否为空
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// 获取首音节切片
+    #[inline]
+    pub fn first(&self) -> Option<&str> {
+        (self.len > 0).then(|| self.items[0].as_str())
+    }
+
+    /// 按序迭代携带的音节文本切片
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.items[..self.len as usize]
+            .iter()
+            .map(InlineSyllable::as_str)
+    }
+}
+
+impl<const N: usize> PartialEq<[&str; N]> for EdgeSyllables {
+    fn eq(&self, other: &[&str; N]) -> bool {
+        self.len as usize == N && self.iter().zip(other.iter().copied()).all(|(a, b)| a == b)
+    }
+}
+
+impl PartialEq<Vec<&str>> for EdgeSyllables {
+    fn eq(&self, other: &Vec<&str>) -> bool {
+        self.len as usize == other.len()
+            && self.iter().zip(other.iter().copied()).all(|(a, b)| a == b)
+    }
+}
+
 /// 音节格上的单条局部有向边
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyllableEdge {
     /// 原始输入中的起始字节偏移
     pub start: usize,
     /// 原始输入中的结束字节偏移
     pub end: usize,
     /// 该边对应的目标标准音节序列（常规为 1 个，跨音节倒置或边界共享漏按为 2 个）
-    pub syllables: Vec<String>,
+    pub syllables: EdgeSyllables,
     /// 边类别
     pub kind: EdgeKind,
     /// 本边消耗的纠错次数（正常/模糊/简拼/半成品为 0，单处容错为 1）
@@ -92,6 +191,15 @@ pub struct SyllableLattice {
 impl SyllableLattice {
     /// 构建统一音节格
     pub fn build(raw: &str, options: &LatticeOptions) -> Self {
+        Self::build_incremental(raw, options, None)
+    }
+
+    /// 增量构建统一音节格：当新输入是旧输入的前缀追加时，复用安全边界之前已计算的边
+    pub fn build_incremental(
+        raw: &str,
+        options: &LatticeOptions,
+        prev: Option<&SyllableLattice>,
+    ) -> Self {
         let len = raw.len();
         let mut edges_from = vec![Vec::new(); len];
         if len == 0 {
@@ -102,8 +210,19 @@ impl SyllableLattice {
             };
         }
 
+        // 覆盖最大跨度(12字节) + 零声母前向借用窗口(2字节)，保证复用区域与全量构建逐比特一致
+        const SAFE_MARGIN_BYTES: usize = 14;
+        let reuse_end = prev
+            .filter(|p| !p.raw.is_empty() && raw.starts_with(&p.raw))
+            .map(|p| p.len.saturating_sub(SAFE_MARGIN_BYTES))
+            .unwrap_or(0);
+
+        if let Some(p) = prev {
+            edges_from[..reuse_end].clone_from_slice(&p.edges_from[..reuse_end]);
+        }
+
         let bytes = raw.as_bytes();
-        let mut start = 0;
+        let mut start = reuse_end;
         while start < len {
             if bytes[start] == b'\'' {
                 start += 1;
@@ -202,7 +321,7 @@ impl SyllableLattice {
                     ) {
                         seq.push(self.raw[edge.start..edge.end].to_string());
                     } else {
-                        seq.extend(edge.syllables.iter().cloned());
+                        seq.extend(edge.syllables.iter().map(str::to_string));
                     }
                     dp_prev[edge.end] = Some((pos, seq));
                 }
@@ -293,7 +412,7 @@ fn populate_exact_and_fuzzy_edges(
         out.push(SyllableEdge {
             start,
             end,
-            syllables: vec![syl.to_string()],
+            syllables: EdgeSyllables::from_one(syl),
             kind: EdgeKind::Exact,
             typo_count: 0,
             cost: borrowing_penalty,
@@ -304,7 +423,7 @@ fn populate_exact_and_fuzzy_edges(
                 out.push(SyllableEdge {
                     start,
                     end,
-                    syllables: vec![variant],
+                    syllables: EdgeSyllables::from_one(&variant),
                     kind: EdgeKind::Fuzzy,
                     typo_count: 0,
                     cost: borrowing_penalty + 12,
@@ -317,7 +436,7 @@ fn populate_exact_and_fuzzy_edges(
                 out.push(SyllableEdge {
                     start,
                     end,
-                    syllables: vec![target.to_string()],
+                    syllables: EdgeSyllables::from_one(target),
                     kind: EdgeKind::RuleNormalized,
                     typo_count: 0,
                     cost: borrowing_penalty + alias_cost,
@@ -336,7 +455,7 @@ fn populate_exact_and_fuzzy_edges(
                     out.push(SyllableEdge {
                         start,
                         end: start + l,
-                        syllables: vec![variant],
+                        syllables: EdgeSyllables::from_one(&variant),
                         kind: EdgeKind::Fuzzy,
                         typo_count: 0,
                         cost: 12,
@@ -352,13 +471,12 @@ fn populate_initial_edge(start: usize, byte: u8, out: &mut Vec<SyllableEdge>) {
     if !byte.is_ascii_lowercase() || matches!(byte, b'i' | b'u' | b'v') {
         return;
     }
-    let ch = byte as char;
-    let mut s = String::with_capacity(1);
-    s.push(ch);
+    let ch = [byte];
+    let s = std::str::from_utf8(&ch).unwrap_or("");
     out.push(SyllableEdge {
         start,
         end: start + 1,
-        syllables: vec![s],
+        syllables: EdgeSyllables::from_one(s),
         kind: EdgeKind::Initial,
         typo_count: 0,
         cost: 160,
@@ -377,7 +495,7 @@ fn populate_partial_tail_edge(start: usize, tail: &str, out: &mut Vec<SyllableEd
         out.push(SyllableEdge {
             start,
             end: start + tail.len(),
-            syllables: vec![tail.to_string()],
+            syllables: EdgeSyllables::from_one(tail),
             kind: EdgeKind::PartialTail,
             typo_count: 0,
             cost: 110,
@@ -394,10 +512,10 @@ fn sort_and_dedup_edges(edges: &mut Vec<SyllableEdge>) {
             .then_with(|| b.end.cmp(&a.end))
     });
 
-    let mut seen: Vec<(usize, Vec<String>, bool)> = Vec::with_capacity(edges.len());
+    let mut seen: Vec<(usize, EdgeSyllables, bool)> = Vec::with_capacity(edges.len());
     edges.retain(|e| {
         let is_partial = matches!(e.kind, EdgeKind::Initial | EdgeKind::PartialTail);
-        let key = (e.end, e.syllables.clone(), is_partial);
+        let key = (e.end, e.syllables, is_partial);
         if seen.contains(&key) {
             false
         } else {
