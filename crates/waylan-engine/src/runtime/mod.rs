@@ -14,7 +14,7 @@ use std::sync::Arc;
 use waylan_algo::AlgoEngine;
 use waylan_core::input::VoiceProvider;
 use waylan_core::state::SharedInputFlags;
-use waylan_core::ParsedShortcut;
+use waylan_core::{CandidateIndexStyle, CandidateOrientation, ParsedShortcut};
 
 pub mod candidate_builder;
 pub mod key_dispatcher;
@@ -42,6 +42,10 @@ pub struct ImeRuntime {
     pub window_mode_memory: bool,
     /// 终端类应用新窗口是否默认使用英文模式
     pub terminal_default_english: bool,
+    /// 候选词序号显示风格
+    candidate_index_style: CandidateIndexStyle,
+    /// 候选框排列方向
+    candidate_orientation: CandidateOrientation,
     /// 当前是否处于受保护安全上下文（密码框、PIN 码或系统锁屏）
     is_protected_context: bool,
     /// 统一语音按键交互与录音流式提供者（抽象特型对象）
@@ -68,6 +72,8 @@ impl ImeRuntime {
             window_tracker: WindowModeTracker::default(),
             window_mode_memory: true,
             terminal_default_english: true,
+            candidate_index_style: CandidateIndexStyle::default(),
+            candidate_orientation: CandidateOrientation::default(),
             is_protected_context: false,
             voice_manager: None,
             shared_flags: None,
@@ -177,6 +183,18 @@ impl ImeRuntime {
         !self.core.engine.raw_input().is_empty()
     }
 
+    /// 获取候选词序号显示风格
+    #[inline]
+    pub fn candidate_index_style(&self) -> CandidateIndexStyle {
+        self.candidate_index_style
+    }
+
+    /// 获取候选框排列方向
+    #[inline]
+    pub fn candidate_orientation(&self) -> CandidateOrientation {
+        self.candidate_orientation
+    }
+
     /// 应用启动阶段的初始配置（仅调用一次）
     ///
     /// 在热重载路径中不能调用本方法，否则每次保存设置都会把用户当前的中英文模式强制重置为
@@ -205,6 +223,8 @@ impl ImeRuntime {
             cfg.pinyin.full_width_char,
         ));
         self.core.set_page_size(cfg.ui.page_size);
+        self.candidate_index_style = cfg.ui.candidate_index_style;
+        self.candidate_orientation = cfg.ui.candidate_orientation;
         self.core.page_keys = waylan_core::input::PageKeyConfig::from(cfg.shortcuts.page_keys);
         self.core.shift_select_second = cfg.shortcuts.shift_select_second;
         self.core.traditional_shortcut = ParsedShortcut::parse(&cfg.shortcuts.traditional_shortcut);

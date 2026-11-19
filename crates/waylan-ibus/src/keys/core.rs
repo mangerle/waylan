@@ -9,7 +9,7 @@ use super::super::engine::UiSnapshot;
 use std::sync::mpsc::SyncSender;
 use waylan_core::input::VoiceProvider;
 use waylan_core::state::SharedInputFlags;
-use waylan_core::{Candidate, CandidateIndexStyle, CandidateOrientation, InputMode};
+use waylan_core::{Candidate, InputMode};
 use waylan_engine::{AlgoEngine, ImeCoreSession, ImeRuntime};
 
 /// 单次 IBus 按键或交互事件的决策输出
@@ -36,8 +36,6 @@ pub struct IbusSessionCore {
     pub(crate) is_password_context: bool,
     pub(crate) is_screen_locked: bool,
     pub(crate) surrounding_text: Option<(String, u32, u32)>,
-    pub(crate) candidate_index_style: CandidateIndexStyle,
-    pub(crate) candidate_orientation: CandidateOrientation,
     /// 当前拥有焦点的活跃 IBus 引擎对象路径
     pub(crate) active_engine_path: Option<String>,
 }
@@ -50,8 +48,6 @@ impl IbusSessionCore {
             is_password_context: false,
             is_screen_locked: false,
             surrounding_text: None,
-            candidate_index_style: CandidateIndexStyle::default(),
-            candidate_orientation: CandidateOrientation::default(),
             active_engine_path: None,
         }
     }
@@ -83,18 +79,6 @@ impl IbusSessionCore {
     #[inline]
     pub fn runtime_mut(&mut self) -> &mut ImeRuntime {
         &mut self.runtime
-    }
-
-    /// 设置候选序号样式
-    #[inline]
-    pub fn set_candidate_index_style(&mut self, style: CandidateIndexStyle) {
-        self.candidate_index_style = style;
-    }
-
-    /// 设置候选框排列方向
-    #[inline]
-    pub fn set_candidate_orientation(&mut self, orientation: CandidateOrientation) {
-        self.candidate_orientation = orientation;
     }
 
     /// 查询是否已挂载系统托盘状态容器

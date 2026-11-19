@@ -143,8 +143,8 @@ impl UiSnapshot {
         Self::from_candidate_box_state(
             &box_state,
             core.runtime.core.engine.config.page_size,
-            core.candidate_orientation,
-            core.candidate_index_style,
+            core.runtime.candidate_orientation(),
+            core.runtime.candidate_index_style(),
         )
     }
 

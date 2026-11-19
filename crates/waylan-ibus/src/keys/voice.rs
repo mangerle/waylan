@@ -19,8 +19,8 @@ impl IbusSessionCore {
     pub fn poll_voice_cycle(&mut self) -> IbusKeyOutcome {
         let mut outcome = IbusKeyOutcome::default();
         let page_size = self.runtime.core.engine.config.page_size;
-        let orientation = self.candidate_orientation;
-        let index_style = self.candidate_index_style;
+        let orientation = self.runtime.candidate_orientation();
+        let index_style = self.runtime.candidate_index_style();
         let commit_opt = {
             let mut frontend = IbusFrontend {
                 outcome: &mut outcome,

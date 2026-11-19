@@ -132,15 +132,11 @@ impl IbusConfigReloader for DaemonIbusConfigReloader {
 
 /// 将统一配置包映射并应用到 IBus 核心会话中
 fn apply_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
-    core.set_candidate_index_style(cfg.ui.candidate_index_style);
-    core.set_candidate_orientation(cfg.ui.candidate_orientation);
     core.runtime_mut().reload_config(cfg);
 }
 
 /// 应用 IBus 会话启动阶段的初始配置（仅调用一次，负责初始化中英文模式）
 fn apply_initial_config_to_ibus_core(cfg: &AppConfig, core: &mut IbusSessionCore) {
-    core.set_candidate_index_style(cfg.ui.candidate_index_style);
-    core.set_candidate_orientation(cfg.ui.candidate_orientation);
     core.runtime_mut().apply_initial_config(cfg);
 }
 

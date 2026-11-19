@@ -121,8 +121,8 @@ impl IbusSessionCore {
         let is_password_or_locked = self.is_screen_locked || self.is_password_context;
         let surrounding = self.surrounding_text.clone();
         let page_size = self.runtime.core.engine.config.page_size;
-        let orientation = self.candidate_orientation;
-        let index_style = self.candidate_index_style;
+        let orientation = self.runtime.candidate_orientation();
+        let index_style = self.runtime.candidate_index_style();
 
         let (consumed, commit_text) = {
             let mut frontend = IbusFrontend {
