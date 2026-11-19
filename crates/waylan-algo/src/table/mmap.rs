@@ -373,6 +373,65 @@ impl CompactMmapLexicon {
         None
     }
 
+    /// 按指定 key_idx 零拷贝迭代前 `limit` 条候选（仅传递 mmap 内的 `&str` 切片与 `(score, word_id)`）
+    pub(crate) fn for_each_candidate_by_key_idx(
+        &self,
+        key_idx: usize,
+        expected_type: Option<u8>,
+        limit: Option<usize>,
+        mut visitor: impl FnMut(&str, u32, u32),
+    ) -> bool {
+        if key_idx >= self.num_keys {
+            return false;
+        }
+
+        let meta_pos = self
+            .key_metas_offset
+            .saturating_add(key_idx.saturating_mul(8));
+        let Some(meta_slice) = self.mmap.get(meta_pos..meta_pos.saturating_add(8)) else {
+            return false;
+        };
+        let Ok(cand_start_bytes) = meta_slice[0..4].try_into() else {
+            return false;
+        };
+        let Ok(cand_count_bytes) = meta_slice[4..6].try_into() else {
+            return false;
+        };
+        let cand_start = u32::from_le_bytes(cand_start_bytes) as usize;
+        let cand_count = u16::from_le_bytes(cand_count_bytes) as usize;
+        let key_type = meta_slice[6];
+
+        if let Some(exp_type) = expected_type {
+            if key_type != exp_type {
+                return false;
+            }
+        }
+
+        let take_count = limit.map_or(cand_count, |max_k| cand_count.min(max_k));
+        for i in 0..take_count {
+            let item_pos = self
+                .candidates_offset
+                .saturating_add(cand_start.saturating_add(i).saturating_mul(8));
+            let Some(item_slice) = self.mmap.get(item_pos..item_pos.saturating_add(8)) else {
+                return false;
+            };
+            let Ok(word_id_bytes) = item_slice[0..4].try_into() else {
+                return false;
+            };
+            let Ok(score_bytes) = item_slice[4..8].try_into() else {
+                return false;
+            };
+            let word_id = u32::from_le_bytes(word_id_bytes);
+            let score = u32::from_le_bytes(score_bytes);
+
+            if let Some(text) = self.get_word(word_id) {
+                visitor(text, score, word_id);
+            }
+        }
+
+        true
+    }
+
     /// 获取指定 key_idx 的候选列表（支持按需截取前 `limit` 条以减少无效堆分配，携带 word_id）
     pub(crate) fn get_candidates_by_key_idx(
         &self,
@@ -380,40 +439,14 @@ impl CompactMmapLexicon {
         expected_type: Option<u8>,
         limit: Option<usize>,
     ) -> Option<Vec<(String, u32, u32)>> {
-        if key_idx >= self.num_keys {
-            return None;
+        let mut res = Vec::with_capacity(limit.unwrap_or(16));
+        if self.for_each_candidate_by_key_idx(key_idx, expected_type, limit, |text, score, id| {
+            res.push((text.to_string(), score, id));
+        }) {
+            Some(res)
+        } else {
+            None
         }
-
-        let meta_pos = self
-            .key_metas_offset
-            .saturating_add(key_idx.saturating_mul(8));
-        let meta_slice = self.mmap.get(meta_pos..meta_pos.saturating_add(8))?;
-        let cand_start = u32::from_le_bytes(meta_slice[0..4].try_into().ok()?) as usize;
-        let cand_count = u16::from_le_bytes(meta_slice[4..6].try_into().ok()?) as usize;
-        let key_type = meta_slice[6];
-
-        if let Some(exp_type) = expected_type {
-            if key_type != exp_type {
-                return None;
-            }
-        }
-
-        let take_count = limit.map_or(cand_count, |max_k| cand_count.min(max_k));
-        let mut res = Vec::with_capacity(take_count);
-        for i in 0..take_count {
-            let item_pos = self
-                .candidates_offset
-                .saturating_add(cand_start.saturating_add(i).saturating_mul(8));
-            let item_slice = self.mmap.get(item_pos..item_pos.saturating_add(8))?;
-            let word_id = u32::from_le_bytes(item_slice[0..4].try_into().ok()?);
-            let score = u32::from_le_bytes(item_slice[4..8].try_into().ok()?);
-
-            if let Some(text) = self.get_word(word_id) {
-                res.push((text.to_string(), score, word_id));
-            }
-        }
-
-        Some(res)
     }
 
     /// 全拼检索（通过 DAT 精确匹配）

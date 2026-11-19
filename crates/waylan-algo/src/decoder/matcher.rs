@@ -10,7 +10,9 @@
 use std::sync::Arc;
 
 use super::alias::calibrate_habitual_alias_score;
+use super::beam_scoring::{compute_raw_match_score, RawScoreParams};
 use super::lattice::{EdgeKind, SyllableEdge, SyllableLattice};
+use super::weights::ScoringWeights;
 use crate::dat::{DatCursor, DatReader};
 use crate::pipeline::is_rare_ext_char;
 use crate::table::{CompactMmapLexicon, LexiconTable};
@@ -92,21 +94,90 @@ impl DatPhraseMatcher {
         table: &LexiconTable,
         options: &MatcherOptions,
     ) -> (Vec<PhraseMatch>, usize) {
+        let Some(mmap) = &table.compact_mmap else {
+            return (Vec::new(), start_pos);
+        };
+        let (raw, max_reach) = Self::collect_raw_matches(lattice, start_pos, mmap, options);
+        let results = materialize_raw_matches(mmap, start_pos, raw);
+        (results, max_reach)
+    }
+
+    /// 束搜索热路径专用：先对轻量索引结果执行生僻单字过滤、打分与 Top-48 截断，再惰性物化 `word: String`
+    ///
+    /// 当 `keep_start_extras` 为 `true` 时，额外保留覆盖全长整词与未容错无简拼的句首词段候选，
+    /// 供起始位置收集 `whole_words` 与 `prefix_word_matches`。
+    pub(super) fn match_ranked_from_with_reach(
+        lattice: &SyllableLattice,
+        start_pos: usize,
+        table: &LexiconTable,
+        options: &MatcherOptions,
+        weights: &ScoringWeights,
+        keep_start_extras: bool,
+    ) -> (Vec<PhraseMatch>, usize) {
+        let Some(mmap) = &table.compact_mmap else {
+            return (Vec::new(), start_pos);
+        };
+        let (mut raw, max_reach) = Self::collect_raw_matches(lattice, start_pos, mmap, options);
+        if raw.is_empty() {
+            return (Vec::new(), max_reach);
+        }
+
+        let target_len = lattice.len;
+        let has_common_at_end: Vec<usize> =
+            raw.iter().filter(|o| o.freq >= 10).map(|o| o.end).collect();
+
+        raw.retain(|m| {
+            let is_rare_single = m.syllable_count == 1
+                && m.freq < 10
+                && m.char_len == 1
+                && (start_pos > 0 || m.end < target_len);
+            if !is_rare_single {
+                return true;
+            }
+            !has_common_at_end.contains(&m.end)
+        });
+
+        raw.sort_by_key(|m| std::cmp::Reverse(score_raw_match(m, weights)));
+        if keep_start_extras {
+            let mut kept_top = 0usize;
+            raw.retain(|m| {
+                let is_start_extra = m.end == target_len
+                    || (m.end < target_len
+                        && m.syllable_count >= 2
+                        && m.typo_count == 0
+                        && !m.has_initial);
+                if kept_top < 48 {
+                    kept_top += 1;
+                    true
+                } else {
+                    is_start_extra
+                }
+            });
+        } else {
+            raw.truncate(48);
+        }
+
+        let results = materialize_raw_matches(mmap, start_pos, raw);
+        (results, max_reach)
+    }
+
+    fn collect_raw_matches(
+        lattice: &SyllableLattice,
+        start_pos: usize,
+        mmap: &CompactMmapLexicon,
+        options: &MatcherOptions,
+    ) -> (Vec<RawPhraseMatch>, usize) {
         let mut results = Vec::new();
         if start_pos >= lattice.len {
             return (results, start_pos);
         }
 
-        let Some(mmap) = &table.compact_mmap else {
-            return (results, start_pos);
-        };
         let reader = mmap.get_dat_reader();
         let mut ctx = DatSearchCtx {
             lattice,
             mmap,
             reader,
             options,
-            start_pos,
             max_reach: start_pos,
             key_buf: String::with_capacity(64),
             results: &mut results,
@@ -129,16 +200,72 @@ impl DatPhraseMatcher {
     }
 }
 
+/// 延迟物化的轻量词组匹配中间条目（不含 `word: String`，避免被剪枝候选产生堆分配）
+struct RawPhraseMatch {
+    end: usize,
+    word_id: u32,
+    char_len: u8,
+    freq: u32,
+    matched_key: Arc<str>,
+    syllable_count: usize,
+    typo_count: u8,
+    edge_cost: u32,
+    has_initial: bool,
+    has_partial_tail: bool,
+    is_exact_all: bool,
+}
+
+#[inline]
+fn score_raw_match(m: &RawPhraseMatch, weights: &ScoringWeights) -> i64 {
+    compute_raw_match_score(
+        RawScoreParams {
+            freq: m.freq,
+            char_len: m.char_len as usize,
+            edge_cost: m.edge_cost,
+            typo_count: m.typo_count,
+            has_initial: m.has_initial,
+            has_partial_tail: m.has_partial_tail,
+        },
+        weights,
+    )
+}
+
+fn materialize_raw_matches(
+    mmap: &CompactMmapLexicon,
+    start_pos: usize,
+    raw: Vec<RawPhraseMatch>,
+) -> Vec<PhraseMatch> {
+    let mut out = Vec::with_capacity(raw.len());
+    for r in raw {
+        if let Some(word) = mmap.get_word(r.word_id) {
+            out.push(PhraseMatch {
+                start: start_pos,
+                end: r.end,
+                word: word.to_string(),
+                word_id: Some(r.word_id),
+                freq: r.freq,
+                matched_key: r.matched_key,
+                syllable_count: r.syllable_count,
+                typo_count: r.typo_count,
+                edge_cost: r.edge_cost,
+                has_initial: r.has_initial,
+                has_partial_tail: r.has_partial_tail,
+                is_exact_all: r.is_exact_all,
+            });
+        }
+    }
+    out
+}
+
 struct DatSearchCtx<'a> {
     lattice: &'a SyllableLattice,
     mmap: &'a CompactMmapLexicon,
     reader: DatReader<'a>,
     options: &'a MatcherOptions,
-    start_pos: usize,
     max_reach: usize,
     /// DFS 共享可回溯拼音键拼接缓冲，消除每分支 Vec<String> 克隆与 join 堆分配
     key_buf: String,
-    results: &'a mut Vec<PhraseMatch>,
+    results: &'a mut Vec<RawPhraseMatch>,
 }
 
 #[derive(Clone, Copy)]
@@ -370,37 +497,38 @@ pub(super) struct MatchMeta {
 }
 
 fn emit_dat_candidates(ctx: &mut DatSearchCtx<'_>, key_idx: usize, meta: MatchMeta) {
-    let Some(entries) =
-        ctx.mmap
-            .get_candidates_by_key_idx(key_idx, Some(0), Some(ctx.options.top_k_per_key))
-    else {
-        return;
-    };
     let mut shared_key: Option<Arc<str>> = None;
-    for (word, raw_score, word_id) in entries {
-        if ctx.options.filter_rare_ext_chars && is_rare_ext_char(&word) {
-            continue;
-        }
-        let matched_key =
-            Arc::clone(shared_key.get_or_insert_with(|| Arc::from(ctx.key_buf.as_str())));
-        let freq = if meta.has_habitual_alias {
-            calibrate_habitual_alias_score(raw_score, word.chars().count() == 1)
-        } else {
-            raw_score
-        };
-        ctx.results.push(PhraseMatch {
-            start: ctx.start_pos,
-            end: meta.end,
-            word,
-            word_id: Some(word_id),
-            freq,
-            matched_key,
-            syllable_count: meta.syllable_count,
-            typo_count: meta.typo_count,
-            edge_cost: meta.edge_cost,
-            has_initial: meta.has_initial,
-            has_partial_tail: meta.has_partial_tail,
-            is_exact_all: meta.is_exact_all,
-        });
-    }
+    let key_buf_str = ctx.key_buf.as_str();
+    let results = &mut *ctx.results;
+    let filter_rare = ctx.options.filter_rare_ext_chars;
+    ctx.mmap.for_each_candidate_by_key_idx(
+        key_idx,
+        Some(0),
+        Some(ctx.options.top_k_per_key),
+        |word, raw_score, word_id| {
+            if filter_rare && is_rare_ext_char(word) {
+                return;
+            }
+            let matched_key = Arc::clone(shared_key.get_or_insert_with(|| Arc::from(key_buf_str)));
+            let char_count = word.chars().count();
+            let freq = if meta.has_habitual_alias {
+                calibrate_habitual_alias_score(raw_score, char_count == 1)
+            } else {
+                raw_score
+            };
+            results.push(RawPhraseMatch {
+                end: meta.end,
+                word_id,
+                char_len: char_count.min(u8::MAX as usize) as u8,
+                freq,
+                matched_key,
+                syllable_count: meta.syllable_count,
+                typo_count: meta.typo_count,
+                edge_cost: meta.edge_cost,
+                has_initial: meta.has_initial,
+                has_partial_tail: meta.has_partial_tail,
+                is_exact_all: meta.is_exact_all,
+            });
+        },
+    );
 }

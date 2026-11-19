@@ -71,6 +71,36 @@ pub(super) fn prune_beam_slot(
     *slot = kept;
 }
 
+/// 原始轻量词匹配打分参数（用于延迟物化前排序截断）
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RawScoreParams {
+    pub freq: u32,
+    pub char_len: usize,
+    pub edge_cost: u32,
+    pub typo_count: u8,
+    pub has_initial: bool,
+    pub has_partial_tail: bool,
+}
+
+/// 在延迟物化前基于纯数值元数据计算词组匹配排序分
+#[inline]
+pub(super) fn compute_raw_match_score(params: RawScoreParams, weights: &ScoringWeights) -> i64 {
+    let length_bonus = (params.char_len as i64 - 1).saturating_mul(weights.length_bonus_per_char);
+    let mut penalty = (params.edge_cost as i64).saturating_mul(weights.typo_cost_penalty as i64);
+    if params.typo_count > 0 {
+        penalty = penalty.saturating_add((params.typo_count as i64) * TYPO_BASE_PENALTY);
+    }
+    if params.has_initial {
+        penalty = penalty.saturating_add(INITIAL_MIX_PENALTY);
+    }
+    if params.has_partial_tail {
+        penalty = penalty.saturating_add(
+            (weights.partial_extension_penalty as i64) * 100 + PARTIAL_TAIL_BASE_PENALTY,
+        );
+    }
+    unigram_log_score(params.freq) + length_bonus - penalty
+}
+
 /// 计算单条词边的基础转移代价（纠错/混简拼/半成品惩罚）
 #[inline]
 pub(super) fn compute_edge_penalty(pm: &PhraseMatch, weights: &ScoringWeights) -> i64 {

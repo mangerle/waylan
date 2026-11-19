@@ -228,17 +228,19 @@ fn init_beam_from_cache(
             }
             continue;
         }
-        let (mut fresh, reach) = DatPhraseMatcher::match_from_with_reach(
+        let (mut fresh, reach) = DatPhraseMatcher::match_ranked_from_with_reach(
             ctx.lattice,
             pos,
             ctx.table,
             &ctx.options.matcher_options,
+            &ctx.options.weights,
+            pos == ctx.start_pos,
         );
         pos_max_reach[pos] = reach;
         if pos == ctx.start_pos {
             collect_start_matches(&fresh, len, whole_words, prefix_word_matches, true);
+            filter_and_rank_matches(&mut fresh, len, &ctx.options.weights);
         }
-        filter_and_rank_matches(&mut fresh, len, &ctx.options.weights);
         merge_crossing_matches(&mut spans_by_pos[pos], fresh, freeze_pos);
 
         let (left, right) = beam.split_at_mut(pos + 1);
@@ -346,11 +348,13 @@ fn advance_beam(
             &ws.spans_by_pos,
             ctx.seed_word,
         );
-        let (mut matches, reach) = DatPhraseMatcher::match_from_with_reach(
+        let (mut matches, reach) = DatPhraseMatcher::match_ranked_from_with_reach(
             ctx.lattice,
             pos,
             ctx.table,
             &ctx.options.matcher_options,
+            &ctx.options.weights,
+            pos == ctx.start_pos,
         );
         ws.pos_max_reach[pos] = reach;
         if matches.is_empty() {
@@ -359,9 +363,9 @@ fn advance_beam(
 
         if pos == ctx.start_pos {
             collect_start_matches(&matches, len, whole_words, prefix_word_matches, true);
+            filter_and_rank_matches(&mut matches, len, &ctx.options.weights);
         }
 
-        filter_and_rank_matches(&mut matches, len, &ctx.options.weights);
         ws.spans_by_pos[pos] = matches;
 
         let (left, right) = ws.beam.split_at_mut(pos + 1);
