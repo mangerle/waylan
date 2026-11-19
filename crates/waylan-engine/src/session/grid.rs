@@ -16,6 +16,7 @@ const MAX_GRID_CANDIDATES: usize = 30;
 impl ImeCoreSession {
     /// 展开 5 行网格大候选词面板（严格互斥：在类型上自动收起二级卡片）
     pub fn expand_grid(&mut self) {
+        self.engine.prepare_candidates_up_to(MAX_GRID_CANDIDATES);
         self.expansion = CandidateExpansion::Grid {
             selected_index: self
                 .selected_global_index()

@@ -52,6 +52,7 @@ impl AlgoEngine {
     /// 清空所有候选词缓存与预编辑内容
     fn clear_candidates_and_preedit(&mut self) {
         self.candidates.clear();
+        self.prepared_up_to = 0;
         self.composition.clear_cached_preedit();
     }
 
@@ -154,7 +155,7 @@ impl AlgoEngine {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let mut candidates = CandidatePipeline::process_all_with_opencc(
+        let mut candidates = CandidatePipeline::process_core_with_opencc(
             raw_candidates,
             &self.config,
             self.config
@@ -164,7 +165,12 @@ impl AlgoEngine {
 
         self.inject_page_zero_extensions(raw_input, &best_units, &mut candidates);
 
-        for cand in &mut candidates {
+        // 仅对首页可见窗口预先执行拼音注释挂载与 consumed_len 计算，其余页延迟至翻页/展开时按需处理
+        let initial_window = self.config.page_size.max(7).min(candidates.len());
+        if self.config.show_pinyin_comment {
+            CandidatePipeline::decorate_comments(&mut candidates[..initial_window]);
+        }
+        for cand in &mut candidates[..initial_window] {
             if cand.consumed_len.is_none() {
                 cand.consumed_len = Some(Self::calculate_consumed_len(
                     raw_input,
@@ -176,5 +182,35 @@ impl AlgoEngine {
         let mut recycled = std::mem::replace(&mut self.candidates, candidates);
         recycled.clear();
         self.scratch_candidates = recycled;
+        self.prepared_up_to = initial_window;
+    }
+
+    /// 按需补齐 `[0..end]` 范围内候选词的拼音注释与消费长度标记（供翻页与大网格展开调用）
+    pub fn prepare_candidates_up_to(&mut self, end: usize) {
+        let target = end.min(self.candidates.len());
+        if target <= self.prepared_up_to {
+            return;
+        }
+        let start = self.prepared_up_to;
+        if self.config.show_pinyin_comment {
+            CandidatePipeline::decorate_comments(&mut self.candidates[start..target]);
+        }
+        let raw_input = self.composition.as_str();
+        let best_units: Vec<&str> = self
+            .composition
+            .cached_preedit()
+            .split('\'')
+            .filter(|s| !s.is_empty())
+            .collect();
+        for cand in &mut self.candidates[start..target] {
+            if cand.consumed_len.is_none() {
+                cand.consumed_len = Some(Self::calculate_consumed_len(
+                    raw_input,
+                    &cand.pinyin,
+                    &best_units,
+                ));
+            }
+        }
+        self.prepared_up_to = target;
     }
 }

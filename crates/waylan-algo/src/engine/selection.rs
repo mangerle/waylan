@@ -50,6 +50,9 @@ impl AlgoEngine {
         if index >= self.candidates.len() {
             return None;
         }
+        if index >= self.prepared_up_to {
+            self.prepare_candidates_up_to(index + 1);
+        }
         let selected = self.candidates[index].clone();
         Some(self.commit_candidate_internal(selected, current_timestamp))
     }

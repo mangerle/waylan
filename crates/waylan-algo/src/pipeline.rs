@@ -44,8 +44,8 @@ impl CandidatePipeline {
         Self::process_with_opencc(raw_candidates, config, page_index, None)
     }
 
-    /// 执行完整候选词清洗与排序流水线，返回全量排序列（不执行分页截断）
-    pub fn process_all_with_opencc(
+    /// 执行候选词核心清洗、排序与去重流水线（不挂载拼音注释，供按页延迟装饰）
+    pub fn process_core_with_opencc(
         raw_candidates: Vec<AlgoCandidate>,
         config: &AlgoConfig,
         opencc: Option<&OpenCcDict>,
@@ -87,6 +87,17 @@ impl CandidatePipeline {
         if candidates.len() > MAX_PUBLISHED_CANDIDATES {
             candidates.truncate(MAX_PUBLISHED_CANDIDATES);
         }
+
+        candidates
+    }
+
+    /// 执行完整候选词清洗与排序流水线，返回全量排序列（不执行分页截断）
+    pub fn process_all_with_opencc(
+        raw_candidates: Vec<AlgoCandidate>,
+        config: &AlgoConfig,
+        opencc: Option<&OpenCcDict>,
+    ) -> Vec<AlgoCandidate> {
+        let mut candidates = Self::process_core_with_opencc(raw_candidates, config, opencc);
 
         // 5. 拼音注释挂载（仅对截断保留的有效候选窗口执行格式化）
         if config.show_pinyin_comment {
@@ -142,7 +153,7 @@ impl CandidatePipeline {
     }
 
     /// 挂载拼音注释
-    fn decorate_comments(candidates: &mut [AlgoCandidate]) {
+    pub(crate) fn decorate_comments(candidates: &mut [AlgoCandidate]) {
         for candidate in candidates.iter_mut() {
             if candidate.comment.is_none() && !candidate.pinyin.is_empty() {
                 candidate.comment = Some(format!("[{}]", candidate.pinyin));

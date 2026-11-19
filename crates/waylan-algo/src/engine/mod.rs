@@ -53,6 +53,8 @@ pub struct AlgoEngine {
     pub(crate) scratch_candidates: Vec<AlgoCandidate>,
     /// 按字节前缀冻结的增量束搜索解码缓存
     pub(crate) beam_cache: IncrementalBeamCache,
+    /// 已完成延迟后处理（拼音注释与消费长度标记）的候选前缀长度
+    pub(crate) prepared_up_to: usize,
 }
 
 impl AlgoEngine {
@@ -78,6 +80,7 @@ impl AlgoEngine {
             config,
             scratch_candidates: Vec::with_capacity(128),
             beam_cache: IncrementalBeamCache::new(),
+            prepared_up_to: 0,
         }
     }
 

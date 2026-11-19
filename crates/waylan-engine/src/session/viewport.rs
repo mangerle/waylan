@@ -120,6 +120,8 @@ impl ImeCoreSession {
     pub fn next_page(&mut self) -> &[Candidate] {
         if self.can_next_page() {
             self.page_index += 1;
+            let end = (self.page_index + 1).saturating_mul(self.page_size().max(1));
+            self.engine.prepare_candidates_up_to(end);
             self.selected_index = 0;
             self.collapse_card();
         }
