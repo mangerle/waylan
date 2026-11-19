@@ -48,6 +48,48 @@ struct ScelWordBatchParams<'a> {
 pub struct DictImporter;
 
 impl DictImporter {
+    /// 校验待导入文件体积不超过上限
+    fn ensure_file_within_size_limit(path: &Path) -> Result<(), DictImportError> {
+        let meta = fs::metadata(path).map_err(|e| DictImportError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        if meta.len() > MAX_IMPORT_FILE_BYTES {
+            return Err(DictImportError::FileTooLarge {
+                path: path.to_path_buf(),
+                limit_bytes: MAX_IMPORT_FILE_BYTES,
+                actual_bytes: meta.len(),
+            });
+        }
+        Ok(())
+    }
+
+    /// 零分配解析单行文本词条（支持 `\t` 分隔或空白分隔）
+    #[inline]
+    fn parse_entry_columns<'a>(
+        mut cols: impl Iterator<Item = &'a str>,
+    ) -> Option<ImportedDictEntry> {
+        let text = cols.next()?.trim();
+        let raw_pinyin = cols.next()?.trim();
+        let weight = cols
+            .next()
+            .and_then(|w| w.trim().parse::<u32>().ok())
+            .unwrap_or(100);
+
+        if text.is_empty() {
+            return None;
+        }
+        let pinyin = normalize_pinyin_tones(raw_pinyin);
+        if pinyin.is_empty() {
+            return None;
+        }
+        Some(ImportedDictEntry {
+            text: text.to_string(),
+            pinyin,
+            weight,
+        })
+    }
+
     /// 自动根据文件后缀解析导入词库文件
     ///
     /// # Errors
@@ -61,17 +103,7 @@ impl DictImporter {
 
         match extension.as_str() {
             "scel" => {
-                let meta = fs::metadata(path).map_err(|e| DictImportError::Io {
-                    path: path.to_path_buf(),
-                    source: e,
-                })?;
-                if meta.len() > MAX_IMPORT_FILE_BYTES {
-                    return Err(DictImportError::FileTooLarge {
-                        path: path.to_path_buf(),
-                        limit_bytes: MAX_IMPORT_FILE_BYTES,
-                        actual_bytes: meta.len(),
-                    });
-                }
+                Self::ensure_file_within_size_limit(path)?;
                 let data = fs::read(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
@@ -79,6 +111,7 @@ impl DictImporter {
                 Self::parse_sogou_scel(&data)
             }
             "yaml" | "yml" => {
+                Self::ensure_file_within_size_limit(path)?;
                 let content = fs::read_to_string(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
@@ -86,6 +119,7 @@ impl DictImporter {
                 Self::parse_rime_yaml(&content)
             }
             "txt" => {
+                Self::ensure_file_within_size_limit(path)?;
                 let content = fs::read_to_string(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
@@ -121,23 +155,8 @@ impl DictImporter {
                 continue;
             }
 
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 {
-                let text = parts[0].trim().to_string();
-                let pinyin = normalize_pinyin_tones(parts[1].trim());
-                let weight = if parts.len() >= 3 {
-                    parts[2].trim().parse::<u32>().unwrap_or(100)
-                } else {
-                    100
-                };
-
-                if !text.is_empty() && !pinyin.is_empty() {
-                    entries.push(ImportedDictEntry {
-                        text,
-                        pinyin,
-                        weight,
-                    });
-                }
+            if let Some(entry) = Self::parse_entry_columns(line.split('\t')) {
+                entries.push(entry);
             }
         }
 
@@ -153,28 +172,13 @@ impl DictImporter {
                 continue;
             }
 
-            let parts: Vec<&str> = if line.contains('\t') {
-                line.split('\t').collect()
+            let entry = if line.contains('\t') {
+                Self::parse_entry_columns(line.split('\t'))
             } else {
-                line.split_whitespace().collect()
+                Self::parse_entry_columns(line.split_whitespace())
             };
-
-            if parts.len() >= 2 {
-                let text = parts[0].trim().to_string();
-                let pinyin = normalize_pinyin_tones(parts[1].trim());
-                let weight = if parts.len() >= 3 {
-                    parts[2].trim().parse::<u32>().unwrap_or(100)
-                } else {
-                    100
-                };
-
-                if !text.is_empty() && !pinyin.is_empty() {
-                    entries.push(ImportedDictEntry {
-                        text,
-                        pinyin,
-                        weight,
-                    });
-                }
+            if let Some(entry) = entry {
+                entries.push(entry);
             }
         }
         Ok(entries)
