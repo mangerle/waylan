@@ -102,6 +102,21 @@ where
     (badge_offset, preedit_offset)
 }
 
+/// 根据展示开关拼接候选词与注释文本（无注释或关闭展示时零堆分配借用原切片）
+#[inline]
+pub(crate) fn format_candidate_text<'a>(cand: &'a Candidate, show_comment: bool) -> Cow<'a, str> {
+    if show_comment {
+        match cand.comment.as_deref() {
+            Some(comment) if !comment.is_empty() => {
+                Cow::Owned(format!("{} {}", cand.text, comment))
+            }
+            _ => Cow::Borrowed(cand.text.as_str()),
+        }
+    } else {
+        Cow::Borrowed(cand.text.as_str())
+    }
+}
+
 /// 测量单个候选条目的序号、注释、图标与文本宽度明细
 fn measure_candidate_item<F>(
     params: &CandidateItemMeasureParams<'_>,
@@ -117,16 +132,7 @@ where
     } else {
         measure_fn(&index_str, params.font_size * 0.85)
     };
-    let display_text: Cow<'_, str> = if params.show_comment {
-        match params.cand.comment.as_deref() {
-            Some(comment) if !comment.is_empty() => {
-                Cow::Owned(format!("{} {}", params.cand.text, comment))
-            }
-            _ => Cow::Borrowed(params.cand.text.as_str()),
-        }
-    } else {
-        Cow::Borrowed(params.cand.text.as_str())
-    };
+    let display_text = format_candidate_text(params.cand, params.show_comment);
     let text_width = measure_fn(&display_text, params.font_size);
     let icon_width = if params.cand.is_expandable {
         16.0 * s

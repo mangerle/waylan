@@ -34,7 +34,7 @@ impl Color {
 }
 
 /// 候选框界面主题配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UiTheme {
     /// 候选框背景色
     pub background: Color,

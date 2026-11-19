@@ -15,7 +15,7 @@ use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache};
 use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
 use font::FontManager;
 use glyph_blend::blend_swash_image;
-use layout::{CandidateHitTarget, HitRegion};
+use layout::{format_candidate_text, CandidateHitTarget, HitRegion};
 use measure_cache::{TextMeasureCache, TextShapeParams};
 use std::path::Path;
 use style::RendererStyle;
@@ -41,6 +41,17 @@ pub(crate) struct DrawTextOptions<'a> {
     pub color: Color,
 }
 
+/// 最近一次完整渲染的输入状态快照，用于对未变更状态直接复用缓存像素
+struct LastRenderSnapshot {
+    state: CandidateBoxState,
+    theme: UiTheme,
+    style: RendererStyle,
+    font_size_bits: u32,
+    scale_bits: u32,
+    width: u32,
+    height: u32,
+}
+
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
 pub struct CandidateBoxRenderer {
     pub theme: UiTheme,
@@ -56,6 +67,8 @@ pub struct CandidateBoxRenderer {
     hit_regions: Vec<HitRegion>,
     /// 复用的 Pixmap 像素缓冲区，避免高频渲染反复分配整块画布内存
     scratch_pixmap_buf: Vec<u8>,
+    /// 最近一次完整渲染快照（状态与样式均未变时直接复用缓冲，跳过重绘）
+    last_render_snapshot: Option<LastRenderSnapshot>,
 }
 
 impl CandidateBoxRenderer {
@@ -83,6 +96,7 @@ impl CandidateBoxRenderer {
             },
             hit_regions: Vec::with_capacity(36),
             scratch_pixmap_buf: Vec::new(),
+            last_render_snapshot: None,
         }
     }
 
@@ -106,12 +120,7 @@ impl CandidateBoxRenderer {
 
     /// 生成候选词的最终展示文本（按配置决定是否附加注释）
     pub(crate) fn display_text<'a>(&self, candidate: &'a Candidate) -> std::borrow::Cow<'a, str> {
-        match candidate.comment.as_deref() {
-            Some(comment) if self.style.show_pinyin_comment && !comment.is_empty() => {
-                std::borrow::Cow::Owned(format!("{} {}", candidate.text, comment))
-            }
-            _ => std::borrow::Cow::Borrowed(candidate.text.as_str()),
-        }
+        format_candidate_text(candidate, self.style.show_pinyin_comment)
     }
 
     /// 根据相对候选框表面左上角的物理像素坐标 (x, y) 执行命中测试，返回命中的操作目标
@@ -171,6 +180,7 @@ impl CandidateBoxRenderer {
     pub fn clear_glyph_cache(&mut self) {
         self.text_engine.swash_cache = SwashCache::new();
         self.text_engine.measure_cache.clear();
+        self.last_render_snapshot = None;
     }
 
     /// 测量一段文字的排版宽度（基于 cosmic-text 高级塑形与布局，复用 Buffer 与直接映射缓存消除多余塑形）
@@ -232,14 +242,52 @@ impl CandidateBoxRenderer {
     }
 
     /// 渲染当前候选框状态并将底层像素缓冲回收到渲染器中复用，返回 `(宽, 高, RGBA 切片)`
+    ///
+    /// 若输入状态与渲染样式参数均与上次一致，则直接复用已有像素缓冲，跳过全量清零与矢量重绘。
     pub fn render_rgba(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &[u8])> {
-        let pixmap = self.render(state)?;
+        let font_size_bits = self.font_size.to_bits();
+        let scale_bits = self.scale.to_bits();
+        if let Some(ref snap) = self.last_render_snapshot {
+            if snap.font_size_bits == font_size_bits
+                && snap.scale_bits == scale_bits
+                && snap.theme == self.theme
+                && snap.style == self.style
+                && snap.state == *state
+            {
+                if let Some(required) = (snap.width as usize)
+                    .checked_mul(snap.height as usize)
+                    .and_then(|px| px.checked_mul(4))
+                {
+                    if self.scratch_pixmap_buf.len() >= required {
+                        return Some((
+                            snap.width,
+                            snap.height,
+                            &self.scratch_pixmap_buf[..required],
+                        ));
+                    }
+                }
+            }
+        }
+
+        let Some(pixmap) = self.render(state) else {
+            self.last_render_snapshot = None;
+            return None;
+        };
         let width = pixmap.width();
         let height = pixmap.height();
         let required = (width as usize)
             .checked_mul(height as usize)?
             .checked_mul(4)?;
         self.scratch_pixmap_buf = pixmap.take();
+        self.last_render_snapshot = Some(LastRenderSnapshot {
+            state: state.clone(),
+            theme: self.theme.clone(),
+            style: self.style,
+            font_size_bits,
+            scale_bits,
+            width,
+            height,
+        });
         Some((width, height, &self.scratch_pixmap_buf[..required]))
     }
 
