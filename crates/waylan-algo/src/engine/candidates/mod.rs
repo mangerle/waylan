@@ -41,8 +41,9 @@ impl AlgoEngine {
         };
         self.composition.set_cached_preedit(preedit_str);
 
-        // 3. 收集多层级候选并叠加用户学习权重
-        let raw_candidates = self.collect_all_raw_candidates(&lattice, &decode);
+        // 3. 收集多层级候选并叠加用户学习权重（复用 scratch_candidates 容量）
+        let mut raw_candidates = std::mem::take(&mut self.scratch_candidates);
+        self.collect_all_raw_candidates_into(&lattice, &decode, &mut raw_candidates);
 
         // 4. 流水线后处理、零页扩展注入与候选发布
         self.finalize_and_publish_candidates(&decode, raw_candidates);
@@ -147,11 +148,10 @@ impl AlgoEngine {
         raw_candidates: Vec<AlgoCandidate>,
     ) {
         let raw_input = self.composition.as_str();
-        let best_units: Vec<String> = decode
+        let best_units: Vec<&str> = decode
             .best_preedit
             .split('\'')
             .filter(|s| !s.is_empty())
-            .map(str::to_string)
             .collect();
 
         let mut candidates = CandidatePipeline::process_all_with_opencc(
@@ -173,8 +173,8 @@ impl AlgoEngine {
                 ));
             }
         }
-
-        let old_cache = std::mem::replace(&mut self.candidates, candidates);
-        self.scratch_candidates = old_cache;
+        let mut recycled = std::mem::replace(&mut self.candidates, candidates);
+        recycled.clear();
+        self.scratch_candidates = recycled;
     }
 }

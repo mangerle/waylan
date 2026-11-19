@@ -18,7 +18,7 @@ impl AlgoEngine {
     pub(crate) fn inject_page_zero_extensions(
         &self,
         raw_input: &str,
-        best_units: &[String],
+        best_units: &[&str],
         candidates: &mut Vec<AlgoCandidate>,
     ) {
         // 1. 前缀高频短词混排注入（支持长句分段确认 Partial Commit）
@@ -78,7 +78,7 @@ impl AlgoEngine {
     fn extract_prefix_3_candidate(
         &self,
         raw_input: &str,
-        best_units: &[String],
+        best_units: &[&str],
     ) -> Option<AlgoCandidate> {
         if best_units.len() < 4 {
             return None;
@@ -102,7 +102,7 @@ impl AlgoEngine {
     fn extract_prefix_2_candidates(
         &self,
         raw_input: &str,
-        best_units: &[String],
+        best_units: &[&str],
     ) -> Vec<AlgoCandidate> {
         let mut prefix_items = Vec::new();
         if best_units.len() < 2 {
@@ -170,7 +170,7 @@ impl AlgoEngine {
     fn inject_prefix_segment_candidates(
         &self,
         raw_input: &str,
-        best_units: &[String],
+        best_units: &[&str],
         candidates: &mut Vec<AlgoCandidate>,
     ) {
         if best_units.len() < 3 {

@@ -12,7 +12,8 @@ fn test_acronym_candidates_respect_configuration() {
         disabled.push_char(ch);
     }
     let (lat_dis, dec_dis) = disabled.build_lattice_and_decode();
-    let raw = disabled.collect_all_raw_candidates(&lat_dis, &dec_dis);
+    let mut raw = Vec::new();
+    disabled.collect_all_raw_candidates_into(&lat_dis, &dec_dis, &mut raw);
     assert!(
         !raw.iter()
             .any(|c| c.tier == CandidateTier::Acronym && c.text == "北京"),
@@ -24,7 +25,7 @@ fn test_acronym_candidates_respect_configuration() {
         enabled.push_char(ch);
     }
     let (lat_en, dec_en) = enabled.build_lattice_and_decode();
-    let raw = enabled.collect_all_raw_candidates(&lat_en, &dec_en);
+    enabled.collect_all_raw_candidates_into(&lat_en, &dec_en, &mut raw);
     assert!(
         raw.iter()
             .any(|c| c.tier == CandidateTier::Acronym && c.text == "北京"),

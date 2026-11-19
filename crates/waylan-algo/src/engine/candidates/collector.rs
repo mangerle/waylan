@@ -30,14 +30,15 @@ fn has_clean_decode_anchor(decode: &DecodeResult) -> bool {
 }
 
 impl AlgoEngine {
-    /// 从统一解码结果及用户词库收集全量候选词
-    pub(crate) fn collect_all_raw_candidates(
+    /// 从统一解码结果及用户词库收集全量候选词到复用缓冲区
+    pub(crate) fn collect_all_raw_candidates_into(
         &self,
         lattice: &SyllableLattice,
         decode: &DecodeResult,
-    ) -> Vec<AlgoCandidate> {
+        all_candidates: &mut Vec<AlgoCandidate>,
+    ) {
+        all_candidates.clear();
         let raw_input = self.composition.as_str();
-        let mut all_candidates = Vec::with_capacity(64);
 
         // 1. 专名保护与受保护实体匹配
         if let Some(protected) = self.resources.entity_manager.match_exact(raw_input) {
@@ -55,24 +56,22 @@ impl AlgoEngine {
         }
 
         // 2. 收集统一束搜索整词匹配
-        self.collect_whole_word_candidates(raw_input, decode, &mut all_candidates);
+        self.collect_whole_word_candidates(raw_input, decode, all_candidates);
 
         // 3. 收集统一束搜索整句与句首词段（确保长句第 2 候选位稳定出现句首词段）
-        self.collect_sentence_and_head_candidates(raw_input, decode, &mut all_candidates);
+        self.collect_sentence_and_head_candidates(raw_input, decode, all_candidates);
 
         // 4. 用户自适应词典匹配
-        self.collect_user_adaptive_candidates(raw_input, decode, &mut all_candidates);
+        self.collect_user_adaptive_candidates(raw_input, decode, all_candidates);
 
         // 5. 纯简拼缩写与单声母/首音节单字兜底补全
-        self.collect_acronym_and_single_char_fallbacks(raw_input, lattice, &mut all_candidates);
+        self.collect_acronym_and_single_char_fallbacks(raw_input, lattice, all_candidates);
 
         // 5.5 未开启模糊音时，针对明显误拼的高频常用整词提供模糊音兜底（如 zidao -> 知道）
-        self.collect_fuzzy_fallback_candidates(raw_input, decode, &mut all_candidates);
+        self.collect_fuzzy_fallback_candidates(raw_input, decode, all_candidates);
 
         // 6. 叠加用户自适应词频权重、词对权重与上一轮上屏上下文
-        self.apply_user_and_context_boost(&mut all_candidates);
-
-        all_candidates
+        self.apply_user_and_context_boost(all_candidates);
     }
 
     /// 收集覆盖全输入的整词候选（精确整词、混简拼整词、半成品整词、容错整词）

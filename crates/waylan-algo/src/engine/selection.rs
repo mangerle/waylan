@@ -318,7 +318,7 @@ impl AlgoEngine {
     ///   每个候选词所消费的按键长度，并在候选词中记录 `consumed_len`。
     /// - **核心优势**：彻底消除用户选词上屏时重新调用 `PrismEngine::build_paths_with_entities`
     ///   求解音节图路径的微秒级延迟，将按键上屏关键交互路径耗时降为纯内存字段读取。
-    pub(crate) fn calculate_consumed_len(raw: &str, pinyin: &str, best_units: &[String]) -> usize {
+    pub(crate) fn calculate_consumed_len(raw: &str, pinyin: &str, best_units: &[&str]) -> usize {
         if raw.is_empty() {
             return 0;
         }
@@ -343,7 +343,7 @@ impl AlgoEngine {
             }
             if raw[pos..].starts_with(cs) {
                 pos += cs.len();
-            } else if i < best_units.len() && raw[pos..].starts_with(best_units[i].as_str()) {
+            } else if i < best_units.len() && raw[pos..].starts_with(best_units[i]) {
                 pos += best_units[i].len();
             } else {
                 let first_len = cs.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
