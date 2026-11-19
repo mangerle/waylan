@@ -24,6 +24,7 @@ pub use item::StatusNotifierItem;
 
 /// 托盘后台事件循环参数包
 struct TrayLoopParams {
+    config: AppConfig,
     shared_flags: SharedInputFlags,
     reload_requested: Arc<AtomicBool>,
     coordinator: ShutdownCoordinator,
@@ -46,9 +47,14 @@ pub struct TrayService {
 }
 
 impl TrayService {
-    /// 使用停机协调器启动后台系统托盘常驻服务
+    /// 使用停机协调器启动后台系统托盘常驻服务（从磁盘加载配置）
     pub fn spawn(coordinator: ShutdownCoordinator) -> Self {
         let config = AppConfig::load_or_create();
+        Self::spawn_with_config(&config, coordinator)
+    }
+
+    /// 使用已加载的配置与停机协调器启动后台系统托盘常驻服务（消除重复磁盘配置解析）
+    pub fn spawn_with_config(config: &AppConfig, coordinator: ShutdownCoordinator) -> Self {
         let shared_flags = SharedInputFlags::new(
             config.pinyin.init_chinese,
             config.pinyin.traditional_chinese,
@@ -59,6 +65,7 @@ impl TrayService {
         let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(64);
 
         let params = TrayLoopParams {
+            config: config.clone(),
             shared_flags: shared_flags.clone(),
             reload_requested: Arc::clone(&reload_requested),
             coordinator: coordinator.clone(),
@@ -130,12 +137,11 @@ impl TrayService {
 
     /// 初始化 StatusNotifierItem 与 DBusMenu 实例
     fn init_tray_objects(params: &TrayLoopParams) -> (StatusNotifierItem, DBusMenu) {
-        let config = AppConfig::load_or_create();
         let loop_wakeup = params.coordinator.loop_wakeup();
         let sni = StatusNotifierItem::new(
             params.shared_flags.clone(),
             params.icon_update_tx.clone(),
-            &config,
+            &params.config,
             loop_wakeup,
         );
         let menu = DBusMenu::new(DBusMenuOptions {

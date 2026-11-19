@@ -197,7 +197,10 @@ fn dispatch_active_session(
     let should_spawn_tray = determine_tray_should_spawn(&cfg, use_ibus);
 
     let tray = if should_spawn_tray {
-        Some(tray::TrayService::spawn(coordinator.clone()))
+        Some(tray::TrayService::spawn_with_config(
+            &cfg,
+            coordinator.clone(),
+        ))
     } else {
         None
     };
