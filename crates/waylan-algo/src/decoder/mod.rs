@@ -18,8 +18,10 @@ pub mod fsa;
 pub mod fuzzy;
 pub mod language_model;
 pub mod lattice;
+mod lattice_types;
 mod lattice_typo;
 pub mod matcher;
+mod matcher_rank;
 pub mod weights;
 
 pub use beam::{

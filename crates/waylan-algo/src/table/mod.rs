@@ -6,10 +6,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub mod mmap;
+mod mmap_header;
 mod prefix;
 mod sample;
 
-pub use mmap::{CompactMmapLexicon, COMPACT_DICT_MAGIC};
+pub use mmap::CompactMmapLexicon;
+pub use mmap_header::COMPACT_DICT_MAGIC;
 
 /// 词长加权分基数（每增加一字长度提权 600,000 分，确保长词优先于单字短词）
 pub const LENGTH_BOOST_MULTIPLIER: u32 = 600_000;
