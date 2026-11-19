@@ -341,10 +341,8 @@ impl CandidateSurfaceManager {
             return None;
         }
 
-        // 1. 调用矢量渲染器绘制候选框位图
-        let pixmap = self.renderer.render(state)?;
-        let width = pixmap.width();
-        let height = pixmap.height();
+        // 1. 调用矢量渲染器绘制候选框位图（复用渲染器内部像素缓冲，消除跨帧大块内存重分配）
+        let (width, height, _) = self.renderer.render_rgba(state)?;
         self.on_input_active(width, height);
 
         let required_bytes = (width as usize)
@@ -358,8 +356,9 @@ impl CandidateSurfaceManager {
         }
 
         // 3. 复用持久映射句柄零拷贝写入像素数据，消除中间堆内存中转与重复 seek+write_all 内核拷贝
+        let rgba = self.renderer.last_rgba_slice(required_bytes)?;
         let slot = self.shm_slots[self.current_slot].as_mut()?;
-        if Self::write_rgba_to_slot(slot, pixmap.data()).is_none() {
+        if Self::write_rgba_to_slot(slot, rgba).is_none() {
             warn!(
                 "[悬浮窗口] 写入候选框共享内存失败，槽位: {}",
                 self.current_slot

@@ -118,13 +118,17 @@ fn resolve_voice_leading_width(effect: VoiceVisualEffect, wave_total_w: f32, s: 
 }
 
 /// 创建语音胶囊栏画布（画布尺寸非法时返回 None）
-fn create_voice_capsule_pixmap(total_bar_width: f32, bar_height: f32) -> Option<Pixmap> {
+fn create_voice_capsule_pixmap(
+    renderer: &mut CandidateBoxRenderer,
+    total_bar_width: f32,
+    bar_height: f32,
+) -> Option<Pixmap> {
     let canvas_w = total_bar_width.ceil() as u32;
     let canvas_h = bar_height.ceil() as u32;
     if canvas_w == 0 || canvas_h == 0 {
         return None;
     }
-    Pixmap::new(canvas_w, canvas_h)
+    renderer.allocate_pixmap(canvas_w, canvas_h)
 }
 
 /// 绘制语音胶囊栏外层圆角卡片背景
@@ -328,7 +332,7 @@ pub fn render_voice_capsule_bar(
     let text_w = renderer.measure_text(voice_text, metrics.font_size);
     let total_bar_width = (metrics.padding_h * 2.0 + leading_width + text_w).max(140.0 * s);
 
-    let mut pixmap = create_voice_capsule_pixmap(total_bar_width, metrics.bar_height)?;
+    let mut pixmap = create_voice_capsule_pixmap(renderer, total_bar_width, metrics.bar_height)?;
 
     draw_voice_capsule_background(&mut pixmap, &renderer.theme, &metrics, total_bar_width);
 

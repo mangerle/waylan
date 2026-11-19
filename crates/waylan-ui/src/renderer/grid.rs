@@ -67,7 +67,7 @@ pub fn render_grid_expanded_panel(
     let clamped_h = dims.total_height.ceil().clamp(1.0, 2048.0) as u32;
     let canvas_w = clamped_w.div_ceil(align).saturating_mul(align);
     let canvas_h = clamped_h.div_ceil(align).saturating_mul(align);
-    let mut pixmap = Pixmap::new(canvas_w, canvas_h)?;
+    let mut pixmap = renderer.allocate_pixmap(canvas_w, canvas_h)?;
 
     // 绘制大面板圆角卡片背景
     draw_card_background_at(

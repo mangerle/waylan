@@ -54,6 +54,8 @@ pub struct CandidateBoxRenderer {
     text_engine: TextEngineState,
     /// 最近一次渲染生成的鼠标可点击命中测试区域列表
     hit_regions: Vec<HitRegion>,
+    /// 复用的 Pixmap 像素缓冲区，避免高频渲染反复分配整块画布内存
+    scratch_pixmap_buf: Vec<u8>,
 }
 
 impl CandidateBoxRenderer {
@@ -80,6 +82,7 @@ impl CandidateBoxRenderer {
                 measure_cache: TextMeasureCache::new(),
             },
             hit_regions: Vec::with_capacity(36),
+            scratch_pixmap_buf: Vec::new(),
         }
     }
 
@@ -216,6 +219,36 @@ impl CandidateBoxRenderer {
         }
     }
 
+    /// 按给定尺寸分配或复用底层缓冲区的透明 Pixmap 画布
+    pub(crate) fn allocate_pixmap(&mut self, width: u32, height: u32) -> Option<Pixmap> {
+        let required = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        let size = tiny_skia::IntSize::from_wh(width, height)?;
+        let mut buf = std::mem::take(&mut self.scratch_pixmap_buf);
+        buf.clear();
+        buf.resize(required, 0);
+        Pixmap::from_vec(buf, size)
+    }
+
+    /// 渲染当前候选框状态并将底层像素缓冲回收到渲染器中复用，返回 `(宽, 高, RGBA 切片)`
+    pub fn render_rgba(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &[u8])> {
+        let pixmap = self.render(state)?;
+        let width = pixmap.width();
+        let height = pixmap.height();
+        let required = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        self.scratch_pixmap_buf = pixmap.take();
+        Some((width, height, &self.scratch_pixmap_buf[..required]))
+    }
+
+    /// 获取最近一次 `render_rgba` 产出的底层像素只读切片（用于避免调用方不相交字段借用冲突）
+    #[inline]
+    pub fn last_rgba_slice(&self, required_bytes: usize) -> Option<&[u8]> {
+        self.scratch_pixmap_buf.get(..required_bytes)
+    }
+
     /// 渲染单行胶囊候选栏及二级展开浮层卡片
     pub fn render(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
         match state.view() {
@@ -255,7 +288,7 @@ impl CandidateBoxRenderer {
     /// 渲染单行胶囊候选栏，并在存在活动子候选时叠加二级展开浮层卡片
     fn render_capsule_with_popup(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
         let geom = self.calculate_geometry(state)?;
-        let mut pixmap = Pixmap::new(geom.canvas_w, geom.canvas_h)?;
+        let mut pixmap = self.allocate_pixmap(geom.canvas_w, geom.canvas_h)?;
 
         let mut regions = capsule::render_capsule_bar(
             self,
