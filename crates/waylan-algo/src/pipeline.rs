@@ -60,24 +60,35 @@ impl CandidatePipeline {
             candidates.retain(|c| !is_rare_ext_char(&c.text));
         }
 
-        // 2. 简繁体转换（基于 STPhrases 正向最大匹配 FMM + STCharacters 单字表及一简多繁展开）
+        // 2. 预排序并限制进入简繁转换与注释装饰的最大候选窗口，避免短拼长尾候选触发无谓开销
+        //    先按 Tier 与得分降序排列，保留前 160 条高价值候选再执行简繁展开与去重
+        const MAX_PRE_OPENCC_CANDIDATES: usize = 160;
+        const MAX_PUBLISHED_CANDIDATES: usize = 120;
+        candidates.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| b.score.cmp(&a.score)));
+        if candidates.len() > MAX_PRE_OPENCC_CANDIDATES {
+            candidates.truncate(MAX_PRE_OPENCC_CANDIDATES);
+        }
+
+        // 3. 简繁体转换（基于 STPhrases 正向最大匹配 FMM + STCharacters 单字表及一简多繁展开）
         if config.traditional_chinese {
             if let Some(dict) = opencc {
                 dict.convert_candidates(&mut candidates);
             } else {
                 OpenCcDict::global().convert_candidates(&mut candidates);
             }
+            // 一简多繁展开可能引入新顺序，重排确保同层级得分有序
+            candidates.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| b.score.cmp(&a.score)));
         }
-
-        // 3. 多级综合排序：先比对优先级层级 Tier（成词 > 用户自造 > 拼句 > 前缀），同层级比对综合 score
-        candidates.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| b.score.cmp(&a.score)));
 
         // 4. 候选词去重（在有序列表中保留最高优先级与最高分者）
         if config.auto_dedup {
             candidates = Self::deduplicate(candidates);
         }
+        if candidates.len() > MAX_PUBLISHED_CANDIDATES {
+            candidates.truncate(MAX_PUBLISHED_CANDIDATES);
+        }
 
-        // 5. 拼音注释挂载
+        // 5. 拼音注释挂载（仅对截断保留的有效候选窗口执行格式化）
         if config.show_pinyin_comment {
             Self::decorate_comments(&mut candidates);
         }
