@@ -79,6 +79,7 @@ pub(super) struct StopCommitContext<'a> {
 pub(super) struct ActiveRecordingContext<'a> {
     pub capture: Option<AudioCapture>,
     pub pcm_rx: Receiver<Vec<f32>>,
+    pub recycle_tx: SyncSender<Vec<f32>>,
     pub cmd_rx: &'a Receiver<WorkerCommand>,
     pub event_tx: &'a SyncSender<VoiceEvent>,
     pub visualizer: &'a mut WaveformVisualizer,

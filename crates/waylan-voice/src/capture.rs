@@ -7,7 +7,7 @@
 //! - **代价与局限**：线性重采样相比高阶带通 sinc 插值开销更低，但高频部分有轻微滤波失真，完全满足语音识别需求。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -145,6 +145,15 @@ impl AudioCapture {
         pcm_sender: SyncSender<Vec<f32>>,
         target_device: Option<&str>,
     ) -> Result<Self, VoiceError> {
+        Self::start_with_device_and_recycle(pcm_sender, None, target_device)
+    }
+
+    /// 启动指定名称或默认麦克风的音频捕获，并挂载 PCM 缓冲回收通道以消除实时音频回调中的堆分配
+    pub fn start_with_device_and_recycle(
+        pcm_sender: SyncSender<Vec<f32>>,
+        recycle_receiver: Option<Receiver<Vec<f32>>>,
+        target_device: Option<&str>,
+    ) -> Result<Self, VoiceError> {
         let (device, device_name) = Self::select_input_device(target_device)?;
         info!("[语音采集] 正在初始化音频捕获设备: {}", device_name);
 
@@ -160,6 +169,7 @@ impl AudioCapture {
             is_stream_dead: is_stream_dead.clone(),
             dropped_chunks: dropped_chunks.clone(),
             pcm_sender,
+            recycle_receiver,
         })?;
 
         stream.play().map_err(|e| VoiceError::StreamStartFailed {
@@ -239,8 +249,12 @@ impl AudioCapture {
     ) -> Result<cpal::Stream, VoiceError> {
         let channels = params.config.channels;
         let native_sample_rate = params.config.sample_rate.0;
-        let mut pipeline =
-            build_capture_pipeline(native_sample_rate, params.pcm_sender, params.dropped_chunks);
+        let mut pipeline = build_capture_pipeline(
+            native_sample_rate,
+            params.pcm_sender,
+            params.recycle_receiver,
+            params.dropped_chunks,
+        );
         let err_fn = build_stream_error_callback(params.is_stream_dead);
 
         match params.sample_format {
@@ -312,12 +326,15 @@ struct InputStreamParams<'a> {
     dropped_chunks: Arc<AtomicU64>,
     /// 重采样后 PCM 帧投递通道
     pcm_sender: SyncSender<Vec<f32>>,
+    /// 下游处理完毕归还的空闲 PCM 缓冲区回收通道
+    recycle_receiver: Option<Receiver<Vec<f32>>>,
 }
 
 /// 构造音频回调复用的重采样管道工作区
 fn build_capture_pipeline(
     native_sample_rate: u32,
     pcm_sender: SyncSender<Vec<f32>>,
+    recycle_receiver: Option<Receiver<Vec<f32>>>,
     dropped_chunks: Arc<AtomicU64>,
 ) -> CapturePipeline {
     CapturePipeline {
@@ -325,6 +342,7 @@ fn build_capture_pipeline(
         mono_buf: Vec::with_capacity(1024),
         resampled_buf: Vec::with_capacity(1024),
         pcm_sender,
+        recycle_receiver,
         dropped_chunks,
     }
 }
@@ -345,6 +363,7 @@ struct CapturePipeline {
     mono_buf: Vec<f32>,
     resampled_buf: Vec<f32>,
     pcm_sender: SyncSender<Vec<f32>>,
+    recycle_receiver: Option<Receiver<Vec<f32>>>,
     dropped_chunks: Arc<AtomicU64>,
 }
 
@@ -380,7 +399,17 @@ impl CapturePipeline {
             let chunk = std::mem::take(&mut self.resampled_buf);
             match self.pcm_sender.try_send(chunk) {
                 Ok(()) => {
-                    self.resampled_buf.reserve(1024);
+                    // 优先从回收池领取下游已处理完毕的空闲 Vec，避免实时音频线程频繁堆分配
+                    if let Some(mut recycled) = self
+                        .recycle_receiver
+                        .as_ref()
+                        .and_then(|rx| rx.try_recv().ok())
+                    {
+                        recycled.clear();
+                        self.resampled_buf = recycled;
+                    } else {
+                        self.resampled_buf.reserve(1024);
+                    }
                 }
                 Err(std::sync::mpsc::TrySendError::Full(chunk)) => {
                     self.resampled_buf = chunk;

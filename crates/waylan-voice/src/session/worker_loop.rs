@@ -146,8 +146,15 @@ fn handle_start_command(
     state.visualizer.reset();
 
     let (pcm_tx, pcm_rx) = sync_channel::<Vec<f32>>(32);
-    let capture = match AudioCapture::start_with_device(
+    let (recycle_tx, recycle_rx) = sync_channel::<Vec<f32>>(32);
+    // 预填充 8 块空闲缓冲区至回收池，使录音首帧即零堆分配
+    for _ in 0..8 {
+        let _ = recycle_tx.try_send(Vec::with_capacity(1024));
+    }
+
+    let capture = match AudioCapture::start_with_device_and_recycle(
         pcm_tx,
+        Some(recycle_rx),
         options.voice_config.device_name.as_deref(),
     ) {
         Ok(c) => c,
@@ -163,6 +170,7 @@ fn handle_start_command(
     active_recording_loop(ActiveRecordingContext {
         capture: Some(capture),
         pcm_rx,
+        recycle_tx,
         cmd_rx: state.cmd_rx,
         event_tx: &event_tx,
         visualizer: state.visualizer,

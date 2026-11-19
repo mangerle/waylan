@@ -256,11 +256,15 @@ fn process_pcm_chunk(
     let rms = calculate_rms(&samples);
 
     // 刷新动态波形条（约 80ms 间隔，仅在开启浮动条时上报）
-    if !refresh_waveform_visual(rms, now, state, ctx) {
-        return false;
+    let mut keep_running = refresh_waveform_visual(rms, now, state, ctx);
+    if keep_running {
+        keep_running = feed_vad_and_recognition(&samples, now, state, ctx);
     }
 
-    feed_vad_and_recognition(&samples, now, state, ctx)
+    // 处理完毕后清空并归还缓冲区至音频采集线程复用池，避免实时音频回调持续分配内存
+    samples.clear();
+    let _ = ctx.recycle_tx.try_send(samples);
+    keep_running
 }
 
 /// 处理 VAD 检测到的人声停顿自动断句提交，返回是否继续录音
