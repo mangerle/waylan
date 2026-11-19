@@ -100,8 +100,23 @@ pub(super) fn filter_and_truncate_raw_matches(
     weights: &ScoringWeights,
     keep_start_extras: bool,
 ) {
-    let has_common_at_end: Vec<usize> =
-        raw.iter().filter(|o| o.freq >= 10).map(|o| o.end).collect();
+    // 常规输入（<= 63 字节）使用栈上 u64 位图完成 O(1) 零堆分配判定；超长输入回退布尔表
+    let mut common_mask: u64 = 0;
+    let mut common_overflow: Vec<bool> = Vec::new();
+    let use_mask = target_len < 64;
+    if !use_mask {
+        common_overflow.resize(target_len + 1, false);
+    }
+
+    for o in raw.iter() {
+        if o.freq >= 10 {
+            if use_mask {
+                common_mask |= 1u64 << o.end;
+            } else if let Some(slot) = common_overflow.get_mut(o.end) {
+                *slot = true;
+            }
+        }
+    }
 
     raw.retain(|m| {
         let is_rare_single = m.syllable_count == 1
@@ -111,7 +126,12 @@ pub(super) fn filter_and_truncate_raw_matches(
         if !is_rare_single {
             return true;
         }
-        !has_common_at_end.contains(&m.end)
+        let has_common = if use_mask {
+            (common_mask & (1u64 << m.end)) != 0
+        } else {
+            common_overflow.get(m.end).copied().unwrap_or(false)
+        };
+        !has_common
     });
 
     raw.sort_by_key(|m| std::cmp::Reverse(score_raw_match(m, weights)));

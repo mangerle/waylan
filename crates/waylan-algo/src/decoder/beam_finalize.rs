@@ -68,8 +68,8 @@ fn collect_decoded_sentences(
     spans_by_pos: &[Vec<PhraseMatch>],
     options: &BeamDecodeOptions<'_>,
 ) -> Vec<DecodedSentence> {
-    let mut sentences = Vec::with_capacity(end_slot.len().min(options.max_sentences));
-    let mut seen_texts: Vec<String> = Vec::with_capacity(options.max_sentences);
+    let mut sentences: Vec<DecodedSentence> =
+        Vec::with_capacity(end_slot.len().min(options.max_sentences));
 
     let mut sorted_end = end_slot.to_vec();
     sorted_end.sort_by_key(|a| std::cmp::Reverse(a.score));
@@ -91,10 +91,9 @@ fn collect_decoded_sentences(
             .iter()
             .map(|&(p, idx)| spans_by_pos[p][idx].word.as_str())
             .collect();
-        if seen_texts.contains(&text) {
+        if sentences.iter().any(|s| s.text == text) {
             continue;
         }
-        seen_texts.push(text.clone());
 
         let mut pinyin = String::new();
         for (i, &(p, idx)) in refs.iter().enumerate() {
@@ -166,15 +165,19 @@ fn build_prefix_heads(
     heads
 }
 
-/// 按词面文本去重（保留排序靠前的高分匹配）
+/// 按词面文本原地去重（保留排序靠前的高分匹配，零堆分配与克隆）
 fn dedup_phrase_matches(matches: &mut Vec<PhraseMatch>) {
-    let mut seen: Vec<String> = Vec::with_capacity(matches.len());
-    matches.retain(|m| {
-        if seen.contains(&m.word) {
-            false
-        } else {
-            seen.push(m.word.clone());
-            true
+    let mut write_idx = 0usize;
+    for read_idx in 0..matches.len() {
+        let is_dup = matches[..write_idx]
+            .iter()
+            .any(|prev| prev.word == matches[read_idx].word);
+        if !is_dup {
+            if write_idx != read_idx {
+                matches.swap(write_idx, read_idx);
+            }
+            write_idx += 1;
         }
-    });
+    }
+    matches.truncate(write_idx);
 }
