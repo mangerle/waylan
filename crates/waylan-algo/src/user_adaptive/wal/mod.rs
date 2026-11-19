@@ -53,11 +53,22 @@ pub struct UserDictAppendParams<'a> {
     pub timestamp: u64,
 }
 
+/// 已打开的 WAL 追加句柄及其底层文件标识（缓存 dev/ino 以省去每次写入时的 fstat 调用）
+#[derive(Debug)]
+struct OpenedWalFile {
+    path: PathBuf,
+    file: File,
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+}
+
 /// 用户词库预写日志（WAL）与磁盘文件持久化管理器
 #[derive(Debug)]
 pub struct UserAdaptiveWal {
-    /// 常驻保持的 WAL 日志追加写入文件句柄（消除每次选词时的重复 open/stat/close 系统调用）
-    wal_file: Mutex<Option<(PathBuf, File)>>,
+    /// 常驻保持的 WAL 日志追加写入文件句柄（消除每次选词时的重复 open/fstat/close 系统调用）
+    wal_file: Mutex<Option<OpenedWalFile>>,
     /// 运行期向 WAL 追加记录的计数器（用于触发周期性自动压缩）
     wal_append_counter: usize,
     /// 触发自动压缩的追加条数阈值（默认为 1000 条）
@@ -131,21 +142,21 @@ impl UserAdaptiveWal {
     /// 判断磁盘上的 WAL 文件是否与当前管理器持有的常驻追加句柄指向同一底层文件（相同 inode 且长度一致）
     pub fn is_same_wal_file(&self, path: &Path) -> bool {
         let guard = self.wal_file.lock();
-        let Some((ref opened_path, ref opened_file)) = *guard else {
+        let Some(ref opened) = *guard else {
             return false;
         };
-        if opened_path != path {
+        if opened.path != path {
             return false;
         }
-        let (Ok(opened_meta), Ok(disk_meta)) = (opened_file.metadata(), std::fs::metadata(path))
+        let (Ok(opened_meta), Ok(disk_meta)) = (opened.file.metadata(), std::fs::metadata(path))
         else {
             return false;
         };
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            opened_meta.dev() == disk_meta.dev()
-                && opened_meta.ino() == disk_meta.ino()
+            opened.dev == disk_meta.dev()
+                && opened.ino == disk_meta.ino()
                 && opened_meta.len() == disk_meta.len()
         }
         #[cfg(not(unix))]
@@ -154,31 +165,25 @@ impl UserAdaptiveWal {
         }
     }
 
-    /// 判断已打开的文件是否与目标磁盘文件一致，需要重新打开
-    fn check_need_reopen(current_opt: Option<&(PathBuf, File)>, target_path: &Path) -> bool {
-        match current_opt {
-            Some((current_path, opened_file)) => {
-                if current_path != target_path {
-                    true
-                } else {
-                    match (opened_file.metadata(), std::fs::metadata(target_path)) {
-                        (Ok(opened_meta), Ok(disk_meta)) => {
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::MetadataExt;
-                                opened_meta.dev() != disk_meta.dev()
-                                    || opened_meta.ino() != disk_meta.ino()
-                            }
-                            #[cfg(not(unix))]
-                            {
-                                false
-                            }
-                        }
-                        _ => true,
-                    }
-                }
+    /// 判断已打开的文件是否与目标磁盘文件一致，需要重新打开（仅需单次路径 stat 对比缓存 inode）
+    fn check_need_reopen(current_opt: Option<&OpenedWalFile>, target_path: &Path) -> bool {
+        let Some(opened) = current_opt else {
+            return true;
+        };
+        if opened.path != target_path {
+            return true;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            match std::fs::metadata(target_path) {
+                Ok(disk_meta) => opened.dev != disk_meta.dev() || opened.ino != disk_meta.ino(),
+                Err(_) => true,
             }
-            None => true,
+        }
+        #[cfg(not(unix))]
+        {
+            !target_path.exists()
         }
     }
 
@@ -206,10 +211,28 @@ impl UserAdaptiveWal {
             self.upgrade_legacy_wal(model, path_ref)?;
         }
 
-        let mut guard = self.wal_file.lock();
         let file = Self::open_wal_append_file(path_ref)?;
+        #[cfg(unix)]
+        let (dev, ino) = {
+            use std::os::unix::fs::MetadataExt;
+            let meta = file
+                .metadata()
+                .map_err(|e| AlgoError::UserDictPersistFailed {
+                    path: PathBuf::from(path_ref),
+                    source: e,
+                })?;
+            (meta.dev(), meta.ino())
+        };
 
-        *guard = Some((PathBuf::from(path_ref), file));
+        let mut guard = self.wal_file.lock();
+        *guard = Some(OpenedWalFile {
+            path: PathBuf::from(path_ref),
+            file,
+            #[cfg(unix)]
+            dev,
+            #[cfg(unix)]
+            ino,
+        });
         Ok(())
     }
 
@@ -324,8 +347,10 @@ impl UserAdaptiveWal {
         self.ensure_wal_file_opened(model, path_ref)?;
 
         let mut guard = self.wal_file.lock();
-        if let Some((_, ref mut file)) = *guard {
-            file.write_all(frame_buf)
+        if let Some(ref mut opened) = *guard {
+            opened
+                .file
+                .write_all(frame_buf)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: PathBuf::from(path_ref),
                     source: e,
