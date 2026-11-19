@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use log::{info, warn};
 use waylan_core::{AppConfig, SharedInputFlags, VoiceProvider};
-use waylan_engine::{AlgoEngine, ImeRuntime};
+use waylan_engine::AlgoEngine;
 use waylan_sys::{FileSignature, LoopWakeup};
 use waylan_ui::CandidateBoxRenderer;
 use wayland_client::globals::registry_queue_init;
@@ -25,7 +25,9 @@ use wayland_client::Connection;
 use self::globals::{bind_session_v1_globals, bind_session_v2_globals};
 use self::poll::run_session_loop_step;
 use crate::error::WaylandRunnerError;
-use crate::session_common::{apply_session_setup, SessionSetupOptions, SessionSetupTargets};
+use crate::session_common::{
+    apply_session_setup, SessionSetupOptions, SessionSetupTargets, WaylandSessionLifecycle,
+};
 use crate::session_v1::{WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext};
 use crate::session_v2::WaylanV2Session;
 
@@ -105,57 +107,13 @@ pub fn run_session_v2_loop(session: WaylanV2Session) -> Result<(), WaylandRunner
     run_session_v2_loop_fallible(session).map_err(|(e, _)| e)
 }
 
-/// 抽象具备热重载与表面刷新能力的 Wayland 会话接口
-pub trait ReloadableWaylandSession {
-    /// 获取候选框渲染器的可变引用
-    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer;
-    /// 获取输入法运行时的可变引用
-    fn runtime_mut(&mut self) -> &mut ImeRuntime;
-    /// 触发刷新候选框悬浮表面
-    fn refresh_surface(&mut self);
-}
-
-impl ReloadableWaylandSession for WaylanV1Session {
-    #[inline]
-    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
-        &mut self.surface.surface_manager.renderer
-    }
-
-    #[inline]
-    fn runtime_mut(&mut self) -> &mut ImeRuntime {
-        &mut self.runtime
-    }
-
-    #[inline]
-    fn refresh_surface(&mut self) {
-        self.refresh_candidate_surface();
-    }
-}
-
-impl ReloadableWaylandSession for WaylanV2Session {
-    #[inline]
-    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer {
-        &mut self.surface.surface_manager.renderer
-    }
-
-    #[inline]
-    fn runtime_mut(&mut self) -> &mut ImeRuntime {
-        &mut self.runtime
-    }
-
-    #[inline]
-    fn refresh_surface(&mut self) {
-        self.refresh_candidate_surface();
-    }
-}
-
 /// 执行通用的 Wayland 会话运行配置与词库热重载
-pub fn reload_wayland_session<S: ReloadableWaylandSession>(session: &mut S) {
-    let cfg = session.runtime_mut().reload_from_disk();
+pub fn reload_wayland_session<S: WaylandSessionLifecycle>(session: &mut S) {
+    let cfg = session.runtime().reload_from_disk();
     session
         .renderer_mut()
         .apply_ui_config(&cfg.ui, cfg.ui.theme);
-    if !session.runtime_mut().core.engine.raw_input().is_empty() {
+    if !session.runtime().core.engine.raw_input().is_empty() {
         session.refresh_surface();
     }
 }

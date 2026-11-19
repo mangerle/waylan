@@ -113,4 +113,14 @@ impl WaylandSessionLifecycle for WaylanV2Session {
     fn on_english_mode_switch(&mut self) {
         self.cancel_input();
     }
+
+    #[inline]
+    fn renderer_mut(&mut self) -> &mut waylan_ui::CandidateBoxRenderer {
+        &mut self.surface.surface_manager.renderer
+    }
+
+    #[inline]
+    fn refresh_surface(&mut self) {
+        self.refresh_candidate_surface();
+    }
 }

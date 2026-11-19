@@ -133,6 +133,12 @@ pub trait WaylandSessionLifecycle: Sized {
     /// 拼音组合期间切换到英文模式时的协议侧清理动作
     fn on_english_mode_switch(&mut self);
 
+    /// 获取候选框矢量渲染器的可变引用
+    fn renderer_mut(&mut self) -> &mut CandidateBoxRenderer;
+
+    /// 刷新候选框悬浮表面
+    fn refresh_surface(&mut self);
+
     /// 同步外部系统托盘状态、配置热重载与文件变更
     fn sync_external_state(&mut self) {
         let label = self.session_label();

@@ -229,6 +229,16 @@ impl WaylandSessionLifecycle for WaylanV1Session {
             ctx.preedit_string(self.protocol.commit_serial, String::new(), String::new());
         }
     }
+
+    #[inline]
+    fn renderer_mut(&mut self) -> &mut waylan_ui::CandidateBoxRenderer {
+        &mut self.surface.surface_manager.renderer
+    }
+
+    #[inline]
+    fn refresh_surface(&mut self) {
+        self.refresh_candidate_surface();
+    }
 }
 
 // 为 zwp_input_method_v1 实现事件分发
