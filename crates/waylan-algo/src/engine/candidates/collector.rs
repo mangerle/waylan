@@ -152,7 +152,7 @@ impl AlgoEngine {
 
         Some(AlgoCandidate {
             text: pm.word.clone(),
-            pinyin: pm.matched_key.clone(),
+            pinyin: pm.matched_key.to_string(),
             score,
             comment,
             tier,

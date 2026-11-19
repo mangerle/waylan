@@ -109,7 +109,7 @@ fn collect_decoded_sentences(
             .unwrap_or_default();
         let first_word_pinyin = refs
             .first()
-            .map(|&(p, idx)| spans_by_pos[p][idx].matched_key.clone())
+            .map(|&(p, idx)| spans_by_pos[p][idx].matched_key.to_string())
             .unwrap_or_default();
 
         sentences.push(DecodedSentence {
@@ -155,7 +155,7 @@ fn build_prefix_heads(
         }
         heads.push(SentenceHeadSegment {
             text: pm.word.clone(),
-            pinyin: pm.matched_key.clone(),
+            pinyin: pm.matched_key.to_string(),
             consumed_len: pm.end,
             score: score_phrase_match(pm, weights),
         });

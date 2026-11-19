@@ -7,6 +7,8 @@
 //! - **核心优势**：零多余堆分配，无效前缀在 Trie 层立即剪枝；全量检索与测试均统一运行在零拷贝 DAT 视图上。
 //! - **代价与局限**：单次词匹配最多跨越 6 个音节与 4 个混简拼步进，以防止极端输入组合扩散。
 
+use std::sync::Arc;
+
 use super::alias::calibrate_habitual_alias_score;
 use super::lattice::{EdgeKind, SyllableEdge, SyllableLattice};
 use crate::dat::{DatCursor, DatReader};
@@ -26,8 +28,8 @@ pub struct PhraseMatch {
     pub word_id: Option<u32>,
     /// 词条词频（经惯用音/长度校准前或后的词频得分）
     pub freq: u32,
-    /// 命中的规范拼音键（如 `"wan'quan'ke'yi"`）
-    pub matched_key: String,
+    /// 命中的规范拼音键（如 `"wan'quan'ke'yi"`），同键多词条共享同一底层切片
+    pub matched_key: Arc<str>,
     /// 覆盖音节数
     pub syllable_count: usize,
     /// 消耗的纠错次数
@@ -106,6 +108,7 @@ impl DatPhraseMatcher {
             options,
             start_pos,
             max_reach: start_pos,
+            key_buf: String::with_capacity(64),
             results: &mut results,
         };
         let state = DatWalkState {
@@ -119,7 +122,6 @@ impl DatPhraseMatcher {
             has_partial_tail: false,
             is_exact_all: true,
             has_habitual_alias: false,
-            key_parts: Vec::with_capacity(6),
         };
         dfs_dat_match(&mut ctx, state);
         let max_reach = ctx.max_reach;
@@ -134,10 +136,12 @@ struct DatSearchCtx<'a> {
     options: &'a MatcherOptions,
     start_pos: usize,
     max_reach: usize,
+    /// DFS 共享可回溯拼音键拼接缓冲，消除每分支 Vec<String> 克隆与 join 堆分配
+    key_buf: String,
     results: &'a mut Vec<PhraseMatch>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct DatWalkState {
     pos: usize,
     cursor: DatCursor,
@@ -149,7 +153,6 @@ struct DatWalkState {
     has_partial_tail: bool,
     is_exact_all: bool,
     has_habitual_alias: bool,
-    key_parts: Vec<String>,
 }
 
 fn dfs_dat_match(ctx: &mut DatSearchCtx<'_>, state: DatWalkState) {
@@ -174,19 +177,22 @@ fn dfs_dat_match(ctx: &mut DatSearchCtx<'_>, state: DatWalkState) {
 
 fn handle_dat_standard_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edge: &SyllableEdge) {
     let mut cursor = state.cursor;
-    let mut next_parts = state.key_parts.clone();
+    let saved_len = ctx.key_buf.len();
     for (idx, syl) in edge.syllables.iter().enumerate() {
         if state.syl_count + idx > 0 {
             let Some(sep_c) = cursor.step_byte(&ctx.reader, b'\'') else {
+                ctx.key_buf.truncate(saved_len);
                 return;
             };
             cursor = sep_c;
+            ctx.key_buf.push('\'');
         }
         let Some(syl_c) = cursor.step_str(&ctx.reader, syl) else {
+            ctx.key_buf.truncate(saved_len);
             return;
         };
         cursor = syl_c;
-        next_parts.push(syl.to_string());
+        ctx.key_buf.push_str(syl);
     }
 
     ctx.max_reach = ctx.max_reach.max(edge.end);
@@ -197,13 +203,11 @@ fn handle_dat_standard_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, ed
     let has_alias = state.has_habitual_alias || edge.kind == EdgeKind::RuleNormalized;
 
     if let Some(key_idx) = cursor.terminal_value(&ctx.reader) {
-        let matched_key = next_parts.join("'");
         emit_dat_candidates(
             ctx,
             key_idx as usize,
             MatchMeta {
                 end: edge.end,
-                matched_key,
                 syllable_count: next_syl_count,
                 typo_count: next_typo,
                 edge_cost: next_cost,
@@ -230,10 +234,10 @@ fn handle_dat_standard_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, ed
                 has_partial_tail: state.has_partial_tail,
                 is_exact_all: is_exact,
                 has_habitual_alias: has_alias,
-                key_parts: next_parts,
             },
         );
     }
+    ctx.key_buf.truncate(saved_len);
 }
 
 fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edge: &SyllableEdge) {
@@ -259,19 +263,20 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
     let next_pos = ctx.lattice.skip_separators(edge.end);
     let next_cost = state.edge_cost.saturating_add(edge.cost);
     let next_syl_count = state.syl_count + 1;
+    let saved_len = ctx.key_buf.len();
 
     for (syl, next_cursor) in branches {
-        let mut next_parts = state.key_parts.clone();
-        next_parts.push(syl);
+        if state.syl_count > 0 {
+            ctx.key_buf.push('\'');
+        }
+        ctx.key_buf.push_str(&syl);
         if next_syl_count >= 2 {
             if let Some(key_idx) = next_cursor.terminal_value(&ctx.reader) {
-                let matched_key = next_parts.join("'");
                 emit_dat_candidates(
                     ctx,
                     key_idx as usize,
                     MatchMeta {
                         end: edge.end,
-                        matched_key,
                         syllable_count: next_syl_count,
                         typo_count: state.typo_count,
                         edge_cost: next_cost,
@@ -297,10 +302,10 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
                     has_partial_tail: state.has_partial_tail,
                     is_exact_all: false,
                     has_habitual_alias: state.has_habitual_alias,
-                    key_parts: next_parts,
                 },
             );
         }
+        ctx.key_buf.truncate(saved_len);
     }
 }
 
@@ -323,20 +328,22 @@ fn handle_dat_partial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
 
     let next_cost = state.edge_cost.saturating_add(edge.cost);
     let next_syl_count = state.syl_count + 1;
+    let saved_len = ctx.key_buf.len();
 
     for (syl, next_cursor) in branches {
         if syl.len() <= partial_prefix.len() {
             continue;
         }
         if let Some(key_idx) = next_cursor.terminal_value(&ctx.reader) {
-            let mut next_parts = state.key_parts.clone();
-            next_parts.push(syl);
+            if state.syl_count > 0 {
+                ctx.key_buf.push('\'');
+            }
+            ctx.key_buf.push_str(&syl);
             emit_dat_candidates(
                 ctx,
                 key_idx as usize,
                 MatchMeta {
                     end: edge.end,
-                    matched_key: next_parts.join("'"),
                     syllable_count: next_syl_count,
                     typo_count: state.typo_count,
                     edge_cost: next_cost,
@@ -346,13 +353,13 @@ fn handle_dat_partial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
                     has_habitual_alias: state.has_habitual_alias,
                 },
             );
+            ctx.key_buf.truncate(saved_len);
         }
     }
 }
 
 pub(super) struct MatchMeta {
     pub end: usize,
-    pub matched_key: String,
     pub syllable_count: usize,
     pub typo_count: u8,
     pub edge_cost: u32,
@@ -369,10 +376,13 @@ fn emit_dat_candidates(ctx: &mut DatSearchCtx<'_>, key_idx: usize, meta: MatchMe
     else {
         return;
     };
+    let mut shared_key: Option<Arc<str>> = None;
     for (word, raw_score, word_id) in entries {
         if ctx.options.filter_rare_ext_chars && is_rare_ext_char(&word) {
             continue;
         }
+        let matched_key =
+            Arc::clone(shared_key.get_or_insert_with(|| Arc::from(ctx.key_buf.as_str())));
         let freq = if meta.has_habitual_alias {
             calibrate_habitual_alias_score(raw_score, word.chars().count() == 1)
         } else {
@@ -384,7 +394,7 @@ fn emit_dat_candidates(ctx: &mut DatSearchCtx<'_>, key_idx: usize, meta: MatchMe
             word,
             word_id: Some(word_id),
             freq,
-            matched_key: meta.matched_key.clone(),
+            matched_key,
             syllable_count: meta.syllable_count,
             typo_count: meta.typo_count,
             edge_cost: meta.edge_cost,
