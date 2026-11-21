@@ -351,9 +351,9 @@ fn decode_connected_fallback(
 fn append_english_lexicon_edges(
     lattice: &SyllableLattice,
     pos: usize,
+    eng: &EnglishSuggestionManager,
     matches: &mut Vec<PhraseMatch>,
 ) {
-    let eng = EnglishSuggestionManager::active_or_default();
     let hits = eng.match_exact_prefixes(&lattice.raw[pos..], 3, 24);
     for (orig_word, eng_freq, byte_len) in hits {
         let slice = &lattice.raw[pos..pos + byte_len];
@@ -441,6 +441,7 @@ fn advance_beam(
     } else {
         ctx.options.beam_width
     };
+    let english_suggester = EnglishSuggestionManager::active_or_default();
     for pos in ws.loop_start..len {
         ws.arena_len_before_pos[pos] = ws.node_arena.len();
         let next_non_sep = ctx.lattice.skip_separators(pos);
@@ -476,7 +477,7 @@ fn advance_beam(
             pos == ctx.start_pos,
         );
         ws.pos_max_reach[pos] = reach;
-        append_english_lexicon_edges(ctx.lattice, pos, &mut matches);
+        append_english_lexicon_edges(ctx.lattice, pos, &english_suggester, &mut matches);
         if fallback_mode {
             append_fallback_edges(ctx.lattice, pos, &mut matches);
         }
