@@ -347,7 +347,26 @@ fn decode_connected_fallback(
     )
 }
 
+/// 非合法汉语拼音的高频技术英文短词集合（免切中英混输场景给予优先权重）
+const HIGH_FREQ_TECH_WORDS: &[&str] = &[
+    "api", "bug", "cli", "cpu", "css", "dns", "docker", "git", "gpu", "html", "ide", "json", "jwt",
+    "linux", "python", "rpc", "rust", "sdk", "sql", "ssh", "tcp", "tls", "toml", "udp", "url",
+    "vim", "yaml",
+];
+
+/// 判断英文词条是否为高频技术短词（忽略大小写）
+#[inline]
+fn is_high_freq_tech_word(slice: &str) -> bool {
+    HIGH_FREQ_TECH_WORDS
+        .iter()
+        .any(|w| w.eq_ignore_ascii_case(slice))
+}
+
 /// 在词图当前位置注入高频英文词库边，实现免切中英混输（如 woxiangqugoogle -> 我想去google）
+///
+/// # 防截胡与提权策略
+/// 1. 若同跨度已命中高频精确中文词（如 `pinyin` -> “拼音”），禁止英文边截胡中文；
+/// 2. 对非合法拼音的高频技术短词（如 `bug`、`api`、`git`）给予零边惩罚与高频提权，避免被中文碎词吞没。
 fn append_english_lexicon_edges(
     lattice: &SyllableLattice,
     pos: usize,
@@ -355,21 +374,76 @@ fn append_english_lexicon_edges(
     matches: &mut Vec<PhraseMatch>,
 ) {
     let hits = eng.match_exact_prefixes(&lattice.raw[pos..], 3, 24);
+    let mut added_tech_end: Option<usize> = None;
     for (orig_word, eng_freq, byte_len) in hits {
-        let slice = &lattice.raw[pos..pos + byte_len];
-        if is_valid_syllable(slice) || (byte_len <= 5 && can_segment_into_syllables(slice)) {
+        let end = pos + byte_len;
+        let slice = &lattice.raw[pos..end];
+        let is_tech = is_high_freq_tech_word(slice);
+        if is_valid_syllable(slice)
+            || (!is_tech && byte_len <= 6 && can_segment_into_syllables(slice))
+        {
+            continue;
+        }
+        // 若同跨度已存在无容错、无简拼的高频精确中文词（如 pinyin -> 拼音），禁止英文边截胡
+        let blocked_by_chinese = matches.iter().any(|m| {
+            m.end == end && m.is_exact_all && m.typo_count == 0 && !m.has_initial && m.freq >= 500
+        });
+        if blocked_by_chinese {
+            continue;
+        }
+        if is_tech {
+            added_tech_end = Some(end);
+        }
+        matches.push(PhraseMatch {
+            start: pos,
+            end,
+            word: orig_word.to_string(),
+            word_id: None,
+            freq: if is_tech {
+                eng_freq.max(80_000)
+            } else {
+                eng_freq.max(10_000)
+            },
+            matched_key: Arc::from(slice),
+            syllable_count: 1,
+            typo_count: 0,
+            edge_cost: if is_tech { 0 } else { 12 },
+            has_initial: false,
+            has_partial_tail: false,
+            is_exact_all: false,
+        });
+    }
+
+    // 保底兜底：即使未加载外部 aux.dict，也确保内置高频技术短词（如 bug/api/git）可参与混输
+    for &tech in HIGH_FREQ_TECH_WORDS {
+        let tlen = tech.len();
+        if pos + tlen > lattice.len {
+            continue;
+        }
+        let end = pos + tlen;
+        if added_tech_end == Some(end) {
+            continue;
+        }
+        let slice = &lattice.raw[pos..end];
+        if !slice.eq_ignore_ascii_case(tech) {
+            continue;
+        }
+        if matches
+            .iter()
+            .any(|m| m.end == end && m.word.eq_ignore_ascii_case(tech))
+        {
             continue;
         }
         matches.push(PhraseMatch {
             start: pos,
-            end: pos + byte_len,
-            word: orig_word.to_string(),
+            end,
+            word: tech.to_string(),
             word_id: None,
-            freq: eng_freq.max(10_000),
+            freq: 80_000,
             matched_key: Arc::from(slice),
             syllable_count: 1,
             typo_count: 0,
-            edge_cost: 12,
+            edge_cost: 0,
             has_initial: false,
             has_partial_tail: false,
             is_exact_all: false,

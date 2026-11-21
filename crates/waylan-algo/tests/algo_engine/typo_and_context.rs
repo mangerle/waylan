@@ -317,3 +317,37 @@ fn test_engine_mixed_english_and_erhua_and_reranker() {
     let cands_wanren = engine.candidates();
     assert_eq!(cands_wanren[0].text, "万人");
 }
+
+#[test]
+fn test_engine_mixed_english_guard_pinyin_and_boost_bug() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table_mut().insert("qing", "请", 70_000);
+    engine.table_mut().insert("shu'ru", "输入", 80_000);
+    engine.table_mut().insert("wan'zheng", "完整", 75_000);
+    engine.table_mut().insert("de", "的", 95_000);
+    engine.table_mut().insert("pin'yin", "拼音", 85_000);
+    engine.table_mut().insert("wo'men", "我们", 90_000);
+    engine.table_mut().insert("xu'yao", "需要", 85_000);
+    engine.table_mut().insert("ba", "把", 80_000);
+    engine.table_mut().insert("zhe'ge", "这个", 88_000);
+    engine.table_mut().insert("xiu'fu", "修复", 78_000);
+    engine.table_mut().insert("diao", "掉", 65_000);
+    engine.table_mut().insert("bu", "不", 90_000);
+
+    // 1. 高频中文词“拼音”绝不被英文词表中的 pinyin 截胡
+    for ch in "qingshuruwanzhengdepinyin".chars() {
+        engine.push_char(ch);
+    }
+    let cands_py = engine.candidates();
+    assert!(!cands_py.is_empty());
+    assert_eq!(cands_py[0].text, "请输入完整的拼音");
+
+    // 2. 高频短 IT 词 bug 应在中文长句中准确召回
+    engine.reset();
+    for ch in "womenxuyaobazhegebugxiufudiao".chars() {
+        engine.push_char(ch);
+    }
+    let cands_bug = engine.candidates();
+    assert!(!cands_bug.is_empty());
+    assert_eq!(cands_bug[0].text, "我们需要把这个bug修复掉");
+}
