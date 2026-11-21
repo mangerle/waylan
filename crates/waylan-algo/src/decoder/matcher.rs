@@ -101,6 +101,7 @@ impl DatPhraseMatcher {
             options,
             max_reach: start_pos,
             key_buf: String::with_capacity(64),
+            branch_pool: Vec::with_capacity(128),
             results: &mut results,
         };
         let state = DatWalkState {
@@ -129,6 +130,8 @@ struct DatSearchCtx<'a> {
     max_reach: usize,
     /// DFS 共享可回溯拼音键拼接缓冲，消除每分支 Vec<String> 克隆与 join 堆分配
     key_buf: String,
+    /// DFS 共享分支缓冲池，消除递归展开 Initial/PartialTail 时的 Vec 堆分配
+    branch_pool: Vec<(String, DatCursor)>,
     results: &'a mut Vec<RawPhraseMatch>,
 }
 
@@ -245,9 +248,10 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
         };
         cursor = sep_c;
     }
-    let mut branches = Vec::with_capacity(32);
-    cursor.collect_syllable_branches(&ctx.reader, initial, 32, &mut branches);
-    if !branches.is_empty() {
+    let base_idx = ctx.branch_pool.len();
+    cursor.collect_syllable_branches(&ctx.reader, initial, 32, &mut ctx.branch_pool);
+    let end_idx = ctx.branch_pool.len();
+    if end_idx > base_idx {
         ctx.max_reach = ctx.max_reach.max(edge.end);
     }
 
@@ -256,11 +260,12 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
     let next_syl_count = state.syl_count + 1;
     let saved_len = ctx.key_buf.len();
 
-    for (syl, next_cursor) in branches {
+    for idx in base_idx..end_idx {
+        let next_cursor = ctx.branch_pool[idx].1;
         if state.syl_count > 0 {
             ctx.key_buf.push('\'');
         }
-        ctx.key_buf.push_str(&syl);
+        ctx.key_buf.push_str(&ctx.branch_pool[idx].0);
         if next_syl_count >= 2 {
             if let Some(key_idx) = next_cursor.terminal_value(&ctx.reader) {
                 emit_dat_candidates(
@@ -298,6 +303,7 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
         }
         ctx.key_buf.truncate(saved_len);
     }
+    ctx.branch_pool.truncate(base_idx);
 }
 
 fn handle_dat_partial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edge: &SyllableEdge) {
@@ -314,22 +320,24 @@ fn handle_dat_partial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
         };
         cursor = sep_c;
     }
-    let mut branches = Vec::with_capacity(32);
-    cursor.collect_syllable_branches(&ctx.reader, partial_prefix, 32, &mut branches);
+    let base_idx = ctx.branch_pool.len();
+    cursor.collect_syllable_branches(&ctx.reader, partial_prefix, 32, &mut ctx.branch_pool);
+    let end_idx = ctx.branch_pool.len();
 
     let next_cost = state.edge_cost.saturating_add(edge.cost);
     let next_syl_count = state.syl_count + 1;
     let saved_len = ctx.key_buf.len();
 
-    for (syl, next_cursor) in branches {
-        if syl.len() <= partial_prefix.len() {
+    for idx in base_idx..end_idx {
+        if ctx.branch_pool[idx].0.len() <= partial_prefix.len() {
             continue;
         }
+        let next_cursor = ctx.branch_pool[idx].1;
         if let Some(key_idx) = next_cursor.terminal_value(&ctx.reader) {
             if state.syl_count > 0 {
                 ctx.key_buf.push('\'');
             }
-            ctx.key_buf.push_str(&syl);
+            ctx.key_buf.push_str(&ctx.branch_pool[idx].0);
             emit_dat_candidates(
                 ctx,
                 key_idx as usize,
@@ -347,6 +355,7 @@ fn handle_dat_partial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
             ctx.key_buf.truncate(saved_len);
         }
     }
+    ctx.branch_pool.truncate(base_idx);
 }
 
 pub(super) struct MatchMeta {
