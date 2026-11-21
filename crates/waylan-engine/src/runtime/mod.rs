@@ -42,6 +42,8 @@ pub struct ImeRuntime {
     pub window_mode_memory: bool,
     /// 终端类应用新窗口是否默认使用英文模式
     pub terminal_default_english: bool,
+    /// 自定义默认使用英文模式的应用标识列表（如 code、zed、idea、obsidian）
+    pub default_english_apps: Vec<String>,
     /// 候选词序号显示风格
     candidate_index_style: CandidateIndexStyle,
     /// 候选框排列方向
@@ -72,6 +74,7 @@ impl ImeRuntime {
             window_tracker: WindowModeTracker::default(),
             window_mode_memory: true,
             terminal_default_english: true,
+            default_english_apps: Vec::new(),
             candidate_index_style: CandidateIndexStyle::default(),
             candidate_orientation: CandidateOrientation::default(),
             is_protected_context: false,
@@ -242,6 +245,7 @@ impl ImeRuntime {
 
         // 桌面与窗口模式配置同步
         self.terminal_default_english = cfg.desktop.terminal_default_english;
+        self.default_english_apps = cfg.desktop.default_english_apps.clone();
         self.window_mode_memory = cfg.desktop.window_mode_memory;
 
         // 语音配置同步
@@ -286,11 +290,14 @@ impl ImeRuntime {
 
     /// 窗口获得焦点时切换当前活动上下文并恢复该窗口记录的基础模式
     pub fn focus_window(&mut self, window_id: &str, app_name: Option<&str>) {
-        let base_mode = self.window_tracker.focus_window(
+        let base_mode = self.window_tracker.focus_window_with_policy(
             window_id,
-            app_name,
-            self.terminal_default_english,
-            self.window_mode_memory,
+            window_tracker::FocusWindowPolicy {
+                app_name,
+                terminal_default_english: self.terminal_default_english,
+                custom_english_apps: &self.default_english_apps,
+                window_mode_memory: self.window_mode_memory,
+            },
         );
         if self.core.input_mode() != base_mode {
             self.core.set_input_mode(base_mode);

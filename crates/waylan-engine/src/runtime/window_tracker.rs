@@ -46,6 +46,31 @@ pub fn is_terminal_app(app_identifier: &str) -> bool {
         || lower.contains("urxvt")
 }
 
+/// 判定给定的应用标识是否命中用户自定义的默认英文应用列表（忽略大小写子串匹配）
+pub fn matches_english_app_list(app_identifier: &str, custom_apps: &[String]) -> bool {
+    if custom_apps.is_empty() {
+        return false;
+    }
+    let lower = app_identifier.to_ascii_lowercase();
+    custom_apps.iter().any(|pattern| {
+        let trimmed = pattern.trim();
+        !trimmed.is_empty() && lower.contains(&trimmed.to_ascii_lowercase())
+    })
+}
+
+/// 窗口获焦时的默认输入模式判定策略参数
+#[derive(Debug, Clone, Copy)]
+pub struct FocusWindowPolicy<'a> {
+    /// 可选的应用名称/类别（如 wm_class、app_id 或 client_name）
+    pub app_name: Option<&'a str>,
+    /// 终端类应用首次获焦时是否默认使用英文模式
+    pub terminal_default_english: bool,
+    /// 用户自定义的默认英文应用标识列表（如 code、zed、idea、obsidian）
+    pub custom_english_apps: &'a [String],
+    /// 是否启用多窗口输入模式独立记忆
+    pub window_mode_memory: bool,
+}
+
 impl WindowModeTracker {
     /// 创建带有指定容量与默认模式的窗口跟踪器
     pub fn new(max_capacity: usize, default_mode: InputMode) -> Self {
@@ -76,8 +101,25 @@ impl WindowModeTracker {
         terminal_default_english: bool,
         window_mode_memory: bool,
     ) -> InputMode {
+        self.focus_window_with_policy(
+            window_id,
+            FocusWindowPolicy {
+                app_name,
+                terminal_default_english,
+                custom_english_apps: &[],
+                window_mode_memory,
+            },
+        )
+    }
+
+    /// 按策略参数切换活动窗口并返回该窗口记录的基础输入模式
+    pub fn focus_window_with_policy(
+        &mut self,
+        window_id: &str,
+        policy: FocusWindowPolicy<'_>,
+    ) -> InputMode {
         self.active_window = Some(window_id.to_string());
-        if !window_mode_memory {
+        if !policy.window_mode_memory {
             return self.default_mode;
         }
         if let Some(&mode) = self.modes.get(window_id) {
@@ -89,12 +131,15 @@ impl WindowModeTracker {
                     self.modes.remove(&first_key);
                 }
             }
-            let initial_mode =
-                if terminal_default_english && app_name.map(is_terminal_app).unwrap_or(false) {
-                    InputMode::English
-                } else {
-                    self.default_mode
-                };
+            let default_to_english = policy.app_name.is_some_and(|app| {
+                (policy.terminal_default_english && is_terminal_app(app))
+                    || matches_english_app_list(app, policy.custom_english_apps)
+            });
+            let initial_mode = if default_to_english {
+                InputMode::English
+            } else {
+                self.default_mode
+            };
             self.modes.insert(window_id.to_string(), initial_mode);
             initial_mode
         }
@@ -193,5 +238,49 @@ mod tests {
         assert!(!is_terminal_app("google-chrome"));
         assert!(!is_terminal_app("code"));
         assert!(!is_terminal_app("gedit"));
+    }
+
+    #[test]
+    fn test_custom_default_english_apps_policy() {
+        let mut tracker = WindowModeTracker::new(10, InputMode::Chinese);
+        let custom = vec![
+            "code".to_string(),
+            "zed".to_string(),
+            "idea".to_string(),
+            "obsidian".to_string(),
+        ];
+
+        let mode_code = tracker.focus_window_with_policy(
+            "win_code",
+            FocusWindowPolicy {
+                app_name: Some("Code - OSS"),
+                terminal_default_english: false,
+                custom_english_apps: &custom,
+                window_mode_memory: true,
+            },
+        );
+        assert_eq!(mode_code, InputMode::English);
+
+        let mode_zed = tracker.focus_window_with_policy(
+            "win_zed",
+            FocusWindowPolicy {
+                app_name: Some("dev.zed.Zed"),
+                terminal_default_english: false,
+                custom_english_apps: &custom,
+                window_mode_memory: true,
+            },
+        );
+        assert_eq!(mode_zed, InputMode::English);
+
+        let mode_browser = tracker.focus_window_with_policy(
+            "win_chrome",
+            FocusWindowPolicy {
+                app_name: Some("google-chrome"),
+                terminal_default_english: false,
+                custom_english_apps: &custom,
+                window_mode_memory: true,
+            },
+        );
+        assert_eq!(mode_browser, InputMode::Chinese);
     }
 }

@@ -174,9 +174,16 @@ impl ImeCoreSession {
             }
         }
 
-        // 2. 若输入缓冲区为空（空闲输入），拦截并处理智能标点与数字上下文
+        // 2. 若输入缓冲区为空（空闲输入），优先判定代码/URL/路径语境自动直通英文，
+        //    再拦截并处理智能标点与数字上下文
         if self.engine.raw_input().is_empty() {
             if keycode == KEY_BACKSPACE || keycode == KEY_SPACE {
+                return ImeOutputAction::PassThrough;
+            }
+            if context_surrounding.is_some_and(should_auto_passthrough_english)
+                && (self.keymap_layout.get_char(keycode).is_some()
+                    || keycode_to_punctuation_with_shift(keycode, self.is_shift_active()).is_some())
+            {
                 return ImeOutputAction::PassThrough;
             }
             if let Some(action) = self.dispatch_idle_punctuation(keycode, context_surrounding) {
@@ -366,5 +373,99 @@ impl ImeCoreSession {
             return Some(ImeOutputAction::Commit(full.to_string()));
         }
         Some(ImeOutputAction::PassThrough)
+    }
+}
+
+/// 判定光标前周围文本是否处于 URL、文件路径或代码标识符语境，决定空闲态是否自动临时直通英文
+///
+/// # 判定规则
+/// 仅检查光标前紧贴的最后一个非空白 token（若光标紧跟空白或中文字符则返回 `false`，不干扰正常中文输入）：
+/// 1. URL / 协议前缀（`http://`、`https://`、`ftp://`、`ssh://`、`file://`、`www.`）或邮箱（`@`）；
+/// 2. 路径前缀或代码作用域符号（`/`、`./`、`../`、`~/`、`::`、`->`）；
+/// 3. 蛇形变量（含 `_`）或成员访问/文件名（含 `.` 且相邻 ASCII 字母/数字）；
+/// 4. 驼峰标识符（长度 >= 2 的纯 ASCII 字母数字串且同时包含大写与小写字母，如 `myVar`、`HashMap`）。
+pub fn should_auto_passthrough_english(prefix: &str) -> bool {
+    let Some(last_ch) = prefix.chars().next_back() else {
+        return false;
+    };
+    if last_ch.is_whitespace() || !last_ch.is_ascii() {
+        return false;
+    }
+
+    let token = prefix
+        .rsplit(|c: char| c.is_whitespace() || !c.is_ascii())
+        .next()
+        .unwrap_or("");
+    if token.is_empty() {
+        return false;
+    }
+
+    if token.contains("://")
+        || token.contains("::")
+        || token.contains("->")
+        || token.contains('@')
+        || token.contains('_')
+        || token.starts_with("www.")
+        || token.starts_with('/')
+        || token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with("~/")
+    {
+        return true;
+    }
+
+    if let Some(dot_pos) = token.rfind('.') {
+        let before_ascii = dot_pos > 0 && token.as_bytes()[dot_pos - 1].is_ascii_alphanumeric();
+        let after_ascii = dot_pos + 1 == token.len()
+            || token
+                .as_bytes()
+                .get(dot_pos + 1)
+                .is_some_and(u8::is_ascii_alphanumeric);
+        if before_ascii && after_ascii {
+            return true;
+        }
+    }
+
+    let is_ascii_ident = token.len() >= 2 && token.bytes().all(|b| b.is_ascii_alphanumeric());
+    if is_ascii_ident {
+        let has_upper = token.bytes().any(|b| b.is_ascii_uppercase());
+        let has_lower = token.bytes().any(|b| b.is_ascii_lowercase());
+        if has_upper && has_lower {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod passthrough_tests {
+    use super::*;
+
+    #[test]
+    fn test_should_auto_passthrough_english_contexts() {
+        // URL 与邮箱
+        assert!(should_auto_passthrough_english("打开 https://github.com/"));
+        assert!(should_auto_passthrough_english("www.rust-lang."));
+        assert!(should_auto_passthrough_english("admin@example."));
+
+        // 路径与代码符号
+        assert!(should_auto_passthrough_english("cd /home/wsl/coding/"));
+        assert!(should_auto_passthrough_english("./src/main"));
+        assert!(should_auto_passthrough_english("std::collections::"));
+        assert!(should_auto_passthrough_english("ptr->"));
+
+        // 蛇形变量、成员访问与驼峰标识符
+        assert!(should_auto_passthrough_english("let user_name"));
+        assert!(should_auto_passthrough_english("self.config."));
+        assert!(should_auto_passthrough_english("HashMap"));
+        assert!(should_auto_passthrough_english("myVar"));
+
+        // 正常中文、空白结尾与空上下文绝不误触发
+        assert!(!should_auto_passthrough_english(""));
+        assert!(!should_auto_passthrough_english("你好世界"));
+        assert!(!should_auto_passthrough_english("https://github.com/ "));
+        assert!(!should_auto_passthrough_english("HashMap "));
+        assert!(!should_auto_passthrough_english("纯小写abc"));
     }
 }

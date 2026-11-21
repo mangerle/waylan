@@ -303,6 +303,9 @@ pub struct DesktopConfig {
     pub window_mode_memory: bool,
     /// 终端类应用新窗口是否默认使用英文模式（如 gnome-terminal、pty、kitty、alacritty 等）
     pub terminal_default_english: bool,
+    /// 自定义默认使用英文模式的应用标识列表（按 app_id/wm_class 忽略大小写子串匹配，如 code、zed、idea、obsidian）
+    #[serde(default)]
+    pub default_english_apps: Vec<String>,
 }
 
 impl Default for DesktopConfig {
@@ -315,6 +318,7 @@ impl Default for DesktopConfig {
             exclusive_input_source: false,
             window_mode_memory: true,
             terminal_default_english: true,
+            default_english_apps: Vec::new(),
         }
     }
 }
