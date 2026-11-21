@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.4.2"
+version = "1.4.3"
 edition = "2021"
 authors = ["WayLan Contributors"]
 license = "Apache-2.0"
