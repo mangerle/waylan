@@ -8,6 +8,7 @@ pub mod grid;
 mod grid_layout;
 pub mod layout;
 pub mod measure_cache;
+mod snapshot;
 pub mod style;
 
 use crate::theme::{Color, UiTheme};
@@ -17,6 +18,7 @@ use font::FontManager;
 use glyph_blend::blend_swash_image;
 use layout::{format_candidate_text, CandidateHitTarget, HitRegion};
 use measure_cache::{TextMeasureCache, TextShapeParams};
+use snapshot::{compute_state_fingerprint, compute_theme_hash, LastRenderSnapshot};
 use std::path::Path;
 use style::RendererStyle;
 use tiny_skia::Pixmap;
@@ -39,17 +41,6 @@ pub(crate) struct DrawTextOptions<'a> {
     pub y: f32,
     pub size: f32,
     pub color: Color,
-}
-
-/// 最近一次完整渲染的输入状态快照，用于对未变更状态直接复用缓存像素
-struct LastRenderSnapshot {
-    state: CandidateBoxState,
-    theme: UiTheme,
-    style: RendererStyle,
-    font_size_bits: u32,
-    scale_bits: u32,
-    width: u32,
-    height: u32,
 }
 
 /// 候选框矢量渲染器（1:1 对标现代单行胶囊样式与二级卡片）
@@ -110,6 +101,8 @@ impl CandidateBoxRenderer {
         self.theme.background.a = (self.theme.background.a * opacity).clamp(0.0, 1.0);
         if font_size_changed {
             self.clear_glyph_cache();
+        } else {
+            self.last_render_snapshot = None;
         }
     }
 
@@ -247,12 +240,14 @@ impl CandidateBoxRenderer {
     pub fn render_rgba(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &[u8])> {
         let font_size_bits = self.font_size.to_bits();
         let scale_bits = self.scale.to_bits();
-        if let Some(ref snap) = self.last_render_snapshot {
+        let state_hash = compute_state_fingerprint(state);
+        let theme_hash = compute_theme_hash(&self.theme);
+        if let Some(snap) = self.last_render_snapshot {
             if snap.font_size_bits == font_size_bits
                 && snap.scale_bits == scale_bits
-                && snap.theme == self.theme
+                && snap.theme_hash == theme_hash
                 && snap.style == self.style
-                && snap.state == *state
+                && snap.state_hash == state_hash
             {
                 if let Some(required) = (snap.width as usize)
                     .checked_mul(snap.height as usize)
@@ -280,8 +275,8 @@ impl CandidateBoxRenderer {
             .checked_mul(4)?;
         self.scratch_pixmap_buf = pixmap.take();
         self.last_render_snapshot = Some(LastRenderSnapshot {
-            state: state.clone(),
-            theme: self.theme.clone(),
+            state_hash,
+            theme_hash,
             style: self.style,
             font_size_bits,
             scale_bits,
