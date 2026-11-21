@@ -362,6 +362,74 @@ fn is_high_freq_tech_word(slice: &str) -> bool {
         .any(|w| w.eq_ignore_ascii_case(slice))
 }
 
+/// 判断非技术短词的英文候选是否会误截胡可被中文完整切分的全拼区间
+///
+/// # 判定规则
+/// 1. 英文词自身区间 `[pos, end)` 可完整切分为合法全拼音节（如 `xigua`、`keyide`）时拒绝，
+///    不再受字节长度上限约束，覆盖三音节及以上的长区间；
+/// 2. 英文词未抵达连续字母段末尾（非尾部对齐），且 `[pos, run_end)` 整段可被全拼切分时，
+///    说明该英文词只是中文长串中的非对齐碎片（如 `xiguapi` 中的前缀碎片），同样拒绝。
+///
+/// # 设计取舍
+/// 仅依赖音节可切分性判断，不查词库，开销为两次 O(n) 动态规划；
+/// 代价是极少数恰好可被全拼切分的真实英文词（如 `panda`）需通过技术词表或 `aux.dict`
+/// 之外的途径提权，不会再由本函数注入。
+fn is_chinese_pinyin_hijack(raw: &str, pos: usize, end: usize) -> bool {
+    if can_segment_into_syllables(&raw[pos..end]) {
+        return true;
+    }
+    let run_end = raw[pos..]
+        .bytes()
+        .position(|b| !b.is_ascii_alphabetic())
+        .map_or(raw.len(), |off| pos + off);
+    end < run_end && can_segment_unbounded(&raw[pos..run_end])
+}
+
+/// 不限长度的全拼可切分判定（`can_segment_into_syllables` 受 32 字节上限，无法覆盖整句输入）
+fn can_segment_unbounded(s: &str) -> bool {
+    if s.is_empty() || !s.is_ascii() {
+        return false;
+    }
+    let n = s.len();
+    let mut reachable = vec![false; n + 1];
+    reachable[0] = true;
+    for i in 0..n {
+        if !reachable[i] {
+            continue;
+        }
+        for len in 1..=(n - i).min(6) {
+            if is_valid_syllable(&s[i..i + len]) {
+                reachable[i + len] = true;
+            }
+        }
+    }
+    reachable[n]
+}
+
+/// 判断技术词候选是否只是整段纯拼音串中的一部分（如 `xiguapi` 中的 `api`、`meimeide` 中的 `ide`）
+///
+/// # 判定规则
+/// 取 `[pos, end)` 所在的连续字母段，若该段本身不等于技术词，且整段可被全拼完整切分，
+/// 说明存在完整的中文读法，技术词只是跨音节边界的偶然子串，应拒绝注入。
+///
+/// # 设计取舍
+/// 通用规则，不依赖具体词表；代价是 `woyongapiwenti` 这类整段恰好也可读成全拼的中英混输，
+/// 技术词会被拒绝，需用户以大写或分隔符显式输入英文。
+fn is_tech_word_inside_pinyin_run(raw: &str, pos: usize, end: usize) -> bool {
+    let run_start = raw[..pos]
+        .bytes()
+        .rposition(|b| !b.is_ascii_alphabetic())
+        .map_or(0, |i| i + 1);
+    let run_end = raw[end..]
+        .bytes()
+        .position(|b| !b.is_ascii_alphabetic())
+        .map_or(raw.len(), |off| end + off);
+    if run_start == pos && run_end == end {
+        return false;
+    }
+    can_segment_unbounded(&raw[run_start..run_end])
+}
+
 /// 在词图当前位置注入高频英文词库边，实现免切中英混输（如 woxiangqugoogle -> 我想去google）
 ///
 /// # 防截胡与提权策略
@@ -380,7 +448,8 @@ fn append_english_lexicon_edges(
         let slice = &lattice.raw[pos..end];
         let is_tech = is_high_freq_tech_word(slice);
         if is_valid_syllable(slice)
-            || (!is_tech && byte_len <= 6 && can_segment_into_syllables(slice))
+            || (!is_tech && is_chinese_pinyin_hijack(&lattice.raw, pos, end))
+            || (is_tech && is_tech_word_inside_pinyin_run(&lattice.raw, pos, end))
         {
             continue;
         }
@@ -425,7 +494,9 @@ fn append_english_lexicon_edges(
             continue;
         }
         let slice = &lattice.raw[pos..end];
-        if !slice.eq_ignore_ascii_case(tech) {
+        if !slice.eq_ignore_ascii_case(tech)
+            || is_tech_word_inside_pinyin_run(&lattice.raw, pos, end)
+        {
             continue;
         }
         if matches
@@ -662,5 +733,43 @@ fn expand_position_states(
                 first_word_end: state.first_word_end.or(Some(pm.end)),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod hijack_tests {
+    use super::{is_chinese_pinyin_hijack, is_tech_word_inside_pinyin_run};
+
+    #[test]
+    fn 可切分长区间应判定为截胡() {
+        assert!(is_chinese_pinyin_hijack("xiguapi", 0, 5));
+        assert!(is_chinese_pinyin_hijack("keyide", 0, 6));
+        assert!(is_chinese_pinyin_hijack("mainage", 0, 4));
+    }
+
+    #[test]
+    fn 非对齐碎片但整段可切分应判定为截胡() {
+        assert!(is_chinese_pinyin_hijack("xiguapi", 0, 4));
+    }
+
+    #[test]
+    fn 真实英文词不应被误拦() {
+        assert!(!is_chinese_pinyin_hijack("google", 0, 6));
+        assert!(!is_chinese_pinyin_hijack("googlewoai", 0, 6));
+    }
+
+    #[test]
+    fn 技术词位于纯拼音长串内部应被拒绝() {
+        let s = "xiguapilifangdongxileba";
+        assert!(is_tech_word_inside_pinyin_run(s, 4, 7));
+        let s = "wodasanyaxianzaihaoduomeimeidedifangya";
+        assert!(is_tech_word_inside_pinyin_run(s, 27, 30));
+    }
+
+    #[test]
+    fn 技术词独立或所在串无法读成拼音应保留() {
+        assert!(!is_tech_word_inside_pinyin_run("bug", 0, 3));
+        assert!(!is_tech_word_inside_pinyin_run("wodebugyouduo", 4, 7));
+        assert!(!is_tech_word_inside_pinyin_run("woxihuanrust", 8, 12));
     }
 }
