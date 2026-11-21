@@ -26,6 +26,8 @@ pub const CODEBOOK_SIZE: usize = 1024;
 ///   4. 零堆分配与零拷贝：全生命周期通过虚拟内存 mmap 映射，由操作系统内核按需分页置换。
 pub struct CompactMmapBigram {
     mmap: Mmap,
+    /// 文件格式版本号（2 为经典亲和度矩阵，3 为同源 Unigram + 绝对折扣动态回退矩阵）
+    pub version: u32,
     /// 词表总容量 V
     pub vocab_size: usize,
     /// 收录的有效二元词对总数 N
@@ -36,10 +38,16 @@ pub struct CompactMmapBigram {
     row_offsets_offset: usize,
     /// 列与分数数据数组起始偏移
     cols_offset: usize,
+    /// v3 同源一元对数分数组起始偏移（[i32; vocab_size]）
+    unigram_offset: Option<usize>,
+    /// v3 前驱词绝对折扣回退权重数组起始偏移（[i32; vocab_size]）
+    backoff_offset: Option<usize>,
 }
 
 /// Bigram 文件头解析结果（记录各数据段的绝对偏移量与规模）
 struct BigramHeader {
+    /// 文件格式版本号
+    version: u32,
     /// 词表总容量 V
     vocab_size: usize,
     /// 收录的有效二元词对总数 N
@@ -50,12 +58,16 @@ struct BigramHeader {
     row_offsets_offset: usize,
     /// 列与分数数据数组起始偏移
     cols_offset: usize,
+    /// v3 同源一元对数分数组起始偏移
+    unigram_offset: Option<usize>,
+    /// v3 前驱词绝对折扣回退权重数组起始偏移
+    backoff_offset: Option<usize>,
 }
 
 impl BigramHeader {
     /// 解析并校验 Bigram 文件头（魔数、版本与各数据段起始偏移量）
     fn parse(mmap: &Mmap, path: &Path) -> Result<Self, AlgoError> {
-        Self::validate_magic_and_version(mmap, path)?;
+        let version = Self::validate_magic_and_version(mmap, path)?;
 
         let vocab_size = read_u32_le(mmap, 20)
             .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram词表大小读取失败"))?
@@ -73,17 +85,32 @@ impl BigramHeader {
             .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram列数据偏移读取失败"))?
             as usize;
 
+        let (unigram_offset, backoff_offset) = if version >= 3 {
+            let uni_off = read_u64_le(mmap, 52)
+                .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram一元表偏移读取失败"))?
+                as usize;
+            let back_off = uni_off
+                .saturating_add(CODEBOOK_SIZE)
+                .saturating_add(vocab_size);
+            (Some(uni_off), Some(back_off))
+        } else {
+            (None, None)
+        };
+
         Ok(Self {
+            version,
             vocab_size,
             total_pairs,
             codebook_offset,
             row_offsets_offset,
             cols_offset,
+            unigram_offset,
+            backoff_offset,
         })
     }
 
     /// 校验 Bigram 文件的体积下限、魔数标识与版本号
-    fn validate_magic_and_version(mmap: &Mmap, path: &Path) -> Result<(), AlgoError> {
+    fn validate_magic_and_version(mmap: &Mmap, path: &Path) -> Result<u32, AlgoError> {
         if mmap.len() < BIGRAM_HEADER_SIZE.saturating_add(CODEBOOK_SIZE) {
             return Err(AlgoError::deserialize_failed(path, "Bigram文件体积过小"));
         }
@@ -94,13 +121,13 @@ impl BigramHeader {
 
         let version = read_u32_le(mmap, 16)
             .ok_or_else(|| AlgoError::deserialize_failed(path, "Bigram版本字段缺失"))?;
-        if version != 2 {
+        if version != 2 && version != 3 {
             return Err(AlgoError::deserialize_failed(
                 path,
                 format!("不支持的Bigram版本号: {}", version),
             ));
         }
-        Ok(())
+        Ok(version)
     }
 
     /// 校验各数据段的结束偏移是否均落在内存映射范围内
@@ -112,7 +139,13 @@ impl BigramHeader {
         let cols_end = self
             .cols_offset
             .saturating_add(self.total_pairs.saturating_mul(4));
-        let expected_size = codebook_end.max(row_offsets_end).max(cols_end);
+        let mut expected_size = codebook_end.max(row_offsets_end).max(cols_end);
+        if let Some(back_off) = self.backoff_offset {
+            let backoff_end = back_off
+                .saturating_add(CODEBOOK_SIZE)
+                .saturating_add(self.vocab_size);
+            expected_size = expected_size.max(backoff_end);
+        }
         if mmap.len() < expected_size {
             return Err(AlgoError::deserialize_failed(path, "Bigram数据区截断损坏"));
         }
@@ -153,12 +186,52 @@ impl CompactMmapBigram {
         header.validate_sections(&mmap, path)?;
         Ok(Self {
             mmap,
+            version: header.version,
             vocab_size: header.vocab_size,
             total_pairs: header.total_pairs,
             codebook_offset: header.codebook_offset,
             row_offsets_offset: header.row_offsets_offset,
             cols_offset: header.cols_offset,
+            unigram_offset: header.unigram_offset,
+            backoff_offset: header.backoff_offset,
         })
+    }
+
+    /// 获取前驱词在矩阵中的出度（收录的不同后继词数量）
+    #[inline]
+    pub fn out_degree(&self, prev_id: u32) -> Option<usize> {
+        let (start, end) = self.get_row_range(prev_id)?;
+        Some(end.saturating_sub(start))
+    }
+
+    /// 从 `码本(1024B) + u8量化数组(vocab_size B)` 区间内读取并解码词级标量（`255` 为未登录哨兵）
+    #[inline]
+    fn decode_quantized_table(&self, section_base: Option<usize>, word_id: u32) -> Option<i64> {
+        let base = section_base?;
+        let wid = word_id as usize;
+        if wid >= self.vocab_size {
+            return None;
+        }
+        let q_idx = *self
+            .mmap
+            .get(base.saturating_add(CODEBOOK_SIZE).saturating_add(wid))?;
+        if q_idx == u8::MAX {
+            return None;
+        }
+        let cb_off = base.saturating_add((q_idx as usize).saturating_mul(4));
+        Some(read_i32_le(&self.mmap, cb_off)? as i64)
+    }
+
+    /// 查询 v3 同源语料一元对数概率分（`u8::MAX` 哨兵表示语料未登录）
+    #[inline]
+    pub fn get_unigram_score(&self, word_id: u32) -> Option<i64> {
+        self.decode_quantized_table(self.unigram_offset, word_id)
+    }
+
+    /// 查询 v3 前驱词绝对折扣动态回退对数权重（`d = 0.75`）
+    #[inline]
+    pub fn get_backoff_weight(&self, prev_id: u32) -> Option<i64> {
+        self.decode_quantized_table(self.backoff_offset, prev_id)
     }
 
     /// 查询 8 位量化码本中指定等级还原后的分数
@@ -328,6 +401,73 @@ mod tests {
         let truncated = &valid_bytes[..valid_bytes.len() - 4];
         std::fs::write(&tmp_path, truncated).expect("写入截断 Bigram 文件");
         assert!(CompactMmapBigram::open(&tmp_path).is_err());
+
+        let _ = std::fs::remove_file(tmp_path);
+    }
+
+    #[test]
+    fn test_compact_mmap_bigram_v3_unigram_and_backoff() {
+        let tmp_path = std::env::temp_dir().join("test_waylan_bigram_v3_mmap.bin");
+        let vocab_size: u32 = 3;
+        let total_pairs: u32 = 2;
+        let codebook_offset: u64 = BIGRAM_HEADER_SIZE as u64;
+        let row_offsets_offset: u64 = codebook_offset + CODEBOOK_SIZE as u64;
+        let cols_offset: u64 = row_offsets_offset + ((vocab_size as u64 + 1) * 4);
+        let unigram_offset: u64 = cols_offset + (total_pairs as u64 * 4);
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(BIGRAM_MAGIC);
+        buf.extend_from_slice(&3u32.to_le_bytes());
+        buf.extend_from_slice(&vocab_size.to_le_bytes());
+        buf.extend_from_slice(&total_pairs.to_le_bytes());
+        buf.extend_from_slice(&codebook_offset.to_le_bytes());
+        buf.extend_from_slice(&row_offsets_offset.to_le_bytes());
+        buf.extend_from_slice(&cols_offset.to_le_bytes());
+        buf.extend_from_slice(&unigram_offset.to_le_bytes());
+        buf.resize(BIGRAM_HEADER_SIZE, 0);
+
+        for i in 0..256i32 {
+            buf.extend_from_slice(&(i * 150).to_le_bytes());
+        }
+        for &row_off in &[0u32, 2, 2, 2] {
+            buf.extend_from_slice(&row_off.to_le_bytes());
+        }
+        let pack = |col_id: u32, q: u8| (col_id & 0x00FF_FFFF) | ((q as u32) << 24);
+        buf.extend_from_slice(&pack(1, 20).to_le_bytes());
+        buf.extend_from_slice(&pack(2, 40).to_le_bytes());
+
+        // unigram section: 256*4B codebook + 3B u8 ([10 -> 8500, 20 -> 9200, 255 -> None])
+        for i in 0..256i32 {
+            let val: i32 = match i {
+                10 => 8500,
+                20 => 9200,
+                _ => 0,
+            };
+            buf.extend_from_slice(&val.to_le_bytes());
+        }
+        buf.extend_from_slice(&[10u8, 20, u8::MAX]);
+
+        // backoff section: 256*4B codebook + 3B u8 ([5 -> -1800, 15 -> -400, 255 -> None])
+        for i in 0..256i32 {
+            let val: i32 = match i {
+                5 => -1800,
+                15 => -400,
+                _ => 0,
+            };
+            buf.extend_from_slice(&val.to_le_bytes());
+        }
+        buf.extend_from_slice(&[5u8, 15, u8::MAX]);
+
+        std::fs::write(&tmp_path, &buf).expect("写入测试 v3 Bigram 文件");
+        let bg = CompactMmapBigram::open(&tmp_path).expect("加载 v3 Bigram 成功");
+        assert_eq!(bg.version, 3);
+        assert_eq!(bg.out_degree(0), Some(2));
+        assert_eq!(bg.out_degree(1), Some(0));
+        assert_eq!(bg.get_affinity_by_id(0, 1), Some(3000));
+        assert_eq!(bg.get_unigram_score(0), Some(8500));
+        assert_eq!(bg.get_unigram_score(2), None);
+        assert_eq!(bg.get_backoff_weight(0), Some(-1800));
+        assert_eq!(bg.get_backoff_weight(2), None);
 
         let _ = std::fs::remove_file(tmp_path);
     }

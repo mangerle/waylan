@@ -2,4 +2,6 @@
 **/*.rs.bk
 data/8105.dict.yaml
 data/base.dict.yaml
+data/corpus_raw/
+data/corpus_clean/
 .idea/

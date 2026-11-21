@@ -64,18 +64,52 @@ impl BigramLanguageModel {
         let (curr_word, curr_id, curr_char_len) = curr;
         let length_bonus = (curr_char_len - 1).saturating_mul(weights.length_bonus_per_char);
 
+        let effective_unigram = match (&table.compact_bigram, curr_id) {
+            (Some(bg), Some(cid)) if bg.version >= 3 => bg
+                .get_unigram_score(cid)
+                .map_or(curr_unigram, |u| (u * 3 + curr_unigram * 7) / 10),
+            _ => curr_unigram,
+        };
+
         if prev_word.is_empty() {
-            return curr_unigram + length_bonus - weights.base_word_penalty;
+            return effective_unigram + length_bonus - weights.base_word_penalty;
         }
 
         let bigram_bonus = match (&table.compact_bigram, prev_id, curr_id) {
-            (Some(bg), Some(pid), Some(cid)) => bg
-                .get_affinity_by_id(pid, cid)
-                .unwrap_or_else(|| Self::estimate_bigram_affinity(prev_word, curr_word)),
+            (Some(bg), Some(pid), Some(cid)) => {
+                if let Some(hit) = bg.get_affinity_by_id(pid, cid) {
+                    hit
+                } else if bg.version >= 3 {
+                    Self::v3_backoff_affinity(bg, pid, prev_word, curr_word)
+                } else {
+                    Self::estimate_bigram_affinity(prev_word, curr_word)
+                }
+            }
             _ => Self::estimate_bigram_affinity(prev_word, curr_word),
         };
 
-        curr_unigram + length_bonus + bigram_bonus - weights.base_word_penalty
+        effective_unigram + length_bonus + bigram_bonus - weights.base_word_penalty
+    }
+
+    /// v3 绝对折扣动态回退亲和度：结合前驱词真实出度回退权重与词形平滑
+    ///
+    /// 注意：语料未收录的前驱词不得走静态 `estimate_bigram_affinity` 白拿 +4000 奖励，
+    /// 否则会导致“遗精”“支姐”等生僻词在未命中时分数反超“已经”“直接”等高频前驱词。
+    #[inline]
+    fn v3_backoff_affinity(
+        bg: &crate::bigram::CompactMmapBigram,
+        prev_id: u32,
+        _prev_word: &str,
+        curr_word: &str,
+    ) -> i64 {
+        let particle = if matches!(curr_word, "的" | "了" | "着" | "过" | "吗" | "呢" | "吧")
+        {
+            3_000
+        } else {
+            0
+        };
+        let base_backoff = bg.get_backoff_weight(prev_id).unwrap_or(-2_000);
+        base_backoff.saturating_add(particle)
     }
 
     /// 估算二元词对的接续亲和度（未挂载大语料模型时的平滑回退）
