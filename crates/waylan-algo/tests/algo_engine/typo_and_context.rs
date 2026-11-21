@@ -219,3 +219,42 @@ fn test_engine_habitual_alias_compound_words_enen_and_enhao() {
     assert!(texts_me.contains(&"么"));
     assert!(texts_me.contains(&"呣"));
 }
+
+#[test]
+fn test_engine_long_typo_and_english_fallback_connectivity() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table_mut().insert("wo", "我", 80_000);
+    engine.table_mut().insert("de", "的", 90_000);
+    engine.table_mut().insert("da", "大", 60_000);
+    engine.table_mut().insert("fa", "发", 50_000);
+    engine.table_mut().insert("sha", "傻", 45_000);
+    engine.table_mut().insert("du", "读", 40_000);
+    engine.table_mut().insert("wan", "完", 45_000);
+    engine.table_mut().insert("shi", "是", 75_000);
+    engine.table_mut().insert("sa", "撒", 30_000);
+
+    let input = "wodedasdefasdhadwduwdsdwdadwdsdasdadsad";
+    for ch in input.chars() {
+        engine.push_char(ch);
+    }
+
+    let preedit = engine.formatted_preedit();
+    assert!(
+        preedit.contains("s'de") && preedit.contains("du'w"),
+        "preedit 应将非法音节拆分为合法前缀与简拼，实际: {preedit}"
+    );
+
+    let cands = engine.candidates();
+    assert!(!cands.is_empty());
+    assert_eq!(
+        cands[0].consumed_len,
+        Some(input.len()),
+        "第 1 候选必须完整覆盖全长输入（整句置顶），实际: {:?}",
+        cands[0]
+    );
+    assert!(
+        cands[0].text.starts_with("我的") && cands[0].text.ends_with("sad"),
+        "第 1 候选应保留前段中文解码并在末尾兜底英文 sad，实际: {}",
+        cands[0].text
+    );
+}

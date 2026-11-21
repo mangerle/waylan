@@ -144,8 +144,8 @@ impl SyllableLattice {
                     EdgeKind::Exact => edge.cost,
                     EdgeKind::RuleNormalized => edge.cost + 5,
                     EdgeKind::PartialTail => 25,
-                    EdgeKind::Initial => 70,
-                    EdgeKind::Typo(_) => edge.cost + 40,
+                    EdgeKind::Initial => 55,
+                    EdgeKind::Typo(_) => edge.cost + 45,
                     EdgeKind::Fuzzy => continue,
                 };
                 let cand_cost = cur_cost.saturating_add(penalty);
@@ -164,6 +164,24 @@ impl SyllableLattice {
                         seq.extend(edge.syllables.iter().map(str::to_string));
                     }
                     dp_prev[edge.end] = Some((pos, seq));
+                }
+            }
+            if self.raw.as_bytes()[pos].is_ascii_lowercase()
+                && self.edges_from[pos]
+                    .iter()
+                    .all(|e| e.kind == EdgeKind::Fuzzy)
+            {
+                let char_len = self.raw[pos..].chars().next().map_or(1, char::len_utf8);
+                let next_pos = (pos + char_len).min(self.len);
+                let cand_cost = cur_cost.saturating_add(300);
+                if cand_cost < dp_cost[next_pos] {
+                    dp_cost[next_pos] = cand_cost;
+                    let mut seq = dp_prev[pos]
+                        .as_ref()
+                        .map(|(_, s)| s.clone())
+                        .unwrap_or_default();
+                    seq.push(self.raw[pos..next_pos].to_string());
+                    dp_prev[next_pos] = Some((pos, seq));
                 }
             }
         }

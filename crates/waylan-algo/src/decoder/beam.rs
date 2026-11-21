@@ -8,6 +8,8 @@
 //!   并在束内直接融合 `BigramLanguageModel` 与用户词对自适应提权。
 //! - **代价与局限**：受束宽 `beam_width` 截断约束，极端同音长句可能剪枝低分尾部长句。
 
+use std::sync::Arc;
+
 use super::beam_cache::{
     merge_crossing_matches, CacheSnapshot, IncrementalBeamCache, MAX_PHRASE_SPAN_BYTES,
 };
@@ -18,6 +20,7 @@ use super::beam_scoring::{
 use super::language_model::BigramLanguageModel;
 use super::lattice::SyllableLattice;
 use super::matcher::{DatPhraseMatcher, PhraseMatch};
+use crate::syllables::is_valid_syllable;
 use crate::table::LexiconTable;
 use crate::user_adaptive::UserAdaptiveModel;
 
@@ -148,17 +151,22 @@ impl PositionalBeamDecoder {
             &mut ws,
             &mut whole_words,
             &mut prefix_word_matches,
+            false,
         );
 
-        let result = finalize_decode_result(
-            lattice,
-            &ws.beam[len],
-            &ws.node_arena,
-            &ws.spans_by_pos,
-            whole_words,
-            prefix_word_matches,
-            options,
-        );
+        let result = if ws.beam[len].is_empty() && len >= 3 {
+            decode_connected_fallback(&init_ctx, seed_word_id, whole_words, prefix_word_matches)
+        } else {
+            finalize_decode_result(
+                lattice,
+                &ws.beam[len],
+                &ws.node_arena,
+                &ws.spans_by_pos,
+                whole_words,
+                prefix_word_matches,
+                options,
+            )
+        };
 
         if let Some(c) = cache {
             c.update(
@@ -252,6 +260,7 @@ fn init_beam_from_cache(
             table: ctx.table,
             adaptive: ctx.adaptive,
             options: ctx.options,
+            fallback_mode: false,
             node_arena: &mut node_arena,
             beam: right,
         };
@@ -314,14 +323,93 @@ fn init_beam_cold(len: usize, start_pos: usize, seed_word_id: Option<u32>) -> Be
     }
 }
 
+/// 断链兜底连通解码：放宽多处简拼与容错次数限制，并注入英文及单字符透传兜底边
+fn decode_connected_fallback(
+    ctx: &InitContext<'_>,
+    seed_word_id: Option<u32>,
+    whole_words: Vec<PhraseMatch>,
+    prefix_word_matches: Vec<PhraseMatch>,
+) -> DecodeResult {
+    let len = ctx.lattice.len;
+    let mut fb_ws = init_beam_cold(len, ctx.start_pos, seed_word_id);
+    let mut unused_whole = Vec::new();
+    let mut unused_prefix = Vec::new();
+    advance_beam(ctx, &mut fb_ws, &mut unused_whole, &mut unused_prefix, true);
+    finalize_decode_result(
+        ctx.lattice,
+        &fb_ws.beam[len],
+        &fb_ws.node_arena,
+        &fb_ws.spans_by_pos,
+        whole_words,
+        prefix_word_matches,
+        ctx.options,
+    )
+}
+
+/// 在兜底连通解码模式下追加英文单词兜底边与单字符防断链边
+fn append_fallback_edges(lattice: &SyllableLattice, pos: usize, matches: &mut Vec<PhraseMatch>) {
+    let raw = lattice.raw.as_bytes();
+    let len = lattice.len;
+    let mut seg_end = pos;
+    while seg_end < len && raw[seg_end].is_ascii_alphabetic() {
+        seg_end += 1;
+    }
+    let seg_len = seg_end.saturating_sub(pos);
+    if (2..=12).contains(&seg_len) && (seg_end == len || raw[seg_end] == b'\'') {
+        let seg = &lattice.raw[pos..seg_end];
+        if !is_valid_syllable(seg) {
+            matches.push(PhraseMatch {
+                start: pos,
+                end: seg_end,
+                word: seg.to_string(),
+                word_id: None,
+                freq: 1,
+                matched_key: Arc::from(seg),
+                syllable_count: 1,
+                typo_count: 1,
+                edge_cost: 220,
+                has_initial: false,
+                has_partial_tail: false,
+                is_exact_all: false,
+            });
+        }
+    }
+
+    if !matches.iter().any(|m| m.end > pos) {
+        let char_len = lattice.raw[pos..].chars().next().map_or(1, char::len_utf8);
+        let next_pos = (pos + char_len).min(len);
+        let ch_str = &lattice.raw[pos..next_pos];
+        matches.push(PhraseMatch {
+            start: pos,
+            end: next_pos,
+            word: ch_str.to_string(),
+            word_id: None,
+            freq: 1,
+            matched_key: Arc::from(ch_str),
+            syllable_count: 1,
+            typo_count: 1,
+            edge_cost: 350,
+            has_initial: false,
+            has_partial_tail: false,
+            is_exact_all: false,
+        });
+    }
+}
+
 /// 从 `loop_start` 到输入末尾逐位置推进束搜索扩展
 fn advance_beam(
     ctx: &InitContext<'_>,
     ws: &mut BeamWorkspace,
     whole_words: &mut Vec<PhraseMatch>,
     prefix_word_matches: &mut Vec<PhraseMatch>,
+    fallback_mode: bool,
 ) {
     let len = ctx.lattice.len;
+    let beam_width = if fallback_mode {
+        ctx.options.beam_width.min(16)
+    } else {
+        ctx.options.beam_width
+    };
     for pos in ws.loop_start..len {
         ws.arena_len_before_pos[pos] = ws.node_arena.len();
         let next_non_sep = ctx.lattice.skip_separators(pos);
@@ -331,7 +419,7 @@ fn advance_beam(
                 ws.beam[next_non_sep].extend(carried);
                 prune_beam_slot(
                     &mut ws.beam[next_non_sep],
-                    ctx.options.beam_width,
+                    beam_width,
                     &ws.spans_by_pos,
                     ctx.seed_word,
                 );
@@ -344,7 +432,7 @@ fn advance_beam(
 
         prune_beam_slot(
             &mut ws.beam[pos],
-            ctx.options.beam_width,
+            beam_width,
             &ws.spans_by_pos,
             ctx.seed_word,
         );
@@ -357,11 +445,14 @@ fn advance_beam(
             pos == ctx.start_pos,
         );
         ws.pos_max_reach[pos] = reach;
+        if fallback_mode {
+            append_fallback_edges(ctx.lattice, pos, &mut matches);
+        }
         if matches.is_empty() {
             continue;
         }
 
-        if pos == ctx.start_pos {
+        if pos == ctx.start_pos && !fallback_mode {
             collect_start_matches(&matches, len, whole_words, prefix_word_matches, true);
             filter_and_rank_matches(&mut matches, len, &ctx.options.weights);
         }
@@ -377,6 +468,7 @@ fn advance_beam(
             table: ctx.table,
             adaptive: ctx.adaptive,
             options: ctx.options,
+            fallback_mode,
             node_arena: &mut ws.node_arena,
             beam: right,
         };
@@ -392,6 +484,7 @@ struct ExpandContext<'a> {
     table: &'a LexiconTable,
     adaptive: Option<&'a UserAdaptiveModel>,
     options: &'a BeamDecodeOptions<'a>,
+    fallback_mode: bool,
     node_arena: &'a mut Vec<ArenaNode>,
     beam: &'a mut [Vec<BeamState>],
 }
@@ -403,6 +496,11 @@ fn expand_position_states(
 ) {
     let pos = ctx.pos;
     let pos_matches = &ctx.spans_by_pos[pos];
+    let max_typos = if ctx.fallback_mode {
+        u8::MAX
+    } else {
+        ctx.options.max_typos
+    };
     for state in cur_states {
         let last_word = match state.last_word_ref {
             Some((p, idx)) => ctx.spans_by_pos[p][idx].word.as_str(),
@@ -415,11 +513,11 @@ fn expand_position_states(
                     continue;
                 }
             }
-            if state.has_initial && pm.has_initial && state.word_count > 0 {
+            if !ctx.fallback_mode && state.has_initial && pm.has_initial && state.word_count > 0 {
                 continue;
             }
             let next_typo = state.typo_count.saturating_add(pm.typo_count);
-            if next_typo > ctx.options.max_typos {
+            if next_typo > max_typos {
                 continue;
             }
             let next_pos = pm.end;

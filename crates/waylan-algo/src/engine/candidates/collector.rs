@@ -183,17 +183,18 @@ impl AlgoEngine {
             if idx == 0 {
                 top_sentence_score = base_score;
             }
-            let tier = if sent.typo_count > 0 && !sent.is_exact_all {
-                CandidateTier::TypoCorrection
-            } else if sent.has_initial
-                && sent.has_partial_tail
-                && has_positive_typo_word
-                && base_score <= 100
-            {
-                CandidateTier::PrefixPartial
-            } else {
-                CandidateTier::SentenceViterbi
-            };
+            let tier =
+                if sent.typo_count > 0 && !sent.is_exact_all && (idx > 0 || sent.word_count <= 1) {
+                    CandidateTier::TypoCorrection
+                } else if sent.has_initial
+                    && sent.has_partial_tail
+                    && has_positive_typo_word
+                    && base_score <= 100
+                {
+                    CandidateTier::PrefixPartial
+                } else {
+                    CandidateTier::SentenceViterbi
+                };
             let comment = if sent.typo_count > 0 {
                 Some(format!("[纠错: {}]", sent.pinyin))
             } else if sent.has_initial {
