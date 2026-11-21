@@ -249,7 +249,12 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
         cursor = sep_c;
     }
     let base_idx = ctx.branch_pool.len();
-    cursor.collect_syllable_branches(&ctx.reader, initial, 32, &mut ctx.branch_pool);
+    cursor.collect_syllable_branches(
+        &ctx.reader,
+        initial,
+        base_idx.saturating_add(32),
+        &mut ctx.branch_pool,
+    );
     let end_idx = ctx.branch_pool.len();
     if end_idx > base_idx {
         ctx.max_reach = ctx.max_reach.max(edge.end);
@@ -321,7 +326,12 @@ fn handle_dat_partial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
         cursor = sep_c;
     }
     let base_idx = ctx.branch_pool.len();
-    cursor.collect_syllable_branches(&ctx.reader, partial_prefix, 32, &mut ctx.branch_pool);
+    cursor.collect_syllable_branches(
+        &ctx.reader,
+        partial_prefix,
+        base_idx.saturating_add(32),
+        &mut ctx.branch_pool,
+    );
     let end_idx = ctx.branch_pool.len();
 
     let next_cost = state.edge_cost.saturating_add(edge.cost);
