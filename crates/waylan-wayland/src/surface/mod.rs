@@ -32,8 +32,10 @@ pub struct CandidateSurfaceManager {
     pub is_visible: bool,
     /// 最近一次渲染的位图宽高
     pub current_size: (u32, u32),
-    /// 当前 HiDPI 缩放因子（Wayland 整数缩放，默认 1）
+    /// 当前 HiDPI 缩放因子（Wayland 缓冲区整数缩放，默认 1）
     pub scale: i32,
+    /// 当前精确分数缩放因子（支持 GNOME/KDE/Hyprland 125%~150% 等分数缩放，默认 1.0）
+    pub fractional_scale: f32,
     /// 候选框矢量渲染器实例
     pub renderer: CandidateBoxRenderer,
     /// 共享内存环形多缓冲槽位（交替使用以避免单缓冲画面撕裂与频繁创建文件）
@@ -83,6 +85,7 @@ impl CandidateSurfaceManager {
             is_visible: false,
             current_size: (0, 0),
             scale: 1,
+            fractional_scale: 1.0,
             renderer: CandidateBoxRenderer::new(UiTheme::light()),
             shm_slots: [None, None, None, None],
             slot_buffers: [None, None, None, None],
@@ -92,11 +95,41 @@ impl CandidateSurfaceManager {
         }
     }
 
-    /// 设置 HiDPI 缩放比例并同步更新矢量渲染器
+    /// 设置整数 HiDPI 缩放比例并同步更新矢量渲染器
     pub fn set_scale(&mut self, scale: i32) {
         let scale = scale.max(1);
         self.scale = scale;
-        self.renderer.set_scale(scale as f32);
+        self.fractional_scale = scale as f32;
+        self.renderer.set_scale(self.fractional_scale);
+    }
+
+    /// 设置精确分数缩放比例（如 1.25、1.5、1.75），渲染器按真实物理密度光栅化确保高分屏字体锐利
+    pub fn set_fractional_scale(&mut self, scale: f32) {
+        let clamped = if scale.is_finite() {
+            scale.clamp(0.5, 4.0)
+        } else {
+            1.0
+        };
+        self.fractional_scale = clamped;
+        self.scale = clamped.ceil().max(1.0) as i32;
+        self.renderer.set_scale(clamped);
+    }
+
+    /// 按 `wp_fractional_scale_v1` 协议的 1/120 单位设置分数缩放（例如 150 表示 125%，180 表示 150%）
+    #[inline]
+    pub fn set_fractional_scale_120(&mut self, scale_120: u32) {
+        if scale_120 > 0 {
+            self.set_fractional_scale((scale_120 as f32) / 120.0);
+        }
+    }
+
+    /// 计算当前候选框在当前分数缩放下的逻辑尺寸（供多屏边缘防出屏计算使用）
+    #[inline]
+    pub fn logical_size(&self) -> (u32, u32) {
+        let s = self.fractional_scale.max(0.5);
+        let w = ((self.current_size.0 as f32) / s).ceil().max(0.0) as u32;
+        let h = ((self.current_size.1 as f32) / s).ceil().max(0.0) as u32;
+        (w, h)
     }
 
     /// 清理绑定到旧 Wayland 连接的池与缓冲区代理资源（保留底层 memfd 文件与渲染器缓存，供会话重连或降级复用）

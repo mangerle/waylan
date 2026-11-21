@@ -164,3 +164,48 @@ fn test_zero_copy_slot_mmap_writing() {
     // 验证前两个像素是否已转换为 BGRA/ARGB8888 格式
     assert_eq!(&mmap[0..8], &[30, 20, 10, 255, 200, 150, 100, 128]);
 }
+
+#[test]
+fn test_fractional_scale_125_and_150_support() {
+    let mut manager = CandidateSurfaceManager::new();
+    // 150 / 120 = 1.25 (125% 分数缩放)
+    manager.set_fractional_scale_120(150);
+    assert!((manager.fractional_scale - 1.25).abs() < 0.001);
+    assert_eq!(manager.scale, 2);
+    assert!((manager.renderer.scale - 1.25).abs() < 0.001);
+
+    // 180 / 120 = 1.50 (150% 分数缩放)
+    manager.set_fractional_scale_120(180);
+    assert!((manager.fractional_scale - 1.5).abs() < 0.001);
+    assert_eq!(manager.scale, 2);
+
+    manager.current_size = (300, 75);
+    assert_eq!(manager.logical_size(), (200, 50));
+}
+
+#[test]
+fn test_abnormal_cursor_rect_sanitized_and_clamped() {
+    use crate::surface::cursor_rect::PopupPositionParams;
+
+    // Electron 偶发上报负坐标与异常超大行高
+    let abnormal = CursorRect::new(-40, -10, -5, 999);
+    let (x, y) = abnormal.compute_popup_position_constrained(&PopupPositionParams {
+        popup_width: 300,
+        popup_height: 60,
+        screen_width: 1920,
+        screen_height: 1080,
+    });
+    assert!(x >= 0 && x + 300 <= 1920);
+    assert!(y >= 0 && y + 60 <= 1080);
+
+    // 贴近右下角时水平左移且垂直向上翻转
+    let corner = CursorRect::new(1850, 1040, 2, 0);
+    let (cx, cy) = corner.compute_popup_position_constrained(&PopupPositionParams {
+        popup_width: 320,
+        popup_height: 60,
+        screen_width: 1920,
+        screen_height: 1080,
+    });
+    assert_eq!(cx, 1920 - 320 - 4);
+    assert!(cy < corner.y, "底部空间不足时应向上翻转至光标上方");
+}

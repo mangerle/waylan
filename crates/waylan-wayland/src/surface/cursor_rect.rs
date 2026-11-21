@@ -53,7 +53,33 @@ impl CursorRect {
         })
     }
 
-    /// 在指定屏幕宽度与高度约束下计算候选框悬浮坐标（自动执行水平右边缘防溢出平移与垂直下边缘向上翻转）
+    /// 清理 Electron / 终端等客户端偶发上报的异常光标几何（负坐标、零/负/超大行高与越界坐标）
+    pub fn sanitized(&self, screen_width: i32, screen_height: i32) -> Self {
+        let safe_h = if self.height <= 0 {
+            20
+        } else {
+            self.height.min(120)
+        };
+        let safe_w = self.width.clamp(0, 64);
+        let safe_x = if screen_width > 0 {
+            self.x.clamp(0, screen_width.saturating_sub(1))
+        } else {
+            self.x.max(0)
+        };
+        let safe_y = if screen_height > 0 {
+            self.y.clamp(0, screen_height.saturating_sub(1))
+        } else {
+            self.y.max(0)
+        };
+        Self {
+            x: safe_x,
+            y: safe_y,
+            width: safe_w,
+            height: safe_h,
+        }
+    }
+
+    /// 在指定屏幕宽度与高度约束下计算候选框悬浮坐标（自动防御异常光标、执行四边防溢出钳制与垂直翻转）
     pub fn compute_popup_position_constrained(&self, params: &PopupPositionParams) -> (i32, i32) {
         let PopupPositionParams {
             popup_width,
@@ -63,18 +89,33 @@ impl CursorRect {
         } = *params;
         let popup_w = popup_width as i32;
         let popup_h = popup_height as i32;
+        let safe = self.sanitized(screen_width, screen_height);
 
-        let mut target_y = self.y + self.height + 4;
-        // 如果超出屏幕下方，智能翻转至光标上方，防止遮挡文字
-        if screen_height > 0 && (target_y + popup_h) > screen_height {
-            target_y = (self.y - popup_h - 4).max(0);
+        let mut target_y = safe.y.saturating_add(safe.height).saturating_add(4);
+        // 如果超出屏幕下方，智能翻转至光标上方；若上方仍不足或异常越界则钳制回屏幕安全区
+        if screen_height > 0 && target_y.saturating_add(popup_h) > screen_height {
+            let flipped_y = safe.y.saturating_sub(popup_h).saturating_sub(4);
+            let max_y = screen_height
+                .saturating_sub(popup_h)
+                .saturating_sub(4)
+                .max(0);
+            target_y = if flipped_y >= 0 {
+                flipped_y.min(max_y)
+            } else {
+                max_y
+            };
         }
+        target_y = target_y.max(0);
 
-        let mut target_x = self.x;
+        let mut target_x = safe.x;
         // 如果超出屏幕右边缘，自动向左平移留出 4px 安全边距，防止候选框被屏幕边缘截断
-        if screen_width > 0 && (target_x + popup_w) > screen_width {
-            target_x = (screen_width - popup_w - 4).max(0);
+        if screen_width > 0 && target_x.saturating_add(popup_w) > screen_width {
+            target_x = screen_width
+                .saturating_sub(popup_w)
+                .saturating_sub(4)
+                .max(0);
         }
+        target_x = target_x.max(0);
 
         (target_x, target_y)
     }
