@@ -119,8 +119,15 @@ impl SyllableLattice {
         if self.len == 0 {
             return String::new();
         }
+        #[derive(Clone, Copy)]
+        enum PreeditStep {
+            SkipSep { prev: usize },
+            Edge { prev: usize, edge_idx: usize },
+            RawFallback { prev: usize, end: usize },
+        }
+
         let mut dp_cost = vec![u32::MAX; self.len + 1];
-        let mut dp_prev: Vec<Option<(usize, Vec<String>)>> = vec![None; self.len + 1];
+        let mut dp_prev: Vec<Option<PreeditStep>> = vec![None; self.len + 1];
         dp_cost[0] = 0;
 
         for pos in 0..self.len {
@@ -132,11 +139,11 @@ impl SyllableLattice {
             if next_non_sep > pos {
                 if cur_cost < dp_cost[next_non_sep] {
                     dp_cost[next_non_sep] = cur_cost;
-                    dp_prev[next_non_sep] = dp_prev[pos].clone();
+                    dp_prev[next_non_sep] = Some(PreeditStep::SkipSep { prev: pos });
                 }
                 continue;
             }
-            for edge in &self.edges_from[pos] {
+            for (edge_idx, edge) in self.edges_from[pos].iter().enumerate() {
                 if edge.kind == EdgeKind::Fuzzy {
                     continue;
                 }
@@ -151,19 +158,10 @@ impl SyllableLattice {
                 let cand_cost = cur_cost.saturating_add(penalty);
                 if cand_cost < dp_cost[edge.end] {
                     dp_cost[edge.end] = cand_cost;
-                    let mut seq = dp_prev[pos]
-                        .as_ref()
-                        .map(|(_, s)| s.clone())
-                        .unwrap_or_default();
-                    if matches!(
-                        edge.kind,
-                        EdgeKind::Initial | EdgeKind::PartialTail | EdgeKind::Typo(_)
-                    ) {
-                        seq.push(self.raw[edge.start..edge.end].to_string());
-                    } else {
-                        seq.extend(edge.syllables.iter().map(str::to_string));
-                    }
-                    dp_prev[edge.end] = Some((pos, seq));
+                    dp_prev[edge.end] = Some(PreeditStep::Edge {
+                        prev: pos,
+                        edge_idx,
+                    });
                 }
             }
             if self.raw.as_bytes()[pos].is_ascii_lowercase()
@@ -176,20 +174,64 @@ impl SyllableLattice {
                 let cand_cost = cur_cost.saturating_add(300);
                 if cand_cost < dp_cost[next_pos] {
                     dp_cost[next_pos] = cand_cost;
-                    let mut seq = dp_prev[pos]
-                        .as_ref()
-                        .map(|(_, s)| s.clone())
-                        .unwrap_or_default();
-                    seq.push(self.raw[pos..next_pos].to_string());
-                    dp_prev[next_pos] = Some((pos, seq));
+                    dp_prev[next_pos] = Some(PreeditStep::RawFallback {
+                        prev: pos,
+                        end: next_pos,
+                    });
                 }
             }
         }
 
-        dp_prev[self.len]
-            .as_ref()
-            .map(|(_, seq)| seq.join("'"))
-            .unwrap_or_else(|| self.raw.clone())
+        if dp_prev[self.len].is_none() {
+            return self.raw.clone();
+        }
+
+        let mut steps = Vec::with_capacity(self.len / 2 + 2);
+        let mut cursor = self.len;
+        while cursor > 0 {
+            let Some(step) = dp_prev[cursor] else {
+                return self.raw.clone();
+            };
+            steps.push(step);
+            cursor = match step {
+                PreeditStep::SkipSep { prev }
+                | PreeditStep::Edge { prev, .. }
+                | PreeditStep::RawFallback { prev, .. } => prev,
+            };
+        }
+        steps.reverse();
+
+        let mut out = String::with_capacity(self.len + steps.len());
+        let mut emitted = false;
+        let push_part = |out: &mut String, emitted: &mut bool, part: &str| {
+            if *emitted {
+                out.push('\'');
+            }
+            out.push_str(part);
+            *emitted = true;
+        };
+        for step in steps {
+            match step {
+                PreeditStep::SkipSep { .. } => {}
+                PreeditStep::RawFallback { prev, end } => {
+                    push_part(&mut out, &mut emitted, &self.raw[prev..end]);
+                }
+                PreeditStep::Edge { prev, edge_idx } => {
+                    let edge = &self.edges_from[prev][edge_idx];
+                    if matches!(
+                        edge.kind,
+                        EdgeKind::Initial | EdgeKind::PartialTail | EdgeKind::Typo(_)
+                    ) {
+                        push_part(&mut out, &mut emitted, &self.raw[edge.start..edge.end]);
+                    } else {
+                        for syl in edge.syllables.iter() {
+                            push_part(&mut out, &mut emitted, syl);
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
