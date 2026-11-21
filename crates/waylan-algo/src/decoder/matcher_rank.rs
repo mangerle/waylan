@@ -102,10 +102,13 @@ pub(super) fn filter_and_truncate_raw_matches(
 ) {
     // 常规输入（<= 63 字节）使用栈上 u64 位图完成 O(1) 零堆分配判定；超长输入回退布尔表
     let mut common_mask: u64 = 0;
+    let mut phrase_common_mask: u64 = 0;
     let mut common_overflow: Vec<bool> = Vec::new();
+    let mut phrase_common_overflow: Vec<bool> = Vec::new();
     let use_mask = target_len < 64;
     if !use_mask {
         common_overflow.resize(target_len + 1, false);
+        phrase_common_overflow.resize(target_len + 1, false);
     }
 
     for o in raw.iter() {
@@ -116,22 +119,43 @@ pub(super) fn filter_and_truncate_raw_matches(
                 *slot = true;
             }
         }
+        if o.freq >= 30 {
+            if use_mask {
+                phrase_common_mask |= 1u64 << o.end;
+            } else if let Some(slot) = phrase_common_overflow.get_mut(o.end) {
+                *slot = true;
+            }
+        }
     }
 
     raw.retain(|m| {
-        let is_rare_single = m.syllable_count == 1
-            && m.freq < 10
-            && m.char_len == 1
-            && (start_pos > 0 || m.end < target_len);
-        if !is_rare_single {
+        let is_exact_whole_query = start_pos == 0 && m.end == target_len;
+        if is_exact_whole_query {
             return true;
         }
-        let has_common = if use_mask {
-            (common_mask & (1u64 << m.end)) != 0
-        } else {
-            common_overflow.get(m.end).copied().unwrap_or(false)
-        };
-        !has_common
+        // 1. 隔离低频生僻单字（同跨度存在常用字/词时）
+        if m.syllable_count == 1 && m.freq < 10 && m.char_len == 1 {
+            let has_common = if use_mask {
+                (common_mask & (1u64 << m.end)) != 0
+            } else {
+                common_overflow.get(m.end).copied().unwrap_or(false)
+            };
+            return !has_common;
+        }
+        // 2. 主词库长尾降噪分级：极低频生僻多字词（freq <= 5）禁止参与长句拼接；
+        //    低频多字词（freq < 30）在同跨度存在常用词（freq >= 30）时同样隔离，避免靠字长奖励污染整句
+        if m.syllable_count >= 2 && m.freq < 30 {
+            if m.freq <= 5 {
+                return false;
+            }
+            let has_common_phrase = if use_mask {
+                (phrase_common_mask & (1u64 << m.end)) != 0
+            } else {
+                phrase_common_overflow.get(m.end).copied().unwrap_or(false)
+            };
+            return !has_common_phrase;
+        }
+        true
     });
 
     raw.sort_by_key(|m| std::cmp::Reverse(score_raw_match(m, weights)));

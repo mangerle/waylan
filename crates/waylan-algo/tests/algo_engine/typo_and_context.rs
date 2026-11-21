@@ -351,3 +351,39 @@ fn test_engine_mixed_english_guard_pinyin_and_boost_bug() {
     assert!(!cands_bug.is_empty());
     assert_eq!(cands_bug[0].text, "我们需要把这个bug修复掉");
 }
+
+#[test]
+fn test_engine_rare_phrase_isolated_in_sentence_but_exact_query_preserved() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table_mut().insert("wo", "我", 80_000);
+    engine.table_mut().insert("qu", "去", 75_000);
+    engine.table_mut().insert("wan", "玩", 70_000);
+    engine.table_mut().insert("yi", "一", 90_000);
+    engine.table_mut().insert("hui'er", "会儿", 60_000);
+    // 注入极低频生僻多字词（freq = 3）模拟长尾噪声词
+    engine.table_mut().insert("hui'er", "鹅儿", 3);
+
+    // 1. 单独精确查表时，生僻词依然允许召回
+    for ch in "huier".chars() {
+        engine.push_char(ch);
+    }
+    let exact_cands = engine.candidates();
+    assert!(
+        exact_cands.iter().any(|c| c.text == "鹅儿"),
+        "精确整词查表时应保留低频生僻词"
+    );
+
+    // 2. 长句拼接时，生僻多字词被隔离，首选保持干净高频整句
+    engine.reset();
+    for ch in "woquwanyihuier".chars() {
+        engine.push_char(ch);
+    }
+    let sent_cands = engine.candidates();
+    assert!(!sent_cands.is_empty());
+    assert_eq!(sent_cands[0].text, "我去玩一会儿");
+    assert!(
+        !sent_cands[0].text.contains("鹅儿"),
+        "长句拼接不应被极低频生僻多字词污染: {}",
+        sent_cands[0].text
+    );
+}

@@ -24,16 +24,25 @@ pub(super) fn filter_and_rank_matches(
         .filter(|o| o.freq >= 10)
         .map(|o| o.end)
         .collect();
+    let has_common_phrase_at_end: Vec<usize> = matches
+        .iter()
+        .filter(|o| o.freq >= 30)
+        .map(|o| o.end)
+        .collect();
     matches.retain(|m| {
-        let is_rare_single = m.syllable_count == 1
-            && m.freq < 10
-            && m.word.chars().count() == 1
-            && (m.start > 0 || m.end < target_len);
-        if !is_rare_single {
+        if m.start == 0 && m.end == target_len {
             return true;
         }
-        // 同跨度存在常用单字（freq >= 10）或词组时，隔离低频生僻单字，避免其参与组句挤占束宽
-        !has_common_at_end.contains(&m.end)
+        if m.syllable_count == 1 && m.freq < 10 && m.word.chars().count() == 1 {
+            return !has_common_at_end.contains(&m.end);
+        }
+        if m.syllable_count >= 2 && m.freq < 30 {
+            if m.freq <= 5 {
+                return false;
+            }
+            return !has_common_phrase_at_end.contains(&m.end);
+        }
+        true
     });
     matches.sort_by_key(|m| std::cmp::Reverse(score_phrase_match(m, weights)));
     matches.truncate(48);
