@@ -6,6 +6,9 @@
 //! - **核心优势**：彻底消除旧版多路冗余查表与孤立纠错猜测的冲突，所有变体共享同一份束搜索结果。
 //! - **代价与局限**：整词单键默认拉取 Top-12，冷门同音单字由首音节单字兜底补全。
 
+#[path = "reranker.rs"]
+mod reranker;
+
 use crate::decoder::alias::is_habitual_alias_key;
 use crate::decoder::{
     score_phrase_match, to_positive_score, BigramLanguageModel, DecodeResult, PhraseMatch,
@@ -72,6 +75,9 @@ impl AlgoEngine {
 
         // 6. 叠加用户自适应词频权重、词对权重与上一轮上屏上下文
         self.apply_user_and_context_boost(all_candidates);
+
+        // 7. 基于多维特征线性重排器统一校准候选得分
+        reranker::CandidateReranker::rerank_with_default(raw_input, all_candidates);
     }
 
     /// 收集覆盖全输入的整词候选（精确整词、混简拼整词、半成品整词、容错整词）

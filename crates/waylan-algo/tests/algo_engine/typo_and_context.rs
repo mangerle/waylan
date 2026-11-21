@@ -258,3 +258,62 @@ fn test_engine_long_typo_and_english_fallback_connectivity() {
         cands[0].text
     );
 }
+
+#[test]
+fn test_engine_mixed_english_and_erhua_and_reranker() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    engine.table_mut().insert("wo", "我", 80_000);
+    engine.table_mut().insert("xiang", "想", 75_000);
+    engine.table_mut().insert("qu", "去", 75_000);
+    engine.table_mut().insert("wan'er", "玩儿", 60_000);
+    engine.table_mut().insert("zhe'er", "这儿", 60_000);
+    engine.table_mut().insert("wan'ren", "万人", 70_000);
+
+    // 1. 词图级中英混输：woxiangqugoogle -> 我想去google
+    for ch in "woxiangqugoogle".chars() {
+        engine.push_char(ch);
+    }
+    let cands_mix = engine.candidates();
+    assert!(!cands_mix.is_empty());
+    assert_eq!(cands_mix[0].text, "我想去google");
+    assert_eq!(cands_mix[0].consumed_len, Some("woxiangqugoogle".len()));
+
+    // 2. 儿化音专项边：wanr -> 玩儿，zher -> 这儿
+    engine.reset();
+    for ch in "wanr".chars() {
+        engine.push_char(ch);
+    }
+    let cands_wanr = engine.candidates();
+    assert!(
+        cands_wanr.iter().any(|c| c.text == "玩儿"),
+        "wanr 应召回‘玩儿’，实际: {:?}",
+        cands_wanr
+            .iter()
+            .take(5)
+            .map(|c| &c.text)
+            .collect::<Vec<_>>()
+    );
+
+    engine.reset();
+    for ch in "zher".chars() {
+        engine.push_char(ch);
+    }
+    let cands_zher = engine.candidates();
+    assert!(
+        cands_zher.iter().any(|c| c.text == "这儿"),
+        "zher 应召回‘这儿’，实际: {:?}",
+        cands_zher
+            .iter()
+            .take(5)
+            .map(|c| &c.text)
+            .collect::<Vec<_>>()
+    );
+
+    // 3. 反向防误触：wanren 仍正常召回‘万人’，不被误切为 wan'er'en
+    engine.reset();
+    for ch in "wanren".chars() {
+        engine.push_char(ch);
+    }
+    let cands_wanren = engine.candidates();
+    assert_eq!(cands_wanren[0].text, "万人");
+}

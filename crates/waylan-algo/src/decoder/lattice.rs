@@ -276,6 +276,27 @@ fn populate_exact_and_fuzzy_edges(
             cost: borrowing_penalty,
         });
 
+        // 儿化音专项边：如 wanr -> [wan, er]、zher -> [zhe, er]、nar -> [na, er]
+        // 仅当 r 后不再紧跟元音（排除 wanren 误判为 wan'er'en）时生成低惩罚竞争边
+        let seg_bytes = seg.as_bytes();
+        if syl != "er"
+            && syl != "r"
+            && seg_bytes.get(rel_end) == Some(&b'r')
+            && !matches!(
+                seg_bytes.get(rel_end + 1),
+                Some(b'a' | b'e' | b'i' | b'o' | b'u' | b'v')
+            )
+        {
+            out.push(SyllableEdge {
+                start,
+                end: end + 1,
+                syllables: EdgeSyllables::from_two(syl, "er"),
+                kind: EdgeKind::RuleNormalized,
+                typo_count: 0,
+                cost: borrowing_penalty.saturating_add(16),
+            });
+        }
+
         if options.fuzzy.has_active_rules() {
             for variant in PrismFuzzy::expand_fuzzy_syllables(syl, &options.fuzzy) {
                 out.push(SyllableEdge {

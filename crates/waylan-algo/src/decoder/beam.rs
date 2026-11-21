@@ -20,7 +20,8 @@ use super::beam_scoring::{
 use super::language_model::BigramLanguageModel;
 use super::lattice::SyllableLattice;
 use super::matcher::{DatPhraseMatcher, PhraseMatch};
-use crate::syllables::is_valid_syllable;
+use crate::custom_phrase::EnglishSuggestionManager;
+use crate::syllables::{can_segment_into_syllables, is_valid_syllable};
 use crate::table::LexiconTable;
 use crate::user_adaptive::UserAdaptiveModel;
 
@@ -346,6 +347,36 @@ fn decode_connected_fallback(
     )
 }
 
+/// 在词图当前位置注入高频英文词库边，实现免切中英混输（如 woxiangqugoogle -> 我想去google）
+fn append_english_lexicon_edges(
+    lattice: &SyllableLattice,
+    pos: usize,
+    matches: &mut Vec<PhraseMatch>,
+) {
+    let eng = EnglishSuggestionManager::active_or_default();
+    let hits = eng.match_exact_prefixes(&lattice.raw[pos..], 3, 24);
+    for (orig_word, eng_freq, byte_len) in hits {
+        let slice = &lattice.raw[pos..pos + byte_len];
+        if is_valid_syllable(slice) || (byte_len <= 5 && can_segment_into_syllables(slice)) {
+            continue;
+        }
+        matches.push(PhraseMatch {
+            start: pos,
+            end: pos + byte_len,
+            word: orig_word.to_string(),
+            word_id: None,
+            freq: eng_freq.max(10_000),
+            matched_key: Arc::from(slice),
+            syllable_count: 1,
+            typo_count: 0,
+            edge_cost: 12,
+            has_initial: false,
+            has_partial_tail: false,
+            is_exact_all: false,
+        });
+    }
+}
+
 /// 在兜底连通解码模式下追加英文单词兜底边与单字符防断链边
 fn append_fallback_edges(lattice: &SyllableLattice, pos: usize, matches: &mut Vec<PhraseMatch>) {
     let raw = lattice.raw.as_bytes();
@@ -445,6 +476,7 @@ fn advance_beam(
             pos == ctx.start_pos,
         );
         ws.pos_max_reach[pos] = reach;
+        append_english_lexicon_edges(ctx.lattice, pos, &mut matches);
         if fallback_mode {
             append_fallback_edges(ctx.lattice, pos, &mut matches);
         }

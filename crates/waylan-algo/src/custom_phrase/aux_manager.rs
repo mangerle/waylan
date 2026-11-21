@@ -1,9 +1,10 @@
 use super::AuxiliaryDict;
 use crate::types::{AlgoCandidate, CandidateTier};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 static DEFAULT_ENGLISH_MANAGER: OnceLock<Arc<EnglishSuggestionManager>> = OnceLock::new();
+static ACTIVE_ENGLISH_MANAGER: OnceLock<RwLock<Arc<EnglishSuggestionManager>>> = OnceLock::new();
 static DEFAULT_SYMBOL_MANAGER: OnceLock<Arc<SymbolSuggestionManager>> = OnceLock::new();
 
 /// 常用高频英文单词联想管理器
@@ -27,6 +28,51 @@ impl EnglishSuggestionManager {
         DEFAULT_ENGLISH_MANAGER
             .get_or_init(|| Arc::new(Self::new()))
             .clone()
+    }
+
+    /// 获取当前激活的共享英文词库管理器（未设置外部词库时回退到内置默认词库）
+    pub fn active_or_default() -> Arc<Self> {
+        let lock = ACTIVE_ENGLISH_MANAGER.get_or_init(|| RwLock::new(Self::default_global()));
+        lock.read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| Self::default_global())
+    }
+
+    /// 更新当前激活的共享英文词库管理器，供词图级中英混输直接复用外部完整词库
+    pub fn set_active_global(manager: Arc<Self>) {
+        let lock = ACTIVE_ENGLISH_MANAGER.get_or_init(|| RwLock::new(Self::default_global()));
+        if let Ok(mut guard) = lock.write() {
+            *guard = manager;
+        }
+    }
+
+    /// 零堆分配检索文本前缀中精确命中的英文单词（仅扫描连续 ASCII 字母段）
+    pub fn match_exact_prefixes(
+        &self,
+        text: &str,
+        min_len: usize,
+        max_len: usize,
+    ) -> Vec<(&str, u32, usize)> {
+        let bytes = text.as_bytes();
+        let cap = bytes.len().min(max_len).min(32);
+        let mut lower_buf = [0u8; 32];
+        let mut ascii_len = 0usize;
+        while ascii_len < cap && bytes[ascii_len].is_ascii_alphabetic() {
+            lower_buf[ascii_len] = bytes[ascii_len].to_ascii_lowercase();
+            ascii_len += 1;
+        }
+        if ascii_len < min_len {
+            return Vec::new();
+        }
+        let mut matches = Vec::new();
+        for len in min_len..=ascii_len {
+            if let Ok(key) = std::str::from_utf8(&lower_buf[..len]) {
+                if let Some((orig, score)) = self.exact_index.get(key) {
+                    matches.push((orig.as_str(), *score, len));
+                }
+            }
+        }
+        matches
     }
 
     /// 创建带默认保底词汇的管理器

@@ -53,7 +53,9 @@ impl LexiconResources {
 
     /// 载入外部辅助与混输二进制词库（包含英文词库与符号表情库）
     pub fn load_auxiliary_dict(&mut self, dict: AuxiliaryDict) {
-        self.english_suggester = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
+        let eng = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
+        EnglishSuggestionManager::set_active_global(eng.clone());
+        self.english_suggester = eng;
         self.symbol_suggester = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
     }
 
@@ -63,6 +65,7 @@ impl LexiconResources {
         english: Arc<EnglishSuggestionManager>,
         symbols: Arc<SymbolSuggestionManager>,
     ) {
+        EnglishSuggestionManager::set_active_global(english.clone());
         self.english_suggester = english;
         self.symbol_suggester = symbols;
     }
