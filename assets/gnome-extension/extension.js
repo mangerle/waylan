@@ -27,6 +27,7 @@ function readWaylanConfig() {
         cornerRadius: 8,
         opacity: 95,
         hideIndicator: false,
+        freezeDuringComposition: true,
     };
 
     if (!file.query_exists(null)) {
@@ -100,6 +101,12 @@ function readWaylanConfig() {
         const exclusiveMatch = text.match(/^\s*exclusive_input_source\s*=\s*(true|false)/m);
         const hideIndicator = exclusiveMatch ? exclusiveMatch[1] === 'true' : defaultConfig.hideIndicator;
 
+        // 组字锚定：缺省开启，仅在配置显式写入 false 时关闭
+        const freezeMatch = text.match(/^\s*candidate_freeze_during_composition\s*=\s*(true|false)/m);
+        const freezeDuringComposition = freezeMatch
+            ? freezeMatch[1] === 'true'
+            : defaultConfig.freezeDuringComposition;
+
         return {
             windowMode,
             density,
@@ -111,6 +118,7 @@ function readWaylanConfig() {
             cornerRadius,
             opacity,
             hideIndicator,
+            freezeDuringComposition,
         };
     } catch (e) {
         console.error('[WaylanExtension] 读取微澜配置文件异常:', e);
@@ -672,6 +680,9 @@ export default class WaylanHideInputExtension extends Extension {
         // 分别由 exclusive_input_source 与 candidate_window_mode 决定，故 enable 只建立
         // 配置通道并应用一次当前意图，具体副作用全部下沉到 _applyCurrentConfig。
         this._indicatorHidden = false;
+        this._origCaretGeometry = null;
+        this._pendingCaretGeometry = null;
+        this._popupVisibleId = 0;
         this._setupConfigWatcher();
         this._setupActiveWindowTracker();
         this._applyCurrentConfig();
@@ -828,6 +839,11 @@ export default class WaylanHideInputExtension extends Extension {
         const config = readWaylanConfig();
         this._currentConfig = config;
 
+        // 关闭组字锚定时立即解除冻结，并把组字期间缓存的真实光标几何补回 Shell
+        if (!config.freezeDuringComposition) {
+            this._flushPendingCaretGeometry();
+        }
+
         // 职责一：仅在微澜独占输入源时隐藏顶栏原生指示器
         this._applyIndicatorVisibility(config.hideIndicator);
 
@@ -855,6 +871,7 @@ export default class WaylanHideInputExtension extends Extension {
             this._candidatePopup = popup;
 
             const getPs = () => popup._panelService || ibusManager._panelService;
+            this._installCaretAnchor(popup);
             this._waylanView = new WaylanCandidateView(getPs, config);
 
             // 保存原始子控件并将弹窗内容替换为微澜胶囊组件
@@ -897,7 +914,82 @@ export default class WaylanHideInputExtension extends Extension {
         }
     }
 
+    /**
+     * 安装组字期间的候选框位置锚定
+     *
+     * # 设计原理
+     * - 实现初衷：GNOME Shell 的 IBusCandidatePopup 对每条 set-cursor-location 都会立即重摆弹窗，
+     *   内联预编辑增长时光标右移，候选框便会随拼音一路漂移。
+     * - 核心机制：缓存弹窗可见（组字中）期间的新光标几何，弹窗隐藏（候选上屏或取消）后一次性补回，
+     *   使候选框在整段组字期间固定在起始位置，上屏后再跟随新光标。
+     * - 代价与局限：依赖 Shell 私有方法 `_setDummyCursorGeometry`；组字期间若窗口滚动或拖动，
+     *   候选框会停留在原位置直到本次组字结束。
+     */
+    _installCaretAnchor(popup) {
+        if (this._origCaretGeometry) {
+            return;
+        }
+        if (typeof popup._setDummyCursorGeometry !== 'function') {
+            console.warn('[WaylanExtension] 当前 GNOME Shell 不支持候选框锚定，已跳过组字期间固定位置。');
+            return;
+        }
+
+        this._origCaretGeometry = popup._setDummyCursorGeometry;
+        popup._setDummyCursorGeometry = (x, y, w, h) => {
+            if (this._isCandidateCaretFrozen(popup)) {
+                this._pendingCaretGeometry = { x, y, width: w, height: h };
+                return;
+            }
+            this._origCaretGeometry.call(popup, x, y, w, h);
+        };
+
+        // 弹窗隐藏即本次组字结束：把缓存的真实光标几何补回，供下一次组字锚定使用
+        this._popupVisibleId = popup.connect('notify::visible', () => {
+            if (!popup.visible) {
+                this._flushPendingCaretGeometry();
+            }
+        });
+    }
+
+    /** 判断当前是否应冻结候选框光标几何（配置开启且候选弹窗处于可见态） */
+    _isCandidateCaretFrozen(popup) {
+        const enabled = !this._currentConfig ||
+            this._currentConfig.freezeDuringComposition !== false;
+        return enabled && popup.visible;
+    }
+
+    /** 把组字期间缓存的最后一次光标几何补写给 Shell（弹窗已隐藏时仅更新 dummy cursor） */
+    _flushPendingCaretGeometry() {
+        const pending = this._pendingCaretGeometry;
+        this._pendingCaretGeometry = null;
+        if (!pending || !this._candidatePopup || !this._origCaretGeometry) {
+            return;
+        }
+        this._origCaretGeometry.call(
+            this._candidatePopup,
+            pending.x,
+            pending.y,
+            pending.width,
+            pending.height);
+    }
+
+    /** 还原 Shell 原始的光标几何更新方法并清理锚定状态 */
+    _uninstallCaretAnchor() {
+        if (this._popupVisibleId && this._candidatePopup) {
+            this._candidatePopup.disconnect(this._popupVisibleId);
+        }
+        this._popupVisibleId = 0;
+
+        if (this._origCaretGeometry && this._candidatePopup) {
+            this._candidatePopup._setDummyCursorGeometry = this._origCaretGeometry;
+        }
+        this._origCaretGeometry = null;
+        this._pendingCaretGeometry = null;
+    }
+
     _unmountWaylanView() {
+        this._uninstallCaretAnchor();
+
         if (!this._candidatePopup) {
             return;
         }

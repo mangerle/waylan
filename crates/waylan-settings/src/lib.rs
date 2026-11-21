@@ -111,6 +111,7 @@ mod tests {
                 candidate_orientation: CandidateOrientation::Vertical,
                 candidate_index_style: CandidateIndexStyle::Circled,
                 candidate_window_mode: CandidateWindowMode::WaylanCustom,
+                candidate_freeze_during_composition: false,
                 candidate_density: CandidateDensity::Normal,
                 candidate_theme: CandidateThemePreset::Emerald,
                 candidate_item_spacing: 10.0,
@@ -192,6 +193,7 @@ mod tests {
         assert_eq!(cfg.ui.candidate_padding_h, 12.0);
         assert_eq!(cfg.ui.candidate_corner_radius, 10.0);
         assert_eq!(cfg.ui.candidate_opacity, 90);
+        assert!(!cfg.ui.candidate_freeze_during_composition);
         assert!(cfg.pinyin.fuzzy_rules.g_k);
         assert!(cfg.pinyin.typo_rules.gn_ng);
         assert!(cfg.pinyin.auto_pangu_spacing);

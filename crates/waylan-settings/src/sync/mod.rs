@@ -97,6 +97,7 @@ mod tests {
         assert_eq!(window.get_candidate_padding_h(), 8.0);
         assert_eq!(window.get_candidate_corner_radius(), 8.0);
         assert_eq!(window.get_candidate_opacity(), 95.0);
+        assert!(window.get_candidate_freeze_during_composition()); // 默认开启
         assert_eq!(window.get_voice_visual_effect_index(), 0); // 默认 DynamicWaveform
 
         // 模拟用户在界面修改某项（切为索引 1: GNOME 原生单图标，索引 2: 圆圈序号，修改快捷键，切为原生候选框模式）
@@ -112,6 +113,7 @@ mod tests {
         window.set_candidate_padding_h(14.0);
         window.set_candidate_corner_radius(10.0);
         window.set_candidate_opacity(90.0);
+        window.set_candidate_freeze_during_composition(false);
         window.set_voice_visual_effect_index(1); // BreathingPulse
         window.set_traditional_shortcut("Ctrl + Alt + F".into());
         window.set_full_width_char_shortcut("Ctrl + Shift + Space".into());
@@ -136,6 +138,7 @@ mod tests {
         assert_eq!(updated_cfg.ui.candidate_padding_h, 14.0);
         assert_eq!(updated_cfg.ui.candidate_corner_radius, 10.0);
         assert_eq!(updated_cfg.ui.candidate_opacity, 90);
+        assert!(!updated_cfg.ui.candidate_freeze_during_composition);
         assert_eq!(
             updated_cfg.voice.interaction.visual_effect,
             VoiceVisualEffect::BreathingPulse

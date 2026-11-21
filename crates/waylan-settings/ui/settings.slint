@@ -40,6 +40,7 @@ export component SettingsWindow inherits Window {
     in-out property <float> candidate_padding_h: 8;
     in-out property <float> candidate_corner_radius: 8;
     in-out property <float> candidate_opacity: 95;
+    in-out property <bool> candidate_freeze_during_composition: true;
     in-out property <float> page_size_val: 5;
     in-out property <float> font_size_val: 15;
     in-out property <int> orientation_index: 0;
@@ -376,6 +377,7 @@ export component SettingsWindow inherits Window {
                         candidate_padding_h <=> root.candidate_padding_h;
                         candidate_corner_radius <=> root.candidate_corner_radius;
                         candidate_opacity_val <=> root.candidate_opacity;
+                        candidate_freeze_during_composition <=> root.candidate_freeze_during_composition;
                         orientation_index: root.orientation_index;
                         index_style_index: root.index_style_index;
                         page_size_val: root.page_size_val;

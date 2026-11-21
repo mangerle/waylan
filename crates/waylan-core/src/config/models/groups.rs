@@ -48,6 +48,8 @@ pub struct UiConfig {
     pub candidate_index_style: CandidateIndexStyle,
     /// 候选框渲染模式（微澜现代专属 / 桌面原生系统）
     pub candidate_window_mode: CandidateWindowMode,
+    /// 组字期间是否固定 GNOME 扩展候选框位置（默认开启；候选上屏后恢复跟随光标）
+    pub candidate_freeze_during_composition: bool,
     /// 候选框排版留白密度（紧凑 / 标准 / 宽松）
     pub candidate_density: CandidateDensity,
     /// 候选框色彩主题预设（微澜翡翠绿 / 极简黑白 / 极客暗夜冰蓝 / 暖阳奶茶）
@@ -80,6 +82,7 @@ impl Default for UiConfig {
             candidate_orientation: CandidateOrientation::Horizontal,
             candidate_index_style: CandidateIndexStyle::ModernSpace,
             candidate_window_mode: CandidateWindowMode::default(),
+            candidate_freeze_during_composition: true,
             candidate_density: CandidateDensity::default(),
             candidate_theme: CandidateThemePreset::default(),
             candidate_item_spacing: default_candidate_item_spacing(),
@@ -320,5 +323,20 @@ impl Default for DesktopConfig {
             terminal_default_english: true,
             default_english_apps: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UiConfig;
+
+    #[test]
+    fn test_freeze_during_composition_defaults_true() {
+        let default_cfg: UiConfig = toml::from_str("").expect("空配置应可反序列化为默认值");
+        assert!(default_cfg.candidate_freeze_during_composition);
+
+        let disabled: UiConfig = toml::from_str("candidate_freeze_during_composition = false")
+            .expect("显式关闭配置应可反序列化");
+        assert!(!disabled.candidate_freeze_during_composition);
     }
 }

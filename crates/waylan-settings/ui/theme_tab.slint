@@ -1,5 +1,5 @@
 import { ComboBox } from "std-widgets.slint";
-import { SettingCard, AppSlider, AppSwitch } from "common.slint";
+import { SettingCard, AppSlider, AppSwitch, AppCheckBox } from "common.slint";
 
 export component ThemeTab inherits VerticalLayout {
     spacing: 16px;
@@ -20,6 +20,9 @@ export component ThemeTab inherits VerticalLayout {
     in-out property <float> candidate_padding_h: 8;
     in-out property <float> candidate_corner_radius: 8;
     in-out property <float> candidate_opacity_val: 95;
+
+    // 组字期间是否固定候选框位置（GNOME 扩展候选框生效）
+    in-out property <bool> candidate_freeze_during_composition: true;
 
     // 候选框外观排版只读联动参数（由常规设置传入，仅供所见即所得候选框预览联动呈现）
     in property <int> orientation_index: 0;     // 0: 水平横排, 1: 垂直竖排
@@ -477,6 +480,20 @@ export component ThemeTab inherits VerticalLayout {
                     }
                 }
             }
+        }
+    }
+
+    // ==========================================
+    // 4. 候选框定位行为
+    // ==========================================
+    SettingCard {
+        title: "候选框定位行为";
+        subtitle: "GNOME 扩展候选框在拼音组字期间是否跟随客户端光标移动";
+
+        AppCheckBox {
+            text: "组字期间固定候选框位置（候选上屏后再跟随新光标，默认开启）";
+            checked <=> root.candidate_freeze_during_composition;
+            enabled: root.window_mode_index == 0;
         }
     }
 }

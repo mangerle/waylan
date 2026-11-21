@@ -90,6 +90,7 @@ fn sanitize_shortcut_string(val: slint::SharedString) -> String {
 /// 同步候选框外观排版与主题渲染参数
 fn sync_ui_appearance(window: &SettingsWindow, ui: &UiConfig) {
     window.set_window_mode_index(ui.candidate_window_mode.as_ui_index());
+    window.set_candidate_freeze_during_composition(ui.candidate_freeze_during_composition);
     window.set_density_index(ui.candidate_density.as_ui_index());
     window.set_candidate_item_spacing(ui.candidate_item_spacing);
     window.set_candidate_padding_v(ui.candidate_padding_v);
@@ -107,6 +108,7 @@ fn sync_ui_appearance(window: &SettingsWindow, ui: &UiConfig) {
 /// 从界面更新候选框外观排版与主题渲染参数
 fn update_ui_appearance(window: &SettingsWindow, ui: &mut UiConfig) {
     ui.candidate_window_mode = CandidateWindowMode::from_ui_index(window.get_window_mode_index());
+    ui.candidate_freeze_during_composition = window.get_candidate_freeze_during_composition();
     ui.candidate_density = CandidateDensity::from_ui_index(window.get_density_index());
     ui.candidate_theme = CandidateThemePreset::from_ui_index(window.get_theme_preset_index());
     ui.candidate_item_spacing = window.get_candidate_item_spacing();
