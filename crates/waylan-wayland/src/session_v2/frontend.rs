@@ -58,6 +58,13 @@ impl<'a> InputMethodFrontend for WaylanV2Frontend<'a> {
         }
     }
 
+    fn delete_surrounding_text(&mut self, before_bytes: u32, after_bytes: u32) {
+        if let Some(ref im) = self.protocol.input_method {
+            im.delete_surrounding_text(before_bytes, after_bytes);
+            im.commit(self.protocol.done_serial);
+        }
+    }
+
     fn update_candidates(&mut self, state: &CandidateBoxState) {
         let params = CandidateSurfaceCommitParams {
             shm: self.protocol.shm.as_ref(),

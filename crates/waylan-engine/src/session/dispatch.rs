@@ -174,9 +174,13 @@ impl ImeCoreSession {
             }
         }
 
-        // 2. 若输入缓冲区为空（空闲输入），优先判定代码/URL/路径语境自动直通英文，
+        // 2. 若输入缓冲区为空（空闲输入），优先处理“选错即撤回”、代码/URL/路径自动直通英文，
         //    再拦截并处理智能标点与数字上下文
         if self.engine.raw_input().is_empty() {
+            if let Some(action) = self.try_undo_last_commit(keycode, now) {
+                return action;
+            }
+            self.last_commit_undo = None;
             if keycode == KEY_BACKSPACE || keycode == KEY_SPACE {
                 return ImeOutputAction::PassThrough;
             }
@@ -205,13 +209,20 @@ impl ImeCoreSession {
 
     /// 处理英文模式、CapsLock 锁定及控制键按下时的透传或大写/全角字母转换
     fn dispatch_passthrough_or_fullwidth_english(&self, keycode: u32) -> Option<ImeOutputAction> {
-        // 0. 组词态下的 Ctrl+Delete 放行给候选忘词逻辑，其余控制组合键一律透传
+        // 0. 组词态下的 Ctrl+Delete（忘词）与空闲态紧随上屏后的 Ctrl+Backspace（选错撤回）放行，
+        //    其余控制组合键一律透传
         let is_forget_shortcut = self.mode == InputMode::Chinese
             && !self.engine.raw_input().is_empty()
             && keycode == KEY_DELETE
             && self.is_ctrl_active()
             && !self.is_alt_active();
-        if self.has_ctrl_or_alt() && !is_forget_shortcut {
+        let is_undo_commit_shortcut = self.mode == InputMode::Chinese
+            && self.engine.raw_input().is_empty()
+            && self.last_commit_undo.is_some()
+            && keycode == KEY_BACKSPACE
+            && self.is_ctrl_active()
+            && !self.is_alt_active();
+        if self.has_ctrl_or_alt() && !is_forget_shortcut && !is_undo_commit_shortcut {
             return Some(ImeOutputAction::PassThrough);
         }
 
@@ -270,6 +281,7 @@ impl ImeCoreSession {
             }
         }
 
+        let raw_before_commit = self.engine.raw_input().to_string();
         let params = CompositionKeyParams {
             key: keycode,
             shift_active: self.is_shift_active(),
@@ -291,6 +303,13 @@ impl ImeCoreSession {
                 } else {
                     text
                 };
+                if !raw_before_commit.is_empty() && !final_text.is_empty() {
+                    self.last_commit_undo = Some(super::LastCommitUndoState {
+                        raw_pinyin: raw_before_commit,
+                        committed_text: final_text.clone(),
+                        committed_at: now,
+                    });
+                }
                 ImeOutputAction::Commit(final_text)
             }
             ImeOutputAction::CommitPartial {
@@ -373,6 +392,27 @@ impl ImeCoreSession {
             return Some(ImeOutputAction::Commit(full.to_string()));
         }
         Some(ImeOutputAction::PassThrough)
+    }
+
+    /// 选错即撤回：紧随拼音选词上屏后按下 `Ctrl+Backspace`（15 秒内），删除刚上屏文本并恢复原拼音编辑态
+    fn try_undo_last_commit(&mut self, keycode: u32, now: u64) -> Option<ImeOutputAction> {
+        if keycode != KEY_BACKSPACE || !self.is_ctrl_active() || self.is_alt_active() {
+            return None;
+        }
+        let undo = self.last_commit_undo.take()?;
+        if now.saturating_sub(undo.committed_at) > 15 {
+            return None;
+        }
+        let delete_bytes = undo.committed_text.len() as u32;
+        if delete_bytes == 0 || undo.raw_pinyin.is_empty() {
+            return None;
+        }
+        self.reset_viewport();
+        self.engine.reset();
+        for ch in undo.raw_pinyin.chars() {
+            self.engine.push_char(ch);
+        }
+        Some(ImeOutputAction::UndoCommitAndRestore { delete_bytes })
     }
 }
 
@@ -467,5 +507,65 @@ mod passthrough_tests {
         assert!(!should_auto_passthrough_english("https://github.com/ "));
         assert!(!should_auto_passthrough_english("HashMap "));
         assert!(!should_auto_passthrough_english("纯小写abc"));
+    }
+
+    #[test]
+    fn test_undo_last_commit_restores_pinyin() {
+        let mut session = ImeCoreSession::default();
+        // 输入 "wo" (evdev: w=17, o=24) + 空格上屏
+        for key in [17u32, 24u32] {
+            let act = session.process_key(
+                KeyProcessContext {
+                    keycode: key,
+                    is_press: true,
+                    is_password_or_locked: false,
+                    surrounding_prefix: None,
+                },
+                1000,
+            );
+            assert!(matches!(act, ImeOutputAction::Handled { update_ui: true }));
+        }
+        let commit_act = session.process_key(
+            KeyProcessContext {
+                keycode: KEY_SPACE,
+                is_press: true,
+                is_password_or_locked: false,
+                surrounding_prefix: None,
+            },
+            1001,
+        );
+        let committed = match commit_act {
+            ImeOutputAction::Commit(t) => t,
+            other => panic!("期望 Commit，实际: {:?}", other),
+        };
+        assert!(session.engine.raw_input().is_empty());
+
+        // 紧接着按 Ctrl+Backspace 触发“选错即撤回”
+        session.process_key(
+            KeyProcessContext {
+                keycode: KEY_LEFTCTRL,
+                is_press: true,
+                is_password_or_locked: false,
+                surrounding_prefix: None,
+            },
+            1002,
+        );
+        let undo_act = session.process_key(
+            KeyProcessContext {
+                keycode: KEY_BACKSPACE,
+                is_press: true,
+                is_password_or_locked: false,
+                surrounding_prefix: None,
+            },
+            1002,
+        );
+        assert_eq!(
+            undo_act,
+            ImeOutputAction::UndoCommitAndRestore {
+                delete_bytes: committed.len() as u32
+            }
+        );
+        assert_eq!(session.engine.raw_input(), "wo");
+        assert!(!session.engine.candidates().is_empty());
     }
 }

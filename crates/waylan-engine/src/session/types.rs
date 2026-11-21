@@ -53,6 +53,17 @@ pub enum ShortcutToggleAction {
     FullWidthPunct(bool),
 }
 
+/// 最近一次拼音选词上屏快照（供“选错即撤回”快速恢复原拼音编辑态）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastCommitUndoState {
+    /// 上屏前的原始拼音输入序列
+    pub raw_pinyin: String,
+    /// 已上屏提交的最终文本
+    pub committed_text: String,
+    /// 上屏时的 Unix 秒级时间戳
+    pub committed_at: u64,
+}
+
 /// 核心输入法按键与会话事件统一决策动作 (IME Output Action)
 ///
 /// # 设计原理
@@ -80,6 +91,8 @@ pub enum ImeOutputAction {
     },
     /// 取消/重置当前输入（如 Escape 取消）
     Reset,
+    /// 撤回刚刚误选上屏的文本并恢复先前的拼音编辑态（删除光标前 `delete_bytes` 字节并重绘候选框）
+    UndoCommitAndRestore { delete_bytes: u32 },
     /// 模式或功能快捷键切换（简繁切换、字符全半角、标点全半角）
     ShortcutToggled(ShortcutToggleAction),
     /// 输入模式发生切换（如按 Shift 切换中英文）

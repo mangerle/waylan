@@ -152,6 +152,11 @@ impl ImeRuntime {
                 self.reset_input_state_with_frontend(ctx);
                 (true, None)
             }
+            ImeOutputAction::UndoCommitAndRestore { delete_bytes } => {
+                ctx.frontend.delete_surrounding_text(delete_bytes, 0);
+                self.refresh_frontend_ui(ctx.frontend, ctx.inline_preedit);
+                (true, None)
+            }
             ImeOutputAction::ShortcutToggled(_toggle) => {
                 self.broadcast_state_snapshot();
                 (true, None)

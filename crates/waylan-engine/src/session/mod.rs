@@ -62,6 +62,8 @@ pub struct ImeCoreSession {
     pub(crate) page_size: usize,
     /// 候选框展开交互状态机（大卡片与多行大网格在类型层面严格互斥）
     pub(crate) expansion: CandidateExpansion,
+    /// 最近一次拼音选词上屏快照（供“选错即撤回”恢复拼音编辑态）
+    pub(crate) last_commit_undo: Option<LastCommitUndoState>,
 }
 
 impl Default for ImeCoreSession {
@@ -101,6 +103,7 @@ impl ImeCoreSession {
             selected_index: 0,
             page_size,
             expansion: CandidateExpansion::None,
+            last_commit_undo: None,
         }
     }
 
@@ -280,6 +283,7 @@ impl ImeCoreSession {
         self.punctuation_processor.reset();
         self.collapse_grid();
         self.collapse_card();
+        self.last_commit_undo = None;
         self.engine.reset();
     }
 

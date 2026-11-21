@@ -25,6 +25,9 @@ pub trait InputMethodFrontend {
     /// 模拟方向键或向合成器请求移动文本光标相对偏移（负数向左，正数向右）
     fn move_cursor(&mut self, offset: i32);
 
+    /// 请求前端删除光标前后指定 UTF-8 字节数的已上屏文本（用于“选错即撤回”恢复拼音编辑态）
+    fn delete_surrounding_text(&mut self, _before_bytes: u32, _after_bytes: u32) {}
+
     /// 通知前端中英文输入模式发生了切换
     fn sync_input_mode(&mut self, mode: InputMode);
 }
