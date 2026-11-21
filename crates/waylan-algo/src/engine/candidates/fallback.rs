@@ -98,6 +98,7 @@ impl AlgoEngine {
                 consumed_len: Some(consumed_len),
                 sub_candidates: Vec::new(),
                 word_id,
+                typo_count: 0,
             });
         }
     }
@@ -181,6 +182,7 @@ impl AlgoEngine {
                 consumed_len: Some(raw_input.len()),
                 sub_candidates: Vec::new(),
                 word_id: m.word_id,
+                typo_count: 0,
             });
             added += 1;
             if added >= 2 {

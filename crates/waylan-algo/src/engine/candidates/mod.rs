@@ -155,12 +155,13 @@ impl AlgoEngine {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let mut candidates = CandidatePipeline::process_core_with_opencc(
+        let mut candidates = CandidatePipeline::process_core_with_context(
             raw_candidates,
             &self.config,
             self.config
                 .traditional_chinese
                 .then(|| self.resources.opencc_dict()),
+            Some(raw_input),
         );
 
         self.inject_page_zero_extensions(raw_input, &best_units, &mut candidates);

@@ -1,6 +1,8 @@
 use crate::opencc::OpenCcDict;
+use crate::syllables::can_segment_into_syllables;
 use crate::types::{AlgoCandidate, AlgoConfig};
 use std::collections::HashSet;
+use waylan_core::candidate::CandidateTier;
 
 /// 扩展 B 区以后在常见字体（Noto CJK、思源黑体等）中可正常渲染的通用规范扩展汉字
 const COMMON_EXT_CHARS: &str = concat!(
@@ -22,6 +24,90 @@ pub fn is_rare_ext_char(text: &str) -> bool {
         return false;
     };
     u32::from(ch) >= 0x20000 && !COMMON_EXT_CHARS.contains(ch)
+}
+
+/// 判断原始输入拼音串是否包含无法切分为合法音节的非法分段
+///
+/// # 判定规则
+/// 1. 按隔音符号 `'` 分割为若干子段；
+/// 2. 若存在任意非空子段无法被标准音节表完全切分（例如 `xai`），则判定为包含非法音节；
+/// 3. 若所有子段均可被合法切分（例如 `yi`、`xia`），则判定为不含非法音节。
+pub fn has_illegal_syllable(input: &str) -> bool {
+    let clean = input.trim();
+    if clean.is_empty() {
+        return false;
+    }
+    if clean.contains('\'') {
+        clean
+            .split('\'')
+            .filter(|seg| !seg.is_empty())
+            .any(|seg| !can_segment_into_syllables(seg))
+    } else {
+        !can_segment_into_syllables(clean)
+    }
+}
+
+/// 检查是否满足“非法音节 + 单次纠错明显领先混拼”的竞价提权条件
+///
+/// # 判定规则
+/// 1. 原始输入必须显式包含非法音节；
+/// 2. 候选列表中必须实际存在混拼候选（`SentenceViterbi` 且注释包含 `[混拼]`）；
+/// 3. 候选列表中必须存在单次纠错候选（`TypoCorrection` 且 `typo_count == 1`）；
+/// 4. 单次纠错候选的最佳得分必须高于混拼候选的最佳得分。
+fn should_boost_single_typo(candidates: &[AlgoCandidate], raw_input: Option<&str>) -> bool {
+    let Some(input) = raw_input else {
+        return false;
+    };
+    if !has_illegal_syllable(input) {
+        return false;
+    }
+
+    // 提取单次纠错候选的最高分
+    let best_typo = candidates
+        .iter()
+        .filter(|c| c.tier == CandidateTier::TypoCorrection && c.typo_count == 1)
+        .map(|c| c.score)
+        .max();
+
+    let Some(typo_score) = best_typo else {
+        return false;
+    };
+
+    // 提取混拼候选的最高分（必须为 SentenceViterbi 且带混拼注释）
+    let best_mixed = candidates
+        .iter()
+        .filter(|c| {
+            c.tier == CandidateTier::SentenceViterbi
+                && c.comment.as_deref().is_some_and(|m| m.contains("混拼"))
+        })
+        .map(|c| c.score)
+        .max();
+
+    // 仅在真实存在混拼候选被压制时，才允许单次纠错按分数竞争；若无混拼候选（如纯简拼 bj）则不触发
+    let Some(mixed_score) = best_mixed else {
+        return false;
+    };
+
+    typo_score > mixed_score
+}
+
+/// 计算候选的实际排序档位（在满足提权条件时，将单次纠错并入 SentenceViterbi 与混拼候选同台竞技）
+#[inline]
+fn effective_tier(cand: &AlgoCandidate, enable_typo_boost: bool) -> CandidateTier {
+    if enable_typo_boost && cand.tier == CandidateTier::TypoCorrection && cand.typo_count == 1 {
+        CandidateTier::SentenceViterbi
+    } else {
+        cand.tier
+    }
+}
+
+/// 执行候选词排序（支持基于有效层级与得分降序）
+fn sort_candidates(candidates: &mut [AlgoCandidate], enable_typo_boost: bool) {
+    candidates.sort_by(|a, b| {
+        effective_tier(b, enable_typo_boost)
+            .cmp(&effective_tier(a, enable_typo_boost))
+            .then_with(|| b.score.cmp(&a.score))
+    });
 }
 
 /// 候选词后处理流水线 (Candidate Pipeline)
@@ -50,6 +136,16 @@ impl CandidatePipeline {
         config: &AlgoConfig,
         opencc: Option<&OpenCcDict>,
     ) -> Vec<AlgoCandidate> {
+        Self::process_core_with_context(raw_candidates, config, opencc, None)
+    }
+
+    /// 执行候选词核心清洗、排序与去重流水线（支持注入原始输入上下文用于非法音节提权判定）
+    pub fn process_core_with_context(
+        raw_candidates: Vec<AlgoCandidate>,
+        config: &AlgoConfig,
+        opencc: Option<&OpenCcDict>,
+        raw_input: Option<&str>,
+    ) -> Vec<AlgoCandidate> {
         let mut candidates = raw_candidates;
 
         // 1. 字符集过滤（先清除控制符与 PUA，再按需过滤无字体支持的扩展 B+ 非常用单字）
@@ -64,7 +160,8 @@ impl CandidatePipeline {
         //    先按 Tier 与得分降序排列，保留前 160 条高价值候选再执行简繁展开与去重
         const MAX_PRE_OPENCC_CANDIDATES: usize = 160;
         const MAX_PUBLISHED_CANDIDATES: usize = 120;
-        candidates.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| b.score.cmp(&a.score)));
+        let enable_typo_boost = should_boost_single_typo(&candidates, raw_input);
+        sort_candidates(&mut candidates, enable_typo_boost);
         if candidates.len() > MAX_PRE_OPENCC_CANDIDATES {
             candidates.truncate(MAX_PRE_OPENCC_CANDIDATES);
         }
@@ -77,7 +174,7 @@ impl CandidatePipeline {
                 OpenCcDict::global().convert_candidates(&mut candidates);
             }
             // 一简多繁展开可能引入新顺序，重排确保同层级得分有序
-            candidates.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| b.score.cmp(&a.score)));
+            sort_candidates(&mut candidates, enable_typo_boost);
         }
 
         // 4. 候选词去重（在有序列表中保留最高优先级与最高分者）
@@ -97,7 +194,18 @@ impl CandidatePipeline {
         config: &AlgoConfig,
         opencc: Option<&OpenCcDict>,
     ) -> Vec<AlgoCandidate> {
-        let mut candidates = Self::process_core_with_opencc(raw_candidates, config, opencc);
+        Self::process_all_with_context(raw_candidates, config, opencc, None)
+    }
+
+    /// 执行完整候选词清洗与排序流水线（支持注入原始输入上下文）
+    pub fn process_all_with_context(
+        raw_candidates: Vec<AlgoCandidate>,
+        config: &AlgoConfig,
+        opencc: Option<&OpenCcDict>,
+        raw_input: Option<&str>,
+    ) -> Vec<AlgoCandidate> {
+        let mut candidates =
+            Self::process_core_with_context(raw_candidates, config, opencc, raw_input);
 
         // 5. 拼音注释挂载（仅对截断保留的有效候选窗口执行格式化）
         if config.show_pinyin_comment {
@@ -288,5 +396,75 @@ mod tests {
         assert_eq!(deduped[0].score, 100);
         assert_eq!(deduped[1].text, "其他");
         assert_eq!(deduped[2].text, "微澜");
+    }
+
+    #[test]
+    fn test_has_illegal_syllable() {
+        assert!(has_illegal_syllable("yixai"));
+        assert!(has_illegal_syllable("yi'xai"));
+        assert!(has_illegal_syllable("xai"));
+        assert!(!has_illegal_syllable("yixia"));
+        assert!(!has_illegal_syllable("yi'xia"));
+        assert!(!has_illegal_syllable("nihao"));
+        assert!(!has_illegal_syllable(""));
+    }
+
+    #[test]
+    fn test_single_typo_over_mixed_competition() {
+        let raw = vec![
+            AlgoCandidate::new("胰腺癌", "yi'xian'ai", 20_285)
+                .with_tier(CandidateTier::SentenceViterbi)
+                .with_comment("[混拼]")
+                .with_typo_count(0),
+            AlgoCandidate::new("一下", "yi'xia", 29_478)
+                .with_tier(CandidateTier::TypoCorrection)
+                .with_comment("[纠错: yi'xia]")
+                .with_typo_count(1),
+            AlgoCandidate::new("以下", "yi'xia", 18_000)
+                .with_tier(CandidateTier::TypoCorrection)
+                .with_comment("[纠错: yi'xia]")
+                .with_typo_count(1),
+            AlgoCandidate::new("异想天开", "yi'xiang'tian'kai", 35_000)
+                .with_tier(CandidateTier::TypoCorrection)
+                .with_comment("[纠错: yi'xiang'tian'kai]")
+                .with_typo_count(2),
+        ];
+
+        let config = AlgoConfig::default();
+
+        // 场景 A：输入为非法音节 yixai，单次纠错“一下”应反超混拼“胰腺癌”，多次纠错不参与反超
+        let boosted =
+            CandidatePipeline::process_core_with_context(raw.clone(), &config, None, Some("yixai"));
+        assert_eq!(boosted[0].text, "一下");
+        assert_eq!(boosted[1].text, "胰腺癌");
+        assert_eq!(boosted[2].text, "以下");
+        assert_eq!(boosted[3].text, "异想天开");
+
+        // 场景 B：无非法音节上下文或合法音节，混拼档仍保持高于纠错档
+        let normal =
+            CandidatePipeline::process_core_with_context(raw, &config, None, Some("yixia"));
+        assert_eq!(normal[0].text, "胰腺癌");
+        assert_eq!(normal[1].text, "异想天开");
+        assert_eq!(normal[2].text, "一下");
+        assert_eq!(normal[3].text, "以下");
+    }
+
+    #[test]
+    fn test_pure_acronym_not_affected_by_single_typo() {
+        let raw = vec![
+            AlgoCandidate::new("北京", "bj", 50_000)
+                .with_tier(CandidateTier::Acronym)
+                .with_typo_count(0),
+            AlgoCandidate::new("比", "bi", 60_000)
+                .with_tier(CandidateTier::TypoCorrection)
+                .with_comment("[纠错: bi]")
+                .with_typo_count(1),
+        ];
+
+        let config = AlgoConfig::default();
+        // 纯简拼 bj 没有混拼候选，不应触发单次纠错提权，Acronym 必须保持在 TypoCorrection 之上
+        let res = CandidatePipeline::process_core_with_context(raw, &config, None, Some("bj"));
+        assert_eq!(res[0].text, "北京");
+        assert_eq!(res[1].text, "比");
     }
 }

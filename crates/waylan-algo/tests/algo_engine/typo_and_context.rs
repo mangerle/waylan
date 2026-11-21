@@ -387,3 +387,28 @@ fn test_engine_rare_phrase_isolated_in_sentence_but_exact_query_preserved() {
         sent_cands[0].text
     );
 }
+
+#[test]
+fn test_engine_typo_yixai_outranks_mixed_sentence() {
+    let mut engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    // 注入词汇：
+    // yi'xia => "一下"（高频词，作为 xai->xia 倒置纠错候选）
+    // yi'xian'ai => "胰腺癌"（混拼候选，yi + x(声母) + ai）
+    engine.table_mut().insert("yi'xia", "一下", 60_000);
+    engine.table_mut().insert("yi'xian'ai", "胰腺癌", 30_000);
+    engine.table_mut().insert("yi", "一", 90_000);
+    engine.table_mut().insert("xian", "线", 50_000);
+    engine.table_mut().insert("ai", "癌", 40_000);
+
+    for ch in "yixai".chars() {
+        engine.push_char(ch);
+    }
+
+    let cands = engine.candidates();
+    assert!(!cands.is_empty(), "输入 yixai 应召回候选");
+    assert_eq!(
+        cands[0].text, "一下",
+        "在输入非法音节 xai 时，得分更高的单次纠错候选‘一下’应排在混拼候选前面，实际首位为: {}",
+        cands[0].text
+    );
+}

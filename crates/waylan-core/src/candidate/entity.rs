@@ -57,6 +57,9 @@ pub struct Candidate {
     /// 词条在静态词库中的全局整数 ID（若来源于系统词典，可用于直接加速二元转移打分）
     #[serde(default)]
     pub word_id: Option<u32>,
+    /// 该候选沿解码路径消耗的纠错次数（0 表示未纠错；仅用于最终排序的竞争判定）
+    #[serde(default)]
+    pub typo_count: u8,
 }
 
 impl Candidate {
@@ -72,6 +75,7 @@ impl Candidate {
             tier: CandidateTier::ExactWord,
             consumed_len: None,
             word_id: None,
+            typo_count: 0,
         }
     }
 
@@ -103,6 +107,12 @@ impl Candidate {
     /// 设置词库全局 ID
     pub fn with_word_id(mut self, word_id: Option<u32>) -> Self {
         self.word_id = word_id;
+        self
+    }
+
+    /// 设置该候选解码路径消耗的纠错次数
+    pub fn with_typo_count(mut self, typo_count: u8) -> Self {
+        self.typo_count = typo_count;
         self
     }
 }
