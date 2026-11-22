@@ -6,6 +6,7 @@
 //! - **代价与局限**：事件依赖 Slint 弱引用升级（as_weak），在窗口析构后安全取消执行。
 
 pub mod cloud_profiles;
+pub mod model_download;
 pub mod model_import;
 
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use crate::SettingsWindow;
 /// 注册所有语音输入相关界面回调事件
 pub fn register_voice_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {
     model_import::register_model_import_callbacks(window, loaded_config.clone());
+    model_download::register_model_download_callbacks(window, loaded_config.clone());
     cloud_profiles::register_cloud_profile_callbacks(window, loaded_config);
 }
 

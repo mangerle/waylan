@@ -215,7 +215,7 @@ mod tests {
     use self::types::{RecognitionFeedContext, StopCommitContext, PRE_SPEECH_BUFFER_CAPACITY};
     use super::*;
     use crate::afe::AudioFrontEndPipeline;
-    use crate::recognizer::MockVoiceRecognizer;
+    use crate::recognizer::{MockVoiceRecognizer, VoiceRecognizer};
     use std::collections::VecDeque;
     use waylan_core::VoiceConfig;
 
@@ -289,12 +289,31 @@ mod tests {
     fn test_extract_final_text_punctuation() {
         let itn_cfg = waylan_core::VoiceItnConfig::default();
         let mut recognizer = MockVoiceRecognizer::new();
-        let text = extract_final_text(&mut recognizer, None, true, &itn_cfg);
-        assert!(text.ends_with('。'));
+        let text = extract_final_text(&mut recognizer, true, &itn_cfg);
+        assert_eq!(text, "微澜语音输入");
 
-        let mut recognizer2 = MockVoiceRecognizer::new();
-        let text_no_punct = extract_final_text(&mut recognizer2, None, false, &itn_cfg);
-        assert_eq!(text_no_punct, "微澜语音输入");
+        // 模拟自带标点的识别器输出验证自动标点与滤除标点
+        struct PunctMockRecognizer;
+        impl VoiceRecognizer for PunctMockRecognizer {
+            fn feed_pcm(
+                &mut self,
+                _samples: &[f32],
+            ) -> Result<Option<String>, crate::error::VoiceError> {
+                Ok(None)
+            }
+            fn finish(&mut self) -> Result<String, crate::error::VoiceError> {
+                Ok("你好，微澜语音输入！".to_string())
+            }
+            fn reset(&mut self) {}
+        }
+
+        let mut punct_rec = PunctMockRecognizer;
+        let with_punct = extract_final_text(&mut punct_rec, true, &itn_cfg);
+        assert_eq!(with_punct, "你好，微澜语音输入！");
+
+        let mut punct_rec2 = PunctMockRecognizer;
+        let stripped = extract_final_text(&mut punct_rec2, false, &itn_cfg);
+        assert_eq!(stripped, "你好微澜语音输入");
     }
 
     #[test]
@@ -336,7 +355,6 @@ mod tests {
             afe: &mut afe,
             pre_speech_buffer: &mut pre_speech,
             last_partial_text: &mut last_partial,
-            punct_restorer: None,
             voice_config: &voice_cfg,
             event_tx: &event_tx,
             is_active: &is_active,

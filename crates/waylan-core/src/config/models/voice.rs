@@ -59,15 +59,67 @@ impl Default for VadConfig {
 /// 本地离线 ASR 识别模型架构类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OfflineModelType {
-    /// 新一代 Zipformer 流式模型 (CTC / Transducer 极轻量架构)
+    /// 阿里 SenseVoice-Small（中英多语言、自带标点、超轻量极速，默认推荐）
     #[default]
     #[serde(
+        alias = "sensevoice",
+        alias = "SenseVoice",
+        alias = "sense_voice",
+        alias = "SenseVoiceSmall",
+        alias = "Zipformer",
+        alias = "zipformer",
         alias = "Paraformer",
-        alias = "paraformer",
-        alias = "Whisper",
-        alias = "whisper"
+        alias = "paraformer"
     )]
-    Zipformer,
+    SenseVoice,
+    /// 阿里 FunASR-Nano（多方言/多语言、自带标点、高准确率）
+    #[serde(
+        alias = "funasr_nano",
+        alias = "FunAsrNano",
+        alias = "fun_asr_nano",
+        alias = "FunASRNano"
+    )]
+    FunAsrNano,
+    /// 阿里通义 Qwen3-ASR（多模态语言模型架构、强大上下文理解与语义纠错、自带标点）
+    #[serde(
+        alias = "qwen3_asr",
+        alias = "qwen3-asr",
+        alias = "Qwen3Asr",
+        alias = "Qwen3ASR",
+        alias = "qwen3"
+    )]
+    Qwen3Asr,
+    /// 小红书 FireRedASR2（中文普通话与多方言识别顶尖准确率）
+    #[serde(
+        alias = "fireredasr2",
+        alias = "firered_asr2",
+        alias = "FireRedAsr2",
+        alias = "FireRedASR2",
+        alias = "fire-red-asr2",
+        alias = "firered"
+    )]
+    FireRedAsr2,
+}
+
+impl OfflineModelType {
+    /// 当前模型是否原生自带标点符号（SenseVoice、FunAsrNano 与 Qwen3Asr 原生自带）
+    #[inline]
+    pub fn has_native_punctuation(&self) -> bool {
+        match self {
+            Self::SenseVoice | Self::FunAsrNano | Self::Qwen3Asr => true,
+            Self::FireRedAsr2 => false,
+        }
+    }
+
+    /// 获取模型标识名称
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SenseVoice => "SenseVoice-Small",
+            Self::FunAsrNano => "Fun-ASR-Nano",
+            Self::Qwen3Asr => "Qwen3-ASR",
+            Self::FireRedAsr2 => "FireRedASR2",
+        }
+    }
 }
 
 /// 本地离线 ASR 模型配置（支持自由更换模型文件与架构）
@@ -76,14 +128,12 @@ pub enum OfflineModelType {
 pub struct OfflineAsrConfig {
     /// 模型架构类型
     pub model_type: OfflineModelType,
-    /// 模型文件所在根目录路径（例如 "~/.local/share/waylan/models/asr/paraformer-zh"）
+    /// 模型文件所在根目录路径（例如 "~/.local/share/waylan/models/asr/sensevoice-small"）
     pub model_dir: Option<String>,
-    /// 编码器模型文件名或相对路径
-    pub encoder: String,
-    /// 解码器模型文件名或相对路径
-    pub decoder: String,
-    /// 词表（Tokens）文件名或相对路径
-    pub tokens: String,
+    /// 语言选项（默认 "auto"，支持 "zh", "en", "yue", "ja", "ko" 等）
+    pub language: String,
+    /// CPU 推理工作线程数
+    pub num_threads: usize,
 }
 
 impl Default for OfflineAsrConfig {
@@ -91,9 +141,8 @@ impl Default for OfflineAsrConfig {
         Self {
             model_type: OfflineModelType::default(),
             model_dir: None,
-            encoder: "encoder.int8.onnx".to_string(),
-            decoder: "decoder.int8.onnx".to_string(),
-            tokens: "tokens.txt".to_string(),
+            language: "auto".to_string(),
+            num_threads: 2,
         }
     }
 }
@@ -299,8 +348,6 @@ pub struct VoiceConfig {
     pub interaction: VoiceInteractionConfig,
     /// 麦克风音频输入设备名称（为 None 时自动使用系统默认设备）
     pub device_name: Option<String>,
-    /// 自定义标点符号预测模型文件路径（为 None 时自动使用系统内置或默认模型）
-    pub punct_model_path: Option<String>,
 }
 
 impl Default for VoiceConfig {
@@ -320,7 +367,6 @@ impl Default for VoiceConfig {
             itn: VoiceItnConfig::default(),
             interaction: VoiceInteractionConfig::default(),
             device_name: None,
-            punct_model_path: None,
         }
     }
 }

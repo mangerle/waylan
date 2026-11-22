@@ -5,14 +5,20 @@
 //! - **核心优势**：严格遵循 Linux XDG 规范，实现系统内置目录与用户导入目录的物理隔离。
 //! - **模块化裂变**：按关注点分离为 `scanner`（模型发现扫描）与 `importer`（物理导入与目录管理）。
 
+pub mod downloader;
 pub mod importer;
 pub mod scanner;
 
+pub use downloader::{
+    download_and_extract_model, find_preset_model_by_id, format_download_speed,
+    get_preset_model_dest_dir, is_preset_model_installed, AsrModelInstallState, OnlineAsrModelMeta,
+    PRESET_ASR_MODELS,
+};
 pub use importer::{
     builtin_models_dir, ensure_user_models_dirs, import_asr_model_from_dir,
     import_onnx_model_from_file, open_user_models_directory, user_models_dir,
 };
-pub use scanner::{list_asr_models, list_ns_models, list_punct_models, list_vad_models};
+pub use scanner::{list_asr_models, list_ns_models, list_vad_models};
 
 /// 可供用户选择的模型项描述
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,8 +34,6 @@ pub struct ModelItem {
 pub enum ModelSubdirectory {
     /// 语音活动检测模型目录
     Vad,
-    /// 标点符号恢复模型目录
-    Punct,
     /// 智能降噪模型目录
     Ns,
     /// 语音识别模型目录
@@ -42,7 +46,6 @@ impl ModelSubdirectory {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Vad => "vad",
-            Self::Punct => "punct",
             Self::Ns => "ns",
             Self::Asr => "asr",
         }
@@ -59,8 +62,8 @@ mod tests {
         let models = list_asr_models();
         assert!(!models.is_empty(), "ASR 扫描列表不应为空");
         assert!(
-            models[0].display_name.contains("[内置]"),
-            "第一项应为内置模型: {}",
+            models[0].display_name.contains("[内置]") || models[0].display_name.contains("[推荐]"),
+            "第一项应为内置或推荐模型: {}",
             models[0].display_name
         );
     }
@@ -74,18 +77,6 @@ mod tests {
                 .iter()
                 .any(|m| m.path.as_deref() == Some("__energy__")),
             "VAD 必须包含纯能量门限算法项"
-        );
-    }
-
-    #[test]
-    fn test_list_punct_models_dynamic_scan() {
-        let models = list_punct_models();
-        assert!(models.len() >= 2, "标点应至少包含内置模型与规则兜底项");
-        assert!(
-            models
-                .iter()
-                .any(|m| m.path.as_deref() == Some("__rule_only__")),
-            "标点必须包含规则兜底项"
         );
     }
 

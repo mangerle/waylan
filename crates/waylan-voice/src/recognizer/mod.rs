@@ -1,19 +1,17 @@
 //! 语音识别 (ASR) 引擎抽象特型与多后端实现（离线模型/云端API/仿真测试）
 //!
 //! # 设计原理
-//! - **实现初衷**：定义统一解耦的 `VoiceRecognizer` Trait，支持用户在本地端侧离线模型（Paraformer/Zipformer）、
+//! - **实现初衷**：定义统一解耦的 `VoiceRecognizer` Trait，支持用户在本地端侧离线模型（SenseVoice-Small/Fun-ASR-Nano）、
 //!   线上云端 API 与仿真测试之间自由热插拔与平滑切换。
 //! - **核心优势**：本地离线模型文件路径完全外部化配置，支持随时更换不同尺寸与架构的权重；云端 API 支持无模型轻量部署。
 //! - **代价与局限**：离线模型依赖用户提前部署 ONNX 权重文件，未就绪时自动给出友好的中文定位提示并优雅降级。
 
 mod cloud;
 mod offline;
-mod punctuation;
 mod traits;
 
 pub use cloud::{encode_pcm_to_wav, test_cloud_profile_connection, CloudVoiceRecognizer};
 pub use offline::{resolve_asr_model_dir, OfflineVoiceRecognizer};
-pub use punctuation::PunctuationRestorer;
 pub use traits::{MockVoiceRecognizer, VoiceRecognizer};
 
 use waylan_core::{CloudAsrConfig, VoiceConfig, VoiceEngineType};
@@ -69,44 +67,56 @@ mod tests {
         };
         let mut rec = create_recognizer(&cfg);
         let chunk = vec![0.0; 5000];
-        let feed_res = rec.feed_pcm(&chunk);
-        assert!(feed_res.is_ok());
-        let finish_res = rec.finish();
-        assert!(finish_res.is_ok());
+        if rec.is_ready() {
+            let feed_res = rec.feed_pcm(&chunk);
+            assert!(feed_res.is_ok());
+            let finish_res = rec.finish();
+            assert!(finish_res.is_ok());
+        } else {
+            // 本地未下载 SenseVoice 模型时，严格遵循失败关闭契约报错
+            let feed_res = rec.feed_pcm(&chunk);
+            assert!(matches!(
+                feed_res,
+                Err(crate::error::VoiceError::RecognizerUnavailable { .. })
+            ));
+        }
     }
 
     #[test]
-    fn test_offline_recognizer_detects_models() {
+    fn test_offline_recognizer_default_sensevoice() {
         let cfg = OfflineAsrConfig::default();
         let rec = OfflineVoiceRecognizer::new(cfg);
-        // 验证部署在标准 XDG 路径的模型是否成功被自探测发现并加载
-        assert!(rec.is_models_ready());
+        assert_eq!(rec.model_type(), OfflineModelType::SenseVoice);
     }
 
     #[test]
-    fn test_zipformer_streaming_recognition() {
+    fn test_offline_recognizer_funasr_nano() {
         let cfg = OfflineAsrConfig {
-            model_type: OfflineModelType::Zipformer,
+            model_type: OfflineModelType::FunAsrNano,
             ..Default::default()
         };
-        let mut rec = OfflineVoiceRecognizer::new(cfg);
-        assert!(rec.is_models_ready(), "Zipformer 模型应成功加载就绪");
-        assert_eq!(rec.model_type(), OfflineModelType::Zipformer);
+        let rec = OfflineVoiceRecognizer::new(cfg);
+        assert_eq!(rec.model_type(), OfflineModelType::FunAsrNano);
+    }
 
-        // 输入一段 1 秒静音采样并验证推理流正常推进
-        let pcm = vec![0.0f32; 16000];
-        let feed_res = rec.feed_pcm(&pcm);
-        assert!(
-            feed_res.is_ok(),
-            "feed_pcm 推理不应返回错误: {:?}",
-            feed_res
-        );
-        let finish_res = rec.finish();
-        assert!(
-            finish_res.is_ok(),
-            "finish 结束流不应返回错误: {:?}",
-            finish_res
-        );
+    #[test]
+    fn test_offline_recognizer_qwen3_asr() {
+        let cfg = OfflineAsrConfig {
+            model_type: OfflineModelType::Qwen3Asr,
+            ..Default::default()
+        };
+        let rec = OfflineVoiceRecognizer::new(cfg);
+        assert_eq!(rec.model_type(), OfflineModelType::Qwen3Asr);
+    }
+
+    #[test]
+    fn test_offline_recognizer_firered_asr2() {
+        let cfg = OfflineAsrConfig {
+            model_type: OfflineModelType::FireRedAsr2,
+            ..Default::default()
+        };
+        let rec = OfflineVoiceRecognizer::new(cfg);
+        assert_eq!(rec.model_type(), OfflineModelType::FireRedAsr2);
     }
 
     #[test]
@@ -140,31 +150,6 @@ mod tests {
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(&wav[12..16], b"fmt ");
         assert_eq!(&wav[36..40], b"data");
-    }
-
-    #[test]
-    fn test_punctuation_restorer_flow() {
-        let restorer = PunctuationRestorer::new();
-        let result = restorer.restore("你好世界");
-        // 无论是否有模型权重，都应当输出带有标点的中文自然句子
-        assert!(
-            result.ends_with('。')
-                || result.ends_with('！')
-                || result.ends_with('？')
-                || result.contains('，'),
-            "标点预测应生成规范标点: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_punctuation_restorer_options() {
-        // 1. 用户选择规则兜底
-        let rule_restorer = PunctuationRestorer::with_custom_path(Some("__rule_only__"));
-        assert_eq!(rule_restorer.restore("今天天气真好"), "今天天气真好。");
-
-        // 2. 空文本处理
-        assert_eq!(rule_restorer.restore("   "), "");
     }
 
     #[test]

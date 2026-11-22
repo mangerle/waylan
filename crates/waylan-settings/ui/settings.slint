@@ -1,5 +1,5 @@
 import { Button, ScrollView } from "std-widgets.slint";
-import { PhraseItem, NavItem, PrimaryButton, CloudProfileItem, ShortcutHelper, ShortcutRecorder } from "common.slint";
+import { PhraseItem, NavItem, PrimaryButton, CloudProfileItem, AsrModelCardItem, ShortcutHelper, ShortcutRecorder } from "common.slint";
 import { GeneralTab } from "general_tab.slint";
 import { ThemeTab } from "theme_tab.slint";
 import { PinyinTab } from "pinyin_tab.slint";
@@ -10,7 +10,7 @@ import { ShortcutsTab } from "shortcuts_tab.slint";
 import { VoiceTab } from "voice_tab.slint";
 import { AboutTab } from "about_tab.slint";
 
-export { PhraseItem, CloudProfileItem, ShortcutHelper }
+export { PhraseItem, CloudProfileItem, AsrModelCardItem, ShortcutHelper }
 
 export component SettingsWindow inherits Window {
     title: "WayLan Settings";
@@ -126,9 +126,8 @@ export component SettingsWindow inherits Window {
     in-out property <int> asr_model_index: 0;
     in property <string> asr_notice_text: "当前处于【本地离线模式】: 采用阿里 Paraformer 流式 int8 ONNX 引擎，所有音频计算均在本地完成，零延迟、零网络依赖、保障隐私安全。";
     in property <bool> is_asr_cloud: false;
+    in property <[AsrModelCardItem]> asr_models: [];
     in-out property <bool> auto_punctuation: true;
-    in property <[string]> punct_model_names: ["[内置] CT-Transformer 深度标点 (int8)", "[规则] 基础句末规则兜底 (无模型)"];
-    in-out property <int> punct_model_index: 0;
 
     // 阶段五：文本规整与语气词过滤 (ITN)
     in-out property <bool> itn_convert_numbers: true;
@@ -164,9 +163,10 @@ export component SettingsWindow inherits Window {
     callback clear_user_model();
     callback import_asr_model();
     callback import_vad_model();
-    callback import_punct_model();
     callback import_ns_model();
     callback open_models_directory();
+    callback download_asr_model(string);
+    callback activate_asr_model(string);
     callback start_add_cloud_profile();
     callback start_edit_cloud_profile(int);
     callback delete_cloud_profile(int);
@@ -467,10 +467,9 @@ export component SettingsWindow inherits Window {
                         asr_model_index <=> root.asr_model_index;
                         asr_notice_text: root.asr_notice_text;
                         is_asr_cloud: root.is_asr_cloud;
+                        asr_models: root.asr_models;
 
                         auto_punctuation <=> root.auto_punctuation;
-                        punct_model_names: root.punct_model_names;
-                        punct_model_index <=> root.punct_model_index;
 
                         itn_convert_numbers <=> root.itn_convert_numbers;
                         itn_filter_filler_words <=> root.itn_filter_filler_words;
@@ -490,9 +489,10 @@ export component SettingsWindow inherits Window {
 
                         import_asr_model => { root.import_asr_model(); }
                         import_vad_model => { root.import_vad_model(); }
-                        import_punct_model => { root.import_punct_model(); }
                         import_ns_model => { root.import_ns_model(); }
                         open_models_directory => { root.open_models_directory(); }
+                        download_asr_model(id) => { root.download_asr_model(id); }
+                        activate_asr_model(id) => { root.activate_asr_model(id); }
                         start_add_cloud_profile => { root.start_add_cloud_profile(); }
                         start_edit_cloud_profile(idx) => { root.start_edit_cloud_profile(idx); }
                         delete_cloud_profile(idx) => { root.delete_cloud_profile(idx); }
@@ -528,7 +528,7 @@ export component SettingsWindow inherits Window {
                         font-size: 13px;
                         color: root.global_status_is_error ? #dc2626 : #059669;
                         vertical-alignment: center;
-                        overflow: elide;
+                        wrap: word-wrap;
                     }
                 }
 

@@ -44,4 +44,8 @@ pub enum VoiceError {
     /// 创建语音后台常驻工作线程失败
     #[error("创建语音后台工作线程失败，原因: {message}")]
     WorkerThreadSpawnFailed { message: String },
+
+    /// 语音模型管理或下载部署失败
+    #[error("语音模型管理或下载部署失败，原因: {message}")]
+    ModelManagementFailed { message: String },
 }

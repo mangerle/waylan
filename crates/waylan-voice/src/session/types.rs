@@ -10,7 +10,7 @@ use waylan_core::VoiceConfig;
 
 use crate::afe::AudioFrontEndPipeline;
 use crate::capture::AudioCapture;
-use crate::recognizer::{PunctuationRestorer, VoiceRecognizer};
+use crate::recognizer::VoiceRecognizer;
 use crate::vad::{VadProcessor, WaveformVisualizer};
 
 /// 起音前置环形预缓冲区容量（以 16kHz 单声道采样点计）：300ms = 4800 采样点
@@ -69,7 +69,6 @@ pub(super) struct StopCommitContext<'a> {
     pub afe: &'a mut AudioFrontEndPipeline,
     pub pre_speech_buffer: &'a mut VecDeque<f32>,
     pub last_partial_text: &'a mut String,
-    pub punct_restorer: Option<&'a PunctuationRestorer>,
     pub voice_config: &'a VoiceConfig,
     pub event_tx: &'a SyncSender<VoiceEvent>,
     pub is_active: &'a Arc<AtomicBool>,
@@ -85,7 +84,6 @@ pub(super) struct ActiveRecordingContext<'a> {
     pub visualizer: &'a mut WaveformVisualizer,
     pub vad: &'a mut dyn VadProcessor,
     pub recognizer: &'a mut dyn VoiceRecognizer,
-    pub punct_restorer: Option<&'a PunctuationRestorer>,
     pub voice_config: &'a VoiceConfig,
     pub is_active: &'a Arc<AtomicBool>,
     pub shutdown_requested: &'a Arc<AtomicBool>,

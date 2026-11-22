@@ -135,8 +135,7 @@ fn handle_start_command(
         return true;
     }
 
-    let Some((recognizer, vad, punct_restorer)) = state.cache.prepare_models(&options.voice_config)
-    else {
+    let Some((recognizer, vad)) = state.cache.prepare_models(&options.voice_config) else {
         let message = "语音识别模型未就绪，已取消本次录音；请检查本地模型文件或云端 API Key 配置";
         warn!("[语音会话] {}", message);
         let _ = event_tx.send(VoiceEvent::Error(message.to_string()));
@@ -176,7 +175,6 @@ fn handle_start_command(
         visualizer: state.visualizer,
         vad,
         recognizer,
-        punct_restorer,
         voice_config: &options.voice_config,
         is_active: state.is_active,
         shutdown_requested: state.shutdown_requested,

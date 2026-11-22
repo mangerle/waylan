@@ -11,7 +11,7 @@ use log::{info, warn};
 use waylan_core::VoiceConfig;
 
 use super::types::IDLE_MODEL_UNLOAD_TIMEOUT;
-use crate::recognizer::{create_recognizer, PunctuationRestorer, VoiceRecognizer};
+use crate::recognizer::{create_recognizer, VoiceRecognizer};
 use crate::vad::{create_vad, VadProcessor};
 
 /// 离线 ASR 识别器缓存键指纹
@@ -61,7 +61,6 @@ pub fn compute_asr_fingerprint(cfg: &VoiceConfig) -> AsrFingerprint {
 pub struct WorkerModelCache {
     recognizer: Option<Box<dyn VoiceRecognizer>>,
     vad: Option<Box<dyn VadProcessor>>,
-    punct: Option<PunctuationRestorer>,
     last_asr_fingerprint: Option<AsrFingerprint>,
 }
 
@@ -70,7 +69,6 @@ impl WorkerModelCache {
     pub fn unload(&mut self) {
         self.recognizer = None;
         self.vad = None;
-        self.punct = None;
         self.last_asr_fingerprint = None;
     }
 
@@ -80,14 +78,13 @@ impl WorkerModelCache {
         self.recognizer.is_some() || self.vad.is_some()
     }
 
-    /// 校验或按需初始化识别器、VAD与标点模型实例
+    /// 校验或按需初始化识别器与VAD模型实例
     pub fn prepare_models(
         &mut self,
         voice_config: &VoiceConfig,
     ) -> Option<(
         &mut (dyn VoiceRecognizer + 'static),
         &mut (dyn VadProcessor + 'static),
-        Option<&PunctuationRestorer>,
     )> {
         let current_fingerprint = compute_asr_fingerprint(voice_config);
         if self.last_asr_fingerprint.as_ref() != Some(&current_fingerprint) {
@@ -109,18 +106,13 @@ impl WorkerModelCache {
         if self.vad.is_none() {
             self.vad = Some(create_vad(&voice_config.vad));
         }
-        if self.punct.is_none() && voice_config.auto_punctuation {
-            self.punct = Some(PunctuationRestorer::with_custom_path(
-                voice_config.punct_model_path.as_deref(),
-            ));
-        }
 
         let recognizer = self.recognizer.as_mut()?;
         let vad = self.vad.as_mut()?;
         recognizer.reset();
         vad.reset();
 
-        Some((recognizer.as_mut(), vad.as_mut(), self.punct.as_ref()))
+        Some((recognizer.as_mut(), vad.as_mut()))
     }
 }
 

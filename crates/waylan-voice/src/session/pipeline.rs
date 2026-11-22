@@ -145,7 +145,6 @@ fn handle_recording_command(
                 afe: &mut state.afe,
                 pre_speech_buffer: &mut state.pre_speech_buffer,
                 last_partial_text: &mut state.last_partial_text,
-                punct_restorer: ctx.punct_restorer,
                 voice_config: ctx.voice_config,
                 event_tx: ctx.event_tx,
                 is_active: ctx.is_active,
@@ -275,7 +274,6 @@ fn handle_vad_segment(
     info!("[语音会话] VAD 检测到人声停顿并超时，分句自动断句上屏提交（保持持续听写）");
     let seg_text = extract_final_text(
         ctx.recognizer,
-        ctx.punct_restorer,
         ctx.voice_config.auto_punctuation,
         &ctx.voice_config.itn,
     );

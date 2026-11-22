@@ -11,6 +11,7 @@ mod general;
 mod voice;
 
 use general::{sync_general_to_window, update_general_from_window};
+pub(crate) use voice::sync_asr_models_to_window;
 use voice::{sync_voice_to_window, update_voice_from_window};
 
 use crate::SettingsWindow;

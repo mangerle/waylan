@@ -12,6 +12,19 @@ export struct CloudProfileItem {
     is_active: bool,
 }
 
+export struct AsrModelCardItem {
+    id: string,
+    name: string,
+    badge: string,
+    size_desc: string,
+    desc: string,
+    state: int,
+    progress: float,
+    progress_text: string,
+    is_cloud: bool,
+    path_or_url: string,
+}
+
 export component Keycap inherits Rectangle {
     in property <string> text;
     border-radius: 4px;

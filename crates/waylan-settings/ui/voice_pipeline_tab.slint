@@ -1,6 +1,6 @@
 import { ComboBox, LineEdit } from "std-widgets.slint";
-import { SettingCard, AppSwitch, SecondaryButton, ShortcutRecorder } from "common.slint";
-import { VoiceStageFourCard, VoiceStageFiveCard, VoiceStageSixCard } from "voice_pipeline_cards.slint";
+import { SettingCard, AppSwitch, SecondaryButton, ShortcutRecorder, AsrModelCardItem } from "common.slint";
+import { VoiceStageFourCard, VoiceStageFiveCard, VoiceStageSixCard, VoiceStageThreeCard } from "voice_pipeline_cards.slint";
 
 export component VoicePipelineTab inherits VerticalLayout {
     spacing: 16px;
@@ -25,16 +25,15 @@ export component VoicePipelineTab inherits VerticalLayout {
     in property <[string]> vad_model_names: ["[内置] Silero VAD (神经网络模型)", "[算法] 纯能量门限 (零模型纯数学 RMS)"];
     in-out property <int> vad_model_index: 0;
 
-    // 阶段三：ASR 核心识别
+    // 阶段三：ASR 核心识别与离线模型一键管理
     in property <[string]> asr_model_names: ["[本地] 阿里 Paraformer (中文流式 int8)"];
     in-out property <int> asr_model_index: 0;
     in property <string> asr_notice_text: "当前处于【本地离线模式】: 采用阿里 Paraformer 流式 int8 ONNX 引擎，所有音频计算均在本地完成，零延迟、零网络依赖、保障隐私安全。";
     in property <bool> is_asr_cloud: false;
+    in property <[AsrModelCardItem]> asr_models: [];
 
-    // 阶段四：标点预测
+    // 阶段四：自动标点
     in-out property <bool> auto_punctuation: true;
-    in property <[string]> punct_model_names: ["[内置] CT-Transformer 深度标点 (int8)", "[规则] 基础句末规则兜底 (无模型)"];
-    in-out property <int> punct_model_index: 0;
 
     // 阶段五：文本规整与语气词过滤 (ITN)
     in-out property <bool> itn_convert_numbers: true;
@@ -51,9 +50,10 @@ export component VoicePipelineTab inherits VerticalLayout {
     callback switch_to_cloud_tab();
     callback import_asr_model();
     callback import_vad_model();
-    callback import_punct_model();
     callback import_ns_model();
     callback open_models_directory();
+    callback download_asr_model(string);
+    callback activate_asr_model(string);
 
     // 0. 基础触发与快捷键控制卡片
     SettingCard {
@@ -349,84 +349,24 @@ export component VoicePipelineTab inherits VerticalLayout {
         }
     }
 
-    // 3. 阶段三：核心语音识别与转写 (ASR) 卡片
-    SettingCard {
-        title: "阶段三：核心语音识别与转写 (ASR)";
-        subtitle: "统一汇集端侧本地离线推理模型与线上云端 Whisper 兼容服务";
+    // 3. 阶段三：核心语音识别与转写 (ASR) 统一管理卡片
+    VoiceStageThreeCard {
+        asr_models: root.asr_models;
+        asr_model_names: root.asr_model_names;
+        asr_model_index <=> root.asr_model_index;
+        asr_notice_text: root.asr_notice_text;
+        is_asr_cloud: root.is_asr_cloud;
 
-        VerticalLayout {
-            spacing: 14px;
-
-            VerticalLayout {
-                spacing: 8px;
-                HorizontalLayout {
-                    alignment: space-between;
-                    Text { text: "选用识别目标模型 (本地 / 云端大一统)"; font-size: 13px; font-weight: 600; color: #0f172a; }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        SecondaryButton {
-                            text: "管理云端服务 »";
-                            clicked => { root.switch_to_cloud_tab(); }
-                        }
-                        SecondaryButton {
-                            text: "导入本地模型";
-                            clicked => { root.import_asr_model(); }
-                        }
-                    }
-                }
-                Text {
-                    text: "选择负责将采集声音转录为文字序列的核心大脑（选择云端服务前请先在云端管理页面添加对应配置）";
-                    font-size: 12px;
-                    color: #64748b;
-                }
-                ComboBox {
-                    model: root.asr_model_names;
-                    current-index <=> root.asr_model_index;
-                }
-            }
-
-            // 模型特性提示胶囊
-            Rectangle {
-                border-radius: 6px;
-                border-width: 1px;
-                border-color: root.is_asr_cloud ? #bfdbfe : #bbf7d0;
-                background: root.is_asr_cloud ? #eff6ff : #f0fdf4;
-
-                HorizontalLayout {
-                    padding: 10px;
-                    Text {
-                        text: root.asr_notice_text;
-                        font-size: 12px;
-                        color: root.is_asr_cloud ? #1e40af : #15803d;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-
-            Rectangle { height: 1px; background: #f1f5f9; }
-
-            // 存储提示与目录打开
-            HorizontalLayout {
-                alignment: space-between;
-                VerticalLayout {
-                    spacing: 2px;
-                    Text { text: "本地模型存放路径: ~/.local/share/waylan/models/"; font-size: 11px; color: #64748b; }
-                    Text { text: "系统升级重装仅更新 /usr 目录，用户导入的模型与个性化配置受到物理隔离保护"; font-size: 11px; color: #94a3b8; }
-                }
-                SecondaryButton {
-                    text: "打开模型存放目录";
-                    clicked => { root.open_models_directory(); }
-                }
-            }
-        }
+        switch_to_cloud_tab => { root.switch_to_cloud_tab(); }
+        import_asr_model => { root.import_asr_model(); }
+        open_models_directory => { root.open_models_directory(); }
+        download_model(id) => { root.download_asr_model(id); }
+        activate_model(id) => { root.activate_asr_model(id); }
     }
 
-    // 4. 阶段四：文本后处理与标点预测 (Punctuation)
+    // 4. 阶段四：文本后处理与自动标点 (Punctuation)
     VoiceStageFourCard {
         auto_punctuation <=> root.auto_punctuation;
-        punct_model_names: root.punct_model_names;
-        punct_model_index <=> root.punct_model_index;
-        import_punct_model => { root.import_punct_model(); }
     }
 
     // 5. 阶段五：文本规整与语气词过滤 (ITN)

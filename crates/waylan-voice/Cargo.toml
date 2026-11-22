@@ -16,6 +16,7 @@ ureq.workspace = true
 waylan-core = { path = "../waylan-core" }
 nnnoiseless = "0.5.2"
 hush-vani = { version = "0.1.1", default-features = false }
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,4 +1,4 @@
-//! 本地离线语音模型导入事件处理（ASR 复合模型包与 VAD/标点神经网络模型）
+//! 本地离线语音模型导入事件处理（ASR 复合模型包与 VAD 神经网络模型）
 //!
 //! # 设计原理
 //! - **实现初衷**：为设置中心提供用户选择并导入外部本地模型的异步后台任务与 UI 反馈。
@@ -45,7 +45,6 @@ impl ModelImportKind {
         match self {
             Self::AsrPackage => "请选择包含 ASR 模型的目录 (需包含 encoder/decoder/tokens)",
             Self::Onnx(ModelSubdirectory::Vad) => "请选择要导入的 VAD 神经网络模型文件 (.onnx)",
-            Self::Onnx(ModelSubdirectory::Punct) => "请选择要导入的标点符号预测模型文件 (.onnx)",
             Self::Onnx(ModelSubdirectory::Ns) => "请选择要导入的降噪神经网络模型文件 (.onnx)",
             Self::Onnx(ModelSubdirectory::Asr) => "请选择要导入的 ASR 神经网络模型文件 (.onnx)",
         }
@@ -60,7 +59,7 @@ impl ModelImportKind {
     }
 }
 
-/// 注册 ASR、VAD、标点与降噪模型导入及目录打开事件
+/// 注册 ASR、VAD 与降噪模型导入及目录打开事件
 pub(crate) fn register_model_import_callbacks(
     window: &SettingsWindow,
     loaded_config: Arc<Mutex<AppConfig>>,
@@ -78,19 +77,10 @@ pub(crate) fn register_model_import_callbacks(
         ModelImportRegistration {
             window,
             kind: ModelImportKind::Onnx(ModelSubdirectory::Vad),
-            loaded_config: loaded_config.clone(),
+            loaded_config,
             apply_fn: apply_vad_model_path,
         },
         |win, cb| win.on_import_vad_model(cb),
-    );
-    register_model_import(
-        ModelImportRegistration {
-            window,
-            kind: ModelImportKind::Onnx(ModelSubdirectory::Punct),
-            loaded_config,
-            apply_fn: apply_punct_model_path,
-        },
-        |win, cb| win.on_import_punct_model(cb),
     );
 
     let window_weak = window.as_weak();
@@ -161,11 +151,6 @@ fn apply_asr_model_path(cfg: &mut AppConfig, path: &str) {
 fn apply_vad_model_path(cfg: &mut AppConfig, path: &str) {
     cfg.voice.vad.model_path = Some(path.to_string());
     cfg.voice.vad.vad_type = VadModelType::SileroOnnx;
-}
-
-/// 将导入的标点符号预测模型路径写入配置
-fn apply_punct_model_path(cfg: &mut AppConfig, path: &str) {
-    cfg.voice.punct_model_path = Some(path.to_string());
 }
 
 /// 模型导入任务选项

@@ -1,7 +1,7 @@
 //! 本地语音模型目录动态发现、类型分类与目录扫描
 //!
 //! # 设计原理
-//! - **实现初衷**：为输入法前端与设置中心提供本地可用 ASR、VAD、标点与降噪模型目录的统一动态发现。
+//! - **实现初衷**：为输入法前端与设置中心提供本地可用 ASR、VAD 与降噪模型目录的统一动态发现。
 //! - **核心优势**：自动合并系统内置与用户私有目录，按模型类型进行同名去重与推荐权重排序。
 //! - **代价与局限**：涉及少量同步目录元数据读取，仅在设置界面打开或配置查询时低频调用。
 
@@ -76,17 +76,27 @@ pub fn list_asr_models() -> Vec<ModelItem> {
         }
     }
 
-    // 优先将包含 zipformer 的模型排在推荐首位
-    items.sort_by(|a, b| {
-        let a_is_zip = a.display_name.to_lowercase().contains("zipformer");
-        let b_is_zip = b.display_name.to_lowercase().contains("zipformer");
-        b_is_zip.cmp(&a_is_zip)
-    });
+    // 优先将 SenseVoice-Small、Qwen3-ASR、FireRedASR2 与 Fun-ASR-Nano 推荐模型排在首位
+    let score_model = |name: &str| {
+        let lower = name.to_lowercase();
+        if lower.contains("sensevoice") {
+            4
+        } else if lower.contains("qwen3") {
+            3
+        } else if lower.contains("firered") || lower.contains("fire-red") {
+            2
+        } else if lower.contains("funasr") {
+            1
+        } else {
+            0
+        }
+    };
+    items.sort_by_key(|a| std::cmp::Reverse(score_model(&a.display_name)));
 
-    // 若系统目录未扫描到任何内置 ASR 模型，提供默认项保底
+    // 若系统目录未扫描到任何内置 ASR 模型，提供默认推荐项保底
     if items.is_empty() {
         items.push(ModelItem {
-            display_name: "[内置] zipformer-zh".to_string(),
+            display_name: "[推荐] sensevoice-small".to_string(),
             path: None,
         });
     }
@@ -98,7 +108,6 @@ pub fn list_asr_models() -> Vec<ModelItem> {
             if items
                 .iter()
                 .any(|m| m.path.as_deref() == Some(path_str.as_str()))
-                || dir_name == "zipformer-zh"
             {
                 continue; // 避免同名重复
             }
@@ -108,6 +117,9 @@ pub fn list_asr_models() -> Vec<ModelItem> {
             });
         }
     }
+
+    // 再次按推荐权重稳定排序
+    items.sort_by_key(|a| std::cmp::Reverse(score_model(&a.display_name)));
 
     items
 }
@@ -157,79 +169,6 @@ pub fn list_vad_models() -> Vec<ModelItem> {
             });
         }
     }
-
-    items
-}
-
-/// 构造内置标点模型展示项
-///
-/// 官方内置的 CT-Transformer 系列文件名多变（`ct-transformer` / 通用 `model` 命名），
-/// 统一映射为面向用户的固定展示名，避免向设置界面暴露内部文件名差异。
-fn build_builtin_punct_item(file_name: String, path: PathBuf) -> ModelItem {
-    let display_name = if file_name.contains("ct-transformer") || file_name.contains("model") {
-        "[内置] CT-Transformer 深度标点 (int8)".to_string()
-    } else {
-        format!("[内置] {}", file_name)
-    };
-    ModelItem {
-        display_name,
-        path: Some(path.to_string_lossy().to_string()),
-    }
-}
-
-/// 扫描系统内置标点模型目录并返回展示项列表
-fn scan_builtin_punct_models() -> Vec<ModelItem> {
-    let Some(builtin_dir) = builtin_models_dir() else {
-        return Vec::new();
-    };
-    scan_onnx_files(&builtin_dir.join("punct"))
-        .into_iter()
-        .map(|(file_name, path)| build_builtin_punct_item(file_name, path))
-        .collect()
-}
-
-/// 扫描用户私有标点模型目录并返回展示项列表（与官方内置同名的文件由内置项代表，此处跳过）
-fn scan_user_punct_models() -> Vec<ModelItem> {
-    let Some(user_dir) = user_models_dir() else {
-        return Vec::new();
-    };
-    scan_onnx_files(&user_dir.join("punct"))
-        .into_iter()
-        .filter(|(file_name, _)| {
-            !matches!(
-                file_name.as_str(),
-                "punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.onnx"
-                    | "model.onnx"
-                    | "model.int8.onnx"
-            )
-        })
-        .map(|(file_name, path)| ModelItem {
-            display_name: format!("[用户] {}", file_name),
-            path: Some(path.to_string_lossy().to_string()),
-        })
-        .collect()
-}
-
-/// 扫描并列出所有可用的标点符号预测模型
-pub fn list_punct_models() -> Vec<ModelItem> {
-    let mut items = scan_builtin_punct_models();
-
-    // 若系统目录未扫描到任何内置标点模型，提供官方推荐项保底
-    if items.is_empty() {
-        items.push(ModelItem {
-            display_name: "[内置] CT-Transformer 深度标点 (int8)".to_string(),
-            path: None,
-        });
-    }
-
-    // 2. 内置规则兜底项（免模型纯规则断句）
-    items.push(ModelItem {
-        display_name: "[规则] 基础句末规则兜底 (无模型)".to_string(),
-        path: Some("__rule_only__".to_string()),
-    });
-
-    // 3. 动态扫描用户私有目录: ~/.local/share/waylan/models/punct/*.onnx
-    items.extend(scan_user_punct_models());
 
     items
 }

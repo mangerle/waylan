@@ -15,7 +15,7 @@ use log::{debug, info, warn};
 use super::types::{
     RecognitionFeedContext, StopCommitContext, VoiceEvent, PRE_SPEECH_BUFFER_CAPACITY,
 };
-use crate::recognizer::{PunctuationRestorer, VoiceRecognizer};
+use crate::recognizer::VoiceRecognizer;
 
 /// 处理主动停止录音与优雅排空提交
 pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
@@ -38,7 +38,6 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     // 4. 调用 finish 提取最终整句识别文字与标点预测
     let mut final_text = extract_final_text(
         ctx.recognizer,
-        ctx.punct_restorer,
         ctx.voice_config.auto_punctuation,
         &ctx.voice_config.itn,
     );
@@ -142,10 +141,9 @@ pub(super) fn process_recognition_feed(ctx: RecognitionFeedContext<'_>, samples:
     true
 }
 
-/// 提取最终整句识别文字并按需自动预测补全标点符号及进行 ITN 规整
+/// 提取最终整句识别文字并按需进行 ITN 规整
 pub(super) fn extract_final_text(
     recognizer: &mut dyn VoiceRecognizer,
-    punct_restorer: Option<&PunctuationRestorer>,
     auto_punctuation: bool,
     itn_config: &waylan_core::VoiceItnConfig,
 ) -> String {
@@ -153,21 +151,21 @@ pub(super) fn extract_final_text(
     if raw_text.is_empty() {
         return String::new();
     }
-    let punct_text = if !auto_punctuation {
+    // SenseVoice-Small 与 Fun-ASR-Nano 端到端原生自带标点；
+    // 若用户显式关闭自动标点，则滤除标点符号直接输出纯字符
+    let final_text = if auto_punctuation {
         raw_text
-    } else if let Some(restorer) = punct_restorer {
-        restorer.restore(&raw_text)
     } else {
-        let mut fallback = raw_text;
-        if !fallback.ends_with('。')
-            && !fallback.ends_with('，')
-            && !fallback.ends_with('！')
-            && !fallback.ends_with('？')
-        {
-            fallback.push('。');
-        }
-        fallback
+        raw_text
+            .chars()
+            .filter(|c| {
+                !matches!(
+                    c,
+                    '。' | '，' | '！' | '？' | '；' | '：' | ',' | '.' | '?' | '!' | ';' | ':'
+                )
+            })
+            .collect()
     };
 
-    crate::itn::normalize_voice_text(&punct_text, itn_config)
+    crate::itn::normalize_voice_text(&final_text, itn_config)
 }

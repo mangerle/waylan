@@ -25,13 +25,15 @@ pub use itn::{
     apply_pangu_spacing, convert_chinese_numbers, filter_filler_words, normalize_voice_text,
 };
 pub use model_manager::{
-    ensure_user_models_dirs, import_asr_model_from_dir, import_onnx_model_from_file,
-    list_asr_models, list_ns_models, list_punct_models, list_vad_models,
-    open_user_models_directory, user_models_dir, ModelItem, ModelSubdirectory,
+    download_and_extract_model, ensure_user_models_dirs, find_preset_model_by_id,
+    get_preset_model_dest_dir, import_asr_model_from_dir, import_onnx_model_from_file,
+    is_preset_model_installed, list_asr_models, list_ns_models, list_vad_models,
+    open_user_models_directory, user_models_dir, AsrModelInstallState, ModelItem,
+    ModelSubdirectory, OnlineAsrModelMeta, PRESET_ASR_MODELS,
 };
 pub use recognizer::{
     create_recognizer, encode_pcm_to_wav, test_cloud_profile_connection, CloudVoiceRecognizer,
-    MockVoiceRecognizer, OfflineVoiceRecognizer, PunctuationRestorer, VoiceRecognizer,
+    MockVoiceRecognizer, OfflineVoiceRecognizer, VoiceRecognizer,
 };
 pub use session::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 pub use vad::{

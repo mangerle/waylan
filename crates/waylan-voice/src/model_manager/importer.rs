@@ -21,7 +21,7 @@ pub fn user_models_dir() -> Option<PathBuf> {
 /// 确保用户模型目录及其四个类型子目录全部创建就绪
 pub fn ensure_user_models_dirs() -> Option<PathBuf> {
     let base = user_models_dir()?;
-    let subdirs = ["vad", "asr", "punct", "ns"];
+    let subdirs = ["vad", "asr", "ns"];
     for sub in &subdirs {
         let p = base.join(sub);
         if !p.exists() {
