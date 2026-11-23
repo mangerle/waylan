@@ -45,7 +45,9 @@ mod lifecycle;
 mod voice_stream;
 
 pub(crate) use engine_listener::spawn_engine_change_listener;
-pub(crate) use lifecycle::{ensure_global_engine_active, handle_screen_saver_transition};
+pub(crate) use lifecycle::{
+    ensure_global_engine_active, force_activate_global_engine, handle_screen_saver_transition,
+};
 pub(crate) use voice_stream::{
     VoiceStreamCycleParams, handle_voice_stream_cycle, query_voice_active_and_path,
 };
@@ -112,8 +114,6 @@ fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSess
 /// - **核心优势**：跨轮次状态以 `&mut` 槽位形式显式承载，状态归属一目了然，杜绝位置错配导致的静默偏差。
 /// - **代价与局限**：调用点需显式构造结构体字面量，代码量略增但语义更清晰。
 struct ScreensaverProbeParams<'a> {
-    /// 到 `ibus-daemon` 的阻塞连接
-    conn: &'a Connection,
     /// 共享的输入法会话核心
     shared_core: &'a Arc<Mutex<IbusSessionCore>>,
     /// 系统锁屏状态共享标记
@@ -124,8 +124,8 @@ struct ScreensaverProbeParams<'a> {
     last_lock_probe_instant: &'a mut Instant,
 }
 
-/// 处于锁屏保护期时的自愈探活与状态迁移处理
-fn probe_and_handle_screensaver(params: &mut ScreensaverProbeParams<'_>) -> bool {
+/// 处于锁屏保护期时的自愈探活与状态迁移处理，返回 (current_locked, just_unlocked)
+fn probe_and_handle_screensaver(params: &mut ScreensaverProbeParams<'_>) -> (bool, bool) {
     let mut current_locked = params.screen_locked_flag.load(Ordering::Acquire);
     if params.last_lock_probe_instant.elapsed() >= Duration::from_secs(3) {
         *params.last_lock_probe_instant = Instant::now();
@@ -137,24 +137,24 @@ fn probe_and_handle_screensaver(params: &mut ScreensaverProbeParams<'_>) -> bool
             current_locked = real_locked;
         }
     }
-    handle_screen_saver_transition(
-        params.conn,
+    let just_unlocked = handle_screen_saver_transition(
         params.shared_core,
         current_locked,
         &mut *params.last_screen_locked,
     );
-    current_locked
+    (current_locked, just_unlocked)
 }
 
 /// 计算当前监控循环的 poll 等待超时策略（毫秒）
 fn compute_monitor_poll_timeout(
     is_voice_active: bool,
     startup_healing_rounds: u32,
+    has_pending_unlock_heal: bool,
     is_locked: bool,
 ) -> i32 {
     if is_voice_active {
         60
-    } else if startup_healing_rounds > 0 {
+    } else if startup_healing_rounds > 0 || has_pending_unlock_heal {
         100
     } else if is_locked {
         3000
@@ -206,6 +206,10 @@ pub(crate) fn run_ibus_monitor_loop(
 struct MonitorLoopState {
     /// 启动期引擎自愈剩余轮次
     startup_healing_rounds: u32,
+    /// 屏幕解锁自愈剩余轮次
+    unlock_healing_rounds: u32,
+    /// 屏幕解锁后延时自愈防抖的触发时刻
+    unlock_heal_deadline: Option<Instant>,
     /// 上一轮观测到的锁屏状态
     last_screen_locked: bool,
     /// 上一轮观测到的语音激活状态
@@ -223,6 +227,8 @@ impl MonitorLoopState {
     fn new(initial_screen_locked: bool, screen_locked_flag: Arc<AtomicBool>) -> Self {
         Self {
             startup_healing_rounds: 3,
+            unlock_healing_rounds: 0,
+            unlock_heal_deadline: None,
             last_screen_locked: initial_screen_locked,
             last_voice_active: false,
             last_lock_probe_instant: Instant::now(),
@@ -289,18 +295,40 @@ fn monitor_poll_phase(
         ensure_global_engine_active(ctx.conn);
     }
 
-    let current_locked = probe_and_handle_screensaver(&mut ScreensaverProbeParams {
-        conn: ctx.conn,
-        shared_core: ctx.shared_core,
-        screen_locked_flag: &state.screen_locked_flag,
-        last_screen_locked: &mut state.last_screen_locked,
-        last_lock_probe_instant: &mut state.last_lock_probe_instant,
-    });
+    // 解锁延时防抖自愈：避开 GNOME Shell 解锁瞬间与外部 gsettings 竞态
+    if let Some(deadline) = state.unlock_heal_deadline {
+        if Instant::now() >= deadline {
+            state.unlock_heal_deadline = None;
+            if state.unlock_healing_rounds > 0 {
+                state.unlock_healing_rounds = state.unlock_healing_rounds.saturating_sub(1);
+                force_activate_global_engine(ctx.conn);
+            }
+        }
+    } else if state.unlock_healing_rounds > 0 {
+        state.unlock_healing_rounds = state.unlock_healing_rounds.saturating_sub(1);
+        ensure_global_engine_active(ctx.conn);
+    }
 
+    let (current_locked, just_unlocked) =
+        probe_and_handle_screensaver(&mut ScreensaverProbeParams {
+            shared_core: ctx.shared_core,
+            screen_locked_flag: &state.screen_locked_flag,
+            last_screen_locked: &mut state.last_screen_locked,
+            last_lock_probe_instant: &mut state.last_lock_probe_instant,
+        });
+
+    if just_unlocked {
+        state.unlock_heal_deadline = Some(Instant::now() + Duration::from_millis(400));
+        state.unlock_healing_rounds = 2;
+    }
+
+    let has_pending_unlock_heal =
+        state.unlock_heal_deadline.is_some() || state.unlock_healing_rounds > 0;
     let (is_voice_active, target_engine_path) = query_voice_active_and_path(ctx.shared_core);
     let poll_timeout_ms = compute_monitor_poll_timeout(
         is_voice_active,
         state.startup_healing_rounds,
+        has_pending_unlock_heal,
         current_locked || state.last_screen_locked,
     );
 
