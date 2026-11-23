@@ -39,7 +39,9 @@ impl GtcrnSuppressor {
                 }
             }
         } else {
-            warn!("[音频前端] 未找到 GTCRN 降噪模型文件 (models/ns/gtcrn/gtcrn_simple.onnx)，将回退为直通模式");
+            warn!(
+                "[音频前端] 未找到 GTCRN 降噪模型文件 (models/ns/gtcrn/gtcrn_simple.onnx)，将回退为直通模式"
+            );
             None
         };
 

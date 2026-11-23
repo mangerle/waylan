@@ -39,9 +39,11 @@ fn test_english_suggestions() {
 
     let prefix = eng.lookup("way");
     assert!(!prefix.is_empty());
-    assert!(prefix
-        .iter()
-        .any(|c| c.text == "wayland" || c.text == "waylan"));
+    assert!(
+        prefix
+            .iter()
+            .any(|c| c.text == "wayland" || c.text == "waylan")
+    );
 }
 
 #[test]
@@ -119,7 +121,9 @@ fn test_custom_phrase_dynamic_macro_expansion() {
     let sig_cands = manager.lookup("sig");
     assert_eq!(sig_cands.len(), 1);
     assert!(sig_cands[0].text.starts_with("签名：\n"));
-    assert!(sig_cands[0]
-        .text
-        .contains(&now.format("%Y-%m-%d").to_string()));
+    assert!(
+        sig_cands[0]
+            .text
+            .contains(&now.format("%Y-%m-%d").to_string())
+    );
 }

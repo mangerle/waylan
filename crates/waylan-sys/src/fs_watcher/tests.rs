@@ -2,12 +2,12 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::check_reload_requested_or_files_changed;
-use super::inotify::{create_timed_file_event_filter, InotifyWatcher};
+use super::inotify::{InotifyWatcher, create_timed_file_event_filter};
 use super::signature::check_watched_paths_changed;
 
 #[test]

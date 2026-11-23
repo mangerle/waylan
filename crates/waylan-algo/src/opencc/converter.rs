@@ -26,16 +26,14 @@ impl OpenCcDict {
             };
 
             let mut matched_phrase = false;
-            if let Some(&max_len) = self.first_char_max_len.get(&first_ch) {
-                if max_len >= 2 {
-                    // 使用栈固定数组收集 UTF-8 字节结束偏移，彻底消除每次字符匹配时的堆内存分配
-                    if let Some((trad_phrase, byte_end)) =
-                        self.match_phrase(rem, chars_iter, max_len)
-                    {
-                        result.push_str(trad_phrase);
-                        pos += byte_end;
-                        matched_phrase = true;
-                    }
+            if let Some(&max_len) = self.first_char_max_len.get(&first_ch)
+                && max_len >= 2
+            {
+                // 使用栈固定数组收集 UTF-8 字节结束偏移，彻底消除每次字符匹配时的堆内存分配
+                if let Some((trad_phrase, byte_end)) = self.match_phrase(rem, chars_iter, max_len) {
+                    result.push_str(trad_phrase);
+                    pos += byte_end;
+                    matched_phrase = true;
                 }
             }
 
@@ -106,23 +104,22 @@ impl OpenCcDict {
         for mut cand in candidates.drain(..) {
             let mut char_iter = cand.text.chars();
             if let (Some(simp_ch), None) = (char_iter.next(), char_iter.next()) {
-                if let Some(trad_list) = self.chars.get(&simp_ch) {
-                    if let Some(&primary) = trad_list.first() {
-                        let base_cand = cand.clone();
-                        cand.text = primary.to_string();
-                        converted.push(cand);
+                if let Some(trad_list) = self.chars.get(&simp_ch)
+                    && let Some(&primary) = trad_list.first()
+                {
+                    let base_cand = cand.clone();
+                    cand.text = primary.to_string();
+                    converted.push(cand);
 
-                        for (idx, &alt_ch) in trad_list.iter().skip(1).enumerate() {
-                            if alt_ch != primary {
-                                let mut derived = base_cand.clone();
-                                derived.text = alt_ch.to_string();
-                                derived.score =
-                                    base_cand.score.saturating_sub(((idx as u32) + 1) * 10);
-                                converted.push(derived);
-                            }
+                    for (idx, &alt_ch) in trad_list.iter().skip(1).enumerate() {
+                        if alt_ch != primary {
+                            let mut derived = base_cand.clone();
+                            derived.text = alt_ch.to_string();
+                            derived.score = base_cand.score.saturating_sub(((idx as u32) + 1) * 10);
+                            converted.push(derived);
                         }
-                        continue;
                     }
+                    continue;
                 }
                 converted.push(cand);
             } else {

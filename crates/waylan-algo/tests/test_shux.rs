@@ -1,9 +1,9 @@
+use waylan_algo::AlgoEngine;
 use waylan_algo::decoder::{
     BeamDecodeOptions, LatticeOptions, PositionalBeamDecoder, SyllableLattice,
 };
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
 
 #[test]
 fn test_shux_prefix_expansion_end_to_end() {

@@ -17,7 +17,7 @@ pub mod types;
 pub mod viewport;
 
 pub use dispatch::KeyProcessContext;
-pub use key_handler::{handle_composition_key_with_params, CompositionKeyParams};
+pub use key_handler::{CompositionKeyParams, handle_composition_key_with_params};
 pub use types::*;
 
 use crate::input::{PunctuationProcessor, ShiftToggleStateMachine};

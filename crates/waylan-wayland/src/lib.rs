@@ -13,7 +13,7 @@ pub use runner::*;
 
 use std::fmt;
 
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{
     wl_compositor::WlCompositor, wl_registry::WlRegistry, wl_seat::WlSeat,
 };
@@ -188,10 +188,12 @@ mod tests {
     #[test]
     fn test_probe_wayland_environment_error_contract() {
         // 在未指定或无效的 WAYLAND_DISPLAY 环境下，验证返回强类型错误枚举变体而非裸 Box<dyn Error>
-        std::env::set_var(
-            "WAYLAND_DISPLAY",
-            "nonexistent-wayland-socket-for-test-9999",
-        );
+        unsafe {
+            std::env::set_var(
+                "WAYLAND_DISPLAY",
+                "nonexistent-wayland-socket-for-test-9999",
+            );
+        }
         let result = probe_wayland_environment();
         assert!(result.is_err(), "应探测失败并返回强类型错误");
         match result.unwrap_err() {

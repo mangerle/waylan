@@ -26,15 +26,15 @@ pub mod vocab;
 pub use bigram::CompactMmapBigram;
 pub use composition::Composition;
 pub use custom_phrase::{
-    load_auxiliary_managers, AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager,
+    AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager, load_auxiliary_managers,
 };
 pub use decoder::ScoringWeights;
 pub use engine::AlgoEngine;
 pub use entity::EntityProtectionManager;
 pub use opencc::OpenCcDict;
 pub use table::{
-    calculate_length_boost, extract_raw_score, CompactMmapLexicon, LexiconTable,
-    LENGTH_BOOST_MULTIPLIER,
+    CompactMmapLexicon, LENGTH_BOOST_MULTIPLIER, LexiconTable, calculate_length_boost,
+    extract_raw_score,
 };
 pub use types::{AlgoCandidate, AlgoConfig, CandidateTier};
 pub use user_adaptive::{UserAdaptiveModel, UserAdaptiveWal};

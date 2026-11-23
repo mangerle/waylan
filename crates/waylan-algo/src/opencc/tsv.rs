@@ -56,10 +56,11 @@ impl OpenCcTsvParser {
             let mut trad_list = Vec::new();
             for part in vals.split_whitespace() {
                 let mut p_chars = part.chars();
-                if let Some(tc) = p_chars.next() {
-                    if p_chars.next().is_none() && !trad_list.contains(&tc) {
-                        trad_list.push(tc);
-                    }
+                if let Some(tc) = p_chars.next()
+                    && p_chars.next().is_none()
+                    && !trad_list.contains(&tc)
+                {
+                    trad_list.push(tc);
                 }
             }
             dict.insert_char_mapping(simp_ch, trad_list);

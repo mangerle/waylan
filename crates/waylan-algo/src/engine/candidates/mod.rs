@@ -12,8 +12,8 @@ mod fallback;
 
 use super::AlgoEngine;
 use crate::decoder::{
-    compute_decode_config_sig, BeamDecodeOptions, DecodeResult, LatticeOptions, MatcherOptions,
-    PositionalBeamDecoder, SyllableLattice,
+    BeamDecodeOptions, DecodeResult, LatticeOptions, MatcherOptions, PositionalBeamDecoder,
+    SyllableLattice, compute_decode_config_sig,
 };
 use crate::dispatcher::ModeDispatcher;
 use crate::pipeline::CandidatePipeline;

@@ -16,14 +16,14 @@ pub fn detect_default_assets_path() -> Option<String> {
     candidates.push(PathBuf::from("../assets"));
     candidates.push(PathBuf::from("../../assets"));
 
-    if let Ok(exe) = env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("assets"));
-            candidates.push(parent.join("../assets"));
-            candidates.push(parent.join("../../assets"));
-            candidates.push(parent.join("../../../assets"));
-            candidates.push(parent.join("../share/waylan/assets"));
-        }
+    if let Ok(exe) = env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        candidates.push(parent.join("assets"));
+        candidates.push(parent.join("../assets"));
+        candidates.push(parent.join("../../assets"));
+        candidates.push(parent.join("../../../assets"));
+        candidates.push(parent.join("../share/waylan/assets"));
     }
 
     candidates.push(PathBuf::from("/usr/share/waylan/assets"));

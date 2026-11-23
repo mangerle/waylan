@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use log::info;
 use parking_lot::Mutex;
-use zbus::blocking::Connection;
+use zbus::connection::Connection;
 
 use super::super::engine::emitter::{emit_commit_text_blocking, emit_ui_snapshot_blocking};
 use super::super::engine::{UiSnapshot, WAYLAN_ENGINE_OBJECT_PATH};

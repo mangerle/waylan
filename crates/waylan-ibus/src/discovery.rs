@@ -13,10 +13,10 @@ use waylan_core::config::env_var_non_empty;
 
 /// 探测当前用户会话中的活跃 IBus D-Bus 总线地址
 pub fn discover_ibus_address() -> Option<String> {
-    if let Some(addr) = env_var_non_empty("IBUS_ADDRESS") {
-        if is_ibus_socket_reachable(&addr) {
-            return Some(addr);
-        }
+    if let Some(addr) = env_var_non_empty("IBUS_ADDRESS")
+        && is_ibus_socket_reachable(&addr)
+    {
+        return Some(addr);
     }
 
     let bus_dir = resolve_ibus_bus_dir()?;
@@ -82,10 +82,10 @@ fn parse_valid_bus_file(path: &Path) -> Option<String> {
     }
 
     #[cfg(target_os = "linux")]
-    if let Some(daemon_pid) = pid {
-        if !Path::new(&format!("/proc/{}", daemon_pid)).exists() {
-            return None;
-        }
+    if let Some(daemon_pid) = pid
+        && !Path::new(&format!("/proc/{}", daemon_pid)).exists()
+    {
+        return None;
     }
 
     let addr = address?;

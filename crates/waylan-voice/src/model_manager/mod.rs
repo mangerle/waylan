@@ -10,9 +10,9 @@ pub mod importer;
 pub mod scanner;
 
 pub use downloader::{
-    download_and_extract_model, find_preset_model_by_id, format_download_speed,
-    get_preset_model_dest_dir, is_preset_model_installed, AsrModelInstallState, OnlineAsrModelMeta,
-    PRESET_ASR_MODELS,
+    AsrModelInstallState, OnlineAsrModelMeta, PRESET_ASR_MODELS, download_and_extract_model,
+    find_preset_model_by_id, format_download_speed, get_preset_model_dest_dir,
+    is_preset_model_installed,
 };
 pub use importer::{
     builtin_models_dir, ensure_user_models_dirs, import_asr_model_from_dir,

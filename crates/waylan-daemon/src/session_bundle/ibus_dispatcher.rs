@@ -7,20 +7,20 @@
 
 use crate::error::DaemonError;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::info;
 use waylan_algo::AlgoEngine;
 use waylan_core::config::AppConfig;
 use waylan_ibus::keys::IbusSessionCore;
 use waylan_ibus::{
-    run_ibus_session, IbusConfigReloader, IbusMenuActionHandler, IbusSessionOptions,
-    IbusShutdownCoordinator,
+    IbusConfigReloader, IbusMenuActionHandler, IbusSessionOptions, IbusShutdownCoordinator,
+    run_ibus_session,
 };
 
 use crate::desktop::{
-    gnome_extension_intent, sync_gnome_extension_state_async, GnomeExtensionIntent,
+    GnomeExtensionIntent, gnome_extension_intent, sync_gnome_extension_state_async,
 };
 use crate::system::{ShutdownCoordinator, SubprocessManager};
 use crate::tray::TrayService;

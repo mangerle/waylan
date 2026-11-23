@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{info, warn};
 use waylan_sys::LoopWakeup;
-use waylan_wayland::{probe_wayland_environment, WaylandCapabilities};
+use waylan_wayland::{WaylandCapabilities, probe_wayland_environment};
 
 /// 检查 Wayland 合成器协议能力
 pub fn check_wayland_capabilities() -> WaylandCapabilities {

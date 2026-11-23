@@ -70,18 +70,18 @@ impl ShmSlot {
         use std::io::{Seek, SeekFrom, Write};
 
         let len = rgba.len();
-        if let Some(ref mut mmap) = self.mmap {
-            if mmap.len() >= len {
-                let src_chunks = rgba.as_chunks::<4>().0;
-                let dst_chunks = mmap[..len].as_chunks_mut::<4>().0;
-                for (src, dst) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
-                    dst[0] = src[2]; // B
-                    dst[1] = src[1]; // G
-                    dst[2] = src[0]; // R
-                    dst[3] = src[3]; // A
-                }
-                return Some(());
+        if let Some(ref mut mmap) = self.mmap
+            && mmap.len() >= len
+        {
+            let src_chunks = rgba.as_chunks::<4>().0;
+            let dst_chunks = mmap[..len].as_chunks_mut::<4>().0;
+            for (src, dst) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
+                dst[0] = src[2]; // B
+                dst[1] = src[1]; // G
+                dst[2] = src[0]; // R
+                dst[3] = src[3]; // A
             }
+            return Some(());
         }
 
         // 回退逻辑：若 mmap 不可用，采用 1024 字节栈缓冲流式分块写入，杜绝频繁堆分配
@@ -123,7 +123,7 @@ impl ShmSlot {
 pub(crate) fn create_shm_fd(size: usize) -> std::io::Result<File> {
     #[cfg(target_os = "linux")]
     {
-        use rustix::fs::{memfd_create, MemfdFlags};
+        use rustix::fs::{MemfdFlags, memfd_create};
         if let Ok(fd) = memfd_create(
             "waylan-candidate-shm",
             MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,

@@ -20,18 +20,18 @@ pub use importer::{AuxImportReport, DictImportReport, DictImportService, DictImp
 pub use input::{PunctuationOptions, PunctuationProcessor, ShiftToggleStateMachine, ToggleKeyMode};
 
 pub use factory::{
-    apply_default_engine_reload, apply_default_runtime_reload, create_engine_with_table,
-    create_standard_engine, ensure_user_dictionaries_linked, load_auxiliary_dict,
-    load_auxiliary_managers, load_lexicon_table, load_opencc_dict, reload_engine_resources,
-    AuxiliaryDict, CustomPhraseManager, LexiconSummaryService,
+    AuxiliaryDict, CustomPhraseManager, LexiconSummaryService, apply_default_engine_reload,
+    apply_default_runtime_reload, create_engine_with_table, create_standard_engine,
+    ensure_user_dictionaries_linked, load_auxiliary_dict, load_auxiliary_managers,
+    load_lexicon_table, load_opencc_dict, reload_engine_resources,
 };
 pub use frontend::InputMethodFrontend;
 pub use runtime::{
-    build_common_candidate_box_state, CandidateBoxBuildOptions, ImeRuntime, ProcessKeyEventParams,
+    CandidateBoxBuildOptions, ImeRuntime, ProcessKeyEventParams, build_common_candidate_box_state,
 };
 pub use session::{
-    extract_surrounding_prefix, handle_composition_key_with_params, CompositionKeyParams,
-    ImeCoreSession, ImeOutputAction, KeyProcessContext, ShortcutToggleAction,
+    CompositionKeyParams, ImeCoreSession, ImeOutputAction, KeyProcessContext, ShortcutToggleAction,
+    extract_surrounding_prefix, handle_composition_key_with_params,
 };
 pub use waylan_algo as algo;
 pub use waylan_algo::{AlgoConfig, AlgoEngine};

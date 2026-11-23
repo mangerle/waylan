@@ -206,13 +206,12 @@ impl ImeCoreSession {
             .get(sel)
             .map(|c| c.sub_candidates.len())
             .unwrap_or(0);
-        if sub_len > 0 {
-            if let CandidateExpansion::Card {
+        if sub_len > 0
+            && let CandidateExpansion::Card {
                 ref mut selected_index,
             } = self.expansion
-            {
-                *selected_index = (*selected_index + 1) % sub_len;
-            }
+        {
+            *selected_index = (*selected_index + 1) % sub_len;
         }
     }
 
@@ -225,17 +224,16 @@ impl ImeCoreSession {
             .get(sel)
             .map(|c| c.sub_candidates.len())
             .unwrap_or(0);
-        if sub_len > 0 {
-            if let CandidateExpansion::Card {
+        if sub_len > 0
+            && let CandidateExpansion::Card {
                 ref mut selected_index,
             } = self.expansion
-            {
-                *selected_index = if *selected_index == 0 {
-                    sub_len.saturating_sub(1)
-                } else {
-                    *selected_index - 1
-                };
-            }
+        {
+            *selected_index = if *selected_index == 0 {
+                sub_len.saturating_sub(1)
+            } else {
+                *selected_index - 1
+            };
         }
     }
 

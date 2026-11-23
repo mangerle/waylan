@@ -24,7 +24,7 @@ use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 
 use crate::callbacks::{
-    populate_lexicon_statistics, register_settings_callbacks, SettingsCallbacksContext,
+    SettingsCallbacksContext, populate_lexicon_statistics, register_settings_callbacks,
 };
 use crate::sync::sync_config_to_window;
 use crate::voice::register_voice_callbacks;

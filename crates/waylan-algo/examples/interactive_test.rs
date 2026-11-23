@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::time::Instant;
 use waylan_algo::custom_phrase::AuxiliaryDict;
-use waylan_algo::{table::LexiconTable, types::AlgoConfig, AlgoEngine};
+use waylan_algo::{AlgoEngine, table::LexiconTable, types::AlgoConfig};
 
 /// 单次输入的响应延迟统计参数对象
 struct LatencyReport {

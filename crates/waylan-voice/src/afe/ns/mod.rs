@@ -10,8 +10,8 @@ pub mod deepfilter;
 pub mod gtcrn;
 pub mod rnnoise;
 
-pub use deepfilter::{resolve_ns_model_path, DeepFilterSuppressor};
-pub use gtcrn::{resolve_gtcrn_model_path, GtcrnSuppressor};
+pub use deepfilter::{DeepFilterSuppressor, resolve_ns_model_path};
+pub use gtcrn::{GtcrnSuppressor, resolve_gtcrn_model_path};
 pub use rnnoise::RnnoiseSuppressor;
 
 use log::info;
@@ -54,7 +54,9 @@ pub fn create_noise_suppressor(config: &AudioFrontEndConfig) -> Box<dyn NoiseSup
 
     match config.ns_engine {
         NsEngineType::DeepFilterNet => {
-            info!("[音频前端] 激活系统内置高阶深度级 DeepFilterNet3 降噪引擎 (强力消除机械键盘打字声)");
+            info!(
+                "[音频前端] 激活系统内置高阶深度级 DeepFilterNet3 降噪引擎 (强力消除机械键盘打字声)"
+            );
             Box::new(DeepFilterSuppressor::new())
         }
         NsEngineType::Gtcrn => {

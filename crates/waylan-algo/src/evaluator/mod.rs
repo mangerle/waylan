@@ -262,7 +262,7 @@ pub mod lunar;
 pub mod math;
 
 pub use financial::FinancialEvaluator;
-pub use math::{format_math_val_str, MathEvaluator};
+pub use math::{MathEvaluator, format_math_val_str};
 
 #[cfg(test)]
 mod tests {

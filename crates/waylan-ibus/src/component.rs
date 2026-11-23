@@ -15,7 +15,7 @@ use std::process::Command;
 use waylan_core::config::env_var_non_empty;
 use waylan_sys::assets::{detect_default_assets_path, resolve_icon_path_or_name};
 use waylan_sys::process::{
-    run_command_with_timeout, spawn_command_detached, DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_COMMAND_TIMEOUT, run_command_with_timeout, spawn_command_detached,
 };
 
 /// 解析微澜 IBus 引擎注册所使用的图标路径（优先绝对路径以确保 GNOME 原生顶栏准确渲染）

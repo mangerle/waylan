@@ -1,5 +1,5 @@
-use super::mmap_header::CompactDictHeader;
 pub use super::mmap_header::COMPACT_DICT_MAGIC;
+use super::mmap_header::CompactDictHeader;
 use crate::dat::DatReader;
 use crate::error::AlgoError;
 use memmap2::{Mmap, MmapOptions};
@@ -217,10 +217,10 @@ impl CompactMmapLexicon {
         let cand_count = u16::from_le_bytes(cand_count_bytes) as usize;
         let key_type = meta_slice[6];
 
-        if let Some(exp_type) = expected_type {
-            if key_type != exp_type {
-                return false;
-            }
+        if let Some(exp_type) = expected_type
+            && key_type != exp_type
+        {
+            return false;
         }
 
         let take_count = limit.map_or(cand_count, |max_k| cand_count.min(max_k));

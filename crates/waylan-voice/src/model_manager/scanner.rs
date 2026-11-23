@@ -8,8 +8,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::importer::{builtin_models_dir, user_models_dir};
 use super::ModelItem;
+use super::importer::{builtin_models_dir, user_models_dir};
 
 /// 扫描指定目录下的 `.onnx` 模型文件，返回 `(文件名, 完整路径)` 列表
 ///

@@ -7,9 +7,9 @@
 //! - **代价与局限**：涉及与会话内部上下文的借用交互，需通过 `session` 对应字段赋值。
 
 use log::{info, warn};
+use wayland_client::QueueHandle;
 use wayland_client::globals::{Global, GlobalList};
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_seat::WlSeat, wl_shm::WlShm};
-use wayland_client::QueueHandle;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use wayland_protocols_misc::zwp_input_method_v2::client::zwp_input_method_v2::ZwpInputMethodV2;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
@@ -49,7 +49,9 @@ fn bind_v1_candidate_surface(
             let panel_surface = input_panel.get_input_panel_surface(&wl_surface, qh, ());
             panel_surface.set_overlay_panel();
             session.protocol.panel_surface = Some(panel_surface);
-            info!("[微澜 Wayland] 成功绑定 zwp_input_panel_v1 并将候选框配置为光标悬浮面板(overlay_panel)。");
+            info!(
+                "[微澜 Wayland] 成功绑定 zwp_input_panel_v1 并将候选框配置为光标悬浮面板(overlay_panel)。"
+            );
         } else if let Ok(layer_shell) = globals.bind::<ZwlrLayerShellV1, _, _>(qh, 1..=4, ()) {
             let layer_surface = layer_shell.get_layer_surface(
                 &wl_surface,
@@ -68,7 +70,9 @@ fn bind_v1_candidate_surface(
                 "[微澜 Wayland] 成功绑定 zwlr_layer_shell_v1 并将候选框配置为 Overlay 图层表面。"
             );
         } else {
-            warn!("[微澜 Wayland] 合成器未提供 zwp_input_panel_v1 或 zwlr_layer_shell_v1，裸 wl_surface 可能无法正常显示。");
+            warn!(
+                "[微澜 Wayland] 合成器未提供 zwp_input_panel_v1 或 zwlr_layer_shell_v1，裸 wl_surface 可能无法正常显示。"
+            );
         }
 
         session.surface.popup_wl_surface = Some(wl_surface);

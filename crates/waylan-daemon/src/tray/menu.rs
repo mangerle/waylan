@@ -1,25 +1,29 @@
 use log::info;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use zbus::Variant;
 use zbus::interface;
-use zbus::object_server::SignalContext;
-use zbus::zvariant::Value;
+use zbus::object_server::SignalEmitter;
 
 use crate::system::ShutdownCoordinator;
 
 /// DBusMenu 布局返回元组类型定义
 pub type DbusMenuLayout = (
     u32,
-    (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>),
+    (
+        i32,
+        HashMap<String, Variant<'static>>,
+        Vec<Variant<'static>>,
+    ),
 );
 
 /// 构造单条 DBusMenu 菜单项结构
-pub(crate) fn make_menu_item(id: i32, label: &str) -> Value<'static> {
+pub(crate) fn make_menu_item(id: i32, label: &str) -> Variant<'static> {
     let mut props = HashMap::with_capacity(1);
-    props.insert("label".to_string(), Value::from(label.to_string()));
-    Value::from((id, props, Vec::<Value>::new()))
+    props.insert("label".to_string(), Variant::from(label.to_string()));
+    Variant::from((id, props, Vec::<Variant>::new()))
 }
 
 pub use crate::system::SubprocessManager;
@@ -210,7 +214,7 @@ impl DBusMenu {
     /// - **核心优势**：保持与托盘菜单宿主（GNOME Shell / KDE 等）的协议兼容。
     /// - **代价与局限**：入参个数由外部协议固定，无法收敛为参数对象；
     ///   其中 `data` 与 `timestamp` 当前未被消费，仅为满足 D-Bus 签名而保留。
-    pub(crate) fn event(&self, id: i32, event_id: String, _data: Value<'_>, _timestamp: u32) {
+    pub(crate) fn event(&self, id: i32, event_id: String, _data: Variant<'_>, _timestamp: u32) {
         if event_id != "clicked" {
             return;
         }
@@ -232,7 +236,7 @@ impl DBusMenu {
     /// 菜单布局更新通知信号
     #[zbus(signal)]
     async fn layout_updated(
-        signal_ctxt: &SignalContext<'_>,
+        signal_ctxt: &SignalEmitter<'_>,
         revision: u32,
         parent: i32,
     ) -> zbus::Result<()>;
@@ -275,7 +279,7 @@ mod tests {
         assert!(item4_str.contains("字符切换: 半角 (英文字母)"));
 
         // 测试点击切换简繁
-        menu.event(6, "clicked".to_string(), Value::from(0), 0);
+        menu.event(6, "clicked".to_string(), Variant::from(0), 0);
         assert!(flags.is_traditional());
         let (_rev, (_root_id, _props, items_updated)) = menu.get_layout(0, -1, Vec::new());
         assert!(format!("{:?}", items_updated[1]).contains("简繁切换: 繁体"));
@@ -287,7 +291,7 @@ mod tests {
         assert!(item1_caps_str.contains("当前输入: 英文大写"));
 
         // 点击第1项菜单（当前输入: 英文大写），验证自动解除大写锁定并切回中文
-        menu.event(1, "clicked".to_string(), Value::from(0), 0);
+        menu.event(1, "clicked".to_string(), Variant::from(0), 0);
         assert!(
             !flags.is_caps_locked(),
             "点击大写菜单项后应立即解除大写锁定"

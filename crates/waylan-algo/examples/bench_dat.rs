@@ -71,8 +71,14 @@ fn build_dat_index(keys: &[String]) -> DoubleArrayTrie {
     let dur = t_dat.elapsed();
     let base_check_mb = (dat.base.len() * 8) as f64 / 1024.0 / 1024.0;
     let tail_mb = dat.tail.len() as f64 / 1024.0 / 1024.0;
-    println!("DAT 构建完成！耗时: {:?} | base/check 节点数: {} ({:.2} MB) | Tail 池: {:.2} MB | DAT 索引总计: {:.2} MB", 
-        dur, dat.base.len(), base_check_mb, tail_mb, base_check_mb + tail_mb);
+    println!(
+        "DAT 构建完成！耗时: {:?} | base/check 节点数: {} ({:.2} MB) | Tail 池: {:.2} MB | DAT 索引总计: {:.2} MB",
+        dur,
+        dat.base.len(),
+        base_check_mb,
+        tail_mb,
+        base_check_mb + tail_mb
+    );
     dat
 }
 

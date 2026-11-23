@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
-use crate::dat::{pinyin_char_to_code, DoubleArrayTrie};
+use crate::dat::{DoubleArrayTrie, pinyin_char_to_code};
 
 /// 从已按字典序排序且去重的拼音键及其关联值索引构建带 Tail 压缩的 DAT
 pub fn build_dat(sorted_keys: &[String], values: &[u32]) -> DoubleArrayTrie {

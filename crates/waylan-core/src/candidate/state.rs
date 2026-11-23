@@ -104,10 +104,10 @@ impl CandidateBoxState {
         if !self.visible {
             return CandidateBoxView::Hidden;
         }
-        if let Some(ref voice) = self.voice {
-            if voice.is_listening {
-                return CandidateBoxView::VoiceCapsule(voice);
-            }
+        if let Some(ref voice) = self.voice
+            && voice.is_listening
+        {
+            return CandidateBoxView::VoiceCapsule(voice);
         }
         if let CandidateExpansion::Grid { selected_index } = self.expansion {
             return CandidateBoxView::GridExpanded {

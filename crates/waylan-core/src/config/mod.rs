@@ -199,9 +199,13 @@ mod tests {
             env_var_non_empty("THIS_VARIABLE_SHOULD_NOT_EXIST_XYZ"),
             None
         );
-        env::set_var("WAYLAN_TEST_EMPTY_VAR", "   ");
+        unsafe {
+            env::set_var("WAYLAN_TEST_EMPTY_VAR", "   ");
+        }
         assert_eq!(env_var_non_empty("WAYLAN_TEST_EMPTY_VAR"), None);
-        env::set_var("WAYLAN_TEST_VAL_VAR", "  valid_value  ");
+        unsafe {
+            env::set_var("WAYLAN_TEST_VAL_VAR", "  valid_value  ");
+        }
         assert_eq!(
             env_var_non_empty("WAYLAN_TEST_VAL_VAR"),
             Some("valid_value".to_string())

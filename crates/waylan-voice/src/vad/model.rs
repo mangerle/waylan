@@ -5,8 +5,8 @@
 //! - **核心优势**：基于 sherpa-onnx 原生 C/C++ 绑定的跨平台推理加速；模型文件缺失时自动优雅降级为 EnergyVad，保证零崩溃。
 //! - **代价与局限**：模型加载存在少许内存开销，单线程 CPU 推理约占 0.5%~1% CPU。
 
-use super::energy::EnergyVad;
 use super::VadProcessor;
+use super::energy::EnergyVad;
 use log::{info, warn};
 use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 use std::path::PathBuf;
@@ -106,11 +106,11 @@ impl VadProcessor for ModelVad {
                     detector.clear();
                     return true;
                 }
-                if let Some(last_speech) = self.last_speech_time {
-                    if now.duration_since(last_speech) >= self.silence_duration_threshold {
-                        detector.clear();
-                        return true;
-                    }
+                if let Some(last_speech) = self.last_speech_time
+                    && now.duration_since(last_speech) >= self.silence_duration_threshold
+                {
+                    detector.clear();
+                    return true;
                 }
                 false
             } else {

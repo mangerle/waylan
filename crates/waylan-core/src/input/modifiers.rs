@@ -2,8 +2,8 @@ use super::constants::{
     KEY_LEFTALT, KEY_LEFTCTRL, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_RIGHTALT, KEY_RIGHTCTRL,
     KEY_RIGHTMETA, KEY_RIGHTSHIFT, MOD_ALT, MOD_CAPS, MOD_CTRL, MOD_SHIFT, MOD_SUPER,
 };
-use crate::state::SharedInputFlags;
 use crate::InputMode;
+use crate::state::SharedInputFlags;
 
 /// 从聚合共享输入状态容器同步输入语言模式
 ///

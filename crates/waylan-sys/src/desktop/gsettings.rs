@@ -7,7 +7,7 @@
 
 use log::info;
 
-use crate::process::{safe_gsettings_get, safe_gsettings_set, DEFAULT_COMMAND_TIMEOUT};
+use crate::process::{DEFAULT_COMMAND_TIMEOUT, safe_gsettings_get, safe_gsettings_set};
 
 /// GNOME 输入源 GSettings Schema 名称
 const INPUT_SOURCES_SCHEMA: &str = "org.gnome.desktop.input-sources";
@@ -61,10 +61,11 @@ pub fn prioritize_source_entry(
     let items = parse_gsettings_source_tuples(raw);
     let has_xkb = items.iter().any(|i| i.trim().starts_with("('xkb',"));
 
-    if let Some(first) = items.first() {
-        if first.trim() == target_entry && has_xkb {
-            return None;
-        }
+    if let Some(first) = items.first()
+        && first.trim() == target_entry
+        && has_xkb
+    {
+        return None;
     }
 
     let mut new_items = Vec::with_capacity(items.len().saturating_add(2));
@@ -89,13 +90,13 @@ fn update_gsettings_source_key(key: &str, target_entry: &str, fallback_xkb_entry
         return;
     };
 
-    if let Some(updated) = prioritize_source_entry(&current, target_entry, fallback_xkb_entry) {
-        if safe_gsettings_set(INPUT_SOURCES_SCHEMA, key, &updated, DEFAULT_COMMAND_TIMEOUT) {
-            info!(
-                "[桌面集成] 已将 {} 置顶同步至 GNOME 系统 {} 列表: {}",
-                target_entry, key, updated
-            );
-        }
+    if let Some(updated) = prioritize_source_entry(&current, target_entry, fallback_xkb_entry)
+        && safe_gsettings_set(INPUT_SOURCES_SCHEMA, key, &updated, DEFAULT_COMMAND_TIMEOUT)
+    {
+        info!(
+            "[桌面集成] 已将 {} 置顶同步至 GNOME 系统 {} 列表: {}",
+            target_entry, key, updated
+        );
     }
 }
 

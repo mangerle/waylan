@@ -10,29 +10,29 @@ mod cloud;
 mod offline;
 mod traits;
 
-pub use cloud::{encode_pcm_to_wav, test_cloud_profile_connection, CloudVoiceRecognizer};
-pub use offline::{resolve_asr_model_dir, OfflineVoiceRecognizer};
+pub use cloud::{CloudVoiceRecognizer, encode_pcm_to_wav, test_cloud_profile_connection};
+pub use offline::{OfflineVoiceRecognizer, resolve_asr_model_dir};
 pub use traits::{MockVoiceRecognizer, VoiceRecognizer};
 
 use waylan_core::{CloudAsrConfig, VoiceConfig, VoiceEngineType};
 
 /// 识别引擎工厂函数：根据系统配置动态构造对应的识别器后端
 pub fn create_recognizer(config: &VoiceConfig) -> Box<dyn VoiceRecognizer> {
-    if let Some(ref sel) = config.selected_asr {
-        if let Some(profile_id) = sel.strip_prefix("cloud:") {
-            let cloud_cfg = config
-                .cloud_profiles
-                .iter()
-                .find(|p| p.id == profile_id)
-                .map(|p| CloudAsrConfig {
-                    provider: p.provider,
-                    endpoint: p.endpoint.clone(),
-                    api_key: p.api_key.clone(),
-                    model: p.model.clone(),
-                })
-                .unwrap_or_else(|| config.cloud.clone());
-            return Box::new(CloudVoiceRecognizer::new(cloud_cfg));
-        }
+    if let Some(ref sel) = config.selected_asr
+        && let Some(profile_id) = sel.strip_prefix("cloud:")
+    {
+        let cloud_cfg = config
+            .cloud_profiles
+            .iter()
+            .find(|p| p.id == profile_id)
+            .map(|p| CloudAsrConfig {
+                provider: p.provider,
+                endpoint: p.endpoint.clone(),
+                api_key: p.api_key.clone(),
+                model: p.model.clone(),
+            })
+            .unwrap_or_else(|| config.cloud.clone());
+        return Box::new(CloudVoiceRecognizer::new(cloud_cfg));
     }
 
     match config.engine_type {

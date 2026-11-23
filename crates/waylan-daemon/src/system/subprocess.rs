@@ -13,8 +13,8 @@ use std::env;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 

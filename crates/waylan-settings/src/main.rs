@@ -4,7 +4,7 @@
 //! - **实现初衷**：作为独立的设置中心客户端二进制执行文件，与常驻输入法后台进程物理隔离。
 //! - **核心优势**：用完即退，关闭后由操作系统完整回收内存与 GPU 驱动句柄，彻底杜绝守护进程常驻内存污染。
 
-use waylan_settings::{run_settings_gui, SettingsError};
+use waylan_settings::{SettingsError, run_settings_gui};
 
 fn main() -> Result<(), SettingsError> {
     let args: Vec<String> = std::env::args().collect();

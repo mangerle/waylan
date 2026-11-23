@@ -3,7 +3,7 @@
 //! 基于 Linux `eventfd` 提供纳秒级跨线程/信号事件循环唤醒通道，支持零开销事件驱动。
 
 use log::warn;
-use rustix::event::{eventfd, EventfdFlags};
+use rustix::event::{EventfdFlags, eventfd};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
 use std::io;

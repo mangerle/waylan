@@ -1,7 +1,7 @@
 use super::AlgoEngine;
 use crate::dispatcher::ModeDispatcher;
 use crate::types::{AlgoCandidate, CandidateTier};
-use waylan_core::{is_cjk_character, PanguSpacing};
+use waylan_core::{PanguSpacing, is_cjk_character};
 
 /// 分段选词记录收尾处理的参数对象
 ///
@@ -307,11 +307,7 @@ impl AlgoEngine {
             }
         }
 
-        if target_opt.is_none() {
-            last_end
-        } else {
-            0
-        }
+        if target_opt.is_none() { last_end } else { 0 }
     }
 
     /// 结合当前最优切分路径单元计算候选词所消费的原始按键字节长度

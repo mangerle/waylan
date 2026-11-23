@@ -1,5 +1,5 @@
-use waylan_algo::table::{calculate_length_boost, extract_raw_score, LexiconTable};
 use waylan_algo::LENGTH_BOOST_MULTIPLIER;
+use waylan_algo::table::{LexiconTable, calculate_length_boost, extract_raw_score};
 
 #[test]
 fn test_lookup_length_boost() {

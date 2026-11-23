@@ -70,16 +70,16 @@ impl OpenCcDict {
         let bin_candidates = waylan_core::config::opencc_dict_search_paths();
 
         for path in &bin_candidates {
-            if path.exists() {
-                if let Ok(dict) = Self::load_from_file(path) {
-                    info!(
-                        "[简繁词库] 成功载入二进制简繁转换词库: {:?} (单字映射: {} 个, 消歧短语: {} 组)",
-                        path,
-                        dict.chars.len(),
-                        dict.phrases_len()
-                    );
-                    return dict;
-                }
+            if path.exists()
+                && let Ok(dict) = Self::load_from_file(path)
+            {
+                info!(
+                    "[简繁词库] 成功载入二进制简繁转换词库: {:?} (单字映射: {} 个, 消歧短语: {} 组)",
+                    path,
+                    dict.chars.len(),
+                    dict.phrases_len()
+                );
+                return dict;
             }
         }
 
@@ -91,11 +91,12 @@ impl OpenCcDict {
         for dir in &tsv_dirs {
             let chars_path = dir.join("STCharacters.txt");
             let phrases_path = dir.join("STPhrases.txt");
-            if chars_path.exists() && phrases_path.exists() {
-                if let Ok(dict) = Self::from_tsv_files(&chars_path, &phrases_path) {
-                    info!("[简繁词库] 成功从 TSV 源文件载入简繁转换词库: {:?}", dir);
-                    return dict;
-                }
+            if chars_path.exists()
+                && phrases_path.exists()
+                && let Ok(dict) = Self::from_tsv_files(&chars_path, &phrases_path)
+            {
+                info!("[简繁词库] 成功从 TSV 源文件载入简繁转换词库: {:?}", dir);
+                return dict;
             }
         }
 

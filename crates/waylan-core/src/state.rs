@@ -8,8 +8,8 @@
 //!   3. 零多余堆内存分配，无需双写同步。
 //! - **代价与局限**：状态受限于 8 位位图（最多 8 种布尔标志组合）。
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// 中文输入模式状态位 (bit 0)
 pub const FLAG_CHINESE: u8 = 1 << 0;

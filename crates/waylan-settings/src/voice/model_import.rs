@@ -14,10 +14,10 @@ use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_voice::{ModelSubdirectory, VadModelType};
 
-use super::{save_config_and_notify_status, SaveConfigParams};
+use super::{SaveConfigParams, save_config_and_notify_status};
+use crate::SettingsWindow;
 use crate::callbacks::{pick_directory_dialog_async, pick_file_dialog_async};
 use crate::sync::update_config_from_window;
-use crate::SettingsWindow;
 
 /// 导入成功后写入配置的回调（采用函数指针以便在多个界面入口间共享同一实现）
 type ApplyConfigFn = fn(&mut AppConfig, &str);

@@ -5,8 +5,8 @@
 //! - **核心优势**：纯栈内浮点算术，纳秒级开销，对系统负载几乎为零。
 //! - **代价与局限**：对背景稳态噪声敏感，复杂嘈杂环境下建议结合 AFE 降噪或 Silero 模型 VAD。
 
-use super::visualizer::calculate_rms;
 use super::VadProcessor;
+use super::visualizer::calculate_rms;
 use std::time::{Duration, Instant};
 
 /// 基础纯数学能量端点检测器 (Energy-based VAD)
@@ -42,10 +42,10 @@ impl VadProcessor for EnergyVad {
             self.last_speech_time = Some(now);
             false
         } else if self.has_speech_started {
-            if let Some(last_speech) = self.last_speech_time {
-                if now.duration_since(last_speech) >= self.silence_duration_threshold {
-                    return true;
-                }
+            if let Some(last_speech) = self.last_speech_time
+                && now.duration_since(last_speech) >= self.silence_duration_threshold
+            {
+                return true;
             }
             false
         } else {

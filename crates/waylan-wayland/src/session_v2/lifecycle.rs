@@ -57,15 +57,16 @@ impl WaylanV2Session {
             self.focus.is_password_context = false;
             self.runtime.set_protected_context(false);
             if was_active || focus_reset {
-                if self.runtime.core.mods_depressed() != 0 && self.protocol.has_virtual_keymap {
-                    if let Some(ref vk) = self.protocol.virtual_keyboard {
-                        vk.modifiers(
-                            0,
-                            0,
-                            self.runtime.core.mods_locked(),
-                            self.keyboard.mods_group,
-                        );
-                    }
+                if self.runtime.core.mods_depressed() != 0
+                    && self.protocol.has_virtual_keymap
+                    && let Some(ref vk) = self.protocol.virtual_keyboard
+                {
+                    vk.modifiers(
+                        0,
+                        0,
+                        self.runtime.core.mods_locked(),
+                        self.keyboard.mods_group,
+                    );
                 }
                 self.reset_focus_state();
                 let _ = self.runtime.core.engine.maybe_compact_user_dict();

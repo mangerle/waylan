@@ -7,8 +7,8 @@
 //! - **代价与局限**：跨线程同步依赖原子标志读取与非阻塞 channel 脉冲。
 
 use crate::session::InputDecorationFlags;
-use waylan_core::state::InputStateSnapshot;
 use waylan_core::InputMode;
+use waylan_core::state::InputStateSnapshot;
 
 use super::ImeRuntime;
 

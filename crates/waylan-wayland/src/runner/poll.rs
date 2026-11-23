@@ -9,12 +9,13 @@
 
 use std::io::ErrorKind;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
-use rustix::event::{poll, PollFd, PollFlags};
+use rustix::event::{PollFd, PollFlags, poll};
 use rustix::fd::BorrowedFd;
 use rustix::io::Errno;
-use wayland_client::backend::{ReadEventsGuard, WaylandError};
 use wayland_client::EventQueue;
+use wayland_client::backend::{ReadEventsGuard, WaylandError};
 
 use crate::error::WaylandRunnerError;
 use crate::session_v1::WaylanV1Session;
@@ -65,10 +66,10 @@ fn read_wayland_events(guard: Option<ReadEventsGuard>) -> Result<(), WaylandRunn
         return Ok(());
     };
 
-    if let Err(WaylandError::Io(io_err)) = guard.read() {
-        if io_err.kind() != ErrorKind::WouldBlock {
-            return Err(io_err.into());
-        }
+    if let Err(WaylandError::Io(io_err)) = guard.read()
+        && io_err.kind() != ErrorKind::WouldBlock
+    {
+        return Err(io_err.into());
     }
     Ok(())
 }
@@ -102,7 +103,13 @@ pub(super) fn poll_and_read_events(
         idx
     });
 
-    match poll(&mut fds[..fd_count], timeout_ms) {
+    let timespec = if timeout_ms >= 0 {
+        Duration::from_millis(timeout_ms as u64).try_into().ok()
+    } else {
+        None
+    };
+
+    match poll(&mut fds[..fd_count], timespec.as_ref()) {
         Ok(0) => {
             drop(guard);
             Ok(PollEventOutcome::TimedOut)

@@ -51,8 +51,7 @@ fn main() {
         },
         CorpusTask {
             name: "MiniMind 知识语料",
-            input_path:
-                "/mnt/d/coding/rust/minimind/dataset/waylan_work/knowledge_minimind_clean.jsonl",
+            input_path: "/mnt/d/coding/rust/minimind/dataset/waylan_work/knowledge_minimind_clean.jsonl",
             output_path: "/home/wsl/coding/waylan/data/corpus_clean/knowledge_clean.txt",
             is_jsonl_text: true,
             is_tsv_body: false,

@@ -16,13 +16,13 @@ use parking_lot::Mutex;
 use slint::{ComponentHandle, Model, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_voice::{
-    download_and_extract_model, find_preset_model_by_id, get_preset_model_dest_dir,
-    is_preset_model_installed, VoiceEngineType,
+    VoiceEngineType, download_and_extract_model, find_preset_model_by_id,
+    get_preset_model_dest_dir, is_preset_model_installed,
 };
 
-use super::{save_config_and_notify_status, SaveConfigParams};
-use crate::sync::sync_asr_models_to_window;
+use super::{SaveConfigParams, save_config_and_notify_status};
 use crate::SettingsWindow;
+use crate::sync::sync_asr_models_to_window;
 
 /// 注册预置离线大模型的一键下载与启用回调
 pub(crate) fn register_model_download_callbacks(
@@ -120,14 +120,14 @@ fn register_download_action(window: &SettingsWindow, loaded_config: Arc<Mutex<Ap
                         let asr_models = win.get_asr_models();
                         let count = asr_models.row_count();
                         for i in 0..count {
-                            if let Some(mut item) = asr_models.row_data(i) {
-                                if item.id.as_str() == id_for_thread.as_str() {
-                                    item.state = 0; // 回到未下载
-                                    item.progress = 0.0;
-                                    item.progress_text = SharedString::from(clean_err.clone());
-                                    asr_models.set_row_data(i, item);
-                                    break;
-                                }
+                            if let Some(mut item) = asr_models.row_data(i)
+                                && item.id.as_str() == id_for_thread.as_str()
+                            {
+                                item.state = 0; // 回到未下载
+                                item.progress = 0.0;
+                                item.progress_text = SharedString::from(clean_err.clone());
+                                asr_models.set_row_data(i, item);
+                                break;
                             }
                         }
                     }

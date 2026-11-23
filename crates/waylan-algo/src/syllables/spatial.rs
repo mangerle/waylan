@@ -5,9 +5,9 @@
 //! - **核心优势**：通过预计算二维高斯替换代价矩阵与邻键表，在运行期实现纯整数 O(1) 查表。
 
 pub use super::spatial_data::{
-    ascii_letter_idx, get_qwerty_coord, QWERTY_SPATIAL_COST_MATRIX, QWERTY_SPATIAL_NEIGHBORS,
+    QWERTY_SPATIAL_COST_MATRIX, QWERTY_SPATIAL_NEIGHBORS, ascii_letter_idx, get_qwerty_coord,
 };
-use super::standard::{is_valid_syllable, STANDARD_SYLLABLES};
+use super::standard::{STANDARD_SYLLABLES, is_valid_syllable};
 use waylan_core::config::TypoCorrectionRules;
 
 /// 获取按键在物理键盘上的紧邻误触按键列表及对应惩罚代价
@@ -62,10 +62,11 @@ pub fn weighted_edit_distance(source: &str, target: &str) -> u32 {
     if source == target {
         return 0;
     }
-    if source.is_ascii() && target.is_ascii() {
-        if let Some(distance) = ascii_weighted_edit_distance(source.as_bytes(), target.as_bytes()) {
-            return distance;
-        }
+    if source.is_ascii()
+        && target.is_ascii()
+        && let Some(distance) = ascii_weighted_edit_distance(source.as_bytes(), target.as_bytes())
+    {
+        return distance;
     }
 
     let s_chars: Vec<char> = source.chars().collect();
@@ -168,10 +169,10 @@ pub fn get_spatial_typo_corrections(slice: &str, max_cost: u32) -> Vec<(String, 
             continue;
         }
         // 声母首字母物理距离相差过大快速剪枝（仅探索紧邻误触按键）
-        if let Some(target_first) = std_syl.chars().next() {
-            if key_spatial_distance(first_char, target_first) > 1.5 {
-                continue;
-            }
+        if let Some(target_first) = std_syl.chars().next()
+            && key_spatial_distance(first_char, target_first) > 1.5
+        {
+            continue;
         }
         let cost = weighted_edit_distance(slice, std_syl);
         if cost > 0 && cost <= max_cost {
@@ -240,10 +241,10 @@ fn collect_nasal_typos(slice: &str, rules: &TypoCorrectionRules, results: &mut V
             push_valid_typo(results, slice, format!("{}eng", prefix));
         }
     }
-    if rules.mg_ng {
-        if let Some(prefix) = slice.strip_suffix("mg") {
-            push_valid_typo(results, slice, format!("{}ng", prefix));
-        }
+    if rules.mg_ng
+        && let Some(prefix) = slice.strip_suffix("mg")
+    {
+        push_valid_typo(results, slice, format!("{}ng", prefix));
     }
 }
 
@@ -272,10 +273,10 @@ fn collect_abbrev_typos(slice: &str, rules: &TypoCorrectionRules, results: &mut 
             push_valid_typo(results, slice, slice.replace("van", "uan"));
         }
     }
-    if rules.on_ong {
-        if let Some(prefix) = slice.strip_suffix("on") {
-            push_valid_typo(results, slice, format!("{}ong", prefix));
-        }
+    if rules.on_ong
+        && let Some(prefix) = slice.strip_suffix("on")
+    {
+        push_valid_typo(results, slice, format!("{}ong", prefix));
     }
 }
 

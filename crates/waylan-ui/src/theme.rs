@@ -1,7 +1,7 @@
 //! 候选框主题颜色与圆角内边距定义
 
-use waylan_core::config::CandidateThemePreset;
 use waylan_core::ThemeMode;
+use waylan_core::config::CandidateThemePreset;
 
 /// 颜色定义 (RGBA，每个分量为 0.0 ~ 1.0)
 #[derive(Debug, Clone, Copy, PartialEq)]

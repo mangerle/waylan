@@ -313,10 +313,10 @@ fn extract_initial_map(dict_map: &KeyCandidateMap, words: &[String]) -> KeyCandi
                 continue;
             };
             for &(wid, score) in matches {
-                if let Some(text) = words.get(wid as usize) {
-                    if text.chars().count() == 1 {
-                        list.push((wid, score));
-                    }
+                if let Some(text) = words.get(wid as usize)
+                    && text.chars().count() == 1
+                {
+                    list.push((wid, score));
                 }
             }
         }

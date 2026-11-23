@@ -16,7 +16,7 @@ pub use property::*;
 pub use text::*;
 
 use std::collections::HashMap;
-use zbus::zvariant::OwnedValue;
+use zbus::OwnedVariant;
 
 /// IBus 预编辑失焦行为：清空预编辑 (`IBUS_ENGINE_PREEDIT_CLEAR`)
 pub const IBUS_ENGINE_PREEDIT_CLEAR: u32 = 0;
@@ -28,12 +28,12 @@ pub const IBUS_ORIENTATION_HORIZONTAL: i32 = 0;
 pub const IBUS_ORIENTATION_VERTICAL: i32 = 1;
 
 /// 构造空的附件字典 `a{sv}`
-pub(crate) fn empty_attachments() -> HashMap<String, OwnedValue> {
+pub(crate) fn empty_attachments() -> HashMap<String, OwnedVariant> {
     HashMap::with_capacity(0)
 }
 
 /// 构造空的变体列表 `av`
-pub(crate) fn empty_variant_vec() -> Vec<OwnedValue> {
+pub(crate) fn empty_variant_vec() -> Vec<OwnedVariant> {
     Vec::with_capacity(0)
 }
 
@@ -45,10 +45,10 @@ mod tests {
     #[test]
     fn test_ibus_text_and_preedit_signature() {
         let text_val = build_ibus_text("你好").expect("序列化 IBusText 失败");
-        assert_eq!(text_val.value_signature().as_str(), "(sa{sv}sv)");
+        assert_eq!(text_val.value_signature(), "(sa{sv}sv)");
 
         let preedit_val = build_ibus_preedit_text("ni'hao").expect("序列化预编辑 IBusText 失败");
-        assert_eq!(preedit_val.value_signature().as_str(), "(sa{sv}sv)");
+        assert_eq!(preedit_val.value_signature(), "(sa{sv}sv)");
 
         let extracted = extract_text_from_ibus_variant(&text_val);
         assert_eq!(extracted.as_deref(), Some("你好"));
@@ -68,7 +68,7 @@ mod tests {
             index_style: CandidateIndexStyle::ModernSpace,
         })
         .expect("序列化 IBusLookupTable 失败");
-        assert_eq!(table.value_signature().as_str(), "(sa{sv}uubbiavav)");
+        assert_eq!(table.value_signature(), "(sa{sv}uubbiavav)");
     }
 
     #[test]
@@ -91,36 +91,34 @@ mod tests {
     }
 
     /// 逐层解开 zvariant 装箱，取出 `IBusProperty` 结构体的键名字段（第 3 个字段）
-    fn unwrap_structure<'a>(
-        val: &'a zbus::zvariant::Value<'a>,
-    ) -> Option<&'a [zbus::zvariant::Value<'a>]> {
+    fn unwrap_structure<'a>(val: &'a zbus::Variant<'a>) -> Option<&'a [zbus::Variant<'a>]> {
         let mut inner = val;
-        while let zbus::zvariant::Value::Value(v) = inner {
+        while let zbus::Variant::Variant(v) = inner {
             inner = v.as_ref();
         }
         match inner {
-            zbus::zvariant::Value::Structure(s) => Some(s.fields()),
+            zbus::Variant::Structure(s) => Some(s.fields()),
             _ => None,
         }
     }
 
     /// 从 `IBusPropList` 变体中按序提取全部属性键名
-    fn extract_prop_keys(prop_list: &zbus::zvariant::OwnedValue) -> Option<Vec<String>> {
+    fn extract_prop_keys(prop_list: &zbus::OwnedVariant) -> Option<Vec<String>> {
         let fields = unwrap_structure(prop_list)?;
         let props_value = &fields[2];
         let mut inner = props_value;
-        while let zbus::zvariant::Value::Value(v) = inner {
+        while let zbus::Variant::Variant(v) = inner {
             inner = v.as_ref();
         }
         let array = match inner {
-            zbus::zvariant::Value::Array(arr) => arr,
+            zbus::Variant::Array(arr) => arr,
             _ => return None,
         };
         let mut keys = Vec::with_capacity(array.len());
-        for item in array.iter() {
+        for item in array.inner().iter() {
             let prop_fields = unwrap_structure(item)?;
             match &prop_fields[2] {
-                zbus::zvariant::Value::Str(text) => keys.push(text.as_str().to_string()),
+                zbus::Variant::Str(text) => keys.push(text.as_str().to_string()),
                 _ => return None,
             }
         }
@@ -131,7 +129,7 @@ mod tests {
     fn test_ibus_prop_and_component_signature() {
         let prop =
             build_input_mode_property(InputMode::Chinese, false).expect("序列化 IBusProperty 失败");
-        assert_eq!(prop.value_signature().as_str(), "(sa{sv}suvsvbbuvv)");
+        assert_eq!(prop.value_signature(), "(sa{sv}suvsvbbuvv)");
 
         let prop_list = build_ibus_prop_list(&IbusPropListParams {
             mode: InputMode::Chinese,
@@ -141,11 +139,11 @@ mod tests {
             full_width_char: false,
         })
         .expect("序列化 IBusPropList 失败");
-        assert_eq!(prop_list.value_signature().as_str(), "(sa{sv}av)");
+        assert_eq!(prop_list.value_signature(), "(sa{sv}av)");
 
         let comp =
             build_waylan_ibus_component("/usr/bin/waylan --ibus", "/usr/bin/waylan settings")
                 .expect("序列化 IBusComponent 失败");
-        assert_eq!(comp.value_signature().as_str(), "(sa{sv}ssssssssavav)");
+        assert_eq!(comp.value_signature(), "(sa{sv}ssssssssavav)");
     }
 }

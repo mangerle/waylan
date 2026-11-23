@@ -8,8 +8,8 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::error::ConfigError;
 use super::AppConfig;
+use super::error::ConfigError;
 
 impl AppConfig {
     /// 宽容解析配置文件：利用 serde(default) 声明式容错，自动补齐缺失默认配置
@@ -27,10 +27,10 @@ impl AppConfig {
         let mut broken_files = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                if file_name.starts_with("config.toml.broken.") {
-                    broken_files.push(path);
-                }
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                && file_name.starts_with("config.toml.broken.")
+            {
+                broken_files.push(path);
             }
         }
         broken_files.sort();
@@ -49,16 +49,16 @@ impl AppConfig {
                 );
                 continue;
             }
-            if let Ok(content) = fs::read_to_string(&broken_path) {
-                if let Ok(rescued_cfg) = Self::parse_tolerant(&content) {
-                    log::info!(
-                        "[配置系统] 检测到历史备份文件 {:?}，已成功恢复用户的历史个性化设置！",
-                        broken_path
-                    );
-                    let restored_path = broken_path.with_extension("restored");
-                    let _ = fs::rename(&broken_path, &restored_path);
-                    return Some(rescued_cfg);
-                }
+            if let Ok(content) = fs::read_to_string(&broken_path)
+                && let Ok(rescued_cfg) = Self::parse_tolerant(&content)
+            {
+                log::info!(
+                    "[配置系统] 检测到历史备份文件 {:?}，已成功恢复用户的历史个性化设置！",
+                    broken_path
+                );
+                let restored_path = broken_path.with_extension("restored");
+                let _ = fs::rename(&broken_path, &restored_path);
+                return Some(rescued_cfg);
             }
         }
         None

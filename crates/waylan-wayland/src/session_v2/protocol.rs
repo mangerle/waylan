@@ -1,5 +1,5 @@
-use crate::surface::interaction::CursorRectUpdateParams;
 use crate::surface::CursorRect;
+use crate::surface::interaction::CursorRectUpdateParams;
 use log::{debug, info, trace};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -119,10 +119,7 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for WaylanV2Session {
         {
             trace!(
                 "[Wayland v2 光标矩形] 捕获焦点光标变化: x={}, y={}, w={}, h={}",
-                x,
-                y,
-                width,
-                height
+                x, y, width, height
             );
             state.surface.current_cursor = CursorRect::new(x, y, width, height);
             state
@@ -204,10 +201,10 @@ fn handle_grab_modifiers(state: &mut WaylanV2Session, params: GrabModifiersParam
         .set_modifiers(mods_depressed, mods_locked);
     state.keyboard.mods_latched = mods_latched;
     state.keyboard.mods_group = group;
-    if state.protocol.has_virtual_keymap {
-        if let Some(ref vk) = state.protocol.virtual_keyboard {
-            vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
-        }
+    if state.protocol.has_virtual_keymap
+        && let Some(ref vk) = state.protocol.virtual_keyboard
+    {
+        vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
     }
     let curr_caps = state.runtime.core.is_caps_locked();
     if prev_caps != curr_caps {
@@ -356,18 +353,18 @@ impl Dispatch<WlPointer, ()> for WaylanV2Session {
                 surface_y,
                 ..
             } => {
-                if let Some(ref popup_surface) = state.surface.popup_wl_surface {
-                    if &surface == popup_surface {
-                        state.surface.pointer_in_surface = true;
-                        state.surface.pointer_pos = (surface_x, surface_y);
-                    }
+                if let Some(ref popup_surface) = state.surface.popup_wl_surface
+                    && &surface == popup_surface
+                {
+                    state.surface.pointer_in_surface = true;
+                    state.surface.pointer_pos = (surface_x, surface_y);
                 }
             }
             PointerEvent::Leave { surface, .. } => {
-                if let Some(ref popup_surface) = state.surface.popup_wl_surface {
-                    if &surface == popup_surface {
-                        state.surface.pointer_in_surface = false;
-                    }
+                if let Some(ref popup_surface) = state.surface.popup_wl_surface
+                    && &surface == popup_surface
+                {
+                    state.surface.pointer_in_surface = false;
                 }
             }
             PointerEvent::Motion {

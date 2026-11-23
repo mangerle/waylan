@@ -108,11 +108,7 @@ struct WalRecordHeader {
 
 /// 获取指定 WAL 帧格式的头部长度（V1 为 12 字节，V2 为 16 字节）
 fn wal_header_len(is_v2: bool) -> usize {
-    if is_v2 {
-        16
-    } else {
-        12
-    }
+    if is_v2 { 16 } else { 12 }
 }
 
 /// 解析单条 WAL 帧的头部字段（兼容 V1 与 V2 两种帧头布局）
@@ -256,13 +252,11 @@ pub fn load_or_replay<P: AsRef<Path>>(path: P) -> Result<UserAdaptiveModel, Algo
     let (model, need_compact) = read_and_replay_file(path_ref)?;
 
     // 共享读锁在 read_and_replay_file 退出时已析构释放，此处若需要归并压缩则能安全获取排他写锁，杜绝自死锁
-    if need_compact {
-        if let Err(e) = compact_model(&model, path_ref) {
-            warn!(
-                "[用户词库 WAL] 重放后自动归并失败，保留现有日志继续运行，路径: {:?}，原因: {}",
-                path_ref, e
-            );
-        }
+    if need_compact && let Err(e) = compact_model(&model, path_ref) {
+        warn!(
+            "[用户词库 WAL] 重放后自动归并失败，保留现有日志继续运行，路径: {:?}，原因: {}",
+            path_ref, e
+        );
     }
 
     Ok(model)

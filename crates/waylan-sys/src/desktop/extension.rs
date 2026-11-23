@@ -14,7 +14,7 @@ use log::{debug, info, warn};
 use super::env_var_non_empty;
 use crate::assets::detect_default_assets_path;
 use crate::process::{
-    run_command_with_timeout, safe_gsettings_get, safe_gsettings_set, DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_COMMAND_TIMEOUT, run_command_with_timeout, safe_gsettings_get, safe_gsettings_set,
 };
 
 /// 系统级 GNOME Shell 扩展目录（由发行版包管理器负责写入）
@@ -115,10 +115,8 @@ fn install_extension_to_user_dir(target: &Path, assets_subdir: &str) {
             (Ok(_), Err(_)) => true,
             _ => false,
         };
-        if needs_copy {
-            if let Err(e) = fs::copy(&src_file, &dst_file) {
-                warn!("[桌面集成] 同步 GNOME 扩展文件 {:?} 失败: {}", src_file, e);
-            }
+        if needs_copy && let Err(e) = fs::copy(&src_file, &dst_file) {
+            warn!("[桌面集成] 同步 GNOME 扩展文件 {:?} 失败: {}", src_file, e);
         }
     }
 }

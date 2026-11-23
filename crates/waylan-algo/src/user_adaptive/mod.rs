@@ -199,13 +199,13 @@ impl UserAdaptiveModel {
         if candidate.tier == CandidateTier::UserHistory {
             return;
         }
-        if let Some(list) = self.entries.get(&candidate.pinyin) {
-            if let Some(entry) = list.iter().find(|e| e.text == candidate.text) {
-                let boost = Self::calculate_decay_score(entry, current_timestamp);
-                candidate.score = candidate.score.saturating_add(boost);
-                if entry.commit_count >= 2 {
-                    candidate.comment = Some("常用习惯".to_string());
-                }
+        if let Some(list) = self.entries.get(&candidate.pinyin)
+            && let Some(entry) = list.iter().find(|e| e.text == candidate.text)
+        {
+            let boost = Self::calculate_decay_score(entry, current_timestamp);
+            candidate.score = candidate.score.saturating_add(boost);
+            if entry.commit_count >= 2 {
+                candidate.comment = Some("常用习惯".to_string());
             }
         }
     }
@@ -251,10 +251,10 @@ impl UserAdaptiveModel {
     /// 当文件路径无法写入时返回 [`AlgoError::UserDictPersistFailed`]。
     pub fn save_to_file(&self, path: impl AsRef<Path>) -> Result<(), AlgoError> {
         let path_ref = path.as_ref();
-        if let Some(parent) = path_ref.parent() {
-            if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
-            }
+        if let Some(parent) = path_ref.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            let _ = std::fs::create_dir_all(parent);
         }
         let file = File::create(path_ref).map_err(|e| AlgoError::UserDictPersistFailed {
             path: PathBuf::from(path_ref),

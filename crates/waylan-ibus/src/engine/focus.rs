@@ -12,10 +12,10 @@ use log::debug;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use zbus::object_server::SignalContext;
-use zbus::zvariant::Value;
+use zbus::Variant;
+use zbus::object_server::SignalEmitter;
 
-use super::super::types::{build_ibus_prop_list, IbusPropListParams};
+use super::super::types::{IbusPropListParams, build_ibus_prop_list};
 use super::service::IbusEngineService;
 use super::snapshot::UiSnapshot;
 
@@ -55,7 +55,7 @@ impl IbusEngineService {
     /// 统一焦点进入处理实现
     pub(crate) async fn handle_focus_in_internal(
         &self,
-        ctxt: &SignalContext<'_>,
+        ctxt: &SignalEmitter<'_>,
         object_path: Option<&str>,
         client: Option<&str>,
     ) {
@@ -117,16 +117,16 @@ impl IbusEngineService {
                 UiSnapshot::capture(&guard),
             )
         };
-        if !self.suppress_properties {
-            if let Ok(prop_list) = build_ibus_prop_list(&IbusPropListParams {
+        if !self.suppress_properties
+            && let Ok(prop_list) = build_ibus_prop_list(&IbusPropListParams {
                 mode,
                 is_caps_locked: is_caps,
                 traditional_chinese: trad,
                 full_width_punct: punct,
                 full_width_char: char_full,
-            }) {
-                let _ = Self::register_properties(ctxt, Value::from(prop_list)).await;
-            }
+            })
+        {
+            let _ = Self::register_properties(ctxt, Variant::from(prop_list)).await;
         }
         Self::emit_ui_snapshot(ctxt, &snap).await;
     }

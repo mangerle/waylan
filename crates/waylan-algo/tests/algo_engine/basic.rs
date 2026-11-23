@@ -1,7 +1,7 @@
 //! 算法引擎基础拼音召回、V 模式与扩展选词集成测试
 
-use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
+use waylan_algo::types::AlgoConfig;
 
 #[test]
 fn test_engine_end_to_end_xian() {

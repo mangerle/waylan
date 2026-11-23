@@ -130,10 +130,10 @@ fn gen_homophone_cases(items: &[DictItem], limit: usize) -> Vec<(String, String)
         if out.len() >= half {
             break;
         }
-        if seen.insert(item.joined.as_str()) {
-            if let Some(group) = by_py.get(item.joined.as_str()) {
-                out.push((item.joined.clone(), group[0].text.clone()));
-            }
+        if seen.insert(item.joined.as_str())
+            && let Some(group) = by_py.get(item.joined.as_str())
+        {
+            out.push((item.joined.clone(), group[0].text.clone()));
         }
     }
 
@@ -142,10 +142,11 @@ fn gen_homophone_cases(items: &[DictItem], limit: usize) -> Vec<(String, String)
         if out.len() >= limit {
             break;
         }
-        if let Some(group) = by_py.get(item.joined.as_str()) {
-            if group[0].text == item.text && seen.insert(item.joined.as_str()) {
-                out.push((item.joined.clone(), item.text.clone()));
-            }
+        if let Some(group) = by_py.get(item.joined.as_str())
+            && group[0].text == item.text
+            && seen.insert(item.joined.as_str())
+        {
+            out.push((item.joined.clone(), item.text.clone()));
         }
     }
     out
@@ -266,10 +267,11 @@ fn gen_typo_cases(items: &[DictItem], limit: usize) -> Vec<(String, String)> {
             _ => Some(format!("{}{}", item.joined, bytes[bytes.len() - 1] as char)),
         };
 
-        if let Some(m) = mutated {
-            if !exact_set.contains(m.as_str()) && seen.insert(m.clone()) {
-                out.push((m, item.text.clone()));
-            }
+        if let Some(m) = mutated
+            && !exact_set.contains(m.as_str())
+            && seen.insert(m.clone())
+        {
+            out.push((m, item.text.clone()));
         }
     }
     out
@@ -308,10 +310,10 @@ fn gen_sentence_cases(items: &[DictItem], limit: usize) -> Vec<(String, String)>
 }
 
 fn write_tsv(out_path: &Path, groups: &[(&str, Vec<(String, String)>)]) -> Result<usize, String> {
-    if let Some(parent) = out_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {e}"))?;
-        }
+    if let Some(parent) = out_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {e}"))?;
     }
     let file = File::create(out_path).map_err(|e| format!("创建输出文件失败: {e}"))?;
     let mut writer = BufWriter::new(file);

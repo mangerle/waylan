@@ -11,8 +11,8 @@ pub mod model;
 pub mod visualizer;
 
 pub use energy::EnergyVad;
-pub use model::{resolve_vad_model_path, ModelVad};
-pub use visualizer::{calculate_rms, WaveformVisualizer};
+pub use model::{ModelVad, resolve_vad_model_path};
+pub use visualizer::{WaveformVisualizer, calculate_rms};
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

@@ -1,7 +1,7 @@
 //! 算法引擎智能盘古空格、前缀短词混排注入、跨词短语前缀合成与简拼合成集成测试
 
-use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
+use waylan_algo::types::AlgoConfig;
 
 #[test]
 fn test_pangu_spacing_helper_rules() {

@@ -10,9 +10,10 @@
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use log::{debug, warn};
-use zbus::blocking::connection::Builder;
-use zbus::blocking::{Connection, MessageIterator};
+use zbus::MessageStream;
+use zbus::connection;
 use zbus::message::Message;
 
 use crate::IbusShutdownCoordinator;
@@ -27,16 +28,24 @@ impl EngineChangeListenerHandle {
     /// 停止后台引擎信号监听线程并回收其句柄
     pub(crate) fn stop(&mut self) {
         if let Some(handle) = self.join_handle.take() {
-            // 向 IBus 总线广播一条信号以即时唤醒阻塞在 iter.next() 的监听线程
-            if let Ok(conn) = Builder::address(self.ibus_addr.as_str()).and_then(|b| b.build()) {
-                let _ = conn.emit_signal(
-                    None::<&str>,
-                    "/org/freedesktop/IBus",
-                    "org.freedesktop.IBus",
-                    "GlobalEngineChanged",
-                    &("waylan",),
-                );
-            }
+            // 向 IBus 总线广播一条信号以即时唤醒阻塞在 stream.next() 的监听线程
+            let _ = zbus::block_on(async {
+                if let Ok(conn) = connection::Builder::address(self.ibus_addr.as_str())
+                    .build()
+                    .await
+                {
+                    let _ = conn
+                        .emit_signal(
+                            None::<&str>,
+                            "/org/freedesktop/IBus",
+                            "org.freedesktop.IBus",
+                            "GlobalEngineChanged",
+                            &("waylan",),
+                        )
+                        .await;
+                }
+                Ok::<(), zbus::Error>(())
+            });
             let _ = handle.join();
         }
     }
@@ -48,26 +57,14 @@ impl Drop for EngineChangeListenerHandle {
     }
 }
 
-/// 注册 IBus 全局引擎变更信号匹配规则
-fn register_engine_change_rules(conn: &Connection) {
-    let rule = "type='signal',interface='org.freedesktop.IBus',member='GlobalEngineChanged'";
-    let _ = conn.call_method(
-        Some("org.freedesktop.DBus"),
-        "/org/freedesktop/DBus",
-        Some("org.freedesktop.DBus"),
-        "AddMatch",
-        &rule,
-    );
-}
-
 /// 解析全局引擎变更信号并提取新引擎名称
 pub(crate) fn parse_engine_change_signal(msg: &Message) -> Option<String> {
     let header = msg.header();
     let member = header.member().map(|m| m.as_str());
-    if member == Some("GlobalEngineChanged") {
-        if let Ok(name) = msg.body().deserialize::<String>() {
-            return Some(name);
-        }
+    if member == Some("GlobalEngineChanged")
+        && let Ok(name) = msg.body().deserialize::<String>()
+    {
+        return Some(name);
     }
     None
 }
@@ -75,28 +72,38 @@ pub(crate) fn parse_engine_change_signal(msg: &Message) -> Option<String> {
 /// 引擎信号被动监听线程主体
 fn run_engine_change_listener(ibus_addr: String, coordinator: IbusShutdownCoordinator) {
     while !coordinator.is_shutting_down() {
-        let Ok(conn) = Builder::address(ibus_addr.as_str()).and_then(|b| b.build()) else {
+        let conn_res = zbus::block_on(async {
+            connection::Builder::address(ibus_addr.as_str())
+                .build()
+                .await
+        });
+        let Ok(conn) = conn_res else {
             std::thread::sleep(Duration::from_millis(500));
             continue;
         };
-        register_engine_change_rules(&conn);
+        let rule = "type='signal',interface='org.freedesktop.IBus',member='GlobalEngineChanged'";
+        let stream_res =
+            zbus::block_on(async { MessageStream::for_match_rule(rule, &conn, None).await });
+        let Ok(mut stream) = stream_res else {
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
+        };
 
-        let iter = MessageIterator::from(&conn);
-        for msg_res in iter {
+        while let Some(msg_res) = zbus::block_on(async { stream.next().await }) {
             if coordinator.is_shutting_down() {
                 break;
             }
             let Ok(msg) = msg_res else {
                 break;
             };
-            if let Some(engine_name) = parse_engine_change_signal(&msg) {
-                if engine_name != "waylan" {
-                    debug!(
-                        "[微澜 IBus] 监听到全局引擎变更为 [{}]，即刻唤醒自愈调度",
-                        engine_name
-                    );
-                    coordinator.wake();
-                }
+            if let Some(engine_name) = parse_engine_change_signal(&msg)
+                && engine_name != "waylan"
+            {
+                debug!(
+                    "[微澜 IBus] 监听到全局引擎变更为 [{}]，即刻唤醒自愈调度",
+                    engine_name
+                );
+                coordinator.wake();
             }
         }
         if coordinator.is_shutting_down() {
@@ -153,7 +160,6 @@ mod tests {
             "org.freedesktop.IBus",
             "GlobalEngineChanged",
         )
-        .unwrap()
         .build(&("xkb:us::eng",))
         .unwrap();
         let parsed = parse_engine_change_signal(&msg);
@@ -167,7 +173,6 @@ mod tests {
             "org.freedesktop.IBus",
             "OtherSignal",
         )
-        .unwrap()
         .build(&("waylan",))
         .unwrap();
         let parsed = parse_engine_change_signal(&msg);

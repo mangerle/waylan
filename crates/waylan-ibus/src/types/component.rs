@@ -7,7 +7,8 @@
 
 use super::{empty_attachments, empty_variant_vec};
 use waylan_core::InputMode;
-use zbus::zvariant::{Error as VariantError, OwnedValue, StructureBuilder, Value};
+use zbus::wire::StructureBuilder;
+use zbus::{Error as VariantError, OwnedVariant, Variant};
 
 /// 解析输入模式对应的微澜矢量图标（优先规范绝对路径以确保 GNOME 原生面板直接加载）
 pub fn resolve_mode_icon(mode: InputMode, is_caps_locked: bool) -> String {
@@ -41,7 +42,7 @@ pub fn resolve_engine_icon() -> String {
 pub fn build_waylan_ibus_component(
     exec_cmd: &str,
     setup_cmd: &str,
-) -> Result<OwnedValue, VariantError> {
+) -> Result<OwnedVariant, VariantError> {
     let version = env!("CARGO_PKG_VERSION");
     let engine_icon = resolve_engine_icon();
     let engine_desc = StructureBuilder::new()
@@ -64,8 +65,8 @@ pub fn build_waylan_ibus_component(
         .add_field(version)
         .add_field("waylan")
         .add_field("InputMode")
-        .build();
-    let engine_val = OwnedValue::try_from(Value::from(engine_desc))?;
+        .build()?;
+    let engine_val = OwnedVariant::try_from(engine_desc)?;
 
     let comp = StructureBuilder::new()
         .add_field("IBusComponent")
@@ -80,22 +81,22 @@ pub fn build_waylan_ibus_component(
         .add_field("waylan")
         .add_field(empty_variant_vec())
         .add_field(vec![engine_val])
-        .build();
-    OwnedValue::try_from(Value::from(comp))
+        .build()?;
+    OwnedVariant::try_from(comp)
 }
 
 /// 从 `IBusText` 或 `IBusEngineDesc` Variant 中安全提取第 3 个字段（文本或引擎名称）
-pub fn extract_text_from_ibus_variant(val: &Value<'_>) -> Option<String> {
+pub fn extract_text_from_ibus_variant(val: &Variant<'_>) -> Option<String> {
     let mut inner = val;
-    while let Value::Value(v) = inner {
+    while let Variant::Variant(v) = inner {
         inner = v.as_ref();
     }
-    if let Value::Structure(s) = inner {
+    if let Variant::Structure(s) = inner {
         let fields = s.fields();
-        if fields.len() >= 3 {
-            if let Value::Str(text) = &fields[2] {
-                return Some(text.as_str().to_string());
-            }
+        if fields.len() >= 3
+            && let Variant::Str(text) = &fields[2]
+        {
+            return Some(text.as_str().to_string());
         }
     }
     None

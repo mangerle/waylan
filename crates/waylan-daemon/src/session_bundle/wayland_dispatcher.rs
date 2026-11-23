@@ -12,7 +12,7 @@ use log::info;
 use waylan_algo::AlgoEngine;
 use waylan_core::config::AppConfig;
 use waylan_ui::CandidateBoxRenderer;
-use waylan_wayland::{run_wayland_session, WaylandCapabilities, WaylandSessionOptions};
+use waylan_wayland::{WaylandCapabilities, WaylandSessionOptions, run_wayland_session};
 
 use crate::system::ShutdownCoordinator;
 use crate::tray::TrayService;

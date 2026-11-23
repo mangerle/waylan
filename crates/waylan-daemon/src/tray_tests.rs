@@ -1,7 +1,7 @@
 use super::*;
 use std::sync::mpsc::sync_channel;
 use waylan_core::state::SharedInputFlags;
-use zbus::zvariant::Value;
+use zbus::Variant;
 
 #[test]
 fn test_tray_mode_toggle() {
@@ -48,33 +48,33 @@ fn test_tray_menu_layout_and_event() {
     assert_eq!(items.len(), 9);
 
     // 模拟点击菜单第1项（模式切换）
-    menu.event(1, "clicked".to_string(), Value::from(0), 0);
+    menu.event(1, "clicked".to_string(), Variant::from(0), 0);
     assert!(!shared_flags.is_chinese());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击第6项（简繁切换）
-    menu.event(6, "clicked".to_string(), Value::from(0), 0);
+    menu.event(6, "clicked".to_string(), Variant::from(0), 0);
     assert!(shared_flags.is_traditional());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击第7项（标点全半角切换）
-    menu.event(7, "clicked".to_string(), Value::from(0), 0);
+    menu.event(7, "clicked".to_string(), Variant::from(0), 0);
     assert!(!shared_flags.is_full_width_punct());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击第8项（字符全半角切换）
-    menu.event(8, "clicked".to_string(), Value::from(0), 0);
+    menu.event(8, "clicked".to_string(), Variant::from(0), 0);
     assert!(shared_flags.is_full_width_char());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 再次点击切回中文
-    menu.event(1, "clicked".to_string(), Value::from(0), 0);
+    menu.event(1, "clicked".to_string(), Variant::from(0), 0);
     assert!(shared_flags.is_chinese());
     assert!(icon_update_rx.try_recv().is_ok());
 
     // 模拟点击菜单第2项（重新加载词库与配置）
     assert!(!reload_requested.load(Ordering::Relaxed));
-    menu.event(2, "clicked".to_string(), Value::from(0), 0);
+    menu.event(2, "clicked".to_string(), Variant::from(0), 0);
     assert!(reload_requested.load(Ordering::Relaxed));
 }
 
@@ -95,7 +95,7 @@ fn test_tray_menu_exit_event() {
 
     assert!(!exit_requested.load(Ordering::Relaxed));
     // 模拟点击菜单第5项（退出微澜输入法）
-    menu.event(5, "clicked".to_string(), Value::from(0), 0);
+    menu.event(5, "clicked".to_string(), Variant::from(0), 0);
     assert!(exit_requested.load(Ordering::Relaxed));
 }
 

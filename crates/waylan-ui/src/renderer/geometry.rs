@@ -5,8 +5,8 @@
 //! - **核心优势**：渲染器主结构仅保留文本引擎与视图分派，几何计算可独立演进与复用。
 //! - **代价与局限**：几何度量依赖渲染器的字体测量能力，仍需以 `&mut` 借用渲染器实例。
 
-use super::layout::{measure_candidates_bar, ItemMeasure, LayoutParams};
 use super::CandidateBoxRenderer;
+use super::layout::{ItemMeasure, LayoutParams, measure_candidates_bar};
 use waylan_core::CandidateBoxState;
 
 /// 胶囊候选栏与展开浮层卡片几何布局度量结果

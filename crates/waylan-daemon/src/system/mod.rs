@@ -8,14 +8,14 @@
 
 use crate::error::DaemonError;
 use log::{info, warn};
-use rustix::fs::{flock, FlockOperation};
+use rustix::fs::{FlockOperation, flock};
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{self, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -26,7 +26,7 @@ use waylan_sys::LoopWakeup;
 use crate::config::AppConfig;
 
 pub mod subprocess;
-pub use subprocess::{build_settings_command, SubprocessManager};
+pub use subprocess::{SubprocessManager, build_settings_command};
 
 /// 进程全局停机协调器
 ///
@@ -255,10 +255,10 @@ pub fn check_another_instance_running() -> bool {
                 if meta.uid() != current_uid {
                     continue;
                 }
-                if let Ok(comm) = fs::read_to_string(path.join("comm")) {
-                    if comm.trim() == "waylan" {
-                        return true;
-                    }
+                if let Ok(comm) = fs::read_to_string(path.join("comm"))
+                    && comm.trim() == "waylan"
+                {
+                    return true;
                 }
             }
         }

@@ -14,7 +14,7 @@ pub use desktop::{
     gnome_extension_intent, pick_directory_dialog, pick_directory_dialog_async, pick_file_dialog,
     pick_file_dialog_async, sync_gnome_indicator_mode,
 };
-pub use dict::{populate_lexicon_statistics, LexiconStatsBundle};
+pub use dict::{LexiconStatsBundle, populate_lexicon_statistics};
 pub(crate) use tasks::TaskRunningGuard;
 
 use std::sync::Arc;
@@ -23,8 +23,8 @@ use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 
-use crate::sync::{sync_config_to_window, update_config_from_window};
 use crate::SettingsWindow;
+use crate::sync::{sync_config_to_window, update_config_from_window};
 use dict::register_dict_import_callbacks;
 use phrases::register_phrase_callbacks;
 

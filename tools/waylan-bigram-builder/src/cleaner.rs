@@ -69,7 +69,7 @@ impl Cleaner {
         for sent in self.clean_and_split(text) {
             let words = jieba.cut(&sent, false);
             for pair in words.windows(2) {
-                out.push((pair[0].to_string(), pair[1].to_string(), weight));
+                out.push((pair[0].word.to_string(), pair[1].word.to_string(), weight));
             }
         }
     }

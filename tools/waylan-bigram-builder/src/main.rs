@@ -25,7 +25,7 @@ use std::time::Instant;
 use accumulator::CorpusAccumulator;
 use cleaner::Cleaner;
 use exporter::export_csr_model;
-use merger::{flush_chunk_to_disk, read_pair, settle_pair_affinity, MergeNode, RawBigramPair};
+use merger::{MergeNode, RawBigramPair, flush_chunk_to_disk, read_pair, settle_pair_affinity};
 use waylan_algo::vocab::Vocabulary;
 
 /// 构建管线统一错误类型：聚合词表算法错误与标准 IO 错误

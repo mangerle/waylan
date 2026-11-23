@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{info, warn};
 
-pub use inotify::{create_timed_file_event_filter, DirEventFilter, InotifyWatcher, ReadFlags};
-pub use signature::{check_watched_paths_changed, compute_initial_signature, FileSignature};
+pub use inotify::{DirEventFilter, InotifyWatcher, ReadFlags, create_timed_file_event_filter};
+pub use signature::{FileSignature, check_watched_paths_changed, compute_initial_signature};
 
 /// 尝试初始化通用的 inotify 文件监控器（默认无特殊排除过滤）
 pub fn init_session_inotify_watcher(
@@ -69,7 +69,7 @@ pub fn check_reload_requested_or_files_changed(
         .map(|flag| flag.swap(false, Ordering::AcqRel))
         .unwrap_or(false);
 
-    let changed = if let Some(ref mut watcher) = inotify_watcher {
+    let changed = if let Some(watcher) = inotify_watcher {
         watcher.drain_events()
     } else {
         check_watched_paths_changed(watched_paths, last_signature)

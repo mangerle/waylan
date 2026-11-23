@@ -233,10 +233,10 @@ impl DictImporter {
             let idx_pos = cursor.saturating_add(i);
             if idx_pos.saturating_add(2) <= data.len() {
                 let idx = u16::from_le_bytes([data[idx_pos], data[idx_pos + 1]]) as usize;
-                if let Some(py_str) = pinyin_table.get(&idx) {
-                    if !py_str.is_empty() {
-                        py_list.push(py_str.as_str());
-                    }
+                if let Some(py_str) = pinyin_table.get(&idx)
+                    && !py_str.is_empty()
+                {
+                    py_list.push(py_str.as_str());
                 }
             }
         }

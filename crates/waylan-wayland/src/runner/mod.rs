@@ -10,23 +10,23 @@ mod globals;
 mod poll;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
 use log::{info, warn};
 use waylan_core::{AppConfig, SharedInputFlags, VoiceProvider};
 use waylan_engine::AlgoEngine;
 use waylan_sys::{FileSignature, LoopWakeup};
 use waylan_ui::CandidateBoxRenderer;
-use wayland_client::globals::registry_queue_init;
 use wayland_client::Connection;
+use wayland_client::globals::registry_queue_init;
 
 use self::globals::{bind_session_v1_globals, bind_session_v2_globals};
 use self::poll::run_session_loop_step;
 use crate::error::WaylandRunnerError;
 use crate::session_common::{
-    apply_session_setup, SessionSetupOptions, SessionSetupTargets, WaylandSessionLifecycle,
+    SessionSetupOptions, SessionSetupTargets, WaylandSessionLifecycle, apply_session_setup,
 };
 use crate::session_v1::{WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext};
 use crate::session_v2::WaylanV2Session;

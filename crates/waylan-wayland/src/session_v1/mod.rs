@@ -162,10 +162,10 @@ impl WaylanV1Session {
     ) {
         debug!("[微澜] 收到激活事件：用户已进入文本输入框。");
         self.sync_external_state();
-        if let Some(old_kb) = self.protocol.grabbed_keyboard.take() {
-            if old_kb.version() >= 3 {
-                old_kb.release();
-            }
+        if let Some(old_kb) = self.protocol.grabbed_keyboard.take()
+            && old_kb.version() >= 3
+        {
+            old_kb.release();
         }
         if let Some(old_ctx) = self.protocol.active_context.take() {
             old_ctx.destroy();
@@ -183,10 +183,10 @@ impl WaylanV1Session {
             if let Some(active_ctx) = self.protocol.active_context.take() {
                 active_ctx.destroy();
             }
-            if let Some(old_kb) = self.protocol.grabbed_keyboard.take() {
-                if old_kb.version() >= 3 {
-                    old_kb.release();
-                }
+            if let Some(old_kb) = self.protocol.grabbed_keyboard.take()
+                && old_kb.version() >= 3
+            {
+                old_kb.release();
             }
             self.runtime.core.reset_input_state();
             self.hide_candidate_surface();

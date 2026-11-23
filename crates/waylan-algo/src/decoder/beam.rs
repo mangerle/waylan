@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use super::beam_cache::{
-    merge_crossing_matches, CacheSnapshot, IncrementalBeamCache, MAX_PHRASE_SPAN_BYTES,
+    CacheSnapshot, IncrementalBeamCache, MAX_PHRASE_SPAN_BYTES, merge_crossing_matches,
 };
 use super::beam_finalize::finalize_decode_result;
 use super::beam_scoring::{
@@ -686,10 +686,10 @@ fn expand_position_states(
         };
 
         for (idx, pm) in pos_matches.iter().enumerate() {
-            if let Some(freeze) = min_next_pos {
-                if pm.end <= freeze {
-                    continue;
-                }
+            if let Some(freeze) = min_next_pos
+                && pm.end <= freeze
+            {
+                continue;
             }
             if !ctx.fallback_mode && state.has_initial && pm.has_initial && state.word_count > 0 {
                 continue;

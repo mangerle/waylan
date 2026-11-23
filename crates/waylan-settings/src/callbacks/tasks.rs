@@ -5,18 +5,18 @@
 //! - **核心优势**：避免解析数百 MB 外部文本阻塞 Slint 主事件循环；配合 RAII Guard 防并发重入。
 //! - **代价与局限**：后台任务需跨线程向 Slint UI 线程派发 `invoke_from_event_loop` 进行界面状态刷新。
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use slint::SharedString;
 use waylan_core::config::AppConfig;
 use waylan_engine::{AuxiliaryDict, LexiconSummaryService};
 
-use crate::importer::{
-    import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file, ImportError,
-};
 use crate::SettingsWindow;
+use crate::importer::{
+    ImportError, import_english_dict_file, import_pinyin_dict_file, import_symbols_dict_file,
+};
 
 /// 异步任务防重入与生命周期安全守护对象 (RAII)
 ///

@@ -135,29 +135,29 @@ fn extract_key_symbol(section: &str, keyname: &str) -> Option<char> {
             break;
         };
         let key_block = &after_key[..semi_pos];
-        if let Some(bracket_start) = key_block.find('[') {
-            if let Some(bracket_end) = key_block[bracket_start..].find(']') {
-                let syms = &key_block[bracket_start + 1..bracket_start + bracket_end];
-                if let Some(first_sym) = syms.split(',').next() {
-                    let sym = first_sym.trim();
-                    if sym.len() == 1 {
-                        let c = sym.chars().next().unwrap_or('\0').to_ascii_lowercase();
-                        if c.is_ascii_alphabetic() || c == '\'' {
-                            return Some(c);
-                        }
-                    } else {
-                        match sym {
-                            "apostrophe" => return Some('\''),
-                            "minus" => return Some('-'),
-                            "equal" => return Some('='),
-                            "bracketleft" => return Some('['),
-                            "bracketright" => return Some(']'),
-                            "semicolon" => return Some(';'),
-                            "comma" => return Some(','),
-                            "period" => return Some('.'),
-                            "slash" => return Some('/'),
-                            _ => {}
-                        }
+        if let Some(bracket_start) = key_block.find('[')
+            && let Some(bracket_end) = key_block[bracket_start..].find(']')
+        {
+            let syms = &key_block[bracket_start + 1..bracket_start + bracket_end];
+            if let Some(first_sym) = syms.split(',').next() {
+                let sym = first_sym.trim();
+                if sym.len() == 1 {
+                    let c = sym.chars().next().unwrap_or('\0').to_ascii_lowercase();
+                    if c.is_ascii_alphabetic() || c == '\'' {
+                        return Some(c);
+                    }
+                } else {
+                    match sym {
+                        "apostrophe" => return Some('\''),
+                        "minus" => return Some('-'),
+                        "equal" => return Some('='),
+                        "bracketleft" => return Some('['),
+                        "bracketright" => return Some(']'),
+                        "semicolon" => return Some(';'),
+                        "comma" => return Some(','),
+                        "period" => return Some('.'),
+                        "slash" => return Some('/'),
+                        _ => {}
                     }
                 }
             }

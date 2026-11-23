@@ -5,7 +5,7 @@
 //! - **核心优势**：在原子锁临界区内推进状态并记录词频/标点上下文，随后在锁外通过 `dispatch_outcome` 或 `emit_ui_snapshot` 异步同步界面。
 
 use std::time::{SystemTime, UNIX_EPOCH};
-use zbus::object_server::SignalContext;
+use zbus::object_server::SignalEmitter;
 
 use super::super::keys::{IbusKeyOutcome, IbusSessionCore};
 use super::emitter::OutcomeDispatchParams;
@@ -14,7 +14,7 @@ use super::snapshot::UiSnapshot;
 
 impl IbusEngineService {
     /// 响应用户在 GNOME 候选框上使用鼠标点击候选词事件
-    pub(crate) async fn handle_candidate_clicked(&self, ctxt: &SignalContext<'_>, index: u32) {
+    pub(crate) async fn handle_candidate_clicked(&self, ctxt: &SignalEmitter<'_>, index: u32) {
         let (outcome, snap, is_caps_locked) = {
             let mut guard = self.core.lock();
             let now = SystemTime::now()
@@ -84,7 +84,7 @@ impl IbusEngineService {
     }
 
     /// 响应候选框上一页按钮事件
-    pub(crate) async fn handle_page_up(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn handle_page_up(&self, ctxt: &SignalEmitter<'_>) {
         let snap = {
             let mut guard = self.core.lock();
             if !guard.runtime.core.is_card_expanded() {
@@ -96,7 +96,7 @@ impl IbusEngineService {
     }
 
     /// 响应候选框下一页按钮事件
-    pub(crate) async fn handle_page_down(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn handle_page_down(&self, ctxt: &SignalEmitter<'_>) {
         let snap = {
             let mut guard = self.core.lock();
             if !guard.runtime.core.is_card_expanded() {
@@ -108,7 +108,7 @@ impl IbusEngineService {
     }
 
     /// 响应候选框光标上移事件
-    pub(crate) async fn handle_cursor_up(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn handle_cursor_up(&self, ctxt: &SignalEmitter<'_>) {
         let snap = {
             let mut guard = self.core.lock();
             if guard.runtime.core.is_card_expanded() {
@@ -122,7 +122,7 @@ impl IbusEngineService {
     }
 
     /// 响应候选框光标下移事件
-    pub(crate) async fn handle_cursor_down(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn handle_cursor_down(&self, ctxt: &SignalEmitter<'_>) {
         let snap = {
             let mut guard = self.core.lock();
             if guard.runtime.core.is_card_expanded() {

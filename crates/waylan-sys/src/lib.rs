@@ -17,19 +17,19 @@ pub mod process;
 
 pub use assets::{detect_default_assets_path, resolve_icon_path_or_name};
 pub use desktop::{
-    activate_ibus_engine, enqueue_desktop_task, ensure_gnome_extension_files,
-    ensure_input_source_prioritized, is_gnome_desktop, prioritize_source_entry,
-    set_exclusive_input_source, set_gnome_extension_enabled, GnomeExtensionIntent,
-    WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_ENGINE_NAME, WAYLAN_IBUS_SOURCE_ENTRY,
+    GnomeExtensionIntent, WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_ENGINE_NAME,
+    WAYLAN_IBUS_SOURCE_ENTRY, activate_ibus_engine, enqueue_desktop_task,
+    ensure_gnome_extension_files, ensure_input_source_prioritized, is_gnome_desktop,
+    prioritize_source_entry, set_exclusive_input_source, set_gnome_extension_enabled,
 };
 pub use fs_watcher::{
+    DirEventFilter, FileSignature, InotifyWatcher, ReadFlags,
     check_reload_requested_or_files_changed, check_watched_paths_changed,
     compute_initial_signature, create_timed_file_event_filter, init_session_inotify_watcher,
-    init_session_inotify_watcher_with_filter, DirEventFilter, FileSignature, InotifyWatcher,
-    ReadFlags,
+    init_session_inotify_watcher_with_filter,
 };
 pub use loop_wakeup::LoopWakeup;
 pub use process::{
-    run_command_with_timeout, safe_gsettings_get, safe_gsettings_set, safe_gsettings_set_async,
-    spawn_command_detached, DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_COMMAND_TIMEOUT, run_command_with_timeout, safe_gsettings_get, safe_gsettings_set,
+    safe_gsettings_set_async, spawn_command_detached,
 };

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::syllables::standard::STANDARD_SYLLABLES;
-use crate::syllables::{is_valid_syllable, STANDARD_INITIALS};
+use crate::syllables::{STANDARD_INITIALS, is_valid_syllable};
 use crate::types::FuzzyConfig;
 
 /// 模糊音位掩码定义
@@ -221,10 +221,11 @@ impl PrismFuzzy {
             if entry.text == slice {
                 continue;
             }
-            if let Some(needed) = diff_mask_if_valid(pos_mask, entry.pos_mask) {
-                if needed != 0 && (needed & active_mask) == needed {
-                    variants.push(entry.text.to_string());
-                }
+            if let Some(needed) = diff_mask_if_valid(pos_mask, entry.pos_mask)
+                && needed != 0
+                && (needed & active_mask) == needed
+            {
+                variants.push(entry.text.to_string());
             }
         }
         variants

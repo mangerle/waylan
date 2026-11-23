@@ -9,10 +9,10 @@ use log::{debug, warn};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
-use zbus::blocking::Connection;
+use zbus::OwnedObjectPath;
+use zbus::connection::Connection;
 use zbus::fdo;
 use zbus::interface;
-use zbus::zvariant::OwnedObjectPath;
 
 use super::super::keys::IbusSessionCore;
 use super::service::IbusEngineService;
@@ -84,16 +84,18 @@ impl IbusFactoryService {
         let mut srv = self.engine_template.clone();
         srv.is_password = Arc::new(AtomicBool::new(false));
         srv.lock_healer = Arc::clone(&self.engine_template.lock_healer);
-        let gen = IbusGenericService {
+        let generic_srv = IbusGenericService {
             core: Arc::clone(&self.core),
         };
-        if let Err(e) = conn.object_server().at(obj_path, srv) {
+        if let Err(e) = zbus::block_on(async { conn.object_server().at(obj_path, srv).await }) {
             warn!(
                 "[微澜 IBus] 为动态路径 {} 注册 Engine 接口失败: {}",
                 path_str, e
             );
         }
-        if let Err(e) = conn.object_server().at(obj_path, gen) {
+        if let Err(e) =
+            zbus::block_on(async { conn.object_server().at(obj_path, generic_srv).await })
+        {
             warn!(
                 "[微澜 IBus] 为动态路径 {} 注册 Service 接口失败: {}",
                 path_str, e

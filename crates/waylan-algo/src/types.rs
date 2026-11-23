@@ -1,7 +1,7 @@
 use crate::decoder::ScoringWeights;
 use serde::{Deserialize, Serialize};
-use waylan_core::config::{FuzzyPinyinRules, TypoCorrectionRules};
 use waylan_core::AppConfig;
+use waylan_core::config::{FuzzyPinyinRules, TypoCorrectionRules};
 
 /// 模糊音细粒度规则配置别名（统一收敛至 core::config::FuzzyPinyinRules，消除重复抽象）
 pub type FuzzyConfig = FuzzyPinyinRules;

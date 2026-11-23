@@ -7,8 +7,8 @@
 
 use waylan_core::CandidateBoxState;
 
-use super::candidate_builder::{build_common_candidate_box_state, CandidateBoxBuildOptions};
 use super::ImeRuntime;
+use super::candidate_builder::{CandidateBoxBuildOptions, build_common_candidate_box_state};
 use crate::frontend::InputMethodFrontend;
 
 impl ImeRuntime {

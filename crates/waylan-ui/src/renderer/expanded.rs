@@ -3,7 +3,7 @@
 //! 负责二级展开多候选词面板的背景、高亮项、序号及文字渲染。
 
 use super::draw::{
-    draw_card_background_at, draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
+    CardBackgroundParams, RoundedRectParams, draw_card_background_at, draw_rounded_rect,
 };
 use super::layout::{CandidateHitTarget, HitRegion, HitRegionParams};
 use super::{CandidateBoxRenderer, DrawTextOptions};

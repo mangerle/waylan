@@ -4,16 +4,16 @@
 //! - **实现初衷**：将预编辑文本更新、候选词表刷新、按键上屏与标点光标补偿等 D-Bus 异步信号发送逻辑从接口定义中解耦。
 //! - **核心优势**：在释放核心 Mutex 锁后进行纯异步信号发射，杜绝死锁与事件循环阻塞。
 
-use zbus::blocking::Connection;
-use zbus::object_server::SignalContext;
-use zbus::zvariant::Value;
+use zbus::Variant;
+use zbus::connection::Connection;
+use zbus::object_server::SignalEmitter;
 
 use waylan_core::input::{KEY_LEFT, KEY_RIGHT};
 
-use super::super::keys::{IbusKeyOutcome, IBUS_KEYVAL_LEFT, IBUS_KEYVAL_RIGHT, IBUS_RELEASE_MASK};
+use super::super::keys::{IBUS_KEYVAL_LEFT, IBUS_KEYVAL_RIGHT, IBUS_RELEASE_MASK, IbusKeyOutcome};
 use super::super::types::{
-    build_ibus_lookup_table, build_ibus_preedit_text, build_ibus_text, build_input_mode_property,
-    IbusLookupTableParams, IBUS_ENGINE_PREEDIT_CLEAR,
+    IBUS_ENGINE_PREEDIT_CLEAR, IbusLookupTableParams, build_ibus_lookup_table,
+    build_ibus_preedit_text, build_ibus_text, build_input_mode_property,
 };
 use super::service::IbusEngineService;
 use super::snapshot::UiSnapshot;
@@ -27,7 +27,7 @@ use super::snapshot::UiSnapshot;
 /// - **代价与局限**：多引入一个结构体类型。
 pub(crate) struct OutcomeDispatchParams<'a, 'b> {
     /// D-Bus 信号发射上下文
-    pub ctxt: &'a SignalContext<'b>,
+    pub ctxt: &'a SignalEmitter<'b>,
     /// 按键处理结果
     pub outcome: IbusKeyOutcome,
     /// 界面状态快照（按键未触发界面刷新时为 None）
@@ -38,14 +38,14 @@ pub(crate) struct OutcomeDispatchParams<'a, 'b> {
 
 impl IbusEngineService {
     /// 在锁作用域之外根据快照向 `ibus-daemon` 发射预编辑与候选词表更新信号
-    pub(crate) async fn emit_ui_snapshot(ctxt: &SignalContext<'_>, snap: &UiSnapshot) {
+    pub(crate) async fn emit_ui_snapshot(ctxt: &SignalEmitter<'_>, snap: &UiSnapshot) {
         if snap.preedit.is_empty() {
             let _ = Self::hide_preedit_text(ctxt).await;
         } else if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
             let char_len = snap.preedit.chars().count() as u32;
             let _ = Self::update_preedit_text(
                 ctxt,
-                Value::from(preedit_val),
+                Variant::from(preedit_val),
                 char_len,
                 true,
                 IBUS_ENGINE_PREEDIT_CLEAR,
@@ -62,7 +62,7 @@ impl IbusEngineService {
             orientation: snap.orientation,
             index_style: snap.index_style,
         }) {
-            let _ = Self::update_lookup_table(ctxt, Value::from(table_val), true).await;
+            let _ = Self::update_lookup_table(ctxt, Variant::from(table_val), true).await;
         }
     }
 
@@ -74,10 +74,10 @@ impl IbusEngineService {
             snap,
             is_caps_locked,
         } = params;
-        if let Some(ref text) = outcome.commit_text {
-            if let Ok(text_val) = build_ibus_text(text) {
-                let _ = Self::commit_text(ctxt, Value::from(text_val)).await;
-            }
+        if let Some(ref text) = outcome.commit_text
+            && let Ok(text_val) = build_ibus_text(text)
+        {
+            let _ = Self::commit_text(ctxt, Variant::from(text_val)).await;
         }
 
         if outcome.cursor_offset != 0 {
@@ -96,17 +96,16 @@ impl IbusEngineService {
             Self::emit_ui_snapshot(ctxt, s).await;
         }
 
-        if !self.suppress_properties {
-            if let Some(new_mode) = outcome.mode_changed {
-                if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps_locked) {
-                    let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-                }
-            }
+        if !self.suppress_properties
+            && let Some(new_mode) = outcome.mode_changed
+            && let Ok(prop_val) = build_input_mode_property(new_mode, is_caps_locked)
+        {
+            let _ = Self::update_property(ctxt, Variant::from(prop_val)).await;
         }
     }
 
     /// 重置会话并向 `ibus-daemon` 发送隐藏预编辑与候选面板信号
-    pub(crate) async fn reset_and_hide_ui(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn reset_and_hide_ui(&self, ctxt: &SignalEmitter<'_>) {
         self.clear_password_state();
         let snap = {
             let mut guard = self.core.lock();
@@ -128,13 +127,16 @@ pub(crate) fn emit_commit_text_blocking(conn: &Connection, target_engine_path: &
         return;
     }
     if let Ok(text_val) = build_ibus_text(text) {
-        let _ = conn.emit_signal(
-            None::<&str>,
-            target_engine_path,
-            IBUS_ENGINE_INTERFACE,
-            "CommitText",
-            &(Value::from(text_val),),
-        );
+        let _ = zbus::block_on(async {
+            conn.emit_signal(
+                None::<&str>,
+                target_engine_path,
+                IBUS_ENGINE_INTERFACE,
+                "CommitText",
+                &(Variant::from(text_val),),
+            )
+            .await
+        });
     }
 }
 
@@ -150,18 +152,21 @@ pub(crate) fn emit_ui_snapshot_blocking(
     if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
         let char_len = snap.preedit.chars().count() as u32;
         let visible = !snap.preedit.is_empty();
-        let _ = conn.emit_signal(
-            None::<&str>,
-            target_engine_path,
-            IBUS_ENGINE_INTERFACE,
-            "UpdatePreeditText",
-            &(
-                Value::from(preedit_val),
-                char_len,
-                visible,
-                IBUS_ENGINE_PREEDIT_CLEAR,
-            ),
-        );
+        let _ = zbus::block_on(async {
+            conn.emit_signal(
+                None::<&str>,
+                target_engine_path,
+                IBUS_ENGINE_INTERFACE,
+                "UpdatePreeditText",
+                &(
+                    Variant::from(preedit_val),
+                    char_len,
+                    visible,
+                    IBUS_ENGINE_PREEDIT_CLEAR,
+                ),
+            )
+            .await
+        });
     }
 
     let table_visible = !snap.candidates.is_empty();
@@ -172,12 +177,15 @@ pub(crate) fn emit_ui_snapshot_blocking(
         orientation: snap.orientation,
         index_style: snap.index_style,
     }) {
-        let _ = conn.emit_signal(
-            None::<&str>,
-            target_engine_path,
-            IBUS_ENGINE_INTERFACE,
-            "UpdateLookupTable",
-            &(Value::from(table_val), table_visible),
-        );
+        let _ = zbus::block_on(async {
+            conn.emit_signal(
+                None::<&str>,
+                target_engine_path,
+                IBUS_ENGINE_INTERFACE,
+                "UpdateLookupTable",
+                &(Variant::from(table_val), table_visible),
+            )
+            .await
+        });
     }
 }

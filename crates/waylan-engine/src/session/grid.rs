@@ -7,8 +7,8 @@
 //! - **代价与局限**：网格几何布局固定为 6 列、最多 5 行（30 个词）。
 
 use super::{ImeCoreSession, ImeOutputAction};
-use waylan_core::input::*;
 use waylan_core::CandidateExpansion;
+use waylan_core::input::*;
 
 const GRID_COLS: usize = 6;
 const MAX_GRID_CANDIDATES: usize = 30;

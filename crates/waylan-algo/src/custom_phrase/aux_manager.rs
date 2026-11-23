@@ -66,10 +66,10 @@ impl EnglishSuggestionManager {
         }
         let mut matches = Vec::new();
         for len in min_len..=ascii_len {
-            if let Ok(key) = std::str::from_utf8(&lower_buf[..len]) {
-                if let Some((orig, score)) = self.exact_index.get(key) {
-                    matches.push((orig.as_str(), *score, len));
-                }
+            if let Ok(key) = std::str::from_utf8(&lower_buf[..len])
+                && let Some((orig, score)) = self.exact_index.get(key)
+            {
+                matches.push((orig.as_str(), *score, len));
             }
         }
         matches
@@ -233,12 +233,12 @@ pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSu
     let search_paths = waylan_core::AppConfig::aux_dict_search_paths();
 
     for path in search_paths {
-        if path.exists() {
-            if let Ok(dict) = AuxiliaryDict::load_from_file(&path) {
-                let en = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
-                let sym = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
-                return (en, sym);
-            }
+        if path.exists()
+            && let Ok(dict) = AuxiliaryDict::load_from_file(&path)
+        {
+            let en = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
+            let sym = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
+            return (en, sym);
         }
     }
 

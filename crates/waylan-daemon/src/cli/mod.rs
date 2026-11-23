@@ -60,12 +60,11 @@ impl CliCommand {
 
 /// 从原始命令行入参中滤除二进制可执行程序名自身的路径前缀
 fn extract_cli_tokens(args: &[String]) -> &[String] {
-    if let Some((first, rest)) = args.split_first() {
-        if !first.starts_with('-')
-            && (first.ends_with("waylan") || first.contains('/') || first == "cargo")
-        {
-            return rest;
-        }
+    if let Some((first, rest)) = args.split_first()
+        && !first.starts_with('-')
+        && (first.ends_with("waylan") || first.contains('/') || first == "cargo")
+    {
+        return rest;
     }
     args
 }

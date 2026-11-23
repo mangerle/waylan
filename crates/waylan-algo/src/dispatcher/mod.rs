@@ -32,19 +32,11 @@ impl ModeDispatcher {
             }
             'u' if config.enable_u_mode && !body.is_empty() => {
                 let res = Self::eval_u_mode(body);
-                if res.is_empty() {
-                    None
-                } else {
-                    Some(res)
-                }
+                if res.is_empty() { None } else { Some(res) }
             }
             'i' if config.enable_i_mode && !body.is_empty() => {
                 let res = Self::eval_i_mode(body);
-                if res.is_empty() {
-                    None
-                } else {
-                    Some(res)
-                }
+                if res.is_empty() { None } else { Some(res) }
             }
             _ => None,
         }

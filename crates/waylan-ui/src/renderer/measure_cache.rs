@@ -143,9 +143,5 @@ fn calculate_measure_hash(text: &str, size_bits: u32) -> u64 {
     text.hash(&mut hasher);
     size_bits.hash(&mut hasher);
     let h = hasher.finish();
-    if h == 0 {
-        1
-    } else {
-        h
-    }
+    if h == 0 { 1 } else { h }
 }

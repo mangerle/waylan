@@ -11,13 +11,13 @@ pub mod gsettings;
 
 use std::env;
 use std::process::Command;
-use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::OnceLock;
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread;
 
 use log::warn;
 
-use crate::process::{run_command_with_timeout, DEFAULT_COMMAND_TIMEOUT};
+use crate::process::{DEFAULT_COMMAND_TIMEOUT, run_command_with_timeout};
 
 pub use extension::{ensure_gnome_extension_files, set_gnome_extension_enabled};
 pub use gsettings::{

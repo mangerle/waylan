@@ -11,8 +11,8 @@ mod reranker;
 
 use crate::decoder::alias::is_habitual_alias_key;
 use crate::decoder::{
-    score_phrase_match, to_positive_score, BigramLanguageModel, DecodeResult, PhraseMatch,
-    SyllableLattice,
+    BigramLanguageModel, DecodeResult, PhraseMatch, SyllableLattice, score_phrase_match,
+    to_positive_score,
 };
 use crate::engine::AlgoEngine;
 use crate::pipeline::is_rare_ext_char;

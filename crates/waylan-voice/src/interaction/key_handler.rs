@@ -6,8 +6,8 @@ use log::info;
 use waylan_core::config::KeyModifiers;
 use waylan_core::input::*;
 
-use super::types::{VoiceKeyAction, VoiceSessionState};
 use super::VoiceInteractionManager;
+use super::types::{VoiceKeyAction, VoiceSessionState};
 
 impl VoiceInteractionManager {
     /// 处理单个物理按键事件，返回针对语音交互的决策动作
@@ -143,10 +143,10 @@ impl VoiceInteractionManager {
         }
 
         // 对讲机模式下若重复按下 PTT 主键（如键盘硬件 Auto-Repeat 连发），静默消费保持录音
-        if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state {
-            if trigger_key == evdev_key {
-                return VoiceKeyAction::Consumed;
-            }
+        if let VoiceSessionState::PushToTalkRecording { trigger_key, .. } = self.state
+            && trigger_key == evdev_key
+        {
+            return VoiceKeyAction::Consumed;
         }
 
         // 命中开关快捷键时停止录音并请求转录上屏
@@ -168,29 +168,29 @@ impl VoiceInteractionManager {
         );
 
         // 1. 尝试匹配对讲机模式 (Push-to-Talk)
-        if let Some(ref ptt) = self.ptt_shortcut {
-            if ptt.matches(evdev_key, &modifiers) {
-                if !self.controller.is_recording() {
-                    info!("[微澜语音] 触发对讲机快捷键，启动语音采集");
-                    self.start_recording(true, Some(evdev_key));
-                }
-                return VoiceKeyAction::Consumed;
+        if let Some(ref ptt) = self.ptt_shortcut
+            && ptt.matches(evdev_key, &modifiers)
+        {
+            if !self.controller.is_recording() {
+                info!("[微澜语音] 触发对讲机快捷键，启动语音采集");
+                self.start_recording(true, Some(evdev_key));
             }
+            return VoiceKeyAction::Consumed;
         }
 
         // 2. 尝试匹配开关模式开启录音 (Toggle)
-        if let Some(ref toggle) = self.toggle_shortcut {
-            if toggle.matches(evdev_key, &modifiers) {
-                let now = Instant::now();
-                if now.duration_since(self.last_toggle_time) < Duration::from_millis(300) {
-                    return VoiceKeyAction::Consumed;
-                }
-                self.last_toggle_time = now;
-
-                info!("[微澜语音] 触发开关快捷键开启连续听写录音");
-                self.start_recording(false, None);
+        if let Some(ref toggle) = self.toggle_shortcut
+            && toggle.matches(evdev_key, &modifiers)
+        {
+            let now = Instant::now();
+            if now.duration_since(self.last_toggle_time) < Duration::from_millis(300) {
                 return VoiceKeyAction::Consumed;
             }
+            self.last_toggle_time = now;
+
+            info!("[微澜语音] 触发开关快捷键开启连续听写录音");
+            self.start_recording(false, None);
+            return VoiceKeyAction::Consumed;
         }
 
         VoiceKeyAction::PassThrough

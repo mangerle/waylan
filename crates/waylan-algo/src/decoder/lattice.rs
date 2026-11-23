@@ -278,10 +278,10 @@ fn is_syllable_split_borrowing(raw: &str, start: usize, syl: &str) -> bool {
             if extra > 0 {
                 buf[total - 1] = raw_bytes[syl_end + extra - 1];
             }
-            if let Ok(merged) = std::str::from_utf8(&buf[..total]) {
-                if is_valid_syllable(merged) {
-                    return true;
-                }
+            if let Ok(merged) = std::str::from_utf8(&buf[..total])
+                && is_valid_syllable(merged)
+            {
+                return true;
             }
         }
     }

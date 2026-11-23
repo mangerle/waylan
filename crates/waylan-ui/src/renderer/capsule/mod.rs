@@ -9,5 +9,5 @@
 mod capsule_bar;
 mod voice_capsule;
 
-pub use capsule_bar::{render_capsule_bar, CapsuleBarParams};
+pub use capsule_bar::{CapsuleBarParams, render_capsule_bar};
 pub use voice_capsule::render_voice_capsule_bar;

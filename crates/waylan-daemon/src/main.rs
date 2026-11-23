@@ -6,12 +6,12 @@ use waylan_core::config::AppConfig;
 use waylan_daemon::cli::{self, CliCommand, DaemonOptions};
 use waylan_daemon::error::DaemonError;
 use waylan_daemon::session_bundle::{
-    build_algo_engine, check_wayland_capabilities, dispatch_ibus_session, dispatch_wayland_session,
-    IbusDispatchOptions, WaylandDispatchOptions,
+    IbusDispatchOptions, WaylandDispatchOptions, build_algo_engine, check_wayland_capabilities,
+    dispatch_ibus_session, dispatch_wayland_session,
 };
 use waylan_daemon::system::{
-    check_another_instance_running, collect_watched_paths, determine_tray_should_spawn,
-    launch_settings_gui, try_acquire_single_instance_lock, ShutdownCoordinator, SingleInstanceLock,
+    ShutdownCoordinator, SingleInstanceLock, check_another_instance_running, collect_watched_paths,
+    determine_tray_should_spawn, launch_settings_gui, try_acquire_single_instance_lock,
 };
 use waylan_daemon::{desktop, logger, tray};
 use waylan_ibus::{print_ibus_component_xml, print_ibus_engines_xml};
@@ -70,10 +70,10 @@ fn is_greeter_or_system_session() -> bool {
     }
 
     // 2. 环境变量判定：XDG_SESSION_CLASS 明确标记为 greeter 或 lock-screen
-    if let Ok(class) = env::var("XDG_SESSION_CLASS") {
-        if class.eq_ignore_ascii_case("greeter") || class.eq_ignore_ascii_case("lock-screen") {
-            return true;
-        }
+    if let Ok(class) = env::var("XDG_SESSION_CLASS")
+        && (class.eq_ignore_ascii_case("greeter") || class.eq_ignore_ascii_case("lock-screen"))
+    {
+        return true;
     }
 
     // 3. 用户名或会话名称敏感词过滤
@@ -100,7 +100,9 @@ fn run_daemon(opts: DaemonOptions) -> Result<(), DaemonError> {
     }
 
     if is_greeter_or_system_session() {
-        info!("[微澜守护进程] 检测到当前处于登录管理器或系统受限会话 (Greeter)，微澜静默退出以保障系统密码输入纯净。");
+        info!(
+            "[微澜守护进程] 检测到当前处于登录管理器或系统受限会话 (Greeter)，微澜静默退出以保障系统密码输入纯净。"
+        );
         return Ok(());
     }
 
@@ -154,7 +156,9 @@ fn acquire_daemon_instance_lock(
                 e
             );
             if !opts.ibus_backend && !opts.self_check && check_another_instance_running() {
-                info!("[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心并激活输入法...");
+                info!(
+                    "[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心并激活输入法..."
+                );
                 activate_desktop_input_source();
                 let _ = launch_settings_gui();
                 return Ok(None);

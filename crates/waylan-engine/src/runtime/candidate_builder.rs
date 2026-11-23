@@ -143,10 +143,10 @@ pub fn build_common_candidate_box_state(
         voice_state,
     } = opts;
 
-    if let Some(ref voice_box) = voice_state {
-        if let Some(state) = build_voice_candidate_box(voice_box, is_active) {
-            return state;
-        }
+    if let Some(ref voice_box) = voice_state
+        && let Some(state) = build_voice_candidate_box(voice_box, is_active)
+    {
+        return state;
     }
 
     let all = engine.candidates();

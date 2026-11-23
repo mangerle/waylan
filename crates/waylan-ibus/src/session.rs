@@ -13,12 +13,12 @@ use std::sync::{Arc, OnceLock};
 
 use log::{debug, info};
 use waylan_sys::fs_watcher::{
-    create_timed_file_event_filter, init_session_inotify_watcher_with_filter, InotifyWatcher,
+    InotifyWatcher, create_timed_file_event_filter, init_session_inotify_watcher_with_filter,
 };
-use zbus::blocking::connection::Builder;
-use zbus::blocking::Connection;
-use zbus::zvariant::Value;
+use zbus::Variant;
+use zbus::connection::{Builder, Connection};
 
+use super::IbusSessionOptions;
 use super::component::ensure_ibus_component_installed;
 use super::discovery::discover_ibus_address;
 use super::engine::{
@@ -27,10 +27,9 @@ use super::engine::{
 };
 use super::error::IbusError;
 use super::keys::IbusSessionCore;
-use super::monitor::{run_ibus_monitor_loop, IbusMonitorParams};
+use super::monitor::{IbusMonitorParams, run_ibus_monitor_loop};
 use super::screensaver::ScreenLockHealer;
 use super::types::build_waylan_ibus_component;
-use super::IbusSessionOptions;
 
 /// IBus 会话内部服务装配结果
 struct AssembledIbusServices {
@@ -150,12 +149,15 @@ fn build_ibus_connection(
         core: Arc::clone(shared_core),
     };
 
-    let conn = Builder::address(ibus_addr)?
-        .serve_at(WAYLAN_FACTORY_OBJECT_PATH, factory)?
-        .serve_at(WAYLAN_FACTORY_OBJECT_PATH, factory_srv)?
-        .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine)?
-        .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine_srv)?
-        .build()?;
+    let conn = zbus::block_on(async {
+        Builder::address(ibus_addr)
+            .serve_at(WAYLAN_FACTORY_OBJECT_PATH, factory)
+            .serve_at(WAYLAN_FACTORY_OBJECT_PATH, factory_srv)
+            .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine)
+            .serve_at(WAYLAN_ENGINE_OBJECT_PATH, engine_srv)
+            .build()
+            .await
+    })?;
 
     let _ = factory_conn_slot.set(conn.clone());
 
@@ -200,13 +202,16 @@ fn register_ibus_component(conn: &Connection, exe_path: &str) {
     let exec_cmd = format!("{} --ibus", exe_path);
     let setup_cmd = format!("{} settings", exe_path);
     if let Ok(comp_val) = build_waylan_ibus_component(&exec_cmd, &setup_cmd) {
-        let _ = conn.call_method(
-            Some("org.freedesktop.IBus"),
-            "/org/freedesktop/IBus",
-            Some("org.freedesktop.IBus"),
-            "RegisterComponent",
-            &(Value::from(comp_val),),
-        );
+        let _ = zbus::block_on(async {
+            conn.call_method(
+                Some("org.freedesktop.IBus"),
+                "/org/freedesktop/IBus",
+                Some("org.freedesktop.IBus"),
+                "RegisterComponent",
+                &(Variant::from(comp_val),),
+            )
+            .await
+        });
         info!(
             "[微澜 IBus] 成功向 ibus-daemon 动态注册微澜输入法组件 (org.freedesktop.IBus.Waylan)"
         );
@@ -215,7 +220,8 @@ fn register_ibus_component(conn: &Connection, exe_path: &str) {
 
 /// 申请微澜引擎的独占总线名称
 fn request_ibus_engine_name(conn: &Connection, is_ibus_child_mode: bool) {
-    if let Err(e) = conn.request_name("org.freedesktop.IBus.Waylan") {
+    if let Err(e) = zbus::block_on(async { conn.request_name("org.freedesktop.IBus.Waylan").await })
+    {
         log::warn!(
             "[微澜 IBus 警告] 申请独占总线名称 org.freedesktop.IBus.Waylan 失败: {}",
             e
@@ -227,13 +233,16 @@ fn request_ibus_engine_name(conn: &Connection, is_ibus_child_mode: bool) {
 
 /// 将当前 GNOME / IBus 全局输入法引擎切换为微澜
 fn activate_global_ibus_engine(conn: &Connection) {
-    if let Err(e) = conn.call_method(
-        Some("org.freedesktop.IBus"),
-        "/org/freedesktop/IBus",
-        Some("org.freedesktop.IBus"),
-        "SetGlobalEngine",
-        &("waylan",),
-    ) {
+    if let Err(e) = zbus::block_on(async {
+        conn.call_method(
+            Some("org.freedesktop.IBus"),
+            "/org/freedesktop/IBus",
+            Some("org.freedesktop.IBus"),
+            "SetGlobalEngine",
+            &("waylan",),
+        )
+        .await
+    }) {
         debug!(
             "[微澜 IBus] 切换全局引擎至 waylan 提示: {}（系统输入源就绪）",
             e
@@ -244,17 +253,17 @@ fn activate_global_ibus_engine(conn: &Connection) {
 }
 
 /// 从 IBus `GetGlobalEngine` 返回的 `IBusEngineDesc` D-Bus 结构体/变体中提取引擎名称
-pub(crate) fn extract_engine_name_from_desc_variant(val: &Value<'_>) -> Option<String> {
+pub(crate) fn extract_engine_name_from_desc_variant(val: &Variant<'_>) -> Option<String> {
     let mut current = val;
-    while let Value::Value(inner) = current {
+    while let Variant::Variant(inner) = current {
         current = inner;
     }
-    if let Value::Structure(st) = current {
+    if let Variant::Structure(st) = current {
         let fields = st.fields();
-        if fields.len() >= 3 {
-            if let Value::Str(s) = &fields[2] {
-                return Some(s.to_string());
-            }
+        if fields.len() >= 3
+            && let Variant::Str(s) = &fields[2]
+        {
+            return Some(s.to_string());
         }
     }
     None
@@ -264,16 +273,16 @@ pub(crate) fn extract_engine_name_from_desc_variant(val: &Value<'_>) -> Option<S
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use zbus::zvariant::StructureBuilder;
+    use zbus::wire::StructureBuilder;
 
     #[test]
     fn test_extract_engine_name_from_desc_variant() {
         let mut builder = StructureBuilder::new();
-        builder.push_value(Value::from("IBusEngineDesc"));
-        builder.push_value(Value::from(HashMap::<String, Value>::new()));
-        builder.push_value(Value::from("waylan"));
-        let st = builder.build();
-        let val = Value::Structure(st);
+        builder.push_value(Variant::from("IBusEngineDesc"));
+        builder.push_value(Variant::from(HashMap::<String, Variant>::new()));
+        builder.push_value(Variant::from("waylan"));
+        let st = builder.build().expect("构造结构体失败");
+        let val = Variant::Structure(st);
         let extracted = extract_engine_name_from_desc_variant(&val);
         assert_eq!(extracted.as_deref(), Some("waylan"));
     }

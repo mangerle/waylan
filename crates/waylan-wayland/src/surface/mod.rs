@@ -164,15 +164,15 @@ impl CandidateSurfaceManager {
     /// 响应合成器发射的 wl_buffer.release 事件，标记对应槽位为空闲并销毁旧 buffer
     pub fn on_buffer_released(&mut self, released_buffer: &WlBuffer) {
         for (idx, slot_buf) in self.slot_buffers.iter_mut().enumerate() {
-            if let Some(buf) = slot_buf {
-                if buf == released_buffer {
-                    if let Some(ref mut slot) = self.shm_slots[idx] {
-                        slot.is_busy = false;
-                    }
-                    buf.destroy();
-                    *slot_buf = None;
-                    return;
+            if let Some(buf) = slot_buf
+                && buf == released_buffer
+            {
+                if let Some(ref mut slot) = self.shm_slots[idx] {
+                    slot.is_busy = false;
                 }
+                buf.destroy();
+                *slot_buf = None;
+                return;
             }
         }
 
@@ -183,10 +183,10 @@ impl CandidateSurfaceManager {
             .position(|(_, b)| b == released_buffer)
         {
             let (slot_idx, buf) = self.pending_release_buffers.remove(pos);
-            if self.slot_buffers[slot_idx].is_none() {
-                if let Some(ref mut slot) = self.shm_slots[slot_idx] {
-                    slot.is_busy = false;
-                }
+            if self.slot_buffers[slot_idx].is_none()
+                && let Some(ref mut slot) = self.shm_slots[slot_idx]
+            {
+                slot.is_busy = false;
             }
             buf.destroy();
         }

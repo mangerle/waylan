@@ -6,8 +6,8 @@
 //! - **代价与局限**：模糊音兜底仅在未显式开启模糊音且精确整词词频偏低时触发，避免正常输入额外开销。
 
 use crate::decoder::{
-    score_phrase_match, to_positive_score, DatPhraseMatcher, DecodeResult, LatticeOptions,
-    MatcherOptions, PrismFsa, SyllableLattice,
+    DatPhraseMatcher, DecodeResult, LatticeOptions, MatcherOptions, PrismFsa, SyllableLattice,
+    score_phrase_match, to_positive_score,
 };
 use crate::engine::AlgoEngine;
 use crate::pipeline::is_rare_ext_char;
@@ -164,10 +164,10 @@ impl AlgoEngine {
         let mut added = 0usize;
         for m in matches {
             let m_score = score_phrase_match(&m, &self.config.scoring_weights);
-            if let Some(exact_score) = best_exact_score {
-                if m_score < exact_score.saturating_add(FUZZY_FALLBACK_LEAD) {
-                    continue;
-                }
+            if let Some(exact_score) = best_exact_score
+                && m_score < exact_score.saturating_add(FUZZY_FALLBACK_LEAD)
+            {
+                continue;
             }
             if out.iter().any(|c| c.text == m.word) {
                 continue;

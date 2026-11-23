@@ -12,7 +12,7 @@
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use rustix::fs::{flock, FlockOperation};
+use rustix::fs::{FlockOperation, flock};
 
 /// 跨进程文件排他与共享锁守卫 (RAII)
 pub(crate) struct ProcessFileLock {
@@ -32,10 +32,10 @@ impl ProcessFileLock {
 
     fn acquire_internal(path: &Path, op: FlockOperation) -> std::io::Result<Self> {
         let lock_path = Self::lock_path(path);
-        if let Some(parent) = lock_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = lock_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
         }
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true);

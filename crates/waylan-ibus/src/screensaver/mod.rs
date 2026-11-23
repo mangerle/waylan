@@ -12,9 +12,9 @@
 mod dbus;
 mod listener;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::info;

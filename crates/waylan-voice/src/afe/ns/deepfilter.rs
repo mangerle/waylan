@@ -24,7 +24,9 @@ impl DeepFilterSuppressor {
     pub fn new() -> Self {
         let hush = match hush_vani::Hush::new() {
             Ok(h) => {
-                info!("[音频前端] 成功初始化系统内置 DeepFilterNet3 深度降噪神经网络引擎 (AVX2+FMA 自动加速)");
+                info!(
+                    "[音频前端] 成功初始化系统内置 DeepFilterNet3 深度降噪神经网络引擎 (AVX2+FMA 自动加速)"
+                );
                 Some(h)
             }
             Err(e) => {

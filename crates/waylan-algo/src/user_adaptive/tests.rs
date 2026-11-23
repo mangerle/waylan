@@ -267,9 +267,11 @@ fn test_wal_truncation_and_corrupt_resilience() {
     let cands = restored.lookup_user_words("wan'zheng", 1_700_000_000);
     assert_eq!(cands.len(), 1);
     assert_eq!(cands[0].text, "完整词");
-    assert!(restored
-        .lookup_user_words("jie'duan", 1_700_000_001)
-        .is_empty());
+    assert!(
+        restored
+            .lookup_user_words("jie'duan", 1_700_000_001)
+            .is_empty()
+    );
 
     let _ = std::fs::remove_file(wal_path);
 }

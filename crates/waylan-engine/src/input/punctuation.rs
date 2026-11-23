@@ -5,8 +5,8 @@
 //! - **核心优势**：在拼音引擎外层形成纯函数式拦截，打数字（如 12:30 或 3.14）时无需切英文模式。
 //! - **代价与局限**：需由外部在选词上屏时调用 `record_commit` 维护前驱字符上下文。
 
-use waylan_core::config::PinyinConfig;
 use waylan_core::TextAction;
+use waylan_core::config::PinyinConfig;
 
 /// 智能标点符号处理选项（参数对象）
 ///

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod compact;
-pub use crate::compact_writer::{write_compact_file, CompactWritePayload};
+pub use crate::compact_writer::{CompactWritePayload, write_compact_file};
 pub use crate::dat_builder::build_dat;
 pub use compact::CompactDictBuilder;
 
@@ -317,10 +317,11 @@ impl DictBuilder {
                 if parts.len() < 2 {
                     continue;
                 }
-                if let Some((key, sym, desc)) = Self::parse_symbol_entry(&parts) {
-                    if !key.is_empty() && !sym.is_empty() {
-                        dict.symbols.push((key, sym, desc));
-                    }
+                if let Some((key, sym, desc)) = Self::parse_symbol_entry(&parts)
+                    && !key.is_empty()
+                    && !sym.is_empty()
+                {
+                    dict.symbols.push((key, sym, desc));
                 }
             }
         }

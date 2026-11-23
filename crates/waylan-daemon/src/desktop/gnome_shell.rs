@@ -8,9 +8,9 @@
 use waylan_core::config::AppConfig;
 pub use waylan_sys::desktop::GnomeExtensionIntent;
 use waylan_sys::desktop::{
-    enqueue_desktop_task, ensure_gnome_extension_files, ensure_input_source_prioritized,
-    is_gnome_desktop, set_gnome_extension_enabled, WAYLAN_GNOME_EXTENSION_UUID,
-    WAYLAN_IBUS_SOURCE_ENTRY,
+    WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_SOURCE_ENTRY, enqueue_desktop_task,
+    ensure_gnome_extension_files, ensure_input_source_prioritized, is_gnome_desktop,
+    set_gnome_extension_enabled,
 };
 
 /// 微澜扩展资源子目录名

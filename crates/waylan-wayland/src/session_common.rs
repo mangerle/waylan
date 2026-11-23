@@ -6,12 +6,12 @@
 //! - **代价与局限**：具体文件监控与候选框装配已解耦至 `watcher` 与 `surface::state_builder` 独立模块。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
 use log::info;
-use waylan_core::input::{update_modifier_masks, ModifierState, MOD_CAPS};
+use waylan_core::input::{MOD_CAPS, ModifierState, update_modifier_masks};
 use waylan_core::{AppConfig, InputMode, SharedInputFlags, VoiceProvider};
 use waylan_engine::ImeRuntime;
 use waylan_sys::LoopWakeup;
@@ -192,10 +192,10 @@ pub trait WaylandSessionLifecycle: Sized {
     /// 从共享原子标志同步输入模式
     fn sync_mode_from_shared_flag(&mut self) {
         let mode_changed = self.runtime().sync_shared_mode();
-        if let Some(InputMode::English) = mode_changed {
-            if !self.runtime().core.engine.raw_input().is_empty() {
-                self.on_english_mode_switch();
-            }
+        if let Some(InputMode::English) = mode_changed
+            && !self.runtime().core.engine.raw_input().is_empty()
+        {
+            self.on_english_mode_switch();
         }
     }
 }
@@ -256,8 +256,8 @@ pub fn is_caps_locked_state(mods_locked: u32) -> bool {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
-    use waylan_core::state::SharedInputFlags;
     use waylan_core::InputMode;
+    use waylan_core::state::SharedInputFlags;
 
     #[test]
     fn test_sync_mode_from_shared_flags() {

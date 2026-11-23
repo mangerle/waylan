@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::beam_scoring::{compute_raw_match_score, RawScoreParams};
+use super::beam_scoring::{RawScoreParams, compute_raw_match_score};
 use super::weights::ScoringWeights;
 use crate::table::CompactMmapLexicon;
 

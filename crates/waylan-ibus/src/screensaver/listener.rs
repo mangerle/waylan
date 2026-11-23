@@ -9,15 +9,17 @@
 //!   2. 监听线程退出时通过广播唤醒与 `Connection::close()` 即时中断阻塞迭代，停机无卡死。
 //! - **代价与局限**：需维护最多三个轻量常驻监听/探测线程句柄并在 `Drop` 时统一回收。
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use log::warn;
 use parking_lot::Mutex;
-use zbus::blocking::{Connection, MessageIterator};
+use zbus::MessageStream;
+use zbus::connection::Connection;
 
 use super::dbus::{
     handle_session_screen_saver_signal, handle_system_logind_signal,
@@ -39,21 +41,25 @@ impl ScreenSaverListenerHandle {
     pub(crate) fn stop(&mut self) {
         // 1. 唤醒并中断 Session 总线阻塞迭代
         if let Some(handle) = self.session_handle.take() {
-            if let Ok(conn) = Connection::session() {
-                let _ = conn.emit_signal(
-                    None::<&str>,
-                    "/org/waylan/Daemon",
-                    "org.freedesktop.ScreenSaver",
-                    "ActiveChanged",
-                    &(false,),
-                );
-            }
+            zbus::block_on(async {
+                if let Ok(conn) = Connection::session().await {
+                    let _ = conn
+                        .emit_signal(
+                            None::<&str>,
+                            "/org/waylan/Daemon",
+                            "org.freedesktop.ScreenSaver",
+                            "ActiveChanged",
+                            &(false,),
+                        )
+                        .await;
+                }
+            });
             let _ = handle.join();
         }
 
-        // 2. 主动关闭 System 总线连接以即时中断 logind MessageIterator
+        // 2. 主动关闭 System 总线连接以即时中断 logind MessageStream
         if let Some(conn) = self.system_conn.lock().take() {
-            let _ = conn.close();
+            let _ = zbus::block_on(async { conn.close().await });
         }
         if let Some(handle) = self.system_handle.take() {
             let _ = handle.join();
@@ -78,7 +84,7 @@ fn run_session_screen_saver_listener(
     coordinator: IbusShutdownCoordinator,
 ) {
     while !coordinator.is_shutting_down() {
-        let Ok(conn) = Connection::session() else {
+        let Ok(conn) = zbus::block_on(async { Connection::session().await }) else {
             std::thread::sleep(Duration::from_millis(500));
             continue;
         };
@@ -91,8 +97,8 @@ fn run_session_screen_saver_listener(
             coordinator.wake();
         }
 
-        let iter = MessageIterator::from(&conn);
-        for msg_res in iter {
+        let mut stream = MessageStream::from(&conn);
+        while let Some(msg_res) = zbus::block_on(async { stream.next().await }) {
             if coordinator.is_shutting_down() {
                 break;
             }
@@ -118,7 +124,7 @@ fn run_system_logind_listener(
     conn_slot: Arc<Mutex<Option<Connection>>>,
 ) {
     while !coordinator.is_shutting_down() {
-        let Ok(conn) = Connection::system() else {
+        let Ok(conn) = zbus::block_on(async { Connection::system().await }) else {
             std::thread::sleep(Duration::from_millis(1000));
             continue;
         };
@@ -128,8 +134,8 @@ fn run_system_logind_listener(
         *conn_slot.lock() = Some(conn.clone());
         register_system_logind_rules(&conn);
 
-        let iter = MessageIterator::from(&conn);
-        for msg_res in iter {
+        let mut stream = MessageStream::from(&conn);
+        while let Some(msg_res) = zbus::block_on(async { stream.next().await }) {
             if coordinator.is_shutting_down() {
                 break;
             }

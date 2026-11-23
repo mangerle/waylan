@@ -8,7 +8,7 @@
 use waylan_core::{
     Candidate, CandidateBoxState, CandidateExpansion, CandidateIndexStyle, CandidateOrientation,
 };
-use waylan_engine::{build_common_candidate_box_state, CandidateBoxBuildOptions};
+use waylan_engine::{CandidateBoxBuildOptions, build_common_candidate_box_state};
 
 use super::super::keys::IbusSessionCore;
 

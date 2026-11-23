@@ -13,7 +13,7 @@ use wayland_client::{Dispatch, QueueHandle};
 
 use crate::surface::CandidateSurfaceManager;
 
-pub use waylan_engine::{build_common_candidate_box_state, CandidateBoxBuildOptions};
+pub use waylan_engine::{CandidateBoxBuildOptions, build_common_candidate_box_state};
 
 /// 提交候选框图层所需的 Wayland 目标上下文参数对象
 pub struct CandidateSurfaceCommitParams<'a, S> {

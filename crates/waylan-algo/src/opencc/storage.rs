@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::compact::CompactPhraseTable;
-use super::{OpenCcDict, OPENCC_DICT_MAGIC};
+use super::{OPENCC_DICT_MAGIC, OpenCcDict};
 use crate::error::AlgoError;
 
 /// 字符串驻留池（负责去重、字符边界安全截断与紧凑字节累积）

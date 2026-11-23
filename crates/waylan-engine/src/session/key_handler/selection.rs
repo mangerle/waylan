@@ -19,12 +19,12 @@ pub(crate) fn handle_v_mode_key(
     key: u32,
     shift_active: bool,
 ) -> Option<ImeOutputAction> {
-    if session.engine.raw_input().starts_with('v') {
-        if let Some(ch) = keycode_to_v_mode_char(key, shift_active) {
-            session.engine.push_char(ch);
-            session.reset_viewport();
-            return Some(ImeOutputAction::Handled { update_ui: true });
-        }
+    if session.engine.raw_input().starts_with('v')
+        && let Some(ch) = keycode_to_v_mode_char(key, shift_active)
+    {
+        session.engine.push_char(ch);
+        session.reset_viewport();
+        return Some(ImeOutputAction::Handled { update_ui: true });
     }
     None
 }
@@ -50,13 +50,13 @@ pub(crate) fn handle_digit_selection(
         let sel = session.selected_global_index();
         session.collapse_card();
 
-        if let Some(cand) = session.engine.candidates().get(sel) {
-            if let Some(sub_text) = cand.sub_candidates.get(sub_idx).cloned() {
-                let (committed, _) = session.engine.commit_custom_text(&sub_text);
-                session.reset_viewport();
-                session.punctuation_processor.record_commit(&committed);
-                return Some(ImeOutputAction::Commit(committed));
-            }
+        if let Some(cand) = session.engine.candidates().get(sel)
+            && let Some(sub_text) = cand.sub_candidates.get(sub_idx).cloned()
+        {
+            let (committed, _) = session.engine.commit_custom_text(&sub_text);
+            session.reset_viewport();
+            session.punctuation_processor.record_commit(&committed);
+            return Some(ImeOutputAction::Commit(committed));
         }
         Some(ImeOutputAction::Handled { update_ui: true })
     } else {

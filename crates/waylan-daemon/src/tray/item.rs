@@ -1,11 +1,11 @@
-use crate::config::{env_var_non_empty, AppConfig};
+use crate::config::{AppConfig, env_var_non_empty};
 use log::{info, warn};
 use std::path::Path;
 use std::sync::mpsc::SyncSender;
 use waylan_sys::LoopWakeup;
+use zbus::OwnedObjectPath;
 use zbus::interface;
-use zbus::object_server::SignalContext;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::object_server::SignalEmitter;
 
 /// 提示文本结构类型别名
 type ToolTipData = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
@@ -264,11 +264,11 @@ impl StatusNotifierItem {
 
     /// 图标更新通知信号（用于告知系统任务栏刷新图标呈现）
     #[zbus(signal)]
-    async fn new_icon(signal_ctxt: &SignalContext<'_>) -> zbus::Result<()>;
+    async fn new_icon(signal_ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     /// 悬停提示更新通知信号
     #[zbus(signal)]
-    async fn new_tool_tip(signal_ctxt: &SignalContext<'_>) -> zbus::Result<()>;
+    async fn new_tool_tip(signal_ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
 #[cfg(test)]

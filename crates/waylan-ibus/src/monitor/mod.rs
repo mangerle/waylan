@@ -7,18 +7,18 @@
 //! - **代价与局限**：主线程常驻阻塞于 poll 调用。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use log::{debug, info};
 use parking_lot::Mutex;
-use rustix::event::{poll, PollFd, PollFlags};
-use waylan_sys::fs_watcher::{check_reload_requested_or_files_changed, InotifyWatcher};
+use rustix::event::{PollFd, PollFlags, poll};
 use waylan_sys::LoopWakeup;
-use zbus::blocking::Connection;
-use zbus::zvariant::Value;
+use waylan_sys::fs_watcher::{InotifyWatcher, check_reload_requested_or_files_changed};
+use zbus::Variant;
+use zbus::connection::Connection;
 
 use super::engine::WAYLAN_ENGINE_OBJECT_PATH;
 use super::keys::IbusSessionCore;
@@ -47,7 +47,7 @@ mod voice_stream;
 pub(crate) use engine_listener::spawn_engine_change_listener;
 pub(crate) use lifecycle::{ensure_global_engine_active, handle_screen_saver_transition};
 pub(crate) use voice_stream::{
-    handle_voice_stream_cycle, query_voice_active_and_path, VoiceStreamCycleParams,
+    VoiceStreamCycleParams, handle_voice_stream_cycle, query_voice_active_and_path,
 };
 
 /// 处理词库与配置热重载事件，若触发指示器形态变更自重启则返回 true
@@ -87,17 +87,20 @@ fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSess
         let mut g = shared_core.lock();
         g.sync_shared_mode().map(|m| (m, g.is_caps_locked()))
     };
-    if let Some((new_mode, is_caps)) = mode_changed {
-        if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
-            let _ = conn.emit_signal(
+    if let Some((new_mode, is_caps)) = mode_changed
+        && let Ok(prop_val) = build_input_mode_property(new_mode, is_caps)
+    {
+        let _ = zbus::block_on(async {
+            conn.emit_signal(
                 Option::<&str>::None,
                 WAYLAN_ENGINE_OBJECT_PATH,
                 "org.freedesktop.IBus.Engine",
                 "UpdateProperty",
-                &(Value::from(prop_val),),
-            );
-            debug!("[微澜 IBus] 已同步托盘模式切换并发射 UpdateProperty 信号");
-        }
+                &(Variant::from(prop_val),),
+            )
+            .await
+        });
+        debug!("[微澜 IBus] 已同步托盘模式切换并发射 UpdateProperty 信号");
     }
 }
 
@@ -376,18 +379,20 @@ fn poll_wakeup_and_inotify(
         return;
     }
 
-    if let Ok(n) = poll(&mut fds, timeout_ms) {
-        if n > 0 {
-            if let Some(idx) = wakeup_idx {
-                if fds[idx]
-                    .revents()
-                    .intersects(PollFlags::IN | PollFlags::ERR)
-                {
-                    if let Some(wakeup) = loop_wakeup {
-                        wakeup.drain();
-                    }
-                }
-            }
-        }
+    let timespec = if timeout_ms >= 0 {
+        Duration::from_millis(timeout_ms as u64).try_into().ok()
+    } else {
+        None
+    };
+
+    if let Ok(n) = poll(&mut fds, timespec.as_ref())
+        && n > 0
+        && let Some(idx) = wakeup_idx
+        && fds[idx]
+            .revents()
+            .intersects(PollFlags::IN | PollFlags::ERR)
+        && let Some(wakeup) = loop_wakeup
+    {
+        wakeup.drain();
     }
 }

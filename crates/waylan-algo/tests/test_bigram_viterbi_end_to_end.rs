@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::time::Instant;
+use waylan_algo::AlgoEngine;
 use waylan_algo::table::LexiconTable;
 use waylan_algo::types::AlgoConfig;
-use waylan_algo::AlgoEngine;
 
 #[test]
 fn test_bigram_mmap_end_to_end_typing() {

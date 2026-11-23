@@ -11,8 +11,8 @@ use log::{info, warn};
 use waylan_core::VoiceConfig;
 
 use super::types::IDLE_MODEL_UNLOAD_TIMEOUT;
-use crate::recognizer::{create_recognizer, VoiceRecognizer};
-use crate::vad::{create_vad, VadProcessor};
+use crate::recognizer::{VoiceRecognizer, create_recognizer};
+use crate::vad::{VadProcessor, create_vad};
 
 /// 离线 ASR 识别器缓存键指纹
 ///

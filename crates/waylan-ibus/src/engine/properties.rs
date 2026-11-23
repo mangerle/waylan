@@ -7,19 +7,19 @@
 
 use log::info;
 use std::sync::atomic::Ordering;
-use zbus::object_server::SignalContext;
-use zbus::zvariant::Value;
+use zbus::Variant;
+use zbus::object_server::SignalEmitter;
 
 use super::super::types::{
-    build_full_width_char_property, build_full_width_punct_property, build_input_mode_property,
-    build_traditional_property, KEY_EXIT, KEY_FULL_WIDTH_CHAR, KEY_FULL_WIDTH_PUNCT,
-    KEY_INPUT_MODE, KEY_RELOAD_CONFIG, KEY_RESTART, KEY_SETUP, KEY_TRADITIONAL, KEY_VIEW_LOG,
+    KEY_EXIT, KEY_FULL_WIDTH_CHAR, KEY_FULL_WIDTH_PUNCT, KEY_INPUT_MODE, KEY_RELOAD_CONFIG,
+    KEY_RESTART, KEY_SETUP, KEY_TRADITIONAL, KEY_VIEW_LOG, build_full_width_char_property,
+    build_full_width_punct_property, build_input_mode_property, build_traditional_property,
 };
 use super::service::IbusEngineService;
 
 impl IbusEngineService {
     /// 统一响应 GNOME / IBus 原生状态栏菜单项激活事件
-    pub(crate) async fn handle_property_activate(&self, ctxt: &SignalContext<'_>, name: &str) {
+    pub(crate) async fn handle_property_activate(&self, ctxt: &SignalEmitter<'_>, name: &str) {
         match name {
             KEY_INPUT_MODE => self.on_prop_input_mode(ctxt).await,
             KEY_TRADITIONAL => self.on_prop_traditional_chinese(ctxt).await,
@@ -53,21 +53,21 @@ impl IbusEngineService {
     }
 
     /// 响应状态栏点击切换中英文输入模式
-    async fn on_prop_input_mode(&self, ctxt: &SignalContext<'_>) {
+    async fn on_prop_input_mode(&self, ctxt: &SignalEmitter<'_>) {
         let (new_mode, is_caps) = {
             let mut guard = self.core.lock();
             let next = guard.runtime.toggle_input_mode();
             (next, guard.is_caps_locked())
         };
-        if !self.suppress_properties {
-            if let Ok(prop_val) = build_input_mode_property(new_mode, is_caps) {
-                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-            }
+        if !self.suppress_properties
+            && let Ok(prop_val) = build_input_mode_property(new_mode, is_caps)
+        {
+            let _ = Self::update_property(ctxt, Variant::from(prop_val)).await;
         }
     }
 
     /// 响应状态栏点击切换简繁模式
-    pub(crate) async fn on_prop_traditional_chinese(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn on_prop_traditional_chinese(&self, ctxt: &SignalEmitter<'_>) {
         let is_trad = {
             let mut guard = self.core.lock();
             let next = guard.runtime.toggle_traditional();
@@ -77,15 +77,15 @@ impl IbusEngineService {
             );
             next
         };
-        if !self.suppress_properties {
-            if let Ok(prop_val) = build_traditional_property(is_trad) {
-                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-            }
+        if !self.suppress_properties
+            && let Ok(prop_val) = build_traditional_property(is_trad)
+        {
+            let _ = Self::update_property(ctxt, Variant::from(prop_val)).await;
         }
     }
 
     /// 响应状态栏点击切换标点全半角模式
-    pub(crate) async fn on_prop_full_width_punct(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn on_prop_full_width_punct(&self, ctxt: &SignalEmitter<'_>) {
         let is_full = {
             let mut guard = self.core.lock();
             let next = guard.runtime.toggle_full_width_punct();
@@ -99,15 +99,15 @@ impl IbusEngineService {
             );
             next
         };
-        if !self.suppress_properties {
-            if let Ok(prop_val) = build_full_width_punct_property(is_full) {
-                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-            }
+        if !self.suppress_properties
+            && let Ok(prop_val) = build_full_width_punct_property(is_full)
+        {
+            let _ = Self::update_property(ctxt, Variant::from(prop_val)).await;
         }
     }
 
     /// 响应状态栏点击切换字符全半角模式
-    pub(crate) async fn on_prop_full_width_char(&self, ctxt: &SignalContext<'_>) {
+    pub(crate) async fn on_prop_full_width_char(&self, ctxt: &SignalEmitter<'_>) {
         let is_full = {
             let mut guard = self.core.lock();
             let next = guard.runtime.toggle_full_width_char();
@@ -121,10 +121,10 @@ impl IbusEngineService {
             );
             next
         };
-        if !self.suppress_properties {
-            if let Ok(prop_val) = build_full_width_char_property(is_full) {
-                let _ = Self::update_property(ctxt, Value::from(prop_val)).await;
-            }
+        if !self.suppress_properties
+            && let Ok(prop_val) = build_full_width_char_property(is_full)
+        {
+            let _ = Self::update_property(ctxt, Variant::from(prop_val)).await;
         }
     }
 

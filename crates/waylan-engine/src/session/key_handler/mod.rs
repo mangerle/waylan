@@ -40,10 +40,10 @@ pub fn handle_composition_key_with_params(
     }
 
     // 2. 未展开卡片时才允许智能方向键导航接管按键
-    if !session.is_card_expanded() {
-        if let Some(act) = navigation::handle_smart_navigation_key(session, params.key) {
-            return Some(act);
-        }
+    if !session.is_card_expanded()
+        && let Some(act) = navigation::handle_smart_navigation_key(session, params.key)
+    {
+        return Some(act);
     }
 
     // 3. 选词、编辑与翻页类按键决策

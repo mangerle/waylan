@@ -34,10 +34,10 @@ impl UserAdaptiveState {
     /// 设置用户自适应词库持久化文件路径并自动重放加载已有 WAL 记录
     pub fn set_dict_path(&mut self, path: impl Into<PathBuf>) {
         let p = path.into();
-        if p.exists() {
-            if let Ok(model) = UserAdaptiveModel::load_or_replay_wal(&p) {
-                self.model = model;
-            }
+        if p.exists()
+            && let Ok(model) = UserAdaptiveModel::load_or_replay_wal(&p)
+        {
+            self.model = model;
         }
         self.dict_path = Some(p);
     }

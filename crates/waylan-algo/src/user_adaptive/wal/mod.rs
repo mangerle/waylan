@@ -16,8 +16,8 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::warn;
@@ -200,10 +200,10 @@ impl UserAdaptiveWal {
             }
         }
 
-        if let Some(parent) = path_ref.parent() {
-            if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
-            }
+        if let Some(parent) = path_ref.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            let _ = std::fs::create_dir_all(parent);
         }
 
         // 若目标文件已存在但并非当前 V2 WAL 格式，先合并重放旧数据再归并升级为标准 V2 WAL 格式

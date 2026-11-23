@@ -1,5 +1,5 @@
 use std::time::Instant;
-use waylan_algo::{table::LexiconTable, types::AlgoConfig, AlgoEngine};
+use waylan_algo::{AlgoEngine, table::LexiconTable, types::AlgoConfig};
 use waylan_core::{Candidate, CandidateBoxState};
 use waylan_ui::{CandidateBoxRenderer, UiTheme};
 

@@ -132,11 +132,7 @@ fn locate_lunar_month(info: u32, offset: &mut i64) -> (u32, bool) {
 
     while l_month <= 12 {
         let days_in_month = if is_leap {
-            if (info & 0x10000) != 0 {
-                30
-            } else {
-                29
-            }
+            if (info & 0x10000) != 0 { 30 } else { 29 }
         } else if (info & (0x10000 >> l_month)) != 0 {
             30
         } else {

@@ -12,8 +12,8 @@ pub(super) use super::commit::{
     extract_final_text, handle_stop_and_commit, process_recognition_feed, push_pre_speech_silence,
 };
 use super::types::{
-    ActiveRecordingContext, RecognitionFeedContext, StopCommitContext, VoiceEvent, WorkerCommand,
-    PRE_SPEECH_BUFFER_CAPACITY,
+    ActiveRecordingContext, PRE_SPEECH_BUFFER_CAPACITY, RecognitionFeedContext, StopCommitContext,
+    VoiceEvent, WorkerCommand,
 };
 use crate::afe::AudioFrontEndPipeline;
 use crate::capture::AudioCapture;

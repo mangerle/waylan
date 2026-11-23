@@ -1,8 +1,8 @@
 use super::DictBuildOptions;
-use crate::builder::{normalize_pinyin_tones, BuildStats};
+use crate::builder::{BuildStats, normalize_pinyin_tones};
 use crate::compact_writer::{
-    build_combined_keys, encode_keys_and_candidates, write_compact_file, CompactWritePayload,
-    KeyCandidateMap,
+    CompactWritePayload, KeyCandidateMap, build_combined_keys, encode_keys_and_candidates,
+    write_compact_file,
 };
 use crate::dat::DoubleArrayTrie;
 use crate::error::AlgoError;
@@ -144,36 +144,34 @@ impl CompactDictBuilder {
         let mut words = Vec::new();
 
         let vocab_path = Path::new("data/vocab.bin");
-        if vocab_path.exists() {
-            if let Ok(vocab) = Vocabulary::load_binary(vocab_path) {
-                for (id, w) in vocab.all_words().iter().enumerate() {
-                    word_to_id.insert(w.clone(), id as u32);
-                    words.push(w.clone());
-                }
+        if vocab_path.exists()
+            && let Ok(vocab) = Vocabulary::load_binary(vocab_path)
+        {
+            for (id, w) in vocab.all_words().iter().enumerate() {
+                word_to_id.insert(w.clone(), id as u32);
+                words.push(w.clone());
             }
         }
-        if words.is_empty() {
-            if let Some(parent) = output_path.parent() {
-                if parent.join("bigram.table.bin").exists() {
-                    let candidates_bin = [
-                        output_path.to_path_buf(),
-                        PathBuf::from("/usr/share/waylan/data/base.dict.bin"),
-                    ];
-                    for bin_path in &candidates_bin {
-                        if bin_path.exists() {
-                            if let Some(extracted) = Self::extract_vocab_from_bin(bin_path) {
-                                if extracted.len() > 1_800_000 {
-                                    words.reserve(extracted.len());
-                                    word_to_id.reserve(extracted.len());
-                                    for (id, w) in extracted.into_iter().enumerate() {
-                                        word_to_id.insert(w.clone(), id as u32);
-                                        words.push(w);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+        if words.is_empty()
+            && let Some(parent) = output_path.parent()
+            && parent.join("bigram.table.bin").exists()
+        {
+            let candidates_bin = [
+                output_path.to_path_buf(),
+                PathBuf::from("/usr/share/waylan/data/base.dict.bin"),
+            ];
+            for bin_path in &candidates_bin {
+                if bin_path.exists()
+                    && let Some(extracted) = Self::extract_vocab_from_bin(bin_path)
+                    && extracted.len() > 1_800_000
+                {
+                    words.reserve(extracted.len());
+                    word_to_id.reserve(extracted.len());
+                    for (id, w) in extracted.into_iter().enumerate() {
+                        word_to_id.insert(w.clone(), id as u32);
+                        words.push(w);
                     }
+                    break;
                 }
             }
         }

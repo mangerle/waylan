@@ -219,13 +219,13 @@ impl LexiconSummaryService {
     /// 查询系统预编译主词库（base.dict.bin）的状态描述信息
     pub fn query_system_dict_info() -> String {
         for path in AppConfig::base_dict_search_paths() {
-            if path.exists() {
-                if let Ok(lexicon) = CompactMmapLexicon::open(&path) {
-                    return format!(
-                        "系统预编译词库: base.dict.bin (约 {:.1} 万组词条已就绪)",
-                        lexicon.num_candidates as f64 / 10_000.0
-                    );
-                }
+            if path.exists()
+                && let Ok(lexicon) = CompactMmapLexicon::open(&path)
+            {
+                return format!(
+                    "系统预编译词库: base.dict.bin (约 {:.1} 万组词条已就绪)",
+                    lexicon.num_candidates as f64 / 10_000.0
+                );
             }
         }
         "系统预编译词库: base.dict.bin (未找到或未就绪)".to_string()

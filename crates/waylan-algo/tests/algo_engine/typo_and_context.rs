@@ -1,7 +1,7 @@
 //! 算法引擎上下文联想、空间相邻键位容错与拼写纠错集成测试
 
-use waylan_algo::types::{AlgoConfig, CandidateTier};
 use waylan_algo::AlgoEngine;
+use waylan_algo::types::{AlgoConfig, CandidateTier};
 
 #[test]
 fn test_engine_commit_context_association() {

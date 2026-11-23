@@ -6,9 +6,9 @@
 //! - **核心优势**：在音频中断回调中采用非阻塞有界同步通道（`try_send`），彻底杜绝音频线程卡顿与爆内存。
 //! - **代价与局限**：线性重采样相比高阶带通 sinc 插值开销更低，但高频部分有轻微滤波失真，完全满足语音识别需求。
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -183,7 +183,7 @@ impl AudioCapture {
             is_stream_dead,
             dropped_chunks,
             device_name,
-            native_sample_rate: stream_config.sample_rate.0,
+            native_sample_rate: stream_config.sample_rate,
             channels: stream_config.channels,
         })
     }
@@ -206,7 +206,7 @@ impl AudioCapture {
 
         info!(
             "[语音采集] 设备采样率: {} Hz, 声道数: {}, 采样格式: {:?}",
-            stream_config.sample_rate.0, stream_config.channels, sample_format
+            stream_config.sample_rate, stream_config.channels, sample_format
         );
 
         Ok((stream_config, sample_format))
@@ -217,9 +217,11 @@ impl AudioCapture {
         let host = cpal::default_host();
         let device = if let Some(target_name) = target_device.filter(|s| !s.trim().is_empty()) {
             match host.input_devices() {
-                Ok(mut devices) => {
-                    devices.find(|d| d.name().map(|n| n.contains(target_name)).unwrap_or(false))
-                }
+                Ok(mut devices) => devices.find(|d| {
+                    d.description()
+                        .map(|desc| desc.name().contains(target_name))
+                        .unwrap_or_else(|_| d.to_string().contains(target_name))
+                }),
                 Err(_) => None,
             }
             .or_else(|| {
@@ -238,8 +240,9 @@ impl AudioCapture {
         })?;
 
         let name = device
-            .name()
-            .unwrap_or_else(|_| "未知音频输入设备".to_string());
+            .description()
+            .map(|desc| desc.name().to_string())
+            .unwrap_or_else(|_| device.to_string());
         Ok((device, name))
     }
 
@@ -248,7 +251,7 @@ impl AudioCapture {
         params: InputStreamParams<'_>,
     ) -> Result<cpal::Stream, VoiceError> {
         let channels = params.config.channels;
-        let native_sample_rate = params.config.sample_rate.0;
+        let native_sample_rate = params.config.sample_rate;
         let mut pipeline = build_capture_pipeline(
             native_sample_rate,
             params.pcm_sender,
@@ -259,7 +262,7 @@ impl AudioCapture {
 
         match params.sample_format {
             SampleFormat::F32 => params.device.build_input_stream(
-                params.config,
+                *params.config,
                 move |data: &[f32], _| {
                     pipeline.convert(data, channels, |s| s);
                 },
@@ -267,7 +270,7 @@ impl AudioCapture {
                 None,
             ),
             SampleFormat::I16 => params.device.build_input_stream(
-                params.config,
+                *params.config,
                 move |data: &[i16], _| {
                     pipeline.convert(data, channels, |s| (s as f32) / 32768.0);
                 },
@@ -275,7 +278,7 @@ impl AudioCapture {
                 None,
             ),
             SampleFormat::U16 => params.device.build_input_stream(
-                params.config,
+                *params.config,
                 move |data: &[u16], _| {
                     pipeline.convert(data, channels, |s| (s as f32 - 32768.0) / 32768.0);
                 },
@@ -286,7 +289,7 @@ impl AudioCapture {
                 return Err(VoiceError::UnsupportedFormat {
                     sample_rate: native_sample_rate,
                     channels,
-                })
+                });
             }
         }
         .map_err(|e| VoiceError::StreamStartFailed {
@@ -350,7 +353,7 @@ fn build_capture_pipeline(
 /// 构造底层音频流的异常回调，在流异常中止时置位中断标记供上层感知
 fn build_stream_error_callback(
     is_stream_dead: Arc<AtomicBool>,
-) -> impl FnMut(cpal::StreamError) + Send + 'static {
+) -> impl FnMut(cpal::Error) + Send + 'static {
     move |err| {
         error!("[语音采集 错误] 麦克风音频捕获流异常: {}", err);
         is_stream_dead.store(true, Ordering::Release);

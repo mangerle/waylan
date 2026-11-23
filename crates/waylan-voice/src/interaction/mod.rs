@@ -220,21 +220,18 @@ impl VoiceInteractionManager {
             fallback_committed,
             ..
         } = self.state
+            && start_time.elapsed() >= Duration::from_millis(2000)
         {
-            if start_time.elapsed() >= Duration::from_millis(2000) {
-                warn!("[微澜语音] 等待最终结算超时(2s)，启用流式预览兜底并强制重置状态");
-                let fallback = self.partial_text.take();
-                if !fallback_committed {
-                    if let Some(fb) = fallback {
-                        let trimmed = fb.trim().to_string();
-                        if !trimmed.is_empty() {
-                            self.enter_completed_state();
-                            return Some(trimmed);
-                        }
-                    }
+            warn!("[微澜语音] 等待最终结算超时(2s)，启用流式预览兜底并强制重置状态");
+            let fallback = self.partial_text.take();
+            if !fallback_committed && let Some(fb) = fallback {
+                let trimmed = fb.trim().to_string();
+                if !trimmed.is_empty() {
+                    self.enter_completed_state();
+                    return Some(trimmed);
                 }
-                self.clear_state();
             }
+            self.clear_state();
         }
         None
     }

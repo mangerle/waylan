@@ -135,10 +135,10 @@ impl LexiconTable {
     /// 已知前驱词 ID 时直接查询二元词对亲和度得分（避免在候选循环内重复解析前驱词 ID）
     #[inline]
     pub fn get_bigram_affinity_by_first_id(&self, prev_id: u32, curr: &str) -> Option<i64> {
-        if let Some(bg) = &self.compact_bigram {
-            if let Some(curr_id) = self.get_word_id(curr) {
-                return bg.get_affinity_by_id(prev_id, curr_id);
-            }
+        if let Some(bg) = &self.compact_bigram
+            && let Some(curr_id) = self.get_word_id(curr)
+        {
+            return bg.get_affinity_by_id(prev_id, curr_id);
         }
         None
     }
@@ -159,17 +159,15 @@ impl LexiconTable {
 
     /// 根据归一化拼音键检索候选词并写入指定的复用容器中（避免堆重新分配）
     pub fn lookup_into(&self, key: &str, out: &mut Vec<AlgoCandidate>) {
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(matches) = compact.lookup(key) {
-                out.reserve(matches.len());
-                for (text, score, word_id) in matches {
-                    let char_len = text.chars().count() as u32;
-                    let boost = calculate_length_boost(char_len);
-                    let final_score = score.saturating_add(boost);
-                    out.push(
-                        AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
-                    );
-                }
+        if let Some(compact) = &self.compact_mmap
+            && let Some(matches) = compact.lookup(key)
+        {
+            out.reserve(matches.len());
+            for (text, score, word_id) in matches {
+                let char_len = text.chars().count() as u32;
+                let boost = calculate_length_boost(char_len);
+                let final_score = score.saturating_add(boost);
+                out.push(AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)));
             }
         }
     }
@@ -183,17 +181,15 @@ impl LexiconTable {
 
     /// 根据归一化拼音键检索按需截取 Top-K 候选词并写入指定的复用容器中（避免堆重新分配）
     pub fn lookup_top_k_into(&self, key: &str, k: usize, out: &mut Vec<AlgoCandidate>) {
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(matches) = compact.lookup_top_k(key, k) {
-                out.reserve(matches.len());
-                for (text, score, word_id) in matches {
-                    let char_len = text.chars().count() as u32;
-                    let boost = calculate_length_boost(char_len);
-                    let final_score = score.saturating_add(boost);
-                    out.push(
-                        AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)),
-                    );
-                }
+        if let Some(compact) = &self.compact_mmap
+            && let Some(matches) = compact.lookup_top_k(key, k)
+        {
+            out.reserve(matches.len());
+            for (text, score, word_id) in matches {
+                let char_len = text.chars().count() as u32;
+                let boost = calculate_length_boost(char_len);
+                let final_score = score.saturating_add(boost);
+                out.push(AlgoCandidate::new(text, key, final_score).with_word_id(Some(word_id)));
             }
         }
     }

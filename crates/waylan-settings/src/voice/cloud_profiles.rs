@@ -7,17 +7,17 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
 use waylan_voice::{CloudAsrConfig, CloudProfile, CloudProviderType, VoiceEngineType};
 
+use crate::SettingsWindow;
 use crate::callbacks::TaskRunningGuard;
 use crate::sync::{sync_config_to_window, update_config_from_window};
-use crate::SettingsWindow;
 
 /// 云端服务回调共享上下文
 ///

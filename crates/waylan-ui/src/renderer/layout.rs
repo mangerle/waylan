@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use waylan_core::{format_candidate_index, Candidate, CandidateIndexStyle};
+use waylan_core::{Candidate, CandidateIndexStyle, format_candidate_index};
 
 /// 单个候选条测量计算结果
 pub struct ItemMeasure {

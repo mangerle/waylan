@@ -15,8 +15,8 @@ use parking_lot::Mutex;
 use slint::SharedString;
 use waylan_core::config::AppConfig;
 
-use crate::sync::sync_config_to_window;
 use crate::SettingsWindow;
+use crate::sync::sync_config_to_window;
 
 /// 注册所有语音输入相关界面回调事件
 pub fn register_voice_callbacks(window: &SettingsWindow, loaded_config: Arc<Mutex<AppConfig>>) {

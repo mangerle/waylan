@@ -126,10 +126,10 @@ impl WindowModeTracker {
             mode
         } else {
             // 防御性容量检查：若超过上限，清理最早遍历到的条目
-            if self.modes.len() >= self.max_capacity {
-                if let Some(first_key) = self.modes.keys().next().cloned() {
-                    self.modes.remove(&first_key);
-                }
+            if self.modes.len() >= self.max_capacity
+                && let Some(first_key) = self.modes.keys().next().cloned()
+            {
+                self.modes.remove(&first_key);
             }
             let default_to_english = policy.app_name.is_some_and(|app| {
                 (policy.terminal_default_english && is_terminal_app(app))

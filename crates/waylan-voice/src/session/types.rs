@@ -1,9 +1,9 @@
 //! 语音会话状态机核心事件与通信指令类型
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::Arc;
 use std::time::Duration;
 
 use waylan_core::VoiceConfig;

@@ -130,16 +130,16 @@ impl LexiconTable {
     pub fn lookup_acronym(&self, key: &str) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::with_capacity(16);
 
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(matches) = compact.lookup_acronym(key) {
-                for (text, score, word_id) in matches {
-                    candidates.push(
-                        AlgoCandidate::new(text, key, score)
-                            .with_tier(CandidateTier::Acronym)
-                            .with_comment("[简拼]")
-                            .with_word_id(Some(word_id)),
-                    );
-                }
+        if let Some(compact) = &self.compact_mmap
+            && let Some(matches) = compact.lookup_acronym(key)
+        {
+            for (text, score, word_id) in matches {
+                candidates.push(
+                    AlgoCandidate::new(text, key, score)
+                        .with_tier(CandidateTier::Acronym)
+                        .with_comment("[简拼]")
+                        .with_word_id(Some(word_id)),
+                );
             }
         }
 
@@ -150,16 +150,16 @@ impl LexiconTable {
     pub fn lookup_acronym_top_k(&self, key: &str, k: usize) -> Vec<AlgoCandidate> {
         let mut candidates = Vec::with_capacity(k);
 
-        if let Some(compact) = &self.compact_mmap {
-            if let Some(matches) = compact.lookup_acronym_top_k(key, k) {
-                for (text, score, word_id) in matches {
-                    candidates.push(
-                        AlgoCandidate::new(text, key, score)
-                            .with_tier(CandidateTier::Acronym)
-                            .with_comment("[简拼]")
-                            .with_word_id(Some(word_id)),
-                    );
-                }
+        if let Some(compact) = &self.compact_mmap
+            && let Some(matches) = compact.lookup_acronym_top_k(key, k)
+        {
+            for (text, score, word_id) in matches {
+                candidates.push(
+                    AlgoCandidate::new(text, key, score)
+                        .with_tier(CandidateTier::Acronym)
+                        .with_comment("[简拼]")
+                        .with_word_id(Some(word_id)),
+                );
             }
         }
 

@@ -25,8 +25,8 @@ pub use error::IbusError;
 use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use session::run_ibus_session;
 use waylan_sys::LoopWakeup;

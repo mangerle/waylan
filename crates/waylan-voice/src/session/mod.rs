@@ -14,9 +14,9 @@ mod worker_loop;
 
 pub use types::{VoiceEvent, VoiceSessionOptions};
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 
 use log::warn;
@@ -212,7 +212,7 @@ mod tests {
         extract_final_text, handle_stop_and_commit, process_recognition_feed,
         push_pre_speech_silence,
     };
-    use self::types::{RecognitionFeedContext, StopCommitContext, PRE_SPEECH_BUFFER_CAPACITY};
+    use self::types::{PRE_SPEECH_BUFFER_CAPACITY, RecognitionFeedContext, StopCommitContext};
     use super::*;
     use crate::afe::AudioFrontEndPipeline;
     use crate::recognizer::{MockVoiceRecognizer, VoiceRecognizer};

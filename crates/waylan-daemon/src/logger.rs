@@ -3,7 +3,7 @@ use crate::error::DaemonError;
 use chrono::Local;
 use log::LevelFilter;
 use std::fs;
-use std::io::{self, stdout, LineWriter, Write};
+use std::io::{self, LineWriter, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -168,14 +168,14 @@ pub fn init_logger() -> Result<PathBuf, DaemonError> {
 
 /// 检查并执行日志文件轮转（若超过指定体积上限）
 pub(crate) fn rotate_log_file_if_needed(log_path: &Path, max_bytes: u64) {
-    if let Ok(meta) = fs::metadata(log_path) {
-        if meta.len() > max_bytes {
-            let backup_2 = log_path.with_extension("log.2");
-            let backup_1 = log_path.with_extension("log.1");
-            let _ = fs::remove_file(&backup_2);
-            let _ = fs::rename(&backup_1, &backup_2);
-            let _ = fs::rename(log_path, &backup_1);
-        }
+    if let Ok(meta) = fs::metadata(log_path)
+        && meta.len() > max_bytes
+    {
+        let backup_2 = log_path.with_extension("log.2");
+        let backup_1 = log_path.with_extension("log.1");
+        let _ = fs::remove_file(&backup_2);
+        let _ = fs::rename(&backup_1, &backup_2);
+        let _ = fs::rename(log_path, &backup_1);
     }
 }
 

@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use super::alias::calibrate_habitual_alias_score;
 use super::lattice::{EdgeKind, SyllableEdge, SyllableLattice};
-use super::matcher_rank::{
-    filter_and_truncate_raw_matches, materialize_raw_matches, RawPhraseMatch,
-};
 pub use super::matcher_rank::{MatcherOptions, PhraseMatch};
+use super::matcher_rank::{
+    RawPhraseMatch, filter_and_truncate_raw_matches, materialize_raw_matches,
+};
 use super::weights::ScoringWeights;
 use crate::dat::{DatCursor, DatReader};
 use crate::pipeline::is_rare_ext_char;
@@ -271,23 +271,23 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
             ctx.key_buf.push('\'');
         }
         ctx.key_buf.push_str(&ctx.branch_pool[idx].0);
-        if next_syl_count >= 2 {
-            if let Some(key_idx) = next_cursor.terminal_value(&ctx.reader) {
-                emit_dat_candidates(
-                    ctx,
-                    key_idx as usize,
-                    MatchMeta {
-                        end: edge.end,
-                        syllable_count: next_syl_count,
-                        typo_count: state.typo_count,
-                        edge_cost: next_cost,
-                        has_initial: true,
-                        has_partial_tail: state.has_partial_tail,
-                        is_exact_all: false,
-                        has_habitual_alias: state.has_habitual_alias,
-                    },
-                );
-            }
+        if next_syl_count >= 2
+            && let Some(key_idx) = next_cursor.terminal_value(&ctx.reader)
+        {
+            emit_dat_candidates(
+                ctx,
+                key_idx as usize,
+                MatchMeta {
+                    end: edge.end,
+                    syllable_count: next_syl_count,
+                    typo_count: state.typo_count,
+                    edge_cost: next_cost,
+                    has_initial: true,
+                    has_partial_tail: state.has_partial_tail,
+                    is_exact_all: false,
+                    has_habitual_alias: state.has_habitual_alias,
+                },
+            );
         }
         if next_pos < ctx.lattice.len && next_syl_count < ctx.options.max_syllables {
             dfs_dat_match(

@@ -207,7 +207,9 @@ mod tests {
 
     #[test]
     fn test_expand_dynamic_env_and_escape() {
-        std::env::set_var("WAYLAN_TEST_ENV_VAR", "micro_wave");
+        unsafe {
+            std::env::set_var("WAYLAN_TEST_ENV_VAR", "micro_wave");
+        }
         let expanded = expand_dynamic_macros("Env: #env(WAYLAN_TEST_ENV_VAR), Escaped: ##tag");
         assert_eq!(expanded, "Env: micro_wave, Escaped: #tag");
     }

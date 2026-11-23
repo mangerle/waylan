@@ -147,10 +147,10 @@ pub(crate) fn compact_model_internal<F: Fn()>(
     path_ref: &Path,
     mark_compact_fn: F,
 ) -> Result<(), AlgoError> {
-    if let Some(parent) = path_ref.parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+    if let Some(parent) = path_ref.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let _ = std::fs::create_dir_all(parent);
     }
     let pid = std::process::id();
     let timestamp = std::time::SystemTime::now()

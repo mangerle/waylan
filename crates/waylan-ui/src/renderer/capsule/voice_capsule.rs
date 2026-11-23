@@ -3,7 +3,7 @@
 //! 负责在语音听写与实时转录期间渲染声波动态振幅条、提示文本与点击响应区域。
 
 use super::super::draw::{
-    draw_card_background_at, draw_rounded_rect, CardBackgroundParams, RoundedRectParams,
+    CardBackgroundParams, RoundedRectParams, draw_card_background_at, draw_rounded_rect,
 };
 use super::super::layout::{CandidateHitTarget, HitRegion};
 use super::super::{CandidateBoxRenderer, DrawTextOptions};
@@ -55,10 +55,10 @@ struct VoiceContentParams<'a> {
 
 /// 解析语音听写待显示的文本内容
 fn resolve_voice_text(voice: &VoiceBoxState) -> &str {
-    if let Some(ref dt) = voice.display_text {
-        if !dt.is_empty() {
-            return dt.as_str();
-        }
+    if let Some(ref dt) = voice.display_text
+        && !dt.is_empty()
+    {
+        return dt.as_str();
     }
     if !voice.partial_text.is_empty() {
         voice.partial_text.as_str()

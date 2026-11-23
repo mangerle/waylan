@@ -10,25 +10,27 @@ use std::sync::Arc;
 
 use log::{debug, info};
 use parking_lot::Mutex;
-use zbus::blocking::Connection;
-use zbus::zvariant::Value;
+use zbus::Variant;
+use zbus::connection::Connection;
 
 use super::super::keys::IbusSessionCore;
 use waylan_sys::process::safe_gsettings_set_async;
 
 /// 查询 IBus 当前全局激活的引擎名称
 pub(crate) fn query_current_ibus_engine(conn: &Connection) -> Option<String> {
-    let reply = conn
-        .call_method(
+    let reply = zbus::block_on(async {
+        conn.call_method(
             Some("org.freedesktop.IBus"),
             "/org/freedesktop/IBus",
             Some("org.freedesktop.IBus"),
             "GetGlobalEngine",
             &(),
         )
-        .ok()?;
+        .await
+    })
+    .ok()?;
     let body = reply.body();
-    let val = body.deserialize::<Value<'_>>().ok()?;
+    let val = body.deserialize::<Variant<'_>>().ok()?;
     super::super::session::extract_engine_name_from_desc_variant(&val)
 }
 
@@ -38,13 +40,16 @@ pub(crate) fn ensure_global_engine_active(conn: &Connection) {
     let is_waylan = current_engine.as_deref() == Some("waylan");
 
     if !is_waylan {
-        if let Err(e) = conn.call_method(
-            Some("org.freedesktop.IBus"),
-            "/org/freedesktop/IBus",
-            Some("org.freedesktop.IBus"),
-            "SetGlobalEngine",
-            &("waylan",),
-        ) {
+        if let Err(e) = zbus::block_on(async {
+            conn.call_method(
+                Some("org.freedesktop.IBus"),
+                "/org/freedesktop/IBus",
+                Some("org.freedesktop.IBus"),
+                "SetGlobalEngine",
+                &("waylan",),
+            )
+            .await
+        }) {
             debug!("[微澜 IBus] 自愈激活全局引擎 waylan 重试提示: {}", e);
         } else {
             info!("[微澜 IBus] 开机自愈完成：成功将全局引擎激活为 waylan (微澜)");

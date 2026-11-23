@@ -12,14 +12,14 @@ use std::io;
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{debug, warn};
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 pub use rustix::fs::inotify::ReadFlags;
-use rustix::fs::inotify::{self, CreateFlags, InotifyEvent, Reader, WatchFlags};
+use rustix::fs::inotify::{self, CreateFlags, Event as InotifyEvent, Reader, WatchFlags};
 use rustix::io::Errno;
 
 /// 针对同目录下关联文件变更的判定规则过滤器
@@ -179,15 +179,16 @@ impl InotifyWatcher {
                     }
                 }
             }
-            if let Some(parent) = path.parent() {
-                if parent.exists() && watched_dirs.insert(parent.to_path_buf()) {
-                    match inotify::add_watch(&self.fd, parent, dir_flags) {
-                        Ok(wd) => {
-                            self.dir_watches.insert(wd, parent.to_path_buf());
-                        }
-                        Err(e) => {
-                            debug!("[微澜 Inotify] 监听父目录 {:?} 失败: {}", parent, e);
-                        }
+            if let Some(parent) = path.parent()
+                && parent.exists()
+                && watched_dirs.insert(parent.to_path_buf())
+            {
+                match inotify::add_watch(&self.fd, parent, dir_flags) {
+                    Ok(wd) => {
+                        self.dir_watches.insert(wd, parent.to_path_buf());
+                    }
+                    Err(e) => {
+                        debug!("[微澜 Inotify] 监听父目录 {:?} 失败: {}", parent, e);
                     }
                 }
             }
@@ -200,18 +201,18 @@ impl InotifyWatcher {
         if self.file_watches.contains(&wd) {
             return true;
         }
-        if let Some(dir_path) = self.dir_watches.get(&wd) {
-            if let Some(c_name) = event.file_name() {
-                let os_name = OsStr::from_bytes(c_name.to_bytes());
-                let full_path = dir_path.join(os_name);
-                if self.watched_paths.iter().any(|p| p == &full_path) {
-                    return true;
-                }
-                if let Some(ref filter) = self.event_filter {
-                    if let Some(decision) = filter(dir_path, os_name, event.events()) {
-                        return decision;
-                    }
-                }
+        if let Some(dir_path) = self.dir_watches.get(&wd)
+            && let Some(c_name) = event.file_name()
+        {
+            let os_name = OsStr::from_bytes(c_name.to_bytes());
+            let full_path = dir_path.join(os_name);
+            if self.watched_paths.iter().any(|p| p == &full_path) {
+                return true;
+            }
+            if let Some(ref filter) = self.event_filter
+                && let Some(decision) = filter(dir_path, os_name, event.events())
+            {
+                return decision;
             }
         }
         false

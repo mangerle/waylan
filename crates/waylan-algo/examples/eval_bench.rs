@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use waylan_algo::eval_bench::{
-    parse_eval_tsv, run_eval, run_probe, train_weights_softmax, EvalCase, TrainConfig,
+    EvalCase, TrainConfig, parse_eval_tsv, run_eval, run_probe, train_weights_softmax,
 };
 use waylan_algo::{AlgoConfig, AlgoEngine, CompactMmapBigram, LexiconTable, ScoringWeights};
 

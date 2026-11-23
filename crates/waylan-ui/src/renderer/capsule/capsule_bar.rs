@@ -3,8 +3,8 @@
 //! 负责单行胶囊候选框的背景、模式标识徽标、预编辑拼音文本、候选词项及下拉小箭头的渲染与交互区域记录。
 
 use super::super::draw::{
-    draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow, draw_rounded_rect,
     CalendarIconParams, CardBackgroundParams, DropdownArrowParams, RoundedRectParams,
+    draw_calendar_icon, draw_card_background_at, draw_dropdown_arrow, draw_rounded_rect,
 };
 use super::super::layout::{CandidateHitTarget, HitRegion, HitRegionParams, ItemMeasure};
 use super::super::{CandidateBoxRenderer, DrawTextOptions};

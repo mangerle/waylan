@@ -9,8 +9,8 @@ use std::collections::HashSet;
 
 use super::pipeline::ExtensionPipeline;
 use super::providers::ExtensionContext;
-use crate::engine::emoji::suggest_emoji_candidate;
 use crate::engine::AlgoEngine;
+use crate::engine::emoji::suggest_emoji_candidate;
 use crate::types::{AlgoCandidate, CandidateTier};
 
 impl AlgoEngine {
@@ -40,11 +40,12 @@ impl AlgoEngine {
         self.merge_extensions_by_hierarchy(&extensions, candidates);
 
         // 4. 实时 Emoji 推荐（在第三候选位插入匹配表情，受配置开关控制）
-        if self.config.enable_emoji_suggest && candidates.len() >= 2 {
-            if let Some(emoji_cand) = suggest_emoji_candidate(raw_input, candidates) {
-                let insert_pos = 2.min(candidates.len());
-                candidates.insert(insert_pos, emoji_cand);
-            }
+        if self.config.enable_emoji_suggest
+            && candidates.len() >= 2
+            && let Some(emoji_cand) = suggest_emoji_candidate(raw_input, candidates)
+        {
+            let insert_pos = 2.min(candidates.len());
+            candidates.insert(insert_pos, emoji_cand);
         }
     }
 
@@ -116,12 +117,11 @@ impl AlgoEngine {
             .lookup_top_k(&key_2, 1)
             .into_iter()
             .next()
+            && m.pinyin == key_2
         {
-            if m.pinyin == key_2 {
-                m.consumed_len = Some(Self::calculate_consumed_len(raw_input, &key_2, best_units));
-                prefix_items.push(self.format_prefix_candidate(m));
-                found_exact_2 = true;
-            }
+            m.consumed_len = Some(Self::calculate_consumed_len(raw_input, &key_2, best_units));
+            prefix_items.push(self.format_prefix_candidate(m));
+            found_exact_2 = true;
         }
         if !found_exact_2 && self.config.enable_acronym {
             let acronym_2 = best_units[..2].concat();

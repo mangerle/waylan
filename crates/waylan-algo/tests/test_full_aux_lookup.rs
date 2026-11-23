@@ -24,9 +24,11 @@ fn test_full_aux_english_and_symbols() {
 
     let readme_cands = eng.lookup("readme");
     assert!(!readme_cands.is_empty());
-    assert!(readme_cands
-        .iter()
-        .any(|c| c.text.to_lowercase().contains("readme")));
+    assert!(
+        readme_cands
+            .iter()
+            .any(|c| c.text.to_lowercase().contains("readme"))
+    );
 
     // 2. 验证特殊符号表情 (鸭子: yazi)
     let yazi_cands = sym.lookup("yazi");

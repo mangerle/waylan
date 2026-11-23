@@ -7,18 +7,18 @@ use log::{debug, info, warn};
 use menu::{DBusMenu, DBusMenuOptions};
 use std::collections::HashMap;
 use std::process;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use waylan_core::state::SharedInputFlags;
 #[cfg(test)]
 use waylan_core::InputMode;
-use zbus::blocking::connection::Builder;
-use zbus::zvariant::Value;
+use waylan_core::state::SharedInputFlags;
+use zbus::Variant;
+use zbus::connection::{Builder, Connection};
 
 pub use item::StatusNotifierItem;
 
@@ -159,24 +159,17 @@ impl TrayService {
         sni: StatusNotifierItem,
         menu: DBusMenu,
         item_service: &str,
-    ) -> Option<zbus::blocking::Connection> {
-        let builder = match Builder::session() {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(
-                    "[系统托盘 提示] 无法连接到 DBus 会话总线 ({})，跳过任务栏托盘注册。",
-                    e
-                );
-                return None;
-            }
-        };
+    ) -> Option<Connection> {
+        let conn_res = zbus::block_on(async {
+            Builder::session()
+                .name(item_service)
+                .serve_at("/StatusNotifierItem", sni)
+                .serve_at("/MenuBar", menu)
+                .build()
+                .await
+        });
 
-        match builder
-            .name(item_service)
-            .and_then(|b| b.serve_at("/StatusNotifierItem", sni))
-            .and_then(|b| b.serve_at("/MenuBar", menu))
-            .and_then(|b| b.build())
-        {
+        match conn_res {
             Ok(conn) => {
                 info!(
                     "[系统托盘] 成功注册 DBus 托盘与右键菜单服务对象: {} (路径: /StatusNotifierItem, /MenuBar)",
@@ -195,39 +188,44 @@ impl TrayService {
     }
 
     /// 探测并向系统托盘监视器 (StatusNotifierWatcher) 注册自身
-    fn register_to_watcher(conn: &zbus::blocking::Connection, item_service: &str) {
-        let has_watcher: bool = conn
-            .call_method(
+    fn register_to_watcher(conn: &Connection, item_service: &str) {
+        let has_watcher: bool = zbus::block_on(async {
+            conn.call_method(
                 Some("org.freedesktop.DBus"),
                 "/org/freedesktop/DBus",
                 Some("org.freedesktop.DBus"),
                 "NameHasOwner",
                 &("org.kde.StatusNotifierWatcher",),
             )
+            .await
             .and_then(|reply| reply.body().deserialize::<bool>())
-            .unwrap_or(false);
+        })
+        .unwrap_or(false);
 
         let mut registered = false;
         if has_watcher {
             for _ in 0..5 {
-                registered = conn
-                    .call_method(
+                registered = zbus::block_on(async {
+                    conn.call_method(
                         Some("org.kde.StatusNotifierWatcher"),
                         "/StatusNotifierWatcher",
                         Some("org.kde.StatusNotifierWatcher"),
                         "RegisterStatusNotifierItem",
                         &(item_service,),
                     )
+                    .await
                     .is_ok()
-                    || conn
-                        .call_method(
-                            Some("org.kde.StatusNotifierWatcher"),
-                            "/StatusNotifierWatcher",
-                            Some("org.kde.StatusNotifierWatcher"),
-                            "RegisterStatusNotifierItem",
-                            &("/StatusNotifierItem",),
-                        )
-                        .is_ok();
+                        || conn
+                            .call_method(
+                                Some("org.kde.StatusNotifierWatcher"),
+                                "/StatusNotifierWatcher",
+                                Some("org.kde.StatusNotifierWatcher"),
+                                "RegisterStatusNotifierItem",
+                                &("/StatusNotifierItem",),
+                            )
+                            .await
+                            .is_ok()
+                });
                 if registered {
                     break;
                 }
@@ -238,19 +236,21 @@ impl TrayService {
         if registered {
             info!("[系统托盘] 已成功向系统任务栏 (Waybar/KDE/GNOME) 注册托盘图标！");
         } else {
-            info!("[系统托盘 提示] 当前环境暂未发现活跃 StatusNotifierWatcher，托盘服务保持后台就绪。");
+            info!(
+                "[系统托盘 提示] 当前环境暂未发现活跃 StatusNotifierWatcher，托盘服务保持后台就绪。"
+            );
         }
     }
 
     /// 向 D-Bus 发射 NewIcon 图标刷新信号
-    fn emit_new_icon_signal(conn: &zbus::blocking::Connection) {
-        if let Err(e) = conn.emit_signal(
+    fn emit_new_icon_signal(conn: &Connection) {
+        if let Err(e) = zbus::block_on(conn.emit_signal(
             Option::<&str>::None,
             "/StatusNotifierItem",
             "org.kde.StatusNotifierItem",
             "NewIcon",
             &(),
-        ) {
+        )) {
             warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
         } else {
             debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
@@ -258,22 +258,22 @@ impl TrayService {
     }
 
     /// 向 D-Bus 发射 NewToolTip 悬停提示刷新信号
-    fn emit_new_tool_tip_signal(conn: &zbus::blocking::Connection) {
-        let _ = conn.emit_signal(
+    fn emit_new_tool_tip_signal(conn: &Connection) {
+        let _ = zbus::block_on(conn.emit_signal(
             Option::<&str>::None,
             "/StatusNotifierItem",
             "org.kde.StatusNotifierItem",
             "NewToolTip",
             &(),
-        );
+        ));
     }
 
     /// 向 D-Bus 发射 PropertiesChanged 属性变更通知，携带最新图标名称
-    fn emit_properties_changed_signal(conn: &zbus::blocking::Connection, current_icon: String) {
+    fn emit_properties_changed_signal(conn: &Connection, current_icon: String) {
         let mut changed_props = HashMap::with_capacity(1);
-        changed_props.insert("IconName", Value::from(current_icon));
+        changed_props.insert("IconName", Variant::from(current_icon));
         let invalidated_props: Vec<&str> = Vec::new();
-        let _ = conn.emit_signal(
+        let _ = zbus::block_on(conn.emit_signal(
             Option::<&str>::None,
             "/StatusNotifierItem",
             "org.freedesktop.DBus.Properties",
@@ -283,18 +283,18 @@ impl TrayService {
                 changed_props,
                 invalidated_props,
             ),
-        );
+        ));
     }
 
     /// 向 D-Bus 发射 LayoutUpdated 菜单布局刷新信号
-    fn emit_layout_updated_signal(conn: &zbus::blocking::Connection, menu_revision: u32) {
-        if let Err(e) = conn.emit_signal(
+    fn emit_layout_updated_signal(conn: &Connection, menu_revision: u32) {
+        if let Err(e) = zbus::block_on(conn.emit_signal(
             Option::<&str>::None,
             "/MenuBar",
             "com.canonical.dbusmenu",
             "LayoutUpdated",
             &(menu_revision, 0i32),
-        ) {
+        )) {
             warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
         } else {
             debug!(
@@ -308,11 +308,7 @@ impl TrayService {
     ///
     /// 信号发射顺序固定为 NewIcon -> NewToolTip -> PropertiesChanged -> LayoutUpdated，
     /// 以保证任务栏按既定次序刷新图标、悬停提示与右键菜单。
-    fn emit_tray_signals(
-        conn: &zbus::blocking::Connection,
-        sni: &StatusNotifierItem,
-        menu_revision: &mut u32,
-    ) {
+    fn emit_tray_signals(conn: &Connection, sni: &StatusNotifierItem, menu_revision: &mut u32) {
         let current_icon = sni.icon_name();
 
         Self::emit_new_icon_signal(conn);
@@ -324,11 +320,7 @@ impl TrayService {
     }
 
     /// 保持 DBus 事件处理循环运行并在收到状态变更时广播信号
-    fn run_tray_event_loop(
-        params: TrayLoopParams,
-        sni: StatusNotifierItem,
-        conn: zbus::blocking::Connection,
-    ) {
+    fn run_tray_event_loop(params: TrayLoopParams, sni: StatusNotifierItem, conn: Connection) {
         let mut menu_revision: u32 = 1;
         let mut last_emitted_is_chinese = params.shared_flags.is_chinese();
         let mut last_emitted_is_caps = params.shared_flags.is_caps_locked();

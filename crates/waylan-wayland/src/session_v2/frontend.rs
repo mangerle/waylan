@@ -11,10 +11,10 @@ use waylan_core::{CandidateBoxState, InputMode};
 use waylan_engine::InputMethodFrontend;
 use wayland_client::QueueHandle;
 
-use super::context::{WaylandV2ProtocolContext, WaylandV2SurfaceContext};
 use super::WaylanV2Session;
+use super::context::{WaylandV2ProtocolContext, WaylandV2SurfaceContext};
 use crate::session_common::{
-    commit_candidate_surface, hide_candidate_surface_buffer, CandidateSurfaceCommitParams,
+    CandidateSurfaceCommitParams, commit_candidate_surface, hide_candidate_surface_buffer,
 };
 
 /// Wayland V2 协议前端轻量借用管道上下文

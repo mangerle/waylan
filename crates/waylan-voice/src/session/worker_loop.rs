@@ -6,14 +6,14 @@
 //!   后台常驻循环独立负责模型复用与音频采集管道生命周期。
 //! - **代价与局限**：线程间交互依赖强类型有界通道，需显式传递原子标志与接收端。
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
-use super::model_cache::{check_idle_timeout_and_calculate_deadline, WorkerModelCache};
+use super::model_cache::{WorkerModelCache, check_idle_timeout_and_calculate_deadline};
 use super::pipeline::active_recording_loop;
 use super::types::{ActiveRecordingContext, VoiceEvent, VoiceSessionOptions, WorkerCommand};
 use crate::capture::AudioCapture;

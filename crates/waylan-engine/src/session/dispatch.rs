@@ -9,9 +9,9 @@
 
 use log::debug;
 use waylan_core::input::*;
-use waylan_core::{to_full_width_char, to_full_width_string, InputMode, TextAction};
+use waylan_core::{InputMode, TextAction, to_full_width_char, to_full_width_string};
 
-use super::key_handler::{handle_composition_key_with_params, CompositionKeyParams};
+use super::key_handler::{CompositionKeyParams, handle_composition_key_with_params};
 use super::{ImeCoreSession, ImeOutputAction};
 
 /// 核心输入法按键处理上下文
@@ -168,10 +168,10 @@ impl ImeCoreSession {
         }
 
         // 1. 若处于拼音组词状态，流转大网格展开态或拼音状态机
-        if !self.engine.raw_input().is_empty() {
-            if let Some(action) = self.dispatch_composing_key(keycode, now) {
-                return action;
-            }
+        if !self.engine.raw_input().is_empty()
+            && let Some(action) = self.dispatch_composing_key(keycode, now)
+        {
+            return action;
         }
 
         // 2. 若输入缓冲区为空（空闲输入），优先处理“选错即撤回”、代码/URL/路径自动直通英文，
@@ -234,25 +234,25 @@ impl ImeCoreSession {
             }
 
             // 2.2 字母键处理：无论按不按 Shift，字母都必须始终保持大写，绝不允许因为按了 Shift 输出小写
-            if let Some(ch) = self.keymap_layout.get_char(keycode) {
-                if ch.is_ascii_alphabetic() {
-                    let upper = ch.to_ascii_uppercase();
-                    // 当按住 Shift 时，底层系统/XKB 默认会将 CapsLock+Shift 反转为小写字母；
-                    // 此时直接由输入法拦截并提交大写字符，彻底杜绝输出小写
-                    if self.is_shift_active() {
-                        let text = if self.is_full_width_char() {
-                            to_full_width_char(upper).to_string()
-                        } else {
-                            upper.to_string()
-                        };
-                        return Some(ImeOutputAction::Commit(text));
-                    }
-                    if self.is_full_width_char() {
-                        let text = to_full_width_char(upper).to_string();
-                        return Some(ImeOutputAction::Commit(text));
-                    }
-                    return Some(ImeOutputAction::PassThrough);
+            if let Some(ch) = self.keymap_layout.get_char(keycode)
+                && ch.is_ascii_alphabetic()
+            {
+                let upper = ch.to_ascii_uppercase();
+                // 当按住 Shift 时，底层系统/XKB 默认会将 CapsLock+Shift 反转为小写字母；
+                // 此时直接由输入法拦截并提交大写字符，彻底杜绝输出小写
+                if self.is_shift_active() {
+                    let text = if self.is_full_width_char() {
+                        to_full_width_char(upper).to_string()
+                    } else {
+                        upper.to_string()
+                    };
+                    return Some(ImeOutputAction::Commit(text));
                 }
+                if self.is_full_width_char() {
+                    let text = to_full_width_char(upper).to_string();
+                    return Some(ImeOutputAction::Commit(text));
+                }
+                return Some(ImeOutputAction::PassThrough);
             }
 
             // 2.3 其他非字母键（数字、标点符号如 Shift+1->!、回车、退格等）透传
@@ -261,11 +261,12 @@ impl ImeCoreSession {
 
         // 3. 常规英文模式处理
         if self.mode == InputMode::English {
-            if self.is_full_width_char() && !self.is_shift_active() {
-                if let Some(ch) = self.keymap_layout.get_char(keycode) {
-                    let full = to_full_width_char(ch);
-                    return Some(ImeOutputAction::Commit(full.to_string()));
-                }
+            if self.is_full_width_char()
+                && !self.is_shift_active()
+                && let Some(ch) = self.keymap_layout.get_char(keycode)
+            {
+                let full = to_full_width_char(ch);
+                return Some(ImeOutputAction::Commit(full.to_string()));
             }
             return Some(ImeOutputAction::PassThrough);
         }
@@ -275,10 +276,10 @@ impl ImeCoreSession {
 
     /// 组词态按键分流（网格展开键、翻页、选词、字母编辑）
     fn dispatch_composing_key(&mut self, keycode: u32, now: u64) -> Option<ImeOutputAction> {
-        if self.is_grid_expanded() {
-            if let Some(action) = self.handle_grid_expanded_key(keycode, now) {
-                return Some(action);
-            }
+        if self.is_grid_expanded()
+            && let Some(action) = self.handle_grid_expanded_key(keycode, now)
+        {
+            return Some(action);
         }
 
         let raw_before_commit = self.engine.raw_input().to_string();

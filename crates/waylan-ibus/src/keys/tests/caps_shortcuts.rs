@@ -209,11 +209,12 @@ fn test_ibus_shared_settings_sync_and_full_width() {
 
     // 默认状态：简体、全角标点、半角字母
     assert!(!core.runtime.core.engine.config.traditional_chinese);
-    assert!(core
-        .runtime
-        .core
-        .punctuation_processor()
-        .is_full_width_punct());
+    assert!(
+        core.runtime
+            .core
+            .punctuation_processor()
+            .is_full_width_punct()
+    );
     assert!(!core.is_full_width_char());
 
     // 1. 托盘触发切换为繁体

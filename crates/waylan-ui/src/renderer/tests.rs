@@ -200,12 +200,13 @@ fn test_cosmic_text_smoke() {
         line_w = line_w.max(run.line_w);
         for glyph in run.glyphs {
             let physical = glyph.physical((start_x, baseline_y - run.line_y), 1.0);
-            if let Some(img) = swash_cache.get_image(&mut font_system, physical.cache_key) {
-                if img.placement.width > 0 && img.placement.height > 0 {
-                    let _gx = physical.x + img.placement.left;
-                    let _gy = physical.y - img.placement.top;
-                    assert!(!img.data.is_empty());
-                }
+            if let Some(img) = swash_cache.get_image(&mut font_system, physical.cache_key)
+                && img.placement.width > 0
+                && img.placement.height > 0
+            {
+                let _gx = physical.x + img.placement.left;
+                let _gy = physical.y - img.placement.top;
+                assert!(!img.data.is_empty());
             }
         }
     }
@@ -257,10 +258,10 @@ fn test_render_voice_capsule_bar() {
 
 #[test]
 fn test_renderer_applies_ui_config_and_index_style() {
+    use waylan_core::ThemeMode;
     use waylan_core::config::{
         CandidateDensity, CandidateIndexStyle, CandidateThemePreset, UiConfig,
     };
-    use waylan_core::ThemeMode;
 
     let ui = UiConfig {
         candidate_density: CandidateDensity::Compact,

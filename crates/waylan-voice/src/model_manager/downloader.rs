@@ -286,10 +286,11 @@ fn download_file_with_progress<F>(
 where
     F: FnMut(f32, &str),
 {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(60))
+    let config = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_per_read(Some(Duration::from_secs(60)))
         .build();
+    let agent: ureq::Agent = config.into();
 
     let resp = agent
         .get(url)
@@ -298,11 +299,9 @@ where
             message: format!("连接远程下载源 [{}] 失败: {}", source_label, e),
         })?;
 
-    let total_bytes: Option<u64> = resp
-        .header("Content-Length")
-        .and_then(|val| val.parse::<u64>().ok());
+    let total_bytes: Option<u64> = resp.body().content_length();
 
-    let mut reader = resp.into_reader();
+    let mut reader = resp.into_body().into_reader();
     let mut file = File::create(target_path).map_err(|e| VoiceError::ModelManagementFailed {
         message: format!("创建本地目标文件失败: {}", e),
     })?;

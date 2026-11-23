@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::session_v2::keys::process_key_event;
-use waylan_core::input::*;
 use waylan_core::InputMode;
+use waylan_core::input::*;
 use waylan_engine::AlgoConfig;
 
 #[test]

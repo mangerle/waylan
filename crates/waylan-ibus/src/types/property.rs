@@ -9,7 +9,8 @@ use super::component::resolve_mode_icon;
 use super::text::build_ibus_text;
 use super::{empty_attachments, empty_variant_vec};
 use waylan_core::InputMode;
-use zbus::zvariant::{Error as VariantError, OwnedValue, StructureBuilder, Value};
+use zbus::wire::StructureBuilder;
+use zbus::{Error as VariantError, OwnedVariant};
 
 /// IBus 属性类型：普通按钮项 (`PROP_TYPE_NORMAL`)
 const IBUS_PROP_TYPE_NORMAL: u32 = 0;
@@ -78,7 +79,7 @@ pub struct ActionPropertyParams<'a> {
 /// 当属性结构体序列化失败时返回错误。
 pub fn build_action_property(
     params: &ActionPropertyParams<'_>,
-) -> Result<OwnedValue, VariantError> {
+) -> Result<OwnedVariant, VariantError> {
     let ActionPropertyParams {
         key,
         label,
@@ -90,8 +91,8 @@ pub fn build_action_property(
         .add_field("IBusPropList")
         .add_field(empty_attachments())
         .add_field(empty_variant_vec())
-        .build();
-    let empty_sub = OwnedValue::try_from(Value::from(empty_sub_struct))?;
+        .build()?;
+    let empty_sub = OwnedVariant::try_from(empty_sub_struct)?;
 
     let s = StructureBuilder::new()
         .add_field("IBusProperty")
@@ -106,8 +107,8 @@ pub fn build_action_property(
         .add_field(IBUS_PROP_STATE_UNCHECKED)
         .add_field(empty_sub)
         .add_field(build_ibus_text(symbol)?)
-        .build();
-    OwnedValue::try_from(Value::from(s))
+        .build()?;
+    OwnedVariant::try_from(s)
 }
 
 /// 构造中英文状态指示属性 (`InputMode`) 的 `IBusProperty` 变体对象，签名 `(sa{sv}suvsvbbuvv)`
@@ -117,7 +118,7 @@ pub fn build_action_property(
 pub fn build_input_mode_property(
     mode: InputMode,
     is_caps_locked: bool,
-) -> Result<OwnedValue, VariantError> {
+) -> Result<OwnedVariant, VariantError> {
     let is_zh = matches!(mode, InputMode::Chinese | InputMode::VMode);
     let symbol_str = if is_caps_locked {
         "A"
@@ -144,7 +145,7 @@ pub fn build_input_mode_property(
 }
 
 /// 构造简繁切换状态属性 (`TraditionalChinese`) 的 `IBusProperty` 变体对象
-pub fn build_traditional_property(traditional_chinese: bool) -> Result<OwnedValue, VariantError> {
+pub fn build_traditional_property(traditional_chinese: bool) -> Result<OwnedVariant, VariantError> {
     let label = if traditional_chinese {
         "简繁切换: 繁体"
     } else {
@@ -160,7 +161,9 @@ pub fn build_traditional_property(traditional_chinese: bool) -> Result<OwnedValu
 }
 
 /// 构造标点全角/半角属性 (`FullWidthPunct`) 的 `IBusProperty` 变体对象
-pub fn build_full_width_punct_property(full_width_punct: bool) -> Result<OwnedValue, VariantError> {
+pub fn build_full_width_punct_property(
+    full_width_punct: bool,
+) -> Result<OwnedVariant, VariantError> {
     let label = if full_width_punct {
         "标点切换: 全角 (中文标点)"
     } else {
@@ -176,7 +179,7 @@ pub fn build_full_width_punct_property(full_width_punct: bool) -> Result<OwnedVa
 }
 
 /// 构造英文字符全角/半角属性 (`FullWidthChar`) 的 `IBusProperty` 变体对象
-pub fn build_full_width_char_property(full_width_char: bool) -> Result<OwnedValue, VariantError> {
+pub fn build_full_width_char_property(full_width_char: bool) -> Result<OwnedVariant, VariantError> {
     let label = if full_width_char {
         "字符切换: 全角 (英文字母)"
     } else {
@@ -219,7 +222,7 @@ pub struct IbusPropListParams {
 ///
 /// # Errors
 /// 当属性列表序列化失败时返回错误。
-pub fn build_ibus_prop_list(params: &IbusPropListParams) -> Result<OwnedValue, VariantError> {
+pub fn build_ibus_prop_list(params: &IbusPropListParams) -> Result<OwnedVariant, VariantError> {
     let IbusPropListParams {
         mode,
         is_caps_locked,
@@ -272,6 +275,6 @@ pub fn build_ibus_prop_list(params: &IbusPropListParams) -> Result<OwnedValue, V
         .add_field("IBusPropList")
         .add_field(empty_attachments())
         .add_field(props)
-        .build();
-    OwnedValue::try_from(Value::from(s))
+        .build()?;
+    OwnedVariant::try_from(s)
 }

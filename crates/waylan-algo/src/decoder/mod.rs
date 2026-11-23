@@ -27,7 +27,7 @@ pub mod weights;
 pub use beam::{
     BeamDecodeOptions, DecodeResult, DecodedSentence, PositionalBeamDecoder, SentenceHeadSegment,
 };
-pub use beam_cache::{compute_decode_config_sig, IncrementalBeamCache};
+pub use beam_cache::{IncrementalBeamCache, compute_decode_config_sig};
 pub use beam_scoring::{score_phrase_match, to_positive_score, unigram_log_score};
 pub use fsa::PrismFsa;
 pub use fuzzy::PrismFuzzy;

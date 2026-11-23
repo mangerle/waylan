@@ -13,12 +13,12 @@ pub mod style;
 
 use crate::theme::{Color, UiTheme};
 use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache};
-use expanded::{render_expanded_popup_card, ExpandedCardRenderParams};
+use expanded::{ExpandedCardRenderParams, render_expanded_popup_card};
 use font::FontManager;
 use glyph_blend::blend_swash_image;
-use layout::{format_candidate_text, CandidateHitTarget, HitRegion};
+use layout::{CandidateHitTarget, HitRegion, format_candidate_text};
 use measure_cache::{TextMeasureCache, TextShapeParams};
-use snapshot::{compute_state_fingerprint, compute_theme_hash, LastRenderSnapshot};
+use snapshot::{LastRenderSnapshot, compute_state_fingerprint, compute_theme_hash};
 use std::path::Path;
 use style::RendererStyle;
 use tiny_skia::Pixmap;
@@ -212,12 +212,12 @@ impl CandidateBoxRenderer {
                 .text_engine
                 .swash_cache
                 .get_image(&mut self.text_engine.font_system, glyph.cache_key)
+                && img.placement.width > 0
+                && img.placement.height > 0
             {
-                if img.placement.width > 0 && img.placement.height > 0 {
-                    let gx = px + img.placement.left;
-                    let gy = py - img.placement.top;
-                    blend_swash_image(pixmap, img, (gx, gy), color);
-                }
+                let gx = px + img.placement.left;
+                let gy = py - img.placement.top;
+                blend_swash_image(pixmap, img, (gx, gy), color);
             }
         }
     }
@@ -242,26 +242,22 @@ impl CandidateBoxRenderer {
         let scale_bits = self.scale.to_bits();
         let state_hash = compute_state_fingerprint(state);
         let theme_hash = compute_theme_hash(&self.theme);
-        if let Some(snap) = self.last_render_snapshot {
-            if snap.font_size_bits == font_size_bits
-                && snap.scale_bits == scale_bits
-                && snap.theme_hash == theme_hash
-                && snap.style == self.style
-                && snap.state_hash == state_hash
-            {
-                if let Some(required) = (snap.width as usize)
-                    .checked_mul(snap.height as usize)
-                    .and_then(|px| px.checked_mul(4))
-                {
-                    if self.scratch_pixmap_buf.len() >= required {
-                        return Some((
-                            snap.width,
-                            snap.height,
-                            &self.scratch_pixmap_buf[..required],
-                        ));
-                    }
-                }
-            }
+        if let Some(snap) = self.last_render_snapshot
+            && snap.font_size_bits == font_size_bits
+            && snap.scale_bits == scale_bits
+            && snap.theme_hash == theme_hash
+            && snap.style == self.style
+            && snap.state_hash == state_hash
+            && let Some(required) = (snap.width as usize)
+                .checked_mul(snap.height as usize)
+                .and_then(|px| px.checked_mul(4))
+            && self.scratch_pixmap_buf.len() >= required
+        {
+            return Some((
+                snap.width,
+                snap.height,
+                &self.scratch_pixmap_buf[..required],
+            ));
         }
 
         let Some(pixmap) = self.render(state) else {

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use log::{debug, info, warn};
 
 use super::types::{
-    RecognitionFeedContext, StopCommitContext, VoiceEvent, PRE_SPEECH_BUFFER_CAPACITY,
+    PRE_SPEECH_BUFFER_CAPACITY, RecognitionFeedContext, StopCommitContext, VoiceEvent,
 };
 use crate::recognizer::VoiceRecognizer;
 
@@ -120,13 +120,12 @@ pub(super) fn process_recognition_feed(ctx: RecognitionFeedContext<'_>, samples:
             if !partial.is_empty() && partial != *ctx.last_partial_text {
                 debug!("[语音会话] 实时流式识别出字: \"{}\"", partial);
                 *ctx.last_partial_text = partial.clone();
-                if ctx.real_time_preview {
-                    if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
+                if ctx.real_time_preview
+                    && let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
                         ctx.event_tx.try_send(VoiceEvent::PartialText(partial))
-                    {
-                        info!("[语音会话] 外部事件通道已关闭，退出录音循环");
-                        return false;
-                    }
+                {
+                    info!("[语音会话] 外部事件通道已关闭，退出录音循环");
+                    return false;
                 }
             }
         }

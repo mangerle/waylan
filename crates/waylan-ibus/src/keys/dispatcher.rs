@@ -14,8 +14,8 @@ use waylan_engine::InputMethodFrontend;
 use super::super::engine::UiSnapshot;
 use super::core::{IbusKeyOutcome, IbusSessionCore};
 use super::keyval::{
-    ibus_keyval_to_evdev, IBUS_CONTROL_MASK, IBUS_LOCK_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK,
-    IBUS_SHIFT_MASK, IBUS_SUPER_MASK,
+    IBUS_CONTROL_MASK, IBUS_LOCK_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK, IBUS_SHIFT_MASK,
+    IBUS_SUPER_MASK, ibus_keyval_to_evdev,
 };
 
 /// 针对 IBus 会话结果收集的轻量前端管道适配器
@@ -53,10 +53,10 @@ impl<'a> InputMethodFrontend for IbusFrontend<'a> {
             self.orientation,
             self.index_style,
         );
-        if state.voice.is_none() {
-            if let Some(ref v_preedit) = self.raw_v_preedit {
-                snap.preedit = v_preedit.clone();
-            }
+        if state.voice.is_none()
+            && let Some(ref v_preedit) = self.raw_v_preedit
+        {
+            snap.preedit = v_preedit.clone();
         }
         self.outcome.ui_snapshot = Some(snap);
     }
@@ -144,10 +144,11 @@ impl IbusSessionCore {
             );
             // 若当前处于 V 模式动态输入，预编辑区保留原始输入串以与历史行为对齐
             let raw = self.runtime.core.engine.raw_input();
-            if raw.starts_with('v') && !self.runtime.is_voice_active() {
-                if let Some(ref mut snap) = frontend.outcome.ui_snapshot {
-                    snap.preedit = raw.to_string();
-                }
+            if raw.starts_with('v')
+                && !self.runtime.is_voice_active()
+                && let Some(ref mut snap) = frontend.outcome.ui_snapshot
+            {
+                snap.preedit = raw.to_string();
             }
             res
         };

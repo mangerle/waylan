@@ -109,11 +109,7 @@ impl RerankFeatures {
 
 #[inline]
 fn flag(cond: bool) -> f64 {
-    if cond {
-        1.0
-    } else {
-        0.0
-    }
+    if cond { 1.0 } else { 0.0 }
 }
 
 /// 16 维线性重排权重参数（支持序列化持久化与 Pairwise 训练校准）

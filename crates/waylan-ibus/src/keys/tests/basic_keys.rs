@@ -1,7 +1,7 @@
 use super::super::core::IbusSessionCore;
-use super::super::keyval::{ibus_keyval_to_evdev, IBUS_RELEASE_MASK};
-use waylan_core::input::*;
+use super::super::keyval::{IBUS_RELEASE_MASK, ibus_keyval_to_evdev};
 use waylan_core::InputMode;
+use waylan_core::input::*;
 use waylan_engine::{AlgoConfig, AlgoEngine};
 
 #[test]

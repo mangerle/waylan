@@ -8,16 +8,16 @@ mod system_env;
 mod wayland_dispatcher;
 
 pub use engine_builder::build_algo_engine;
-pub use ibus_dispatcher::{dispatch_ibus_session, IbusDispatchOptions};
+pub use ibus_dispatcher::{IbusDispatchOptions, dispatch_ibus_session};
 pub use system_env::{check_wayland_capabilities, trigger_graceful_restart_and_exit};
-pub use wayland_dispatcher::{dispatch_wayland_session, WaylandDispatchOptions};
+pub use wayland_dispatcher::{WaylandDispatchOptions, dispatch_wayland_session};
 
 #[cfg(test)]
 mod tests {
     use waylan_algo::{AlgoConfig, AlgoEngine};
-    use waylan_core::config::AppConfig;
     use waylan_core::VoiceConfig;
-    use waylan_engine::{load_auxiliary_dict, load_lexicon_table, load_opencc_dict, ImeRuntime};
+    use waylan_core::config::AppConfig;
+    use waylan_engine::{ImeRuntime, load_auxiliary_dict, load_lexicon_table, load_opencc_dict};
 
     #[test]
     fn test_app_config_to_algo_config_conversion() {

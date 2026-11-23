@@ -5,8 +5,8 @@
 //! - **核心优势**：严格跟踪目标修饰键按下期间是否伴随其他键，若伴随其他按键则判定为组合键输入，禁止切换模式。
 //! - **代价与局限**：需外部键盘事件驱动严格传入按下与松开（Press/Release）成对事件。
 
-use waylan_core::config::SwitchKey;
 use waylan_core::InputMode;
+use waylan_core::config::SwitchKey;
 
 /// 中英文切换触发键模式（对齐全局统一配置项 [`SwitchKey`]）
 pub type ToggleKeyMode = SwitchKey;

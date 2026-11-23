@@ -8,13 +8,13 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use waylan_core::input::{VoiceKeyAction, VoiceKeyDispatchParams};
 use waylan_core::InputMode;
+use waylan_core::input::{VoiceKeyAction, VoiceKeyDispatchParams};
 
-use super::types::ProcessKeyEventParams;
 use super::ImeRuntime;
+use super::types::ProcessKeyEventParams;
 use crate::frontend::InputMethodFrontend;
-use crate::session::{extract_surrounding_prefix, ImeOutputAction, KeyProcessContext};
+use crate::session::{ImeOutputAction, KeyProcessContext, extract_surrounding_prefix};
 
 /// 获取当前 Unix 秒级时间戳（系统时钟异常时回退为 0）
 fn current_timestamp_secs() -> u64 {
@@ -270,17 +270,17 @@ impl ImeRuntime {
         frontend: &mut F,
         inline_preedit: bool,
     ) -> Option<String> {
-        if let Some(ref mut vm) = self.voice_manager {
-            if vm.is_active() {
-                let commit_opt = vm.poll_events();
-                if let Some(ref text) = commit_opt {
-                    frontend.commit_text(text);
-                    self.core.punctuation_processor.record_commit(text);
-                    self.refresh_frontend_ui(frontend, inline_preedit);
-                    return commit_opt;
-                } else {
-                    self.refresh_frontend_ui(frontend, inline_preedit);
-                }
+        if let Some(ref mut vm) = self.voice_manager
+            && vm.is_active()
+        {
+            let commit_opt = vm.poll_events();
+            if let Some(ref text) = commit_opt {
+                frontend.commit_text(text);
+                self.core.punctuation_processor.record_commit(text);
+                self.refresh_frontend_ui(frontend, inline_preedit);
+                return commit_opt;
+            } else {
+                self.refresh_frontend_ui(frontend, inline_preedit);
             }
         }
         None

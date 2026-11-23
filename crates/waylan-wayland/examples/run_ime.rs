@@ -32,7 +32,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "[微澜] 状态：运行中。随时可以在任意支持 Wayland 的应用（如终端或文本框）中点击测试。"
     );
-    println!("[微澜] 快捷键说明：单按 Shift 切换中英文，中文模式下敲击字母输入拼音，按空格选词上屏，按 / 自动输入顿号。");
+    println!(
+        "[微澜] 快捷键说明：单按 Shift 切换中英文，中文模式下敲击字母输入拼音，按空格选词上屏，按 / 自动输入顿号。"
+    );
 
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();

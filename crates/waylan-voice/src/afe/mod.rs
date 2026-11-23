@@ -16,7 +16,7 @@ pub mod ns;
 
 pub use agc::DigitalAgc;
 pub use hpf::HighPassFilter;
-pub use ns::{create_noise_suppressor, NoiseSuppressor};
+pub use ns::{NoiseSuppressor, create_noise_suppressor};
 
 use log::debug;
 use waylan_core::AudioFrontEndConfig;

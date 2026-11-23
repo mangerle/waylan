@@ -83,11 +83,12 @@ impl CloudVoiceRecognizer {
             config.provider, config.endpoint
         );
         let timeout = std::time::Duration::from_secs(15);
-        let agent = ureq::AgentBuilder::new()
-            .timeout(timeout)
+        let agent_config = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
             .max_idle_connections(8)
             .max_idle_connections_per_host(4)
             .build();
+        let agent: ureq::Agent = agent_config.into();
         Self {
             config,
             pcm_buffer: Vec::with_capacity(16_000 * 5),
@@ -156,12 +157,12 @@ impl VoiceRecognizer for CloudVoiceRecognizer {
         let resp = self
             .agent
             .post(&endpoint)
-            .set("Authorization", &format!("Bearer {}", api_key))
-            .set(
+            .header("Authorization", &format!("Bearer {}", api_key))
+            .header(
                 "Content-Type",
                 &format!("multipart/form-data; boundary={}", boundary),
             )
-            .send_bytes(&body)
+            .send(&body[..])
             .map_err(|e| VoiceError::RecognizerFailed {
                 engine_type: "云端 Whisper".to_string(),
                 message: format!("请求远端语音识别服务失败: {}", e),
@@ -250,26 +251,31 @@ fn build_multipart_payload(model: &str, wav_data: &[u8]) -> (String, Vec<u8>) {
 }
 
 /// 解析云端 HTTP 响应与错误提取
-fn parse_cloud_response(resp: ureq::Response) -> Result<String, VoiceError> {
-    let status = resp.status();
+fn parse_cloud_response(mut resp: ureq::http::Response<ureq::Body>) -> Result<String, VoiceError> {
+    let status = resp.status().as_u16();
     if (200..300).contains(&status) {
-        let resp_str = resp
-            .into_string()
-            .map_err(|e| VoiceError::RecognizerFailed {
-                engine_type: "云端 Whisper".to_string(),
-                message: format!("解析云端响应字符串失败: {}", e),
-            })?;
+        let resp_str =
+            resp.body_mut()
+                .read_to_string()
+                .map_err(|e| VoiceError::RecognizerFailed {
+                    engine_type: "云端 Whisper".to_string(),
+                    message: format!("解析云端响应字符串失败: {}", e),
+                })?;
         // 尝试从标准 Whisper 返回 JSON 中解析识别文本
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp_str) {
-            if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
-                info!("[云端 ASR] 识别成功，文本长度: {}", text.len());
-                return Ok(text.to_string());
-            }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp_str)
+            && let Some(text) = val.get("text").and_then(|t| t.as_str())
+        {
+            info!("[云端 ASR] 识别成功，文本长度: {}", text.len());
+            return Ok(text.to_string());
         }
         Ok(resp_str)
     } else {
-        let status_text = resp.status_text().to_string();
-        let resp_body = resp.into_string().unwrap_or_default();
+        let status_text = resp
+            .status()
+            .canonical_reason()
+            .unwrap_or("未知状态")
+            .to_string();
+        let resp_body = resp.body_mut().read_to_string().unwrap_or_default();
         let detail = if !resp_body.trim().is_empty() {
             format!(
                 "状态码: {} ({}), 详情: {}",

@@ -10,9 +10,9 @@ use waylan_core::{CandidateBoxState, InputMode};
 use waylan_engine::InputMethodFrontend;
 use wayland_client::QueueHandle;
 
-use super::context::{WaylandV1ProtocolContext, WaylandV1SurfaceContext};
 use super::WaylanV1Session;
-use crate::session_common::{commit_candidate_surface, CandidateSurfaceCommitParams};
+use super::context::{WaylandV1ProtocolContext, WaylandV1SurfaceContext};
+use crate::session_common::{CandidateSurfaceCommitParams, commit_candidate_surface};
 
 /// Wayland V1 协议前端轻量借用管道上下文
 pub struct WaylanV1Frontend<'a> {

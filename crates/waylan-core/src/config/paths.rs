@@ -18,14 +18,14 @@ pub fn env_var_non_empty(key: &str) -> Option<String> {
 
 /// 辅助根据执行文件所在目录向多级父路径推入候选词库位置（适应开发、测试与各类宿主子进程环境）
 fn push_exe_relative_candidates(paths: &mut Vec<PathBuf>, rel_subpath: &str) {
-    if let Ok(exe) = env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            paths.push(parent.join(rel_subpath));
-            paths.push(parent.join("..").join(rel_subpath));
-            paths.push(parent.join("../..").join(rel_subpath));
-            paths.push(parent.join("../../..").join(rel_subpath));
-            paths.push(parent.join("../share/waylan").join(rel_subpath));
-        }
+    if let Ok(exe) = env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        paths.push(parent.join(rel_subpath));
+        paths.push(parent.join("..").join(rel_subpath));
+        paths.push(parent.join("../..").join(rel_subpath));
+        paths.push(parent.join("../../..").join(rel_subpath));
+        paths.push(parent.join("../share/waylan").join(rel_subpath));
     }
 }
 
@@ -115,10 +115,10 @@ pub fn user_models_dir() -> Option<PathBuf> {
 /// 统一生成数据资产的多级查找路径（环境变量覆盖 -> XDG 用户数据目录 -> 系统目录 -> 相对路径）
 fn data_file_search_paths(env_override_key: Option<&str>, file_name: &str) -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(16);
-    if let Some(key) = env_override_key {
-        if let Some(custom) = env_var_non_empty(key) {
-            paths.push(PathBuf::from(custom));
-        }
+    if let Some(key) = env_override_key
+        && let Some(custom) = env_var_non_empty(key)
+    {
+        paths.push(PathBuf::from(custom));
     }
     if let Some(user_dir) = user_data_dir_opt() {
         paths.push(user_dir.join(file_name));
@@ -137,10 +137,10 @@ fn data_file_search_paths(env_override_key: Option<&str>, file_name: &str) -> Ve
 
 /// 统一解析语音/AI 模型路径（自定义路径 -> XDG 用户模型目录 -> 系统模型目录 -> 源码相对目录）
 pub fn resolve_model_path(custom_path: Option<&Path>, subpaths: &[&str]) -> Option<PathBuf> {
-    if let Some(p) = custom_path {
-        if p.exists() {
-            return Some(p.to_path_buf());
-        }
+    if let Some(p) = custom_path
+        && p.exists()
+    {
+        return Some(p.to_path_buf());
     }
 
     let mut search_roots = Vec::with_capacity(5);

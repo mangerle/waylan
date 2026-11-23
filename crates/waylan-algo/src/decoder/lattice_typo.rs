@@ -104,17 +104,17 @@ fn populate_single_syllable_transpose(start: usize, seg: &str, out: &mut Vec<Syl
                 continue;
             }
             buf.swap(i, i + 1);
-            if let Ok(swapped) = std::str::from_utf8(&buf[..len]) {
-                if is_valid_syllable(swapped) {
-                    out.push(SyllableEdge {
-                        start,
-                        end: start + len,
-                        syllables: EdgeSyllables::from_one(swapped),
-                        kind: EdgeKind::Typo(TypoKind::Transpose),
-                        typo_count: 1,
-                        cost: 16,
-                    });
-                }
+            if let Ok(swapped) = std::str::from_utf8(&buf[..len])
+                && is_valid_syllable(swapped)
+            {
+                out.push(SyllableEdge {
+                    start,
+                    end: start + len,
+                    syllables: EdgeSyllables::from_one(swapped),
+                    kind: EdgeKind::Typo(TypoKind::Transpose),
+                    typo_count: 1,
+                    cost: 16,
+                });
             }
             buf.swap(i, i + 1);
         }

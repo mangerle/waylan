@@ -391,10 +391,10 @@ fn update_asr_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
         cfg.voice.engine_type = VoiceEngineType::Offline;
         cfg.voice.selected_asr = None;
         cfg.voice.offline.model_type = meta.model_type;
-        if waylan_voice::is_preset_model_installed(meta) {
-            if let Some(dest) = waylan_voice::get_preset_model_dest_dir(meta) {
-                cfg.voice.offline.model_dir = Some(dest.to_string_lossy().to_string());
-            }
+        if waylan_voice::is_preset_model_installed(meta)
+            && let Some(dest) = waylan_voice::get_preset_model_dest_dir(meta)
+        {
+            cfg.voice.offline.model_dir = Some(dest.to_string_lossy().to_string());
         }
     } else if let Some(local_path) = item_id.strip_prefix("local:") {
         cfg.voice.engine_type = VoiceEngineType::Offline;

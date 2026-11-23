@@ -7,9 +7,9 @@
 //!   即可由 `ImeRuntime` 单一真实源驱动所有打字交互、状态流转、预编辑更新与语音会话。
 //! - **代价与局限**：协议层需以借用形式提供前端抽象实例。
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
 use waylan_algo::AlgoEngine;
 use waylan_core::input::VoiceProvider;
@@ -26,7 +26,7 @@ pub mod window_tracker;
 #[cfg(test)]
 mod tests;
 
-pub use candidate_builder::{build_common_candidate_box_state, CandidateBoxBuildOptions};
+pub use candidate_builder::{CandidateBoxBuildOptions, build_common_candidate_box_state};
 pub use types::ProcessKeyEventParams;
 pub use window_tracker::WindowModeTracker;
 

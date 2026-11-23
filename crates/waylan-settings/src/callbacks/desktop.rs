@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use waylan_core::config::AppConfig;
 use waylan_sys::desktop::{
-    activate_ibus_engine, enqueue_desktop_task, ensure_gnome_extension_files,
-    ensure_input_source_prioritized, is_gnome_desktop, set_gnome_extension_enabled,
     GnomeExtensionIntent, WAYLAN_GNOME_EXTENSION_UUID, WAYLAN_IBUS_ENGINE_NAME,
-    WAYLAN_IBUS_SOURCE_ENTRY,
+    WAYLAN_IBUS_SOURCE_ENTRY, activate_ibus_engine, enqueue_desktop_task,
+    ensure_gnome_extension_files, ensure_input_source_prioritized, is_gnome_desktop,
+    set_gnome_extension_enabled,
 };
 use waylan_sys::process::run_command_with_timeout;
 
@@ -73,11 +73,7 @@ pub fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -
     }
 
     let path = PathBuf::from(&selected_str);
-    if path.is_file() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.is_file() { Some(path) } else { None }
 }
 
 /// 调用系统原生对话框 (zenity) 选择外部目录（具备超时保护）
@@ -99,11 +95,7 @@ pub fn pick_directory_dialog(title: &str) -> Option<PathBuf> {
     }
 
     let path = PathBuf::from(&selected_str);
-    if path.is_dir() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.is_dir() { Some(path) } else { None }
 }
 
 /// 异步调用系统原生对话框 (zenity) 选择外部文件，并通过回调接收路径结果（不阻塞当前 UI 线程）

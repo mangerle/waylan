@@ -56,10 +56,10 @@ pub fn format_candidate_display(
     custom_keys: Option<&[char]>,
 ) -> String {
     // 优先支持自定义按键映射指示（如 a.你好、s.世界）
-    if let Some(keys) = custom_keys {
-        if let Some(&ch) = keys.get(index) {
-            return format!("{ch}. {text}");
-        }
+    if let Some(keys) = custom_keys
+        && let Some(&ch) = keys.get(index)
+    {
+        return format!("{ch}. {text}");
     }
 
     format!("{}{}", format_candidate_index(style, index), text)

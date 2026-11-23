@@ -9,6 +9,6 @@
 pub mod gnome_shell;
 
 pub use gnome_shell::{
-    ensure_gnome_input_source_registered, gnome_extension_intent, sync_gnome_extension_state_async,
-    sync_gnome_hide_indicator_extension, GnomeExtensionIntent,
+    GnomeExtensionIntent, ensure_gnome_input_source_registered, gnome_extension_intent,
+    sync_gnome_extension_state_async, sync_gnome_hide_indicator_extension,
 };

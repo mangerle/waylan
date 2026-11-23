@@ -138,15 +138,16 @@ fn build_prefix_heads(
     weights: &ScoringWeights,
 ) -> Vec<SentenceHeadSegment> {
     let mut heads = Vec::with_capacity(4);
-    if let Some(best) = sentences.first() {
-        if best.word_count >= 2 && best.first_word_end > 0 {
-            heads.push(SentenceHeadSegment {
-                text: best.first_word.clone(),
-                pinyin: best.first_word_pinyin.clone(),
-                consumed_len: best.first_word_end,
-                score: best.score,
-            });
-        }
+    if let Some(best) = sentences.first()
+        && best.word_count >= 2
+        && best.first_word_end > 0
+    {
+        heads.push(SentenceHeadSegment {
+            text: best.first_word.clone(),
+            pinyin: best.first_word_pinyin.clone(),
+            consumed_len: best.first_word_end,
+            score: best.score,
+        });
     }
     for pm in prefix_word_matches.iter().take(3) {
         if heads.iter().any(|h| h.text == pm.word) {

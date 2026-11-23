@@ -4,12 +4,12 @@
 //! 向上折叠箭头按钮的矢量绘制以及鼠标可点击区域计算。
 
 use super::draw::{
-    draw_card_background_at, draw_collapse_arrow, draw_rounded_rect, draw_scrollbar,
     CardBackgroundParams, CollapseArrowParams, RoundedRectParams, ScrollbarParams,
+    draw_card_background_at, draw_collapse_arrow, draw_rounded_rect, draw_scrollbar,
 };
 use super::grid_layout::{
-    compute_grid_col_starts, compute_grid_dimensions, compute_grid_scrollbar, GridDimensions,
-    GridScrollbarParams, GRID_COLS, MAX_GRID_CAPACITY,
+    GRID_COLS, GridDimensions, GridScrollbarParams, MAX_GRID_CAPACITY, compute_grid_col_starts,
+    compute_grid_dimensions, compute_grid_scrollbar,
 };
 use super::layout::{CandidateHitTarget, HitRegion, HitRegionParams};
 use super::{CandidateBoxRenderer, DrawTextOptions};

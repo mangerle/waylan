@@ -1,7 +1,7 @@
 //! 算法引擎用户词库 WAL 持久化与拼音借音切分校准集成测试
 
-use waylan_algo::types::AlgoConfig;
 use waylan_algo::AlgoEngine;
+use waylan_algo::types::AlgoConfig;
 
 #[test]
 fn test_engine_user_dict_wal_persistence_across_restart() {
