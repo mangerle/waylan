@@ -11,9 +11,9 @@ use std::path::PathBuf;
 pub use error::ConfigError;
 pub use paths::{
     aux_dict_search_paths, base_dict_search_paths, config_path, env_var_non_empty,
-    fallback_runtime_dir, opencc_dict_search_paths, resolve_model_path, user_aux_dict_path,
-    user_config_dir, user_data_dir, user_data_dir_opt, user_dict_path, user_models_dir,
-    user_state_dir,
+    fallback_runtime_dir, filter_non_empty_str, opencc_dict_search_paths, resolve_model_path,
+    user_aux_dict_path, user_config_dir, user_data_dir, user_data_dir_opt, user_dict_path,
+    user_models_dir, user_state_dir,
 };
 use serde::{Deserialize, Serialize};
 
@@ -124,7 +124,6 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use std::fs;
 
     #[test]
@@ -199,17 +198,12 @@ mod tests {
             env_var_non_empty("THIS_VARIABLE_SHOULD_NOT_EXIST_XYZ"),
             None
         );
-        unsafe {
-            env::set_var("WAYLAN_TEST_EMPTY_VAR", "   ");
-        }
-        assert_eq!(env_var_non_empty("WAYLAN_TEST_EMPTY_VAR"), None);
-        unsafe {
-            env::set_var("WAYLAN_TEST_VAL_VAR", "  valid_value  ");
-        }
         assert_eq!(
-            env_var_non_empty("WAYLAN_TEST_VAL_VAR"),
-            Some("valid_value".to_string())
+            env_var_non_empty("CARGO_PKG_NAME"),
+            Some("waylan-core".to_string())
         );
+        assert_eq!(filter_non_empty_str("   "), None);
+        assert_eq!(filter_non_empty_str("  valid_value  "), Some("valid_value"));
     }
 
     #[test]

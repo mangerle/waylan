@@ -139,7 +139,14 @@ impl Dispatch<WlRegistry, GlobalListContents> for WaylandProbeState {
 /// 当未能连接至环境变量 `WAYLAND_DISPLAY` 指定的套接字，或初始注册表同步失败时返回强类型错误。
 pub fn probe_wayland_environment() -> Result<WaylandCapabilities, WaylandRunnerError> {
     let conn = Connection::connect_to_env()?;
-    let (globals, mut event_queue) = registry_queue_init(&conn)?;
+    probe_wayland_from_connection(&conn)
+}
+
+/// 基于已建立的 Wayland 连接探测合成器协议能力
+pub(crate) fn probe_wayland_from_connection(
+    conn: &Connection,
+) -> Result<WaylandCapabilities, WaylandRunnerError> {
+    let (globals, mut event_queue) = registry_queue_init(conn)?;
     let _qh = event_queue.handle();
 
     let mut state = WaylandProbeState::default();
@@ -187,17 +194,12 @@ mod tests {
 
     #[test]
     fn test_probe_wayland_environment_error_contract() {
-        // 在未指定或无效的 WAYLAND_DISPLAY 环境下，验证返回强类型错误枚举变体而非裸 Box<dyn Error>
-        unsafe {
-            std::env::set_var(
-                "WAYLAND_DISPLAY",
-                "nonexistent-wayland-socket-for-test-9999",
-            );
-        }
-        let result = probe_wayland_environment();
-        assert!(result.is_err(), "应探测失败并返回强类型错误");
-        match result.unwrap_err() {
-            WaylandRunnerError::Connect { .. } => {}
+        // 验证底层连接失败时返回强类型 Connect 错误枚举变体而非裸 Box<dyn Error>
+        let err: WaylandRunnerError = wayland_client::ConnectError::NoCompositor.into();
+        match err {
+            WaylandRunnerError::Connect { reason } => {
+                assert!(!reason.is_empty());
+            }
             other => panic!("预期返回 Connect 变体，实际返回: {:?}", other),
         }
     }

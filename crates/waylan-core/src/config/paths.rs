@@ -4,16 +4,22 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// 过滤空白字符串并返回修剪后的非空字符串切片
+#[inline]
+pub fn filter_non_empty_str(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 /// 读取非空环境变量（自动过滤空白字符串与未设置变量）
 pub fn env_var_non_empty(key: &str) -> Option<String> {
-    env::var(key).ok().and_then(|v| {
-        let trimmed = v.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
+    env::var(key)
+        .ok()
+        .and_then(|v| filter_non_empty_str(&v).map(ToString::to_string))
 }
 
 /// 辅助根据执行文件所在目录向多级父路径推入候选词库位置（适应开发、测试与各类宿主子进程环境）
