@@ -1,12 +1,9 @@
 pub mod wal;
 use crate::error::AlgoError;
 use crate::types::{AlgoCandidate, CandidateTier};
-use bincode::Options;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 pub use wal::{UserAdaptiveWal, UserDictAppendParams, WAL_MAGIC, WAL_MAGIC_V1};
 pub use waylan_core::MAX_USER_DICT_BYTES;
 
@@ -246,54 +243,6 @@ impl UserAdaptiveModel {
         let decay_factor = (0.5_f64).powf(elapsed_days / 30.0);
         let base_weight = entry.commit_count as f64 * 80_000.0;
         (base_weight * decay_factor) as u32
-    }
-
-    /// 当文件路径无法写入时返回 [`AlgoError::UserDictPersistFailed`]。
-    pub fn save_to_file(&self, path: impl AsRef<Path>) -> Result<(), AlgoError> {
-        let path_ref = path.as_ref();
-        if let Some(parent) = path_ref.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let file = File::create(path_ref).map_err(|e| AlgoError::UserDictPersistFailed {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
-        let writer = BufWriter::new(file);
-        bincode::serialize_into(writer, self).map_err(|e| AlgoError::UserDictPersistFailed {
-            path: PathBuf::from(path_ref),
-            source: std::io::Error::other(e.to_string()),
-        })?;
-        Ok(())
-    }
-
-    /// 从本地文件加载用户词库
-    ///
-    /// # Errors
-    /// 当文件读取或反序列化失败时返回 [`AlgoError::DictionaryIo`] 或 [`AlgoError::DeserializeFailed`]。
-    pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, AlgoError> {
-        let path_ref = path.as_ref();
-        let file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
-        let reader = BufReader::new(file);
-        let mut model: Self = bincode::DefaultOptions::new()
-            .with_fixint_encoding()
-            .allow_trailing_bytes()
-            .with_limit(MAX_USER_DICT_BYTES)
-            .deserialize_from(reader)
-            .map_err(|e| AlgoError::deserialize_failed(path_ref, e.to_string()))?;
-        if model.max_timestamp == 0 {
-            model.max_timestamp = model
-                .entries
-                .values()
-                .flat_map(|list| list.iter().map(|e| e.last_used_timestamp))
-                .max()
-                .unwrap_or(0);
-        }
-        Ok(model)
     }
 
     /// 获取记录的用户词条总数

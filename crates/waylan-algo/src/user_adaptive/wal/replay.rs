@@ -205,6 +205,9 @@ fn read_and_replay_file_unlocked(path_ref: &Path) -> Result<(UserAdaptiveModel, 
         path: PathBuf::from(path_ref),
         source: e,
     })?;
+    if meta.len() == 0 {
+        return Ok((UserAdaptiveModel::new(), false));
+    }
     if meta.len() > crate::user_adaptive::MAX_USER_DICT_BYTES {
         return Err(AlgoError::deserialize_failed(
             path_ref,
@@ -235,10 +238,16 @@ fn read_and_replay_file_unlocked(path_ref: &Path) -> Result<(UserAdaptiveModel, 
 
             Ok((model, need_compact))
         } else {
-            Ok((UserAdaptiveModel::load_from_file(path_ref)?, false))
+            Err(AlgoError::deserialize_failed(
+                path_ref,
+                "缺少合法的 WAL 魔数标识",
+            ))
         }
     } else {
-        Ok((UserAdaptiveModel::load_from_file(path_ref)?, false))
+        Err(AlgoError::deserialize_failed(
+            path_ref,
+            "文件头部过短，无法读取 WAL 魔数标识",
+        ))
     }
 }
 

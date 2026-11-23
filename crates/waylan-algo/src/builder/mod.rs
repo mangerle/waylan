@@ -8,11 +8,10 @@
 use crate::custom_phrase::AuxiliaryDict;
 use crate::error::AlgoError;
 use crate::user_adaptive::UserAdaptiveModel;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 pub mod compact;
 pub use crate::compact_writer::{CompactWritePayload, write_compact_file};
@@ -116,44 +115,6 @@ pub use crate::syllables::normalize_pinyin_tones;
 pub struct DictBuilder;
 
 impl DictBuilder {
-    /// 从多个文本词库源编译生成向后兼容的传统 bincode 二进制词库文件
-    ///
-    /// # Errors
-    /// 当读取源文件或创建输出文件失败，或序列化输出失败时返回 [`AlgoError`]。
-    pub fn build_binary_dict<P: AsRef<Path>, Q: AsRef<Path>>(
-        input_paths: &[P],
-        output_path: Q,
-    ) -> Result<BuildStats, AlgoError> {
-        let start = Instant::now();
-        let mut dict_map: HashMap<String, Vec<(String, u32)>> = HashMap::new();
-        let mut total_lines: usize = 0;
-        let mut total_words: usize = 0;
-
-        for in_path in input_paths {
-            let (file_lines, file_words) =
-                Self::parse_dict_source_file(in_path.as_ref(), &mut dict_map)?;
-            total_lines = total_lines.saturating_add(file_lines);
-            total_words = total_words.saturating_add(file_words);
-        }
-
-        for entries in dict_map.values_mut() {
-            entries.sort_by_key(|b| std::cmp::Reverse(b.1));
-        }
-
-        let out_ref = output_path.as_ref();
-        Self::write_binary_dict_file(out_ref, &dict_map)?;
-
-        let total_keys = dict_map.len();
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-
-        Ok(BuildStats {
-            total_lines,
-            total_words,
-            total_keys,
-            elapsed_ms,
-        })
-    }
-
     /// 判定文本词库行是否为注释、空行或词库元信息头（此类行不参与词条编译）
     fn is_skippable_dict_line(trimmed: &str) -> bool {
         trimmed.is_empty()
@@ -163,65 +124,6 @@ impl DictBuilder {
             || trimmed.starts_with("name:")
             || trimmed.starts_with("version:")
             || trimmed.starts_with("sort:")
-    }
-
-    /// 解析单个文本词库源文件，将有效词条累加进「拼音键 -> 候选词列表」映射表
-    ///
-    /// 返回该文件实际读取的原始行数与有效词条数（注释与空行仅计入行数，不计入词条数）
-    fn parse_dict_source_file(
-        path_ref: &Path,
-        dict_map: &mut HashMap<String, Vec<(String, u32)>>,
-    ) -> Result<(usize, usize), AlgoError> {
-        let file = File::open(path_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(path_ref),
-            source: e,
-        })?;
-        let reader = BufReader::new(file);
-        let mut total_lines = 0usize;
-        let mut total_words = 0usize;
-
-        for line_res in reader.lines() {
-            total_lines = total_lines.saturating_add(1);
-            let line = match line_res {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-
-            let trimmed = line.trim();
-            if Self::is_skippable_dict_line(trimmed) {
-                continue;
-            }
-
-            let parts: Vec<&str> = trimmed.split('\t').collect();
-            if parts.len() >= 2 {
-                let word = parts[0].trim().to_string();
-                let pinyin = normalize_pinyin_tones(parts[1].trim());
-                let Some(score) = parse_dict_entry_score(&parts) else {
-                    continue;
-                };
-
-                dict_map.entry(pinyin).or_default().push((word, score));
-                total_words = total_words.saturating_add(1);
-            }
-        }
-
-        Ok((total_lines, total_words))
-    }
-
-    /// 将编译结果以 bincode 格式写入目标二进制词库文件
-    fn write_binary_dict_file(
-        out_ref: &Path,
-        dict_map: &HashMap<String, Vec<(String, u32)>>,
-    ) -> Result<(), AlgoError> {
-        let out_file = File::create(out_ref).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(out_ref),
-            source: e,
-        })?;
-        let writer = BufWriter::new(out_file);
-        bincode::serialize_into(writer, dict_map).map_err(|e| AlgoError::DictionaryIo {
-            path: PathBuf::from(out_ref),
-            source: std::io::Error::other(e.to_string()),
-        })
     }
 
     /// 构建包含英文补全与表情符号的辅助词典二进制文件

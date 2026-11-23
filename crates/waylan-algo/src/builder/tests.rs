@@ -17,10 +17,11 @@ fn test_build_and_import() {
     writeln!(file, "智能\tzhi neng\t12000").unwrap();
     drop(file);
 
-    // 1. 编译二进制词库
-    let stats = DictBuilder::build_binary_dict(&[&txt_path], &bin_path).expect("编译成功");
+    // 1. 编译紧凑二进制词库
+    let stats = DictBuilder::build_compact_binary_dict(&[&txt_path], &bin_path).expect("编译成功");
     assert_eq!(stats.total_words, 2);
-    assert_eq!(stats.total_keys, 2);
+    // 包含 2 个全拼键与 2 个自动生成的简拼缩写键
+    assert_eq!(stats.total_keys, 4);
 
     // 2. 导入到用户自适应模型
     let mut user_model = UserAdaptiveModel::new();

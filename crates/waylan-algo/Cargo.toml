@@ -35,7 +35,6 @@ required-features = ["tools"]
 [dependencies]
 waylan-core = { path = "../waylan-core" }
 serde.workspace = true
-bincode.workspace = true
 thiserror.workspace = true
 log.workspace = true
 memmap2.workspace = true
