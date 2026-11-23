@@ -6125,7 +6125,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-algo"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "bincode 1.3.3",
  "chrono",
@@ -6141,7 +6141,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-bigram-builder"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "jieba-rs",
  "log",
@@ -6155,7 +6155,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-core"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "log",
  "serde",
@@ -6167,7 +6167,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-daemon"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "chrono",
  "fern",
@@ -6192,7 +6192,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-engine"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "log",
  "tempfile",
@@ -6203,7 +6203,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-ibus"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "log",
  "parking_lot",
@@ -6220,7 +6220,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-settings"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "chrono",
  "fern",
@@ -6240,7 +6240,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-sys"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "log",
  "rustix 0.38.44",
@@ -6250,7 +6250,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-ui"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "cosmic-text",
  "log",
@@ -6260,7 +6260,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-voice"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "cpal",
  "hush-vani",
@@ -6277,7 +6277,7 @@ dependencies = [
 
 [[package]]
 name = "waylan-wayland"
-version = "1.4.3"
+version = "1.5.0"
 dependencies = [
  "log",
  "memmap2",
