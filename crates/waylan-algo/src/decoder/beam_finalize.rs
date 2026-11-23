@@ -48,7 +48,9 @@ pub(super) fn finalize_decode_result(
 
     let best_preedit = sentences
         .first()
-        .filter(|s| s.typo_count == 0 && !s.has_initial && !s.pinyin.is_empty())
+        .filter(|s| {
+            s.typo_count == 0 && !s.has_initial && !s.has_partial_tail && !s.pinyin.is_empty()
+        })
         .map(|s| s.pinyin.clone())
         .unwrap_or_else(|| lattice.best_formatted_preedit());
 

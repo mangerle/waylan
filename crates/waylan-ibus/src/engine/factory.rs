@@ -28,7 +28,7 @@ pub struct IbusFactoryService {
 #[interface(name = "org.freedesktop.IBus.Factory")]
 impl IbusFactoryService {
     /// 响应 `ibus-daemon` 的引擎实例创建请求，返回动态创建并注册的微澜引擎对象路径
-    fn create_engine(&self, name: &str) -> fdo::Result<OwnedObjectPath> {
+    async fn create_engine(&self, name: &str) -> fdo::Result<OwnedObjectPath> {
         debug!("[微澜 IBus] 收到 CreateEngine 请求，引擎名: {}", name);
         {
             let mut guard = self.core.lock();
@@ -37,7 +37,10 @@ impl IbusFactoryService {
 
         let (obj_path, path_str) = self.build_engine_object_path()?;
         let conn_registered = match self.conn_slot.get() {
-            Some(conn) => self.register_engine_interfaces(conn, &obj_path, &path_str),
+            Some(conn) => {
+                self.register_engine_interfaces(conn, &obj_path, &path_str)
+                    .await
+            }
             None => false,
         };
 
@@ -75,7 +78,7 @@ impl IbusFactoryService {
     /// # 设计原理
     /// - Engine 与 Service 接口分别独立挂载：单个接口注册失败仅告警降级，
     ///   另一个接口仍可正常工作，避免局部失败导致整个引擎实例不可用。
-    fn register_engine_interfaces(
+    async fn register_engine_interfaces(
         &self,
         conn: &Connection,
         obj_path: &OwnedObjectPath,
@@ -87,15 +90,13 @@ impl IbusFactoryService {
         let generic_srv = IbusGenericService {
             core: Arc::clone(&self.core),
         };
-        if let Err(e) = zbus::block_on(async { conn.object_server().at(obj_path, srv).await }) {
+        if let Err(e) = conn.object_server().at(obj_path, srv).await {
             warn!(
                 "[微澜 IBus] 为动态路径 {} 注册 Engine 接口失败: {}",
                 path_str, e
             );
         }
-        if let Err(e) =
-            zbus::block_on(async { conn.object_server().at(obj_path, generic_srv).await })
-        {
+        if let Err(e) = conn.object_server().at(obj_path, generic_srv).await {
             warn!(
                 "[微澜 IBus] 为动态路径 {} 注册 Service 接口失败: {}",
                 path_str, e
