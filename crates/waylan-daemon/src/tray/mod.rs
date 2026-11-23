@@ -242,81 +242,77 @@ impl TrayService {
         }
     }
 
-    /// 向 D-Bus 发射 NewIcon 图标刷新信号
-    fn emit_new_icon_signal(conn: &Connection) {
-        if let Err(e) = zbus::block_on(conn.emit_signal(
-            Option::<&str>::None,
-            "/StatusNotifierItem",
-            "org.kde.StatusNotifierItem",
-            "NewIcon",
-            &(),
-        )) {
-            warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
-        } else {
-            debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
-        }
-    }
+    /// 向 DBus 批量发射图标、提示与菜单刷新信号
+    ///
+    /// 信号发射顺序固定为 NewIcon -> NewToolTip -> PropertiesChanged -> LayoutUpdated，
+    /// 且收敛在单次异步块内执行，消除反复进出 `block_on` 造成的调度抖动。
+    fn emit_tray_signals(conn: &Connection, sni: &StatusNotifierItem, menu_revision: &mut u32) {
+        let current_icon = sni.icon_name();
+        *menu_revision = menu_revision.wrapping_add(1);
+        let rev = *menu_revision;
 
-    /// 向 D-Bus 发射 NewToolTip 悬停提示刷新信号
-    fn emit_new_tool_tip_signal(conn: &Connection) {
-        let _ = zbus::block_on(conn.emit_signal(
-            Option::<&str>::None,
-            "/StatusNotifierItem",
-            "org.kde.StatusNotifierItem",
-            "NewToolTip",
-            &(),
-        ));
-    }
-
-    /// 向 D-Bus 发射 PropertiesChanged 属性变更通知，携带最新图标名称
-    fn emit_properties_changed_signal(conn: &Connection, current_icon: String) {
         let mut changed_props = HashMap::with_capacity(1);
         changed_props.insert("IconName", Variant::from(current_icon));
         let invalidated_props: Vec<&str> = Vec::new();
-        let _ = zbus::block_on(conn.emit_signal(
-            Option::<&str>::None,
-            "/StatusNotifierItem",
-            "org.freedesktop.DBus.Properties",
-            "PropertiesChanged",
-            &(
-                "org.kde.StatusNotifierItem",
-                changed_props,
-                invalidated_props,
-            ),
-        ));
-    }
 
-    /// 向 D-Bus 发射 LayoutUpdated 菜单布局刷新信号
-    fn emit_layout_updated_signal(conn: &Connection, menu_revision: u32) {
-        if let Err(e) = zbus::block_on(conn.emit_signal(
-            Option::<&str>::None,
-            "/MenuBar",
-            "com.canonical.dbusmenu",
-            "LayoutUpdated",
-            &(menu_revision, 0i32),
-        )) {
-            warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
-        } else {
-            debug!(
-                "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
-                menu_revision
-            );
-        }
-    }
+        zbus::block_on(async {
+            if let Err(e) = conn
+                .emit_signal(
+                    Option::<&str>::None,
+                    "/StatusNotifierItem",
+                    "org.kde.StatusNotifierItem",
+                    "NewIcon",
+                    &(),
+                )
+                .await
+            {
+                warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
+            } else {
+                debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
+            }
 
-    /// 向 DBus 发射图标、提示与菜单刷新信号
-    ///
-    /// 信号发射顺序固定为 NewIcon -> NewToolTip -> PropertiesChanged -> LayoutUpdated，
-    /// 以保证任务栏按既定次序刷新图标、悬停提示与右键菜单。
-    fn emit_tray_signals(conn: &Connection, sni: &StatusNotifierItem, menu_revision: &mut u32) {
-        let current_icon = sni.icon_name();
+            let _ = conn
+                .emit_signal(
+                    Option::<&str>::None,
+                    "/StatusNotifierItem",
+                    "org.kde.StatusNotifierItem",
+                    "NewToolTip",
+                    &(),
+                )
+                .await;
 
-        Self::emit_new_icon_signal(conn);
-        Self::emit_new_tool_tip_signal(conn);
-        Self::emit_properties_changed_signal(conn, current_icon);
+            let _ = conn
+                .emit_signal(
+                    Option::<&str>::None,
+                    "/StatusNotifierItem",
+                    "org.freedesktop.DBus.Properties",
+                    "PropertiesChanged",
+                    &(
+                        "org.kde.StatusNotifierItem",
+                        changed_props,
+                        invalidated_props,
+                    ),
+                )
+                .await;
 
-        *menu_revision = menu_revision.wrapping_add(1);
-        Self::emit_layout_updated_signal(conn, *menu_revision);
+            if let Err(e) = conn
+                .emit_signal(
+                    Option::<&str>::None,
+                    "/MenuBar",
+                    "com.canonical.dbusmenu",
+                    "LayoutUpdated",
+                    &(rev, 0i32),
+                )
+                .await
+            {
+                warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
+            } else {
+                debug!(
+                    "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
+                    rev
+                );
+            }
+        });
     }
 
     /// 保持 DBus 事件处理循环运行并在收到状态变更时广播信号

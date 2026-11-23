@@ -97,18 +97,20 @@ fn run_session_screen_saver_listener(
             coordinator.wake();
         }
 
-        let mut stream = MessageStream::from(&conn);
-        while let Some(msg_res) = zbus::block_on(async { stream.next().await }) {
-            if coordinator.is_shutting_down() {
-                break;
+        zbus::block_on(async {
+            let mut stream = MessageStream::from(&conn);
+            while let Some(msg_res) = stream.next().await {
+                if coordinator.is_shutting_down() {
+                    break;
+                }
+                let Ok(msg) = msg_res else {
+                    break;
+                };
+                if handle_session_screen_saver_signal(&msg, &screen_locked) {
+                    coordinator.wake();
+                }
             }
-            let Ok(msg) = msg_res else {
-                break;
-            };
-            if handle_session_screen_saver_signal(&msg, &screen_locked) {
-                coordinator.wake();
-            }
-        }
+        });
 
         if coordinator.is_shutting_down() {
             break;
@@ -134,18 +136,20 @@ fn run_system_logind_listener(
         *conn_slot.lock() = Some(conn.clone());
         register_system_logind_rules(&conn);
 
-        let mut stream = MessageStream::from(&conn);
-        while let Some(msg_res) = zbus::block_on(async { stream.next().await }) {
-            if coordinator.is_shutting_down() {
-                break;
+        zbus::block_on(async {
+            let mut stream = MessageStream::from(&conn);
+            while let Some(msg_res) = stream.next().await {
+                if coordinator.is_shutting_down() {
+                    break;
+                }
+                let Ok(msg) = msg_res else {
+                    break;
+                };
+                if handle_system_logind_signal(&msg, &screen_locked) {
+                    coordinator.wake();
+                }
             }
-            let Ok(msg) = msg_res else {
-                break;
-            };
-            if handle_system_logind_signal(&msg, &screen_locked) {
-                coordinator.wake();
-            }
-        }
+        });
         *conn_slot.lock() = None;
 
         if coordinator.is_shutting_down() {

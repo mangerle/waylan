@@ -9,13 +9,44 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use parking_lot::Mutex;
 use zbus::connection::Connection;
 use zbus::message::Message;
 use zbus::{OwnedVariant, Variant};
 
+/// 全局缓存的 Session 与 System 总线探测长连接
+static CACHED_SESSION_CONN: Mutex<Option<Connection>> = Mutex::new(None);
+static CACHED_SYSTEM_CONN: Mutex<Option<Connection>> = Mutex::new(None);
+
+/// 获取或安全重建可复用的 Session 总线探测长连接
+fn get_or_reconnect_session() -> Option<Connection> {
+    let mut lock = CACHED_SESSION_CONN.lock();
+    if let Some(ref conn) = *lock
+        && !conn.is_closed()
+    {
+        return Some(conn.clone());
+    }
+    let new_conn = zbus::block_on(async { Connection::session().await.ok() });
+    *lock = new_conn.clone();
+    new_conn
+}
+
+/// 获取或安全重建可复用的 System 总线探测长连接
+fn get_or_reconnect_system() -> Option<Connection> {
+    let mut lock = CACHED_SYSTEM_CONN.lock();
+    if let Some(ref conn) = *lock
+        && !conn.is_closed()
+    {
+        return Some(conn.clone());
+    }
+    let new_conn = zbus::block_on(async { Connection::system().await.ok() });
+    *lock = new_conn.clone();
+    new_conn
+}
+
 /// 查询 `systemd-logind` 系统总线中当前会话的 `LockedHint` 属性
 pub(crate) fn query_logind_locked_hint() -> bool {
-    let Ok(conn) = zbus::block_on(async { Connection::system().await }) else {
+    let Some(conn) = get_or_reconnect_system() else {
         return false;
     };
     if let Ok(reply) = zbus::block_on(async {
@@ -76,8 +107,7 @@ pub(crate) fn query_current_screen_saver_active() -> bool {
         return true;
     }
 
-    zbus::block_on(async { Connection::session().await })
-        .ok()
+    get_or_reconnect_session()
         .as_ref()
         .map(query_initial_screen_saver_active)
         .unwrap_or(false)

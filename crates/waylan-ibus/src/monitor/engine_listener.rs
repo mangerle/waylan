@@ -82,30 +82,28 @@ fn run_engine_change_listener(ibus_addr: String, coordinator: IbusShutdownCoordi
             continue;
         };
         let rule = "type='signal',interface='org.freedesktop.IBus',member='GlobalEngineChanged'";
-        let stream_res =
-            zbus::block_on(async { MessageStream::for_match_rule(rule, &conn, None).await });
-        let Ok(mut stream) = stream_res else {
-            std::thread::sleep(Duration::from_millis(500));
-            continue;
-        };
-
-        while let Some(msg_res) = zbus::block_on(async { stream.next().await }) {
-            if coordinator.is_shutting_down() {
-                break;
-            }
-            let Ok(msg) = msg_res else {
-                break;
+        zbus::block_on(async {
+            let Ok(mut stream) = MessageStream::for_match_rule(rule, &conn, None).await else {
+                return;
             };
-            if let Some(engine_name) = parse_engine_change_signal(&msg)
-                && engine_name != "waylan"
-            {
-                debug!(
-                    "[微澜 IBus] 监听到全局引擎变更为 [{}]，即刻唤醒自愈调度",
-                    engine_name
-                );
-                coordinator.wake();
+            while let Some(msg_res) = stream.next().await {
+                if coordinator.is_shutting_down() {
+                    break;
+                }
+                let Ok(msg) = msg_res else {
+                    break;
+                };
+                if let Some(engine_name) = parse_engine_change_signal(&msg)
+                    && engine_name != "waylan"
+                {
+                    debug!(
+                        "[微澜 IBus] 监听到全局引擎变更为 [{}]，即刻唤醒自愈调度",
+                        engine_name
+                    );
+                    coordinator.wake();
+                }
             }
-        }
+        });
         if coordinator.is_shutting_down() {
             break;
         }

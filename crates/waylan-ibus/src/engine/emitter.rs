@@ -149,43 +149,54 @@ pub(crate) fn emit_ui_snapshot_blocking(
     target_engine_path: &str,
     snap: &UiSnapshot,
 ) {
-    if let Ok(preedit_val) = build_ibus_preedit_text(&snap.preedit) {
-        let char_len = snap.preedit.chars().count() as u32;
-        let visible = !snap.preedit.is_empty();
-        let _ = zbus::block_on(async {
-            conn.emit_signal(
-                None::<&str>,
-                target_engine_path,
-                IBUS_ENGINE_INTERFACE,
-                "UpdatePreeditText",
-                &(
-                    Variant::from(preedit_val),
-                    char_len,
-                    visible,
-                    IBUS_ENGINE_PREEDIT_CLEAR,
-                ),
+    let preedit_payload = build_ibus_preedit_text(&snap.preedit)
+        .ok()
+        .map(|preedit_val| {
+            let char_len = snap.preedit.chars().count() as u32;
+            let visible = !snap.preedit.is_empty();
+            (
+                Variant::from(preedit_val),
+                char_len,
+                visible,
+                IBUS_ENGINE_PREEDIT_CLEAR,
             )
-            .await
         });
-    }
 
     let table_visible = !snap.candidates.is_empty();
-    if let Ok(table_val) = build_ibus_lookup_table(&IbusLookupTableParams {
+    let table_payload = build_ibus_lookup_table(&IbusLookupTableParams {
         candidates: &snap.candidates,
         page_size: snap.page_size,
         selected_index: snap.selected_index,
         orientation: snap.orientation,
         index_style: snap.index_style,
-    }) {
-        let _ = zbus::block_on(async {
-            conn.emit_signal(
-                None::<&str>,
-                target_engine_path,
-                IBUS_ENGINE_INTERFACE,
-                "UpdateLookupTable",
-                &(Variant::from(table_val), table_visible),
-            )
-            .await
+    })
+    .ok()
+    .map(|table_val| (Variant::from(table_val), table_visible));
+
+    if preedit_payload.is_some() || table_payload.is_some() {
+        zbus::block_on(async {
+            if let Some(payload) = preedit_payload {
+                let _ = conn
+                    .emit_signal(
+                        None::<&str>,
+                        target_engine_path,
+                        IBUS_ENGINE_INTERFACE,
+                        "UpdatePreeditText",
+                        &payload,
+                    )
+                    .await;
+            }
+            if let Some(payload) = table_payload {
+                let _ = conn
+                    .emit_signal(
+                        None::<&str>,
+                        target_engine_path,
+                        IBUS_ENGINE_INTERFACE,
+                        "UpdateLookupTable",
+                        &payload,
+                    )
+                    .await;
+            }
         });
     }
 }

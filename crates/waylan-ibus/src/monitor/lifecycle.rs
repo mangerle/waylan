@@ -16,31 +16,27 @@ use zbus::connection::Connection;
 use super::super::keys::IbusSessionCore;
 use waylan_sys::process::safe_gsettings_set_async;
 
-/// 查询 IBus 当前全局激活的引擎名称
-pub(crate) fn query_current_ibus_engine(conn: &Connection) -> Option<String> {
-    let reply = zbus::block_on(async {
-        conn.call_method(
-            Some("org.freedesktop.IBus"),
-            "/org/freedesktop/IBus",
-            Some("org.freedesktop.IBus"),
-            "GetGlobalEngine",
-            &(),
-        )
-        .await
-    })
-    .ok()?;
-    let body = reply.body();
-    let val = body.deserialize::<Variant<'_>>().ok()?;
-    super::super::session::extract_engine_name_from_desc_variant(&val)
-}
-
 /// 确保微澜为当前活跃的全局输入法引擎（用于开机启动与桌面服务时差自愈）
 pub(crate) fn ensure_global_engine_active(conn: &Connection) {
-    let current_engine = query_current_ibus_engine(conn);
-    let is_waylan = current_engine.as_deref() == Some("waylan");
+    let result: Result<bool, zbus::Error> = zbus::block_on(async {
+        let reply = conn
+            .call_method(
+                Some("org.freedesktop.IBus"),
+                "/org/freedesktop/IBus",
+                Some("org.freedesktop.IBus"),
+                "GetGlobalEngine",
+                &(),
+            )
+            .await?;
+        let is_waylan = reply
+            .body()
+            .deserialize::<Variant<'_>>()
+            .ok()
+            .and_then(|val| super::super::session::extract_engine_name_from_desc_variant(&val))
+            .as_deref()
+            == Some("waylan");
 
-    if !is_waylan {
-        if let Err(e) = zbus::block_on(async {
+        if !is_waylan {
             conn.call_method(
                 Some("org.freedesktop.IBus"),
                 "/org/freedesktop/IBus",
@@ -48,12 +44,21 @@ pub(crate) fn ensure_global_engine_active(conn: &Connection) {
                 "SetGlobalEngine",
                 &("waylan",),
             )
-            .await
-        }) {
-            debug!("[微澜 IBus] 自愈激活全局引擎 waylan 重试提示: {}", e);
+            .await?;
+            Ok(true)
         } else {
+            Ok(false)
+        }
+    });
+
+    match result {
+        Ok(true) => {
             info!("[微澜 IBus] 开机自愈完成：成功将全局引擎激活为 waylan (微澜)");
             safe_gsettings_set_async("org.gnome.desktop.input-sources", "current", "0");
+        }
+        Ok(false) => {}
+        Err(e) => {
+            debug!("[微澜 IBus] 自愈激活全局引擎 waylan 重试提示: {}", e);
         }
     }
 }
