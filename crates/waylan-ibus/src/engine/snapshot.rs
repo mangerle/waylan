@@ -169,16 +169,94 @@ impl UiSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use waylan_core::VoiceConfig;
+    use waylan_core::input::{VoiceKeyAction, VoiceKeyDispatchParams, VoiceProvider};
+    use waylan_core::{VoiceBoxState, VoiceConfig};
     use waylan_engine::{AlgoConfig, AlgoEngine};
-    use waylan_voice::VoiceInteractionManager;
+
+    /// 轻量模拟语音提供者（仅用于验证候选框快照隔离，避免引入完整语音引擎依赖）
+    struct MockVoiceProvider {
+        config: VoiceConfig,
+        display_text: Option<String>,
+        partial_text: Option<String>,
+        waveform: Option<String>,
+    }
+
+    impl MockVoiceProvider {
+        fn new(config: VoiceConfig) -> Self {
+            Self {
+                config,
+                display_text: None,
+                partial_text: None,
+                waveform: None,
+            }
+        }
+    }
+
+    impl VoiceProvider for MockVoiceProvider {
+        fn is_enabled(&self) -> bool {
+            self.config.enabled
+        }
+        fn config(&self) -> &VoiceConfig {
+            &self.config
+        }
+        fn is_push_to_talk_recording(&self) -> bool {
+            false
+        }
+        fn is_active(&self) -> bool {
+            self.display_text.is_some()
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+        fn cancel(&mut self) {}
+        fn clear_state(&mut self) {
+            self.display_text = None;
+            self.partial_text = None;
+            self.waveform = None;
+        }
+        fn update_config(&mut self, cfg: &VoiceConfig) {
+            self.config = cfg.clone();
+        }
+        fn poll_events(&mut self) -> Option<String> {
+            None
+        }
+        fn dispatch_key(&mut self, _params: VoiceKeyDispatchParams<'_>) -> VoiceKeyAction {
+            VoiceKeyAction::PassThrough
+        }
+        fn display_text(&self) -> Option<String> {
+            self.display_text.clone()
+        }
+        fn set_display_text(&mut self, text: Option<String>) {
+            self.display_text = text;
+        }
+        fn partial_text(&self) -> Option<String> {
+            self.partial_text.clone()
+        }
+        fn set_partial_text(&mut self, text: Option<String>) {
+            self.partial_text = text;
+        }
+        fn set_waveform(&mut self, waveform: Option<String>) {
+            self.waveform = waveform;
+        }
+        fn render_state(&self) -> Option<VoiceBoxState> {
+            if !self.is_active() {
+                return None;
+            }
+            Some(VoiceBoxState {
+                partial_text: self.partial_text.clone().unwrap_or_default(),
+                waveform: self.waveform.clone().unwrap_or_default(),
+                display_text: self.display_text.clone(),
+                is_listening: true,
+                visual_effect: self.config.interaction.visual_effect,
+            })
+        }
+    }
 
     #[test]
     fn test_ui_snapshot_voice_isolation() {
         let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
-        let mut core = IbusSessionCore::new(engine).with_voice_provider(Box::new(
-            VoiceInteractionManager::new(VoiceConfig::default()),
-        ));
+        let mut core = IbusSessionCore::new(engine)
+            .with_voice_provider(Box::new(MockVoiceProvider::new(VoiceConfig::default())));
 
         // 模拟正常输入状态
         let _ = core.process_key_event(b'n' as u32, 49, 0);

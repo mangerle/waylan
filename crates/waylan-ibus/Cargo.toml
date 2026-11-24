@@ -17,6 +17,3 @@ rustix.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true
 futures-util = "0.3"
-
-[dev-dependencies]
-waylan-voice = { path = "../waylan-voice" }

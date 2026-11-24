@@ -1,10 +1,10 @@
-use super::super::core::IbusSessionCore;
-use super::super::keyval::{IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK};
 use std::thread;
 use std::time::Duration;
+use waylan_algo::{AlgoConfig, AlgoEngine};
 use waylan_core::input::*;
 use waylan_core::{VoiceConfig, VoiceEngineType};
-use waylan_engine::{AlgoConfig, AlgoEngine};
+use waylan_ibus::keys::IbusSessionCore;
+use waylan_ibus::keys::keyval::{IBUS_CONTROL_MASK, IBUS_MOD1_MASK, IBUS_RELEASE_MASK};
 use waylan_voice::VoiceInteractionManager;
 
 const KEY_V: u32 = 47;
@@ -18,13 +18,13 @@ fn create_test_core() -> IbusSessionCore {
 /// 更新测试语音配置并通过统一入口刷新快捷键缓存
 fn update_voice_config(core: &mut IbusSessionCore, update: impl FnOnce(&mut VoiceConfig)) {
     let mut config = core
-        .runtime
+        .runtime()
         .voice_manager()
         .expect("语音管理器应存在")
         .config()
         .clone();
     update(&mut config);
-    core.runtime
+    core.runtime_mut()
         .voice_manager_mut()
         .expect("语音管理器应存在")
         .update_config(&config);
@@ -34,7 +34,7 @@ fn update_voice_config(core: &mut IbusSessionCore, update: impl FnOnce(&mut Voic
 fn test_ibus_voice_input_unconfigured_passthrough() {
     let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
     let mut core = IbusSessionCore::new(engine);
-    assert!(core.runtime.voice_manager().is_none());
+    assert!(core.runtime().voice_manager().is_none());
     let res = core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
     assert!(!res.consumed);
 }
@@ -45,7 +45,7 @@ fn test_ibus_voice_input_disabled_by_default() {
     // 验证默认情况下 voice_manager.config().enabled 为 false
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .config()
@@ -58,14 +58,14 @@ fn test_ibus_voice_input_disabled_by_default() {
     assert!(!v_res.consumed, "默认关闭时不应拦截快捷键");
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording(),
         "默认关闭时不应启动语音录制"
     );
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .display_text()
@@ -77,7 +77,7 @@ fn test_ibus_voice_input_disabled_by_default() {
     assert!(!f8_res.consumed, "默认关闭时不应拦截对讲机按键");
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording(),
@@ -98,14 +98,14 @@ fn test_ibus_voice_input_shortcut_and_cancel() {
     assert!(start_res.consumed, "语音激活按键应被拦截消费");
     assert!(start_res.update_ui, "语音启动时应请求刷新 UI 候选与预编辑");
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording(),
         "语音控制器应进入录音状态"
     );
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .display_text()
@@ -118,14 +118,14 @@ fn test_ibus_voice_input_shortcut_and_cancel() {
     assert!(cancel_res.update_ui);
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording(),
         "ESC 键应终止录音"
     );
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .display_text()
@@ -144,7 +144,7 @@ fn test_ibus_voice_input_commit_on_enter() {
     // 1. 触发语音录音
     let _ = core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
@@ -158,13 +158,13 @@ fn test_ibus_voice_input_commit_on_enter() {
     assert!(enter_res.consumed);
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
     );
     let display_text = core
-        .runtime
+        .runtime()
         .voice_manager()
         .expect("语音管理器应存在")
         .display_text();
@@ -190,13 +190,13 @@ fn test_ibus_voice_input_push_to_talk_mode() {
     assert!(press_res.consumed);
     assert!(press_res.update_ui);
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_push_to_talk_recording()
     );
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
@@ -207,7 +207,7 @@ fn test_ibus_voice_input_push_to_talk_mode() {
     let repeat_res = core.process_key_event(b'v' as u32, KEY_V, IBUS_CONTROL_MASK | IBUS_MOD1_MASK);
     assert!(repeat_res.consumed);
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
@@ -215,13 +215,13 @@ fn test_ibus_voice_input_push_to_talk_mode() {
 
     // 若异步仿真录音在并发高压测试环境下尚未调度产生首帧分块，提供保底文本确保单测执行的确定性
     if core
-        .runtime
+        .runtime()
         .voice_manager()
         .expect("语音管理器应存在")
         .partial_text()
         .is_none()
     {
-        core.runtime
+        core.runtime_mut()
             .voice_manager_mut()
             .expect("语音管理器应存在")
             .set_partial_text(Some("测试对讲机语音文本".to_string()));
@@ -241,14 +241,14 @@ fn test_ibus_voice_input_push_to_talk_mode() {
     );
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_push_to_talk_recording()
     );
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
@@ -270,20 +270,20 @@ fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
     let press_res = core.process_key_event(0xffc5, 66, 0);
     assert!(press_res.consumed);
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_push_to_talk_recording()
     );
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
     );
 
     // 2. 模拟流式识别出了部分文字预览
-    core.runtime
+    core.runtime_mut()
         .voice_manager_mut()
         .expect("语音管理器应存在")
         .set_partial_text(Some("流式已输出的文本".to_string()));
@@ -298,20 +298,20 @@ fn test_ibus_voice_input_f8_push_to_talk_and_fallback() {
     );
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_push_to_talk_recording()
     );
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
     );
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .partial_text()
@@ -336,7 +336,7 @@ fn test_ibus_voice_input_custom_shortcut() {
     assert!(
         !unrelated.consumed
             || !core
-                .runtime
+                .runtime()
                 .voice_manager()
                 .expect("语音管理器应存在")
                 .is_recording()
@@ -346,7 +346,7 @@ fn test_ibus_voice_input_custom_shortcut() {
     let f8_res = core.process_key_event(0xffc5, 66, 0);
     assert!(f8_res.consumed);
     assert!(
-        core.runtime
+        core.runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
@@ -357,7 +357,7 @@ fn test_ibus_voice_input_custom_shortcut() {
     assert!(esc_res.consumed);
     assert!(
         !core
-            .runtime
+            .runtime()
             .voice_manager()
             .expect("语音管理器应存在")
             .is_recording()
