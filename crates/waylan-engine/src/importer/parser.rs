@@ -11,7 +11,8 @@
 //!   仅负责单文件的语法与二进制解码，不直接负责自适应历史记录合入与去重。
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Cursor};
 use std::path::Path;
 use waylan_algo::syllables::normalize_pinyin_tones;
 use waylan_algo::types::ImportedDictEntry;
@@ -112,19 +113,19 @@ impl DictImporter {
             }
             "yaml" | "yml" => {
                 Self::ensure_file_within_size_limit(path)?;
-                let content = fs::read_to_string(path).map_err(|e| DictImportError::Io {
+                let file = File::open(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
-                Self::parse_rime_yaml(&content)
+                Self::parse_rime_yaml_reader(BufReader::new(file), path)
             }
             "txt" => {
                 Self::ensure_file_within_size_limit(path)?;
-                let content = fs::read_to_string(path).map_err(|e| DictImportError::Io {
+                let file = File::open(path).map_err(|e| DictImportError::Io {
                     path: path.to_path_buf(),
                     source: e,
                 })?;
-                Self::parse_plain_text(&content)
+                Self::parse_plain_text_reader(BufReader::new(file), path)
             }
             _ => Err(DictImportError::UnsupportedFormat {
                 path: path.to_path_buf(),
@@ -133,25 +134,37 @@ impl DictImporter {
         }
     }
 
-    /// 解析 Rime 词典 YAML 格式（兼容标准 `...` 表头分隔与无 `...` 标记的纯 TSV 词表）
-    pub fn parse_rime_yaml(content: &str) -> Result<Vec<ImportedDictEntry>, DictImportError> {
+    /// 流式逐行解析 Rime 词典 YAML（单遍扫描，复用行缓冲，避免大文件全量读入内存）
+    fn parse_rime_yaml_reader<R: BufRead>(
+        mut reader: R,
+        path: &Path,
+    ) -> Result<Vec<ImportedDictEntry>, DictImportError> {
         let mut entries = Vec::new();
-        let has_header_sep = content.lines().any(|l| l.trim() == "...");
-        let mut past_header = !has_header_sep;
+        let mut line_buf = String::new();
+        let mut seen_header_sep = false;
 
-        for line in content.lines() {
-            let line = line.trim();
+        loop {
+            line_buf.clear();
+            let n = reader
+                .read_line(&mut line_buf)
+                .map_err(|e| DictImportError::Io {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
+            if n == 0 {
+                break;
+            }
+            let line = line_buf.trim();
             if line.is_empty() || line.starts_with('#') || line == "---" {
                 continue;
             }
 
-            // Rime 词库表头以 "..." 分割正文
+            // Rime 词库表头以 "..." 分割正文；首次遇到 "..." 时丢弃此前可能误匹配的 YAML 元数据行
             if line == "..." {
-                past_header = true;
-                continue;
-            }
-
-            if !past_header {
+                if !seen_header_sep {
+                    entries.clear();
+                    seen_header_sep = true;
+                }
                 continue;
             }
 
@@ -163,11 +176,26 @@ impl DictImporter {
         Ok(entries)
     }
 
-    /// 解析纯文本格式（词条 拼音 [权重] 或 词条\t拼音）
-    pub fn parse_plain_text(content: &str) -> Result<Vec<ImportedDictEntry>, DictImportError> {
+    /// 流式逐行解析纯文本词库（复用行缓冲，避免大文件全量读入内存）
+    fn parse_plain_text_reader<R: BufRead>(
+        mut reader: R,
+        path: &Path,
+    ) -> Result<Vec<ImportedDictEntry>, DictImportError> {
         let mut entries = Vec::new();
-        for line in content.lines() {
-            let line = line.trim();
+        let mut line_buf = String::new();
+
+        loop {
+            line_buf.clear();
+            let n = reader
+                .read_line(&mut line_buf)
+                .map_err(|e| DictImportError::Io {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?;
+            if n == 0 {
+                break;
+            }
+            let line = line_buf.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -181,7 +209,18 @@ impl DictImporter {
                 entries.push(entry);
             }
         }
+
         Ok(entries)
+    }
+
+    /// 解析 Rime 词典 YAML 格式（兼容标准 `...` 表头分隔与无 `...` 标记的纯 TSV 词表）
+    pub fn parse_rime_yaml(content: &str) -> Result<Vec<ImportedDictEntry>, DictImportError> {
+        Self::parse_rime_yaml_reader(Cursor::new(content.as_bytes()), Path::new("<memory>"))
+    }
+
+    /// 解析纯文本格式（词条 拼音 [权重] 或 词条\t拼音）
+    pub fn parse_plain_text(content: &str) -> Result<Vec<ImportedDictEntry>, DictImportError> {
+        Self::parse_plain_text_reader(Cursor::new(content.as_bytes()), Path::new("<memory>"))
     }
 
     /// 校验搜狗细胞词库基本长度与魔数头
