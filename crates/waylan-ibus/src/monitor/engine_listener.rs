@@ -5,47 +5,34 @@
 //!   `xkb:us::eng`。若仅依赖定时轮询心跳（1000ms），用户在打字期间会感受到明显的滞后卡顿。
 //! - **核心优势**：通过在 IBus 私有总线上被动监听 `GlobalEngineChanged` 信号，在引擎发生偏离的数毫秒内
 //!   即刻唤醒主监控循环执行自愈，彻底消除状态撕裂的感知延迟。
-//! - **代价与局限**：独立监听线程常驻阻塞于 D-Bus 消息读取，通过 RAII 句柄在退场时广播信号安全回收。
+//! - **代价与局限**：独立监听线程常驻阻塞于 D-Bus 消息读取，通过 RAII 句柄在退场时关闭连接安全回收。
 
+use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use log::{debug, warn};
+use parking_lot::Mutex;
 use zbus::MessageStream;
-use zbus::connection;
+use zbus::connection::{self, Connection};
 use zbus::message::Message;
 
 use crate::IbusShutdownCoordinator;
 
-/// 后台常驻引擎变更信号监听器 RAII 句柄，Drop 时自动唤醒并回收工作线程
+/// 后台常驻引擎变更信号监听器 RAII 句柄，Drop 时自动关闭连接唤醒并回收工作线程
 pub(crate) struct EngineChangeListenerHandle {
-    ibus_addr: String,
+    conn_slot: Arc<Mutex<Option<Connection>>>,
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl EngineChangeListenerHandle {
     /// 停止后台引擎信号监听线程并回收其句柄
     pub(crate) fn stop(&mut self) {
+        if let Some(conn) = self.conn_slot.lock().take() {
+            let _ = zbus::block_on(async { conn.close().await });
+        }
         if let Some(handle) = self.join_handle.take() {
-            // 向 IBus 总线广播一条信号以即时唤醒阻塞在 stream.next() 的监听线程
-            let _ = zbus::block_on(async {
-                if let Ok(conn) = connection::Builder::address(self.ibus_addr.as_str())
-                    .build()
-                    .await
-                {
-                    let _ = conn
-                        .emit_signal(
-                            None::<&str>,
-                            "/org/freedesktop/IBus",
-                            "org.freedesktop.IBus",
-                            "GlobalEngineChanged",
-                            &("waylan",),
-                        )
-                        .await;
-                }
-                Ok::<(), zbus::Error>(())
-            });
             let _ = handle.join();
         }
     }
@@ -70,7 +57,11 @@ pub(crate) fn parse_engine_change_signal(msg: &Message) -> Option<String> {
 }
 
 /// 引擎信号被动监听线程主体
-fn run_engine_change_listener(ibus_addr: String, coordinator: IbusShutdownCoordinator) {
+fn run_engine_change_listener(
+    ibus_addr: String,
+    coordinator: IbusShutdownCoordinator,
+    conn_slot: Arc<Mutex<Option<Connection>>>,
+) {
     while !coordinator.is_shutting_down() {
         let conn_res = zbus::block_on(async {
             connection::Builder::address(ibus_addr.as_str())
@@ -81,6 +72,10 @@ fn run_engine_change_listener(ibus_addr: String, coordinator: IbusShutdownCoordi
             std::thread::sleep(Duration::from_millis(500));
             continue;
         };
+        if coordinator.is_shutting_down() {
+            break;
+        }
+        *conn_slot.lock() = Some(conn.clone());
         let rule = "type='signal',interface='org.freedesktop.IBus',member='GlobalEngineChanged'";
         zbus::block_on(async {
             let Ok(mut stream) = MessageStream::for_match_rule(rule, &conn, None).await else {
@@ -104,6 +99,7 @@ fn run_engine_change_listener(ibus_addr: String, coordinator: IbusShutdownCoordi
                 }
             }
         });
+        *conn_slot.lock() = None;
         if coordinator.is_shutting_down() {
             break;
         }
@@ -116,16 +112,17 @@ pub(crate) fn spawn_engine_change_listener(
     ibus_addr: &str,
     coordinator: IbusShutdownCoordinator,
 ) -> EngineChangeListenerHandle {
-    let addr_clone = ibus_addr.to_string();
+    let conn_slot = Arc::new(Mutex::new(None));
+    let conn_slot_thread = Arc::clone(&conn_slot);
     let addr_thread = ibus_addr.to_string();
     let handle = ThreadBuilder::new()
         .name("waylan-engine-listener".to_string())
-        .spawn(move || run_engine_change_listener(addr_thread, coordinator))
+        .spawn(move || run_engine_change_listener(addr_thread, coordinator, conn_slot_thread))
         .map_err(|e| warn!("[微澜 IBus 警告] 创建引擎变更信号监听线程失败: {}", e))
         .ok();
 
     EngineChangeListenerHandle {
-        ibus_addr: addr_clone,
+        conn_slot,
         join_handle: handle,
     }
 }

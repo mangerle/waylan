@@ -8,11 +8,15 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use parking_lot::Mutex;
-use zbus::connection::Connection;
+use zbus::connection::{Builder as ConnectionBuilder, Connection};
 use zbus::message::Message;
 use zbus::{OwnedVariant, Variant};
+
+/// D-Bus 锁屏状态探测单次 RPC 超时阈值（防止目标服务挂起拖死监控线程）
+const DBUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// 全局缓存的 Session 与 System 总线探测长连接
 static CACHED_SESSION_CONN: Mutex<Option<Connection>> = Mutex::new(None);
@@ -26,7 +30,13 @@ fn get_or_reconnect_session() -> Option<Connection> {
     {
         return Some(conn.clone());
     }
-    let new_conn = zbus::block_on(async { Connection::session().await.ok() });
+    let new_conn = zbus::block_on(async {
+        ConnectionBuilder::session()
+            .method_timeout(DBUS_PROBE_TIMEOUT)
+            .build()
+            .await
+            .ok()
+    });
     *lock = new_conn.clone();
     new_conn
 }
@@ -39,7 +49,13 @@ fn get_or_reconnect_system() -> Option<Connection> {
     {
         return Some(conn.clone());
     }
-    let new_conn = zbus::block_on(async { Connection::system().await.ok() });
+    let new_conn = zbus::block_on(async {
+        ConnectionBuilder::system()
+            .method_timeout(DBUS_PROBE_TIMEOUT)
+            .build()
+            .await
+            .ok()
+    });
     *lock = new_conn.clone();
     new_conn
 }

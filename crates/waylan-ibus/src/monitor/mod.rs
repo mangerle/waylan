@@ -384,43 +384,47 @@ fn poll_wakeup_and_inotify(
     let inotify_fd = inotify_watcher.map(|w| w.fd());
     let wakeup_fd = loop_wakeup.map(|w| w.fd());
 
-    let mut fds: Vec<PollFd<'_>> = Vec::with_capacity(2);
-    let wakeup_idx = if let Some(ref fd) = wakeup_fd {
-        let idx = fds.len();
-        fds.push(PollFd::new(&**fd, PollFlags::IN | PollFlags::ERR));
-        Some(idx)
-    } else {
-        None
-    };
-
-    if let Some(ref fd) = inotify_fd {
-        fds.push(PollFd::new(&**fd, PollFlags::IN | PollFlags::ERR));
-    }
-
-    if fds.is_empty() {
-        let sleep_ms = if timeout_ms < 0 {
-            100
-        } else {
-            timeout_ms.max(50) as u64
-        };
-        thread::sleep(Duration::from_millis(sleep_ms));
-        return;
-    }
-
     let timespec = if timeout_ms >= 0 {
         Duration::from_millis(timeout_ms as u64).try_into().ok()
     } else {
         None
     };
 
-    if let Ok(n) = poll(&mut fds, timespec.as_ref())
-        && n > 0
-        && let Some(idx) = wakeup_idx
-        && fds[idx]
-            .revents()
-            .intersects(PollFlags::IN | PollFlags::ERR)
-        && let Some(wakeup) = loop_wakeup
-    {
-        wakeup.drain();
+    match (wakeup_fd, inotify_fd) {
+        (Some(w_fd), Some(i_fd)) => {
+            let mut fds = [
+                PollFd::new(&*w_fd, PollFlags::IN | PollFlags::ERR),
+                PollFd::new(&*i_fd, PollFlags::IN | PollFlags::ERR),
+            ];
+            if let Ok(n) = poll(&mut fds, timespec.as_ref())
+                && n > 0
+                && fds[0].revents().intersects(PollFlags::IN | PollFlags::ERR)
+                && let Some(wakeup) = loop_wakeup
+            {
+                wakeup.drain();
+            }
+        }
+        (Some(w_fd), None) => {
+            let mut fds = [PollFd::new(&*w_fd, PollFlags::IN | PollFlags::ERR)];
+            if let Ok(n) = poll(&mut fds, timespec.as_ref())
+                && n > 0
+                && fds[0].revents().intersects(PollFlags::IN | PollFlags::ERR)
+                && let Some(wakeup) = loop_wakeup
+            {
+                wakeup.drain();
+            }
+        }
+        (None, Some(i_fd)) => {
+            let mut fds = [PollFd::new(&*i_fd, PollFlags::IN | PollFlags::ERR)];
+            let _ = poll(&mut fds, timespec.as_ref());
+        }
+        (None, None) => {
+            let sleep_ms = if timeout_ms < 0 {
+                100
+            } else {
+                timeout_ms.max(50) as u64
+            };
+            thread::sleep(Duration::from_millis(sleep_ms));
+        }
     }
 }
