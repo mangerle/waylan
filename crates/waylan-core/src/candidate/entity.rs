@@ -4,7 +4,32 @@
 //! - **实现初衷**：为输入法核心算法、UI 渲染引擎、语音转录与 Wayland/IBus 协议前端提供统一的候选词领域契约。
 //! - **核心优势**：包含匹配拼音、综合分值、二级展开子项与全局 Word ID，支持高效打分与分级排序。
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
+
+/// 候选词注释类别
+///
+/// # 设计原理
+/// - **实现初衷**：消除 UI 渲染与跨层传递中对字符串前缀（如 `starts_with('(')`）的黑盒猜测，
+///   以强类型明确注释的业务意图。
+/// - **核心优势**：严格区分“用户配置控制的标准注音”与“始终需要告知用户的特异性提示”。
+/// - **代价与局限**：轻量 `Copy` 枚举，仅供展示判断，不破坏序列化协议。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommentKind {
+    /// 读音偏离键入拼音的特异性注音（如键入 cang 命中“常”，标注 `(chang)`）
+    /// 属于重要读音纠偏提示，始终常驻展示。
+    PhoneticDifference,
+    /// 物理击键纠错提示（如 `[纠错: ni'hao]`）
+    /// 属于重要输入提示，始终常驻展示。
+    TypoCorrection,
+    /// 特殊功能或模式提示（如 `[混拼]`、`[习惯音]`、`当前时间`、`拆字` 等）
+    /// 始终常驻展示。
+    SpecialHint,
+    /// 用户按需开启的标准拼音全拼注音（如 `[ni'hao]`）
+    /// 受 `show_pinyin_comment` 开关控制。
+    StandardPinyin,
+}
 
 /// 候选词优先级层级（数值越大优先级越高）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
@@ -114,5 +139,67 @@ impl Candidate {
     pub fn with_typo_count(mut self, typo_count: u8) -> Self {
         self.typo_count = typo_count;
         self
+    }
+
+    /// 获取当前注释的强类型类别（若无注释或为空则返回 `None`）
+    #[inline]
+    pub fn comment_kind(&self) -> Option<CommentKind> {
+        let comment = self.comment.as_deref()?.trim();
+        if comment.is_empty() {
+            return None;
+        }
+        if comment.starts_with('(') && comment.ends_with(')') {
+            Some(CommentKind::PhoneticDifference)
+        } else if comment.starts_with("[纠错") {
+            Some(CommentKind::TypoCorrection)
+        } else if comment.starts_with('[') && comment.ends_with(']') {
+            let inner = &comment[1..comment.len() - 1];
+            // 若中括号内部为纯 ASCII 拼音字母及隔音符，则为标准拼音注音；否则为中文特殊提示（如 [混拼]、[习惯音]）
+            if inner
+                .bytes()
+                .all(|b| b.is_ascii_alphabetic() || b == b'\'' || b.is_ascii_whitespace())
+            {
+                Some(CommentKind::StandardPinyin)
+            } else {
+                Some(CommentKind::SpecialHint)
+            }
+        } else {
+            Some(CommentKind::SpecialHint)
+        }
+    }
+
+    /// 根据全局标准拼音展示开关，判定当前注释是否应该在界面上展示
+    #[inline]
+    pub fn should_show_comment(&self, show_standard_pinyin: bool) -> bool {
+        match self.comment_kind() {
+            Some(CommentKind::StandardPinyin) => show_standard_pinyin,
+            Some(
+                CommentKind::PhoneticDifference
+                | CommentKind::TypoCorrection
+                | CommentKind::SpecialHint,
+            ) => true,
+            None => false,
+        }
+    }
+
+    /// 根据全局标准拼音展示开关，获取用于格式化显示的注释切片
+    #[inline]
+    pub fn display_comment(&self, show_standard_pinyin: bool) -> Option<&str> {
+        if self.should_show_comment(show_standard_pinyin) {
+            self.comment.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// 根据全局标准拼音展示开关，合成候选词与其注释文本（无注释或关闭展示时零堆分配借用原切片）
+    #[inline]
+    pub fn format_display_text<'a>(&'a self, show_standard_pinyin: bool) -> Cow<'a, str> {
+        match self.display_comment(show_standard_pinyin) {
+            Some(comment) if !comment.is_empty() => {
+                Cow::Owned(format!("{} {}", self.text, comment))
+            }
+            _ => Cow::Borrowed(self.text.as_str()),
+        }
     }
 }

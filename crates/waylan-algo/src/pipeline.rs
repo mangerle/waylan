@@ -91,23 +91,62 @@ fn should_boost_single_typo(candidates: &[AlgoCandidate], raw_input: Option<&str
     typo_score > mixed_score
 }
 
-/// 计算候选的实际排序档位（在满足提权条件时，将单次纠错并入 SentenceViterbi 与混拼候选同台竞技）
-#[inline]
-fn effective_tier(cand: &AlgoCandidate, enable_typo_boost: bool) -> CandidateTier {
-    if enable_typo_boost && cand.tier == CandidateTier::TypoCorrection && cand.typo_count == 1 {
-        CandidateTier::SentenceViterbi
-    } else {
-        cand.tier
-    }
-}
+/// 候选词排序器 (Candidate Ranker)
+///
+/// # 设计原理
+/// - **实现初衷**：统一候选词分级排序与精确词首位保护策略，
+///   消除零散的层级重写与事后切片挪动。
+/// - **核心优势**：
+///   1. 语义分明：将“单次纠错提权”与“首位精确保护（方案 A）”显式表达为内聚算法；
+///   2. 保护首位：确保在存在精确匹配时，空格首选永远忠实于用户敲击的原始音节，
+///      同时高频模糊音词进入 Top 2+ 前列参与高效选词；
+///   3. 零堆分配：就地利用排序与元素定位，避免无谓的内存分配与克隆。
+/// - **代价与局限**：在首位出现模糊音且存在原生精确词时，执行一次常数时间的就地右旋（`rotate_right(1)`）。
+pub struct CandidateRanker;
 
-/// 执行候选词排序（支持基于有效层级与得分降序）
-fn sort_candidates(candidates: &mut [AlgoCandidate], enable_typo_boost: bool) {
-    candidates.sort_by(|a, b| {
-        effective_tier(b, enable_typo_boost)
-            .cmp(&effective_tier(a, enable_typo_boost))
-            .then_with(|| b.score.cmp(&a.score))
-    });
+impl CandidateRanker {
+    /// 执行完整候选词分级排序与首位保护
+    pub fn rank(candidates: &mut [AlgoCandidate], enable_typo_boost: bool) {
+        if candidates.len() <= 1 {
+            return;
+        }
+
+        // 1. 基于有效层级与综合得分降序排列
+        candidates.sort_by(|a, b| {
+            Self::effective_tier(b, enable_typo_boost)
+                .cmp(&Self::effective_tier(a, enable_typo_boost))
+                .then_with(|| b.score.cmp(&a.score))
+        });
+
+        // 2. 方案 A 首选保护：若排在首位的是模糊音/规则归一候选，且候选集中存在原生精确候选，
+        //    则将最高分的精确候选提升至首位，后续候选保持既定得分降序。
+        if let Some(first_cand) = candidates.first()
+            && first_cand.tier == CandidateTier::RuleNormalization
+            && let Some(exact_idx) = candidates.iter().position(|c| {
+                matches!(
+                    c.tier,
+                    CandidateTier::ExactWord
+                        | CandidateTier::UserHistory
+                        | CandidateTier::ProtectedEntity
+                )
+            })
+        {
+            candidates[..=exact_idx].rotate_right(1);
+        }
+    }
+
+    /// 计算候选的实际比较档位
+    #[inline]
+    fn effective_tier(cand: &AlgoCandidate, enable_typo_boost: bool) -> CandidateTier {
+        if enable_typo_boost && cand.tier == CandidateTier::TypoCorrection && cand.typo_count == 1 {
+            CandidateTier::SentenceViterbi
+        } else if cand.tier == CandidateTier::RuleNormalization {
+            // 模糊音与规则归一提升至与 ExactWord 同级竞技，由综合词频打分决定展现先后
+            CandidateTier::ExactWord
+        } else {
+            cand.tier
+        }
+    }
 }
 
 /// 候选词后处理流水线 (Candidate Pipeline)
@@ -161,7 +200,7 @@ impl CandidatePipeline {
         const MAX_PRE_OPENCC_CANDIDATES: usize = 160;
         const MAX_PUBLISHED_CANDIDATES: usize = 120;
         let enable_typo_boost = should_boost_single_typo(&candidates, raw_input);
-        sort_candidates(&mut candidates, enable_typo_boost);
+        CandidateRanker::rank(&mut candidates, enable_typo_boost);
         if candidates.len() > MAX_PRE_OPENCC_CANDIDATES {
             candidates.truncate(MAX_PRE_OPENCC_CANDIDATES);
         }
@@ -174,7 +213,7 @@ impl CandidatePipeline {
                 OpenCcDict::global().convert_candidates(&mut candidates);
             }
             // 一简多繁展开可能引入新顺序，重排确保同层级得分有序
-            sort_candidates(&mut candidates, enable_typo_boost);
+            CandidateRanker::rank(&mut candidates, enable_typo_boost);
         }
 
         // 4. 候选词去重（在有序列表中保留最高优先级与最高分者）
@@ -466,5 +505,30 @@ mod tests {
         let res = CandidatePipeline::process_core_with_context(raw, &config, None, Some("bj"));
         assert_eq!(res[0].text, "北京");
         assert_eq!(res[1].text, "比");
+    }
+
+    #[test]
+    fn test_candidate_ranker_exact_protection_plan_a() {
+        // 场景 1：存在原生精确词时，首位必须保护给最高分精确词，高频模糊音词排第 2
+        let mut list1 = vec![
+            AlgoCandidate::new("常", "chang", 90_000).with_tier(CandidateTier::RuleNormalization),
+            AlgoCandidate::new("长", "chang", 85_000).with_tier(CandidateTier::RuleNormalization),
+            AlgoCandidate::new("藏", "cang", 30_000).with_tier(CandidateTier::ExactWord),
+            AlgoCandidate::new("仓", "cang", 20_000).with_tier(CandidateTier::ExactWord),
+        ];
+        CandidateRanker::rank(&mut list1, false);
+        assert_eq!(list1[0].text, "藏", "首选必须由最高分原生精确词锁定");
+        assert_eq!(list1[1].text, "常", "次位开始高频模糊音词自然按分值呈现");
+        assert_eq!(list1[2].text, "长");
+        assert_eq!(list1[3].text, "仓");
+
+        // 场景 2：若无原生精确词（仅有模糊音词），最高分模糊音词直接为第 1 位
+        let mut list2 = vec![
+            AlgoCandidate::new("常", "chang", 90_000).with_tier(CandidateTier::RuleNormalization),
+            AlgoCandidate::new("长", "chang", 85_000).with_tier(CandidateTier::RuleNormalization),
+        ];
+        CandidateRanker::rank(&mut list2, false);
+        assert_eq!(list2[0].text, "常");
+        assert_eq!(list2[1].text, "长");
     }
 }

@@ -228,3 +228,127 @@ fn test_fuzzy_fallback_when_fuzzy_disabled() {
         cands2.iter().take(5).map(|c| &c.text).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn test_fuzzy_cang_preedit_preserved_and_ranking_plan_a() {
+    let mut table = LexiconTable::new();
+    table.insert("cang", "藏", 8_700);
+    table.insert("cang", "仓", 3_300);
+    table.insert("cang", "鸧", 50); // 低频生僻字
+    table.insert("chang", "常", 118_000); // 极高频模糊音字
+    table.insert("chang", "长", 101_000);
+
+    let mut cfg = AlgoConfig::default();
+    cfg.fuzzy.c_ch = true;
+    cfg.show_pinyin_comment = false;
+    let mut engine = AlgoEngine::new(table, cfg);
+
+    for ch in "cang".chars() {
+        engine.push_char(ch);
+    }
+
+    // 1. 验证预编辑文本：开启模糊音时必须严格保持用户精确输入的拼音，不得被改写为 chang
+    assert_eq!(
+        engine.formatted_preedit(),
+        "cang",
+        "预编辑文本必须忠实展示用户实际输入的 cang，不得被模糊音改写为 chang"
+    );
+
+    // 2. 验证方案 A 排序：首位必须绝对保留精确匹配中最高分的候选词（藏）
+    let cands = engine.all_candidates();
+    assert!(!cands.is_empty(), "必须产出候选词");
+    assert_eq!(
+        cands[0].text, "藏",
+        "首位候选必须严格保护给精确匹配最高分词「藏」"
+    );
+    assert_eq!(
+        cands[0].comment, None,
+        "精确匹配词与输入拼音完全一致，不应显示冗余括号"
+    );
+
+    // 3. 验证高频模糊音词（常、长）紧随其后进入首页，且超越生僻精确字（鸧）
+    let pos_chang = cands
+        .iter()
+        .position(|c| c.text == "常")
+        .expect("常 必须存在于候选列表");
+    let pos_zhang = cands
+        .iter()
+        .position(|c| c.text == "长")
+        .expect("长 必须存在于候选列表");
+    let pos_qiang = cands
+        .iter()
+        .position(|c| c.text == "鸧")
+        .expect("鸧 必须存在于候选列表");
+
+    assert_eq!(
+        cands[pos_chang].comment.as_deref(),
+        Some("(chang)"),
+        "模糊音候选词「常」必须带正确拼音括号 (chang)"
+    );
+    assert_eq!(
+        cands[pos_zhang].comment.as_deref(),
+        Some("(chang)"),
+        "模糊音候选词「长」必须带正确拼音括号 (chang)"
+    );
+
+    assert!(
+        pos_chang < 4,
+        "高频模糊音「常」必须进入前排可见区，实际位置: {}",
+        pos_chang
+    );
+    assert!(
+        pos_zhang < 4,
+        "高频模糊音「长」必须进入前排可见区，实际位置: {}",
+        pos_zhang
+    );
+    assert!(
+        pos_chang < pos_qiang && pos_zhang < pos_qiang,
+        "高频模糊音（常、长）排序必须优于低频生僻精确字（鸧）"
+    );
+}
+
+#[test]
+fn test_preedit_strictly_preserves_raw_input_under_all_rules() {
+    let mut table = LexiconTable::new();
+    table.insert("gui", "贵", 8_000);
+    table.insert("zong", "总", 8_000);
+    table.insert("wan'er", "玩儿", 8_000);
+    table.insert("ni'hao", "你好", 10_000);
+
+    let mut cfg = AlgoConfig::default();
+    cfg.typo_rules.enable = true;
+    cfg.typo_rules.uei_ui = true;
+    cfg.typo_rules.on_ong = true;
+    let mut engine = AlgoEngine::new(table, cfg);
+
+    // 1. 规则容错 uei -> ui：输入 guei，预编辑必须严格显示 guei，不能被改写为 gui，候选词能出「贵」
+    for ch in "guei".chars() {
+        engine.push_char(ch);
+    }
+    assert_eq!(engine.formatted_preedit(), "guei");
+    assert!(engine.all_candidates().iter().any(|c| c.text == "贵"));
+
+    // 2. 规则容错 on -> ong：输入 zon，预编辑必须严格显示 zon，不能被改写为 zong，候选词能出「总」
+    engine.reset();
+    for ch in "zon".chars() {
+        engine.push_char(ch);
+    }
+    assert_eq!(engine.formatted_preedit(), "zon");
+    assert!(engine.all_candidates().iter().any(|c| c.text == "总"));
+
+    // 3. 儿化音：输入 wanr，预编辑必须严格显示 wanr，不能被改写为 wan'er，候选词能出「玩儿」
+    engine.reset();
+    for ch in "wanr".chars() {
+        engine.push_char(ch);
+    }
+    assert_eq!(engine.formatted_preedit(), "wanr");
+    assert!(engine.all_candidates().iter().any(|c| c.text == "玩儿"));
+
+    // 4. 物理邻键纠错：输入 nihso，预编辑必须严格显示 ni'hso，不能被改写为 ni'hao，候选词能出「你好」
+    engine.reset();
+    for ch in "nihso".chars() {
+        engine.push_char(ch);
+    }
+    assert_eq!(engine.formatted_preedit(), "ni'hso");
+    assert!(engine.all_candidates().iter().any(|c| c.text == "你好"));
+}

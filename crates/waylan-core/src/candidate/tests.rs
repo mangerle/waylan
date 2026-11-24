@@ -205,3 +205,46 @@ fn test_format_candidate_custom_keys() {
         "s. 世界"
     );
 }
+
+#[test]
+fn test_candidate_comment_kind_and_formatting() {
+    // 1. 无注释
+    let c_plain = Candidate::new("你好", "ni'hao", 100);
+    assert_eq!(c_plain.comment_kind(), None);
+    assert!(!c_plain.should_show_comment(true));
+    assert_eq!(c_plain.format_display_text(true), "你好");
+    assert_eq!(c_plain.format_display_text(false), "你好");
+
+    // 2. 特异性读音圆括号注释 (chang)
+    let c_diff = Candidate::new("常", "chang", 90).with_comment("(chang)");
+    assert_eq!(c_diff.comment_kind(), Some(CommentKind::PhoneticDifference));
+    assert!(c_diff.should_show_comment(true));
+    assert!(c_diff.should_show_comment(false));
+    assert_eq!(c_diff.format_display_text(true), "常 (chang)");
+    assert_eq!(c_diff.format_display_text(false), "常 (chang)");
+
+    // 3. 击键纠错提示 [纠错: ni'hao]
+    let c_typo = Candidate::new("你好", "ni'hao", 80).with_comment("[纠错: ni'hao]");
+    assert_eq!(c_typo.comment_kind(), Some(CommentKind::TypoCorrection));
+    assert!(c_typo.should_show_comment(false));
+    assert_eq!(c_typo.format_display_text(false), "你好 [纠错: ni'hao]");
+
+    // 4. 标准普通全拼注音 [ni'hao]
+    let c_std = Candidate::new("你好", "ni'hao", 70).with_comment("[ni'hao]");
+    assert_eq!(c_std.comment_kind(), Some(CommentKind::StandardPinyin));
+    assert!(c_std.should_show_comment(true));
+    assert!(!c_std.should_show_comment(false));
+    assert_eq!(c_std.format_display_text(true), "你好 [ni'hao]");
+    assert_eq!(c_std.format_display_text(false), "你好");
+
+    // 5. 特殊中文模式提示 [混拼] / [习惯音] / 拆字
+    let c_mixed = Candidate::new("北京", "bei'jing", 60).with_comment("[混拼]");
+    assert_eq!(c_mixed.comment_kind(), Some(CommentKind::SpecialHint));
+    assert!(c_mixed.should_show_comment(false));
+    assert_eq!(c_mixed.format_display_text(false), "北京 [混拼]");
+
+    let c_custom = Candidate::new("㐷", "u'ma", 50).with_comment("拆字");
+    assert_eq!(c_custom.comment_kind(), Some(CommentKind::SpecialHint));
+    assert!(c_custom.should_show_comment(false));
+    assert_eq!(c_custom.format_display_text(false), "㐷 拆字");
+}

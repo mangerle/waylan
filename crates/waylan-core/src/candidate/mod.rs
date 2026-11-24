@@ -16,7 +16,7 @@ pub mod view;
 mod tests;
 
 pub use action::{InputMode, TextAction};
-pub use entity::{Candidate, CandidateTier};
+pub use entity::{Candidate, CandidateTier, CommentKind};
 pub use format::{CIRCLED_NUMBERS, format_candidate_display, format_candidate_index};
 pub use state::{CandidateBoxState, CandidateExpansion, VoiceBoxState};
 pub use view::{CandidateBoxView, CandidateViewMode};

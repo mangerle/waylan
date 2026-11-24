@@ -32,6 +32,14 @@ fn has_clean_decode_anchor(decode: &DecodeResult) -> bool {
             .any(|s| s.typo_count == 0 && !s.has_initial)
 }
 
+/// 检查规范拼音（忽略隔音符）是否与用户输入的对应切片存在拼音差异
+#[inline]
+fn is_pinyin_different_from_raw(pinyin: &str, raw: &str) -> bool {
+    let p_iter = pinyin.bytes().filter(|&b| b != b'\'');
+    let r_iter = raw.bytes().filter(|&b| b != b'\'');
+    !p_iter.eq(r_iter)
+}
+
 impl AlgoEngine {
     /// 从统一解码结果及用户词库收集全量候选词到复用缓冲区
     pub(crate) fn collect_all_raw_candidates_into(
@@ -104,6 +112,7 @@ impl AlgoEngine {
                 pm,
                 raw_input.len(),
                 (has_exact_whole_or_sentence, has_positive_typo_word),
+                raw_input,
             ) {
                 out.push(cand);
             }
@@ -116,6 +125,7 @@ impl AlgoEngine {
         pm: &PhraseMatch,
         raw_len: usize,
         anchor_flags: (bool, bool),
+        raw_input: &str,
     ) -> Option<AlgoCandidate> {
         let (has_exact_anchor, has_positive_typo_word) = anchor_flags;
         let mut weighted = score_phrase_match(pm, &self.config.scoring_weights);
@@ -153,7 +163,13 @@ impl AlgoEngine {
         } else if is_habitual_alias_key(&pm.matched_key) {
             (CandidateTier::ExactWord, Some("[习惯音]".to_string()))
         } else {
-            (CandidateTier::RuleNormalization, None)
+            // 模糊音或规则归一：当规范拼音与原始输入切片不一致时，在候选词后附带正确拼音圆括号
+            let comment = if is_pinyin_different_from_raw(&pm.matched_key, raw_input) {
+                Some(format!("({})", pm.matched_key))
+            } else {
+                None
+            };
+            (CandidateTier::RuleNormalization, comment)
         };
 
         Some(AlgoCandidate {
@@ -207,6 +223,8 @@ impl AlgoEngine {
                 Some(format!("[纠错: {}]", sent.pinyin))
             } else if sent.has_initial {
                 Some("[混拼]".to_string())
+            } else if !sent.is_exact_all && is_pinyin_different_from_raw(&sent.pinyin, raw_input) {
+                Some(format!("({})", sent.pinyin))
             } else {
                 None
             };
@@ -239,11 +257,17 @@ impl AlgoEngine {
             } else {
                 (CandidateTier::PrefixPartial, to_positive_score(head.score))
             };
+            let head_slice = raw_input.get(..head.consumed_len).unwrap_or(raw_input);
+            let comment = if is_pinyin_different_from_raw(&head.pinyin, head_slice) {
+                Some(format!("({})", head.pinyin))
+            } else {
+                None
+            };
             out.push(AlgoCandidate {
                 text: head.text.clone(),
                 pinyin: head.pinyin.clone(),
                 score: head_score,
-                comment: None,
+                comment,
                 tier,
                 is_expandable: false,
                 consumed_len: Some(head.consumed_len),

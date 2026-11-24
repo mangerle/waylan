@@ -218,16 +218,7 @@ impl SyllableLattice {
                 }
                 PreeditStep::Edge { prev, edge_idx } => {
                     let edge = &self.edges_from[prev][edge_idx];
-                    if matches!(
-                        edge.kind,
-                        EdgeKind::Initial | EdgeKind::PartialTail | EdgeKind::Typo(_)
-                    ) {
-                        push_part(&mut out, &mut emitted, &self.raw[edge.start..edge.end]);
-                    } else {
-                        for syl in edge.syllables.iter() {
-                            push_part(&mut out, &mut emitted, syl);
-                        }
-                    }
+                    push_part(&mut out, &mut emitted, &self.raw[edge.start..edge.end]);
                 }
             }
         }

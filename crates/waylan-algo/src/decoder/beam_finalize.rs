@@ -46,13 +46,9 @@ pub(super) fn finalize_decode_result(
     });
     let prefix_heads = build_prefix_heads(&sentences, &prefix_word_matches, &options.weights);
 
-    let best_preedit = sentences
-        .first()
-        .filter(|s| {
-            s.typo_count == 0 && !s.has_initial && !s.has_partial_tail && !s.pinyin.is_empty()
-        })
-        .map(|s| s.pinyin.clone())
-        .unwrap_or_else(|| lattice.best_formatted_preedit());
+    // 预编辑文本属于用户输入击键序列的视觉切分回显，唯一且排他性地由音节格依据原始按键切分产出，
+    // 严禁被语义解码结果的词库标准拼音篡改覆盖（确保输入所见即所得）。
+    let best_preedit = lattice.best_formatted_preedit();
 
     DecodeResult {
         sentences,

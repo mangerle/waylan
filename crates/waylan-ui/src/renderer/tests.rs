@@ -321,3 +321,34 @@ fn test_voice_visual_effect_variants_render() {
         );
     }
 }
+
+#[test]
+fn test_candidate_text_formatting_special_comments_preserved() {
+    let mut renderer = CandidateBoxRenderer::new(UiTheme::light());
+    // 关闭常规拼音注音
+    renderer.style.show_pinyin_comment = false;
+
+    // 1. 普通拼音注音中括号应被隐藏
+    let normal_cand = Candidate::new("你好", "ni'hao", 100).with_comment("[ni'hao]");
+    assert_eq!(
+        renderer.display_text(&normal_cand),
+        "你好",
+        "常规拼音注音在 show_pinyin_comment=false 时应被隐藏"
+    );
+
+    // 2. 模糊音/规则归一的特异性读音圆括号注释应常驻保留展示
+    let fuzzy_cand = Candidate::new("常", "chang", 90).with_comment("(chang)");
+    assert_eq!(
+        renderer.display_text(&fuzzy_cand),
+        "常 (chang)",
+        "与输入不一致的特异性读音圆括号注释在 show_pinyin_comment=false 时应常驻展示"
+    );
+
+    // 3. 物理按键纠错注释应常驻保留展示
+    let typo_cand = Candidate::new("你好", "ni'hao", 80).with_comment("[纠错: ni'hao]");
+    assert_eq!(
+        renderer.display_text(&typo_cand),
+        "你好 [纠错: ni'hao]",
+        "纠错提示在 show_pinyin_comment=false 时应常驻展示"
+    );
+}

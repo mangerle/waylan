@@ -102,19 +102,10 @@ where
     (badge_offset, preedit_offset)
 }
 
-/// 根据展示开关拼接候选词与注释文本（无注释或关闭展示时零堆分配借用原切片）
+/// 根据展示开关拼接候选词与注释文本（直接委托至 Candidate 领域模型契约，零堆分配借用原切片）
 #[inline]
 pub(crate) fn format_candidate_text<'a>(cand: &'a Candidate, show_comment: bool) -> Cow<'a, str> {
-    if show_comment {
-        match cand.comment.as_deref() {
-            Some(comment) if !comment.is_empty() => {
-                Cow::Owned(format!("{} {}", cand.text, comment))
-            }
-            _ => Cow::Borrowed(cand.text.as_str()),
-        }
-    } else {
-        Cow::Borrowed(cand.text.as_str())
-    }
+    cand.format_display_text(show_comment)
 }
 
 /// 测量单个候选条目的序号、注释、图标与文本宽度明细
