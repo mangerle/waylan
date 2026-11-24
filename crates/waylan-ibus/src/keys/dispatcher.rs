@@ -26,8 +26,6 @@ pub struct IbusFrontend<'a> {
     pub index_style: CandidateIndexStyle,
     /// 全局标准拼音注音展示开关
     pub show_pinyin_comment: bool,
-    /// V 模式等场景下需保留原始输入串作为预编辑文本时的显式覆盖
-    pub raw_v_preedit: Option<String>,
 }
 
 impl<'a> InputMethodFrontend for IbusFrontend<'a> {
@@ -37,30 +35,24 @@ impl<'a> InputMethodFrontend for IbusFrontend<'a> {
 
     fn update_preedit(&mut self, text: &str, _cursor_byte_idx: usize) {
         self.outcome.update_ui = true;
-        let effective = self.raw_v_preedit.as_deref().unwrap_or(text);
         if let Some(ref mut snap) = self.outcome.ui_snapshot {
-            snap.preedit = effective.to_string();
+            snap.preedit = text.to_string();
         } else {
             let mut snap = UiSnapshot::empty();
-            snap.preedit = effective.to_string();
+            snap.preedit = text.to_string();
             self.outcome.ui_snapshot = Some(snap);
         }
     }
 
     fn update_candidates(&mut self, state: &CandidateBoxState) {
         self.outcome.update_ui = true;
-        let mut snap = UiSnapshot::from_candidate_box_state(
+        let snap = UiSnapshot::from_candidate_box_state(
             state,
             self.page_size,
             self.orientation,
             self.index_style,
             self.show_pinyin_comment,
         );
-        if state.voice.is_none()
-            && let Some(ref v_preedit) = self.raw_v_preedit
-        {
-            snap.preedit = v_preedit.clone();
-        }
         self.outcome.ui_snapshot = Some(snap);
     }
 
@@ -134,7 +126,6 @@ impl IbusSessionCore {
                 orientation,
                 index_style,
                 show_pinyin_comment: self.runtime.core.engine.config.show_pinyin_comment,
-                raw_v_preedit: None,
             };
             let res = self.runtime.process_key_event(
                 &mut frontend,

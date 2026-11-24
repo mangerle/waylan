@@ -110,29 +110,18 @@ impl WaylanV1Session {
 
     /// 触发候选框悬浮表面位图重绘并提交至 Wayland 表面
     pub fn render_candidate_surface(&mut self, state: &CandidateBoxState) {
-        let params = CandidateSurfaceCommitParams {
+        let params = crate::session_common::V1LayerCommitParams {
             shm: self.surface.shm.as_ref(),
             popup_wl_surface: self.surface.popup_wl_surface.as_ref(),
+            layer_surface: self.protocol.layer_surface.as_ref(),
             qhandle: self.qhandle.as_ref(),
             active_buffer: &mut self.surface.active_buffer,
         };
-        commit_candidate_surface(&mut self.surface.surface_manager, state, params);
-
-        if let Some(ref layer_surf) = self.protocol.layer_surface {
-            let scale = self.surface.surface_manager.scale.max(1) as u32;
-            let (phys_w, phys_h) = self.surface.surface_manager.current_size;
-            let logical_w = (phys_w / scale).max(1);
-            let logical_h = (phys_h / scale).max(1);
-            let (pos_x, pos_y) = self
-                .surface
-                .surface_manager
-                .compute_popup_position(logical_w, logical_h);
-            layer_surf.set_size(logical_w, logical_h);
-            layer_surf.set_margin(pos_y.max(0), 0, 0, pos_x.max(0));
-            if let Some(ref surf) = self.surface.popup_wl_surface {
-                surf.commit();
-            }
-        }
+        crate::session_common::commit_v1_layer_surface(
+            &mut self.surface.surface_manager,
+            state,
+            params,
+        );
     }
 
     /// 刷新候选框悬浮表面

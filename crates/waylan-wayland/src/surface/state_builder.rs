@@ -44,11 +44,41 @@ pub fn commit_candidate_surface<S>(
     );
 }
 
-/// 隐藏候选框并解绑关联的 Wayland 表面缓冲区
-pub fn hide_candidate_surface_buffer(
+/// V1 LayerSurface 提交与布局更新所需的目标上下文
+pub struct V1LayerCommitParams<'a, S> {
+    pub shm: Option<&'a WlShm>,
+    pub popup_wl_surface: Option<&'a WlSurface>,
+    pub layer_surface: Option<&'a wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+    pub qhandle: Option<&'a QueueHandle<S>>,
+    pub active_buffer: &'a mut Option<WlBuffer>,
+}
+
+/// 统一执行 V1 候选框渲染提交并同步 LayerSurface 尺寸与边距
+pub fn commit_v1_layer_surface<S>(
     surface_manager: &mut CandidateSurfaceManager,
-    popup_wl_surface: Option<&WlSurface>,
-    active_buffer: &mut Option<WlBuffer>,
-) {
-    surface_manager.hide_wayland_surface(popup_wl_surface, active_buffer);
+    box_state: &CandidateBoxState,
+    params: V1LayerCommitParams<'_, S>,
+) where
+    S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
+{
+    let commit_params = CandidateSurfaceCommitParams {
+        shm: params.shm,
+        popup_wl_surface: params.popup_wl_surface,
+        qhandle: params.qhandle,
+        active_buffer: params.active_buffer,
+    };
+    commit_candidate_surface(surface_manager, box_state, commit_params);
+
+    if let Some(layer_surf) = params.layer_surface {
+        let scale = surface_manager.scale.max(1) as u32;
+        let (phys_w, phys_h) = surface_manager.current_size;
+        let logical_w = (phys_w / scale).max(1);
+        let logical_h = (phys_h / scale).max(1);
+        let (pos_x, pos_y) = surface_manager.compute_popup_position(logical_w, logical_h);
+        layer_surf.set_size(logical_w, logical_h);
+        layer_surf.set_margin(pos_y.max(0), 0, 0, pos_x.max(0));
+        if let Some(surf) = params.popup_wl_surface {
+            surf.commit();
+        }
+    }
 }

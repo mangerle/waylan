@@ -152,8 +152,7 @@ impl WaylanV2Session {
 
     /// 隐藏候选框并卸载 Wayland 表面缓冲
     pub fn hide_candidate_surface(&mut self) {
-        hide_candidate_surface_buffer(
-            &mut self.surface.surface_manager,
+        self.surface.surface_manager.hide_wayland_surface(
             self.surface.popup_wl_surface.as_ref(),
             &mut self.surface.active_buffer,
         );
@@ -162,12 +161,12 @@ impl WaylanV2Session {
     /// 提交指定文本上屏，并重置预编辑状态
     pub(crate) fn commit_text(&mut self, text: &str) {
         self.runtime.core.collapse_grid();
-        if let Some(ref im) = self.protocol.input_method {
-            im.commit_string(text.to_string());
-            im.set_preedit_string(String::new(), 0, 0);
-            im.commit(self.protocol.done_serial);
-        }
-        self.hide_candidate_surface();
+        let mut frontend = frontend::WaylanV2Frontend::new(
+            &self.protocol,
+            &mut self.surface,
+            self.qhandle.as_ref(),
+        );
+        waylan_engine::InputMethodFrontend::commit_text(&mut frontend, text);
     }
 
     /// 更新当前 preedit 预编辑字符串到目标客户端

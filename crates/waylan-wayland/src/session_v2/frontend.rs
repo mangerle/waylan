@@ -13,9 +13,7 @@ use wayland_client::QueueHandle;
 
 use super::WaylanV2Session;
 use super::context::{WaylandV2ProtocolContext, WaylandV2SurfaceContext};
-use crate::session_common::{
-    CandidateSurfaceCommitParams, commit_candidate_surface, hide_candidate_surface_buffer,
-};
+use crate::session_common::{CandidateSurfaceCommitParams, commit_candidate_surface};
 
 /// Wayland V2 协议前端轻量借用管道上下文
 pub struct WaylanV2Frontend<'a> {
@@ -76,8 +74,7 @@ impl<'a> InputMethodFrontend for WaylanV2Frontend<'a> {
     }
 
     fn hide_candidates(&mut self) {
-        hide_candidate_surface_buffer(
-            &mut self.surface.surface_manager,
+        self.surface.surface_manager.hide_wayland_surface(
             self.surface.popup_wl_surface.as_ref(),
             &mut self.surface.active_buffer,
         );
