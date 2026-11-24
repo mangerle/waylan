@@ -21,19 +21,13 @@ impl DateTimeEvaluator {
                 let now = Local::now();
                 let subs = Self::format_date_formats(now);
                 let first_text = subs.first().cloned().unwrap_or_else(|| "日期".to_string());
-                Some(
-                    AlgoCandidate::new(first_text, pinyin, 999_999)
-                        .with_sub_candidates(subs),
-                )
+                Some(AlgoCandidate::new(first_text, pinyin, 999_999).with_sub_candidates(subs))
             }
             "shijian" | "sj" => {
                 let now = Local::now();
                 let subs = Self::format_time_formats(now);
                 let first_text = subs.first().cloned().unwrap_or_else(|| "时间".to_string());
-                Some(
-                    AlgoCandidate::new(first_text, pinyin, 999_999)
-                        .with_sub_candidates(subs),
-                )
+                Some(AlgoCandidate::new(first_text, pinyin, 999_999).with_sub_candidates(subs))
             }
             "riqishijian" | "rqsj" => {
                 let now = Local::now();
@@ -42,19 +36,13 @@ impl DateTimeEvaluator {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| "日期时间".to_string());
-                Some(
-                    AlgoCandidate::new(first_text, pinyin, 999_999)
-                        .with_sub_candidates(subs),
-                )
+                Some(AlgoCandidate::new(first_text, pinyin, 999_999).with_sub_candidates(subs))
             }
             "xingqi" | "xq" | "zhou" => {
                 let now = Local::now();
                 let subs = Self::format_weekday_formats(now);
                 let first_text = subs.first().cloned().unwrap_or_else(|| "星期".to_string());
-                Some(
-                    AlgoCandidate::new(first_text, pinyin, 999_999)
-                        .with_sub_candidates(subs),
-                )
+                Some(AlgoCandidate::new(first_text, pinyin, 999_999).with_sub_candidates(subs))
             }
             _ => None,
         }

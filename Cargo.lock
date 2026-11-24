@@ -6164,7 +6164,6 @@ dependencies = [
  "waylan-core",
  "waylan-engine",
  "waylan-sys",
- "waylan-voice",
  "zbus 6.5.0",
 ]
 
