@@ -82,10 +82,10 @@ fn reap_exited_children(children: &Mutex<Vec<TrackedChild>>) {
     });
 }
 
-/// 收到退出信号后，主动终止所有存活子进程并收割其退出状态
+/// 收到退出信号后，主动终止所有存活子进程并收割其退出状态（先取出列表释放互斥锁，避免持锁期间阻塞 wait）
 fn terminate_all_children(children: &Mutex<Vec<TrackedChild>>) {
-    let mut lock = children.lock();
-    for tracked in lock.iter_mut() {
+    let mut pending = std::mem::take(&mut *children.lock());
+    for tracked in pending.iter_mut() {
         info!(
             "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
             tracked.name
@@ -94,7 +94,6 @@ fn terminate_all_children(children: &Mutex<Vec<TrackedChild>>) {
         let _ = tracked.child.wait();
         tracked.mark_finished();
     }
-    lock.clear();
 }
 
 /// 启动后台收割线程，持续轮询回收已退出的外部子进程并在停机时强制终止存活进程

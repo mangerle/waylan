@@ -1,15 +1,9 @@
-//! 系统环境能力探测与看门狗自重启管理
-
-use std::env;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-use std::path::Path;
-use std::process::{self, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+//! 系统环境能力探测与看门狗自重启转发
 
 use log::{info, warn};
-use waylan_sys::LoopWakeup;
 use waylan_wayland::{WaylandCapabilities, probe_wayland_environment};
+
+pub use crate::system::trigger_graceful_restart_and_exit;
 
 /// 检查 Wayland 合成器协议能力
 pub fn check_wayland_capabilities() -> WaylandCapabilities {
@@ -32,70 +26,6 @@ pub fn check_wayland_capabilities() -> WaylandCapabilities {
                 e
             );
             WaylandCapabilities::default()
-        }
-    }
-}
-
-/// 自重启看门狗子进程使用的固定 Shell 脚本模板
-///
-/// 采用固定脚本并通过位置参数 ($1, $2, "$@") 传参，由内核保证参数原子性，100% 杜绝 Shell 注入。
-const RESTART_WATCHDOG_SCRIPT: &str = "trap '' HUP; pid=\"$1\"; exe=\"$2\"; shift 2; \
-    for _ in $(seq 1 50); do if ! kill -0 \"$pid\" 2>/dev/null; then break; fi; sleep 0.1; done; \
-    if kill -0 \"$pid\" 2>/dev/null; then exit 1; fi; \
-    sleep 0.15; exec \"$exe\" \"$@\"";
-
-/// 构造自重启看门狗子进程命令
-///
-/// 看门狗脚本会先等待旧实例（以 PID 标识）完全退出，确认退出后再以相同参数拉起新实例。
-fn build_restart_watchdog_command(exe: &Path) -> Command {
-    let pid = process::id();
-    let args = env::args().skip(1).collect::<Vec<_>>();
-
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(RESTART_WATCHDOG_SCRIPT);
-    cmd.arg("waylan-restart-helper");
-    cmd.arg(pid.to_string());
-    cmd.arg(exe);
-    for arg in args {
-        cmd.arg(arg);
-    }
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
-    #[cfg(unix)]
-    cmd.process_group(0);
-    cmd
-}
-
-/// 派生延迟等待当前进程退出的新实例并向旧实例发出优雅停机信号
-pub fn trigger_graceful_restart_and_exit(
-    exit_requested: &AtomicBool,
-    loop_wakeup: Option<&LoopWakeup>,
-) {
-    let exe = match env::current_exe() {
-        Ok(e) => e,
-        Err(e) => {
-            log::error!(
-                "[系统环境 错误] 无法获取当前程序可执行路径，取消自重启: {}",
-                e
-            );
-            return;
-        }
-    };
-
-    match build_restart_watchdog_command(&exe).spawn() {
-        Ok(_) => {
-            log::info!("[系统环境] 已成功派生自重启看门狗子进程，正在向旧实例发送优雅停机信号...");
-            exit_requested.store(true, Ordering::Release);
-            if let Some(wakeup) = loop_wakeup {
-                wakeup.wake();
-            }
-        }
-        Err(e) => {
-            log::error!(
-                "[系统环境 错误] 派生自重启看门狗子进程失败: {}，取消退出以保持当前服务存活",
-                e
-            );
         }
     }
 }

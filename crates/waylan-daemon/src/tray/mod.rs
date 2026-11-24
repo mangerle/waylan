@@ -242,10 +242,7 @@ impl TrayService {
         }
     }
 
-    /// 向 DBus 批量发射图标、提示与菜单刷新信号
-    ///
-    /// 信号发射顺序固定为 NewIcon -> NewToolTip -> PropertiesChanged -> LayoutUpdated，
-    /// 且收敛在单次异步块内执行，消除反复进出 `block_on` 造成的调度抖动。
+    /// 向 DBus 批量发射图标、提示与菜单刷新信号（收敛在单次异步块内执行）
     fn emit_tray_signals(conn: &Connection, sni: &StatusNotifierItem, menu_revision: &mut u32) {
         let current_icon = sni.icon_name();
         *menu_revision = menu_revision.wrapping_add(1);
@@ -256,21 +253,15 @@ impl TrayService {
         let invalidated_props: Vec<&str> = Vec::new();
 
         zbus::block_on(async {
-            if let Err(e) = conn
-                .emit_signal(
-                    Option::<&str>::None,
-                    "/StatusNotifierItem",
-                    "org.kde.StatusNotifierItem",
-                    "NewIcon",
-                    &(),
-                )
-                .await
-            {
-                warn!("[系统托盘] 发射 NewIcon 图标刷新信号失败: {}", e);
-            } else {
-                debug!("[系统托盘] 成功向 D-Bus 总线发射 NewIcon 图标刷新信号");
-            }
-
+            emit_logged_signal(
+                conn,
+                "/StatusNotifierItem",
+                "org.kde.StatusNotifierItem",
+                "NewIcon",
+                &(),
+                "NewIcon 图标刷新信号",
+            )
+            .await;
             let _ = conn
                 .emit_signal(
                     Option::<&str>::None,
@@ -280,7 +271,6 @@ impl TrayService {
                     &(),
                 )
                 .await;
-
             let _ = conn
                 .emit_signal(
                     Option::<&str>::None,
@@ -294,24 +284,15 @@ impl TrayService {
                     ),
                 )
                 .await;
-
-            if let Err(e) = conn
-                .emit_signal(
-                    Option::<&str>::None,
-                    "/MenuBar",
-                    "com.canonical.dbusmenu",
-                    "LayoutUpdated",
-                    &(rev, 0i32),
-                )
-                .await
-            {
-                warn!("[系统托盘] 发射 LayoutUpdated 菜单刷新信号失败: {}", e);
-            } else {
-                debug!(
-                    "[系统托盘] 成功向 D-Bus 总线发射 LayoutUpdated 菜单刷新信号 (版本 {})",
-                    rev
-                );
-            }
+            emit_logged_signal(
+                conn,
+                "/MenuBar",
+                "com.canonical.dbusmenu",
+                "LayoutUpdated",
+                &(rev, 0i32),
+                "LayoutUpdated 菜单刷新信号",
+            )
+            .await;
         });
     }
 
@@ -373,6 +354,25 @@ impl Drop for TrayService {
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+/// 发射单条托盘 D-Bus 信号并记录统一日志
+async fn emit_logged_signal<B: serde::ser::Serialize + zbus::zvariant::Type>(
+    conn: &Connection,
+    path: &str,
+    interface: &str,
+    signal_name: &str,
+    body: &B,
+    label: &str,
+) {
+    if let Err(e) = conn
+        .emit_signal(Option::<&str>::None, path, interface, signal_name, body)
+        .await
+    {
+        warn!("[系统托盘] 发射 {} 失败: {}", label, e);
+    } else {
+        debug!("[系统托盘] 成功向 D-Bus 总线发射 {}", label);
     }
 }
 

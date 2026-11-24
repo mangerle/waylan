@@ -156,11 +156,7 @@ fn acquire_daemon_instance_lock(
                 e
             );
             if !opts.ibus_backend && !opts.self_check && check_another_instance_running() {
-                info!(
-                    "[微澜] 输入法守护进程已在后台常驻运行，正在为您唤起偏好设置中心并激活输入法..."
-                );
-                activate_desktop_input_source();
-                let _ = launch_settings_gui();
+                handle_instance_conflict(opts);
                 return Ok(None);
             }
             Ok(None)
