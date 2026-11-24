@@ -240,17 +240,13 @@ impl ImeCoreSession {
                 let upper = ch.to_ascii_uppercase();
                 // 当按住 Shift 时，底层系统/XKB 默认会将 CapsLock+Shift 反转为小写字母；
                 // 此时直接由输入法拦截并提交大写字符，彻底杜绝输出小写
-                if self.is_shift_active() {
-                    let text = if self.is_full_width_char() {
-                        to_full_width_char(upper).to_string()
-                    } else {
-                        upper.to_string()
-                    };
-                    return Some(ImeOutputAction::Commit(text));
-                }
                 if self.is_full_width_char() {
-                    let text = to_full_width_char(upper).to_string();
-                    return Some(ImeOutputAction::Commit(text));
+                    return Some(ImeOutputAction::Commit(
+                        to_full_width_char(upper).to_string(),
+                    ));
+                }
+                if self.is_shift_active() {
+                    return Some(ImeOutputAction::Commit(upper.to_string()));
                 }
                 return Some(ImeOutputAction::PassThrough);
             }
@@ -282,7 +278,17 @@ impl ImeCoreSession {
             return Some(action);
         }
 
-        let raw_before_commit = self.engine.raw_input().to_string();
+        // 将提交前的原始拼音备份到栈上（超长时回退堆分配），避免普通击键、翻页等非提交路径产生堆分配
+        let raw_slice = self.engine.raw_input();
+        let mut stack_raw = [0u8; 128];
+        let mut heap_raw: Option<String> = None;
+        let stack_len = if raw_slice.len() <= stack_raw.len() {
+            stack_raw[..raw_slice.len()].copy_from_slice(raw_slice.as_bytes());
+            Some(raw_slice.len())
+        } else {
+            heap_raw = Some(raw_slice.to_string());
+            None
+        };
         let params = CompositionKeyParams {
             key: keycode,
             shift_active: self.is_shift_active(),
@@ -303,6 +309,13 @@ impl ImeCoreSession {
                     to_full_width_string(&text)
                 } else {
                     text
+                };
+                let raw_before_commit = match (stack_len, heap_raw) {
+                    (Some(len), _) => std::str::from_utf8(&stack_raw[..len])
+                        .unwrap_or("")
+                        .to_string(),
+                    (None, Some(s)) => s,
+                    (None, None) => String::new(),
                 };
                 if !raw_before_commit.is_empty() && !final_text.is_empty() {
                     self.last_commit_undo = Some(super::LastCommitUndoState {
@@ -386,8 +399,9 @@ impl ImeCoreSession {
             return None;
         }
         let digit_ch = keycode_to_ascii_digit_char(keycode)?;
+        let mut digit_buf = [0u8; 4];
         self.punctuation_processor
-            .record_commit(&digit_ch.to_string());
+            .record_commit(digit_ch.encode_utf8(&mut digit_buf));
         if self.is_full_width_char() {
             let full = to_full_width_char(digit_ch);
             return Some(ImeOutputAction::Commit(full.to_string()));
