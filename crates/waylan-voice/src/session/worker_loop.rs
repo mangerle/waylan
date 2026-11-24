@@ -138,7 +138,7 @@ fn handle_start_command(
     let Some((recognizer, vad)) = state.cache.prepare_models(&options.voice_config) else {
         let message = "语音识别模型未就绪，已取消本次录音；请检查本地模型文件或云端 API Key 配置";
         warn!("[语音会话] {}", message);
-        let _ = event_tx.send(VoiceEvent::Error(message.to_string()));
+        let _ = event_tx.try_send(VoiceEvent::Error(message.to_string()));
         state.is_active.store(false, Ordering::Release);
         return false;
     };
@@ -159,7 +159,7 @@ fn handle_start_command(
         Ok(c) => c,
         Err(e) => {
             warn!("[语音会话] 启动音频采集硬件失败: {}", e);
-            let _ = event_tx.send(VoiceEvent::Error(e.to_string()));
+            let _ = event_tx.try_send(VoiceEvent::Error(e.to_string()));
             state.is_active.store(false, Ordering::Release);
             return false;
         }

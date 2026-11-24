@@ -136,7 +136,7 @@ impl VoiceSessionController {
         }
 
         self.is_active.store(true, Ordering::Release);
-        if let Err(e) = self.cmd_tx.send(WorkerCommand::Start {
+        if let Err(e) = self.cmd_tx.try_send(WorkerCommand::Start {
             options: Box::new(options),
             event_tx,
         }) {
@@ -152,9 +152,8 @@ impl VoiceSessionController {
     /// 停止录音并请求最终提交识别结果
     pub fn stop_and_commit(&mut self) {
         if self.worker_handle.is_some() && self.is_recording() {
-            // 必须先确保停止指令进入有界命令队列，再由工作线程消费后复位录音状态。
-            // 若先复位 is_active，工作线程可能永远看不到 StopAndCommit，导致最终识别结果丢失。
-            if let Err(e) = self.cmd_tx.send(WorkerCommand::StopAndCommit) {
+            // 使用非阻塞 try_send 防止工作线程加载模型或网络请求期间卡死输入法事件主循环
+            if let Err(e) = self.cmd_tx.try_send(WorkerCommand::StopAndCommit) {
                 warn!("[语音会话] 发送停止并提交指令失败: {}", e);
             }
             self.is_active.store(false, Ordering::Release);
@@ -164,7 +163,7 @@ impl VoiceSessionController {
     /// 取消当前录音并丢弃未完成的识别
     pub fn cancel(&mut self) {
         if self.worker_handle.is_some() && self.is_recording() {
-            if let Err(e) = self.cmd_tx.send(WorkerCommand::Cancel) {
+            if let Err(e) = self.cmd_tx.try_send(WorkerCommand::Cancel) {
                 warn!("[语音会话] 发送取消指令失败: {}", e);
             }
             self.is_active.store(false, Ordering::Release);
@@ -174,7 +173,7 @@ impl VoiceSessionController {
     /// 卸载并释放常驻工作线程中已加载的全部模型权重，归还系统内存
     pub fn unload_models(&self) {
         if self.worker_handle.is_some() {
-            let _ = self.cmd_tx.send(WorkerCommand::UnloadModels);
+            let _ = self.cmd_tx.try_send(WorkerCommand::UnloadModels);
         }
     }
 
@@ -289,7 +288,7 @@ mod tests {
     fn test_extract_final_text_punctuation() {
         let itn_cfg = waylan_core::VoiceItnConfig::default();
         let mut recognizer = MockVoiceRecognizer::new();
-        let text = extract_final_text(&mut recognizer, true, &itn_cfg);
+        let text = extract_final_text(&mut recognizer, true, &itn_cfg).expect("应返回正常识别文本");
         assert_eq!(text, "微澜语音输入");
 
         // 模拟自带标点的识别器输出验证自动标点与滤除标点
@@ -308,11 +307,13 @@ mod tests {
         }
 
         let mut punct_rec = PunctMockRecognizer;
-        let with_punct = extract_final_text(&mut punct_rec, true, &itn_cfg);
+        let with_punct =
+            extract_final_text(&mut punct_rec, true, &itn_cfg).expect("应保留原始标点");
         assert_eq!(with_punct, "你好，微澜语音输入！");
 
         let mut punct_rec2 = PunctMockRecognizer;
-        let stripped = extract_final_text(&mut punct_rec2, false, &itn_cfg);
+        let stripped =
+            extract_final_text(&mut punct_rec2, false, &itn_cfg).expect("应滤除标点符号");
         assert_eq!(stripped, "你好微澜语音输入");
     }
 

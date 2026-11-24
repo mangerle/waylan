@@ -238,6 +238,9 @@ fn create_offline_recognizer(
     Some(recognizer)
 }
 
+/// 本地端侧离线语音识别器单次录音最大缓冲采样点数量（16kHz * 5分钟，与云端保持一致防止 OOM）
+const MAX_OFFLINE_PCM_SAMPLES: usize = 16_000 * 60 * 5;
+
 /// 本地端侧离线语音识别器（基于 sherpa-onnx 原生支持 SenseVoice-Small / Fun-ASR-Nano 权重）
 pub struct OfflineVoiceRecognizer {
     /// 配置参数
@@ -347,8 +350,13 @@ impl VoiceRecognizer for OfflineVoiceRecognizer {
         if self.recognizer.is_none() {
             return Err(self.unavailable_error());
         }
-        // SenseVoice 与 Fun-ASR-Nano 均为整段非流式模型，录音期间缓冲累加样本
-        self.accumulated_pcm.extend_from_slice(samples);
+        // SenseVoice 与 Fun-ASR-Nano 均为整段非流式模型，录音期间缓冲累加样本（设 5 分钟防爆内存上限）
+        let remaining = MAX_OFFLINE_PCM_SAMPLES.saturating_sub(self.accumulated_pcm.len());
+        if remaining == 0 {
+            return Ok(None);
+        }
+        let accept = remaining.min(samples.len());
+        self.accumulated_pcm.extend_from_slice(&samples[..accept]);
         Ok(None)
     }
 

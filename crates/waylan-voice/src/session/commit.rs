@@ -36,11 +36,27 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     feed_recognition(&mut ctx, &silence);
 
     // 4. 调用 finish 提取最终整句识别文字与标点预测
-    let mut final_text = extract_final_text(
+    let mut final_text = match extract_final_text(
         ctx.recognizer,
         ctx.voice_config.auto_punctuation,
         &ctx.voice_config.itn,
-    );
+    ) {
+        Ok(text) => text,
+        Err(e) => {
+            if !ctx.last_partial_text.is_empty() {
+                warn!(
+                    "[语音会话] finish 阶段异常 ({})，降级采用实时预览文本保底: \"{}\"",
+                    e, ctx.last_partial_text
+                );
+                ctx.last_partial_text.clone()
+            } else {
+                warn!("[语音会话] 最终整句识别失败: {}", e);
+                let _ = ctx.event_tx.try_send(VoiceEvent::Error(e.to_string()));
+                ctx.is_active.store(false, Ordering::Release);
+                return;
+            }
+        }
+    };
 
     if final_text.is_empty() && !ctx.last_partial_text.is_empty() {
         info!(
@@ -51,7 +67,7 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     }
 
     info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
-    let _ = ctx.event_tx.send(VoiceEvent::FinalCommit(final_text));
+    let _ = ctx.event_tx.try_send(VoiceEvent::FinalCommit(final_text));
     ctx.is_active.store(false, Ordering::Release);
 }
 
@@ -145,10 +161,10 @@ pub(super) fn extract_final_text(
     recognizer: &mut dyn VoiceRecognizer,
     auto_punctuation: bool,
     itn_config: &waylan_core::VoiceItnConfig,
-) -> String {
-    let raw_text = recognizer.finish().unwrap_or_default();
+) -> Result<String, crate::VoiceError> {
+    let raw_text = recognizer.finish()?;
     if raw_text.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
     // SenseVoice-Small 与 Fun-ASR-Nano 端到端原生自带标点；
     // 若用户显式关闭自动标点，则滤除标点符号直接输出纯字符
@@ -166,5 +182,5 @@ pub(super) fn extract_final_text(
             .collect()
     };
 
-    crate::itn::normalize_voice_text(&final_text, itn_config)
+    Ok(crate::itn::normalize_voice_text(&final_text, itn_config))
 }

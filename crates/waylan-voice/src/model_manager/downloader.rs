@@ -127,7 +127,10 @@ pub fn is_preset_model_installed(meta: &OnlineAsrModelMeta) -> bool {
                     && dest.join("tokens.txt").exists()
             }
             OfflineModelType::Qwen3Asr => {
-                (dest.join("encoder.int8.onnx").exists() || dest.join("encoder.onnx").exists())
+                (dest.join("conv_frontend.int8.onnx").exists()
+                    || dest.join("conv_frontend.onnx").exists())
+                    && (dest.join("encoder.int8.onnx").exists()
+                        || dest.join("encoder.onnx").exists())
                     && (dest.join("decoder.int8.onnx").exists()
                         || dest.join("decoder.onnx").exists())
             }
@@ -141,6 +144,8 @@ pub fn is_preset_model_installed(meta: &OnlineAsrModelMeta) -> bool {
                 (dest.join("encoder_adaptor.int8.onnx").exists()
                     || dest.join("encoder_adaptor.onnx").exists())
                     && (dest.join("llm.int8.onnx").exists() || dest.join("llm.onnx").exists())
+                    && (dest.join("embedding.int8.onnx").exists()
+                        || dest.join("embedding.onnx").exists())
             }
         }
     })
@@ -219,24 +224,23 @@ where
     progress_fn(0.99, "正在解压并规整模型权重...");
     info!("[模型下载] 压缩包下载成功，正在解压至临时目录...");
 
-    // 调用系统 tar 解压
-    let tar_status = Command::new("tar")
-        .args([
-            "-xjf",
-            temp_archive_path.to_str().unwrap_or_default(),
-            "-C",
-            temp_dir.path().to_str().unwrap_or_default(),
-        ])
-        .status()
-        .map_err(|e| VoiceError::ModelManagementFailed {
-            message: format!("调用 tar 解压模型失败: {}", e),
+    // 先列举归档条目校验路径安全，严防包含 `..` 或绝对路径的 Tar Slip 越权穿越
+    let archive_str =
+        temp_archive_path
+            .to_str()
+            .ok_or_else(|| VoiceError::ModelManagementFailed {
+                message: "模型归档路径包含非法 UTF-8 字符".to_string(),
+            })?;
+    let dest_str = temp_dir
+        .path()
+        .to_str()
+        .ok_or_else(|| VoiceError::ModelManagementFailed {
+            message: "临时解压路径包含非法 UTF-8 字符".to_string(),
         })?;
+    verify_tar_archive_safety(archive_str)?;
 
-    if !tar_status.success() {
-        return Err(VoiceError::ModelManagementFailed {
-            message: "解压模型归档文件失败，可能文件损坏或缺少解压工具".to_string(),
-        });
-    }
+    // 调用系统 tar 解压（附带 180 秒超时保护，超时强杀并收割子进程）
+    run_tar_extract_with_timeout(archive_str, dest_str, Duration::from_secs(180))?;
 
     // 在临时目录中寻找解压出来的子目录
     let extracted_sub_dir = fs::read_dir(temp_dir.path())
@@ -376,6 +380,84 @@ where
     );
 
     Ok(())
+}
+
+/// 校验 tar.bz2 归档内所有条目路径安全，严防绝对路径或 `..` 路径穿越（Tar Slip）
+fn verify_tar_archive_safety(archive_path: &str) -> Result<(), VoiceError> {
+    let output = Command::new("tar")
+        .args(["-tjf", archive_path])
+        .output()
+        .map_err(|e| VoiceError::ModelManagementFailed {
+            message: format!("校验模型归档目录失败: {}", e),
+        })?;
+    if !output.status.success() {
+        return Err(VoiceError::ModelManagementFailed {
+            message: "校验模型归档失败，可能文件损坏或格式不受支持".to_string(),
+        });
+    }
+    let listing = String::from_utf8_lossy(&output.stdout);
+    for raw_entry in listing.lines() {
+        let entry = raw_entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let path = Path::new(entry);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(VoiceError::ModelManagementFailed {
+                message: format!("模型归档包含不安全的越权路径条目: {}", entry),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// 在指定超时限制内执行 `tar -xjf` 解压，超时强制终止并收割子进程
+fn run_tar_extract_with_timeout(
+    archive_path: &str,
+    dest_dir: &str,
+    timeout: Duration,
+) -> Result<(), VoiceError> {
+    let mut child = Command::new("tar")
+        .args(["-xjf", archive_path, "-C", dest_dir])
+        .spawn()
+        .map_err(|e| VoiceError::ModelManagementFailed {
+            message: format!("启动 tar 解压模型失败: {}", e),
+        })?;
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return Err(VoiceError::ModelManagementFailed {
+                        message: "解压模型归档文件失败，可能文件损坏或缺少解压工具".to_string(),
+                    });
+                }
+                return Ok(());
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(VoiceError::ModelManagementFailed {
+                        message: "解压模型归档超时，已安全中止并清理子进程".to_string(),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(VoiceError::ModelManagementFailed {
+                    message: format!("等待 tar 解压进程失败: {}", e),
+                });
+            }
+        }
+    }
 }
 
 /// 递归将源目录下的所有文件和子目录复制到目标目录

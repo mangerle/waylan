@@ -155,7 +155,7 @@ fn handle_recording_command(
         WorkerCommand::Cancel => {
             info!("[语音会话] 收到外部取消指令，放弃本次录音");
             release_recording_resources(state, ctx);
-            let _ = ctx.event_tx.send(VoiceEvent::Cancelled);
+            let _ = ctx.event_tx.try_send(VoiceEvent::Cancelled);
             ctx.is_active.store(false, Ordering::Release);
             RecordingCommandOutcome::StopRecording
         }
@@ -272,18 +272,29 @@ fn handle_vad_segment(
     ctx: &mut ActiveRecordingContext<'_>,
 ) -> bool {
     info!("[语音会话] VAD 检测到人声停顿并超时，分句自动断句上屏提交（保持持续听写）");
-    let seg_text = extract_final_text(
+    match extract_final_text(
         ctx.recognizer,
         ctx.voice_config.auto_punctuation,
         &ctx.voice_config.itn,
-    );
-    if !seg_text.is_empty() {
-        info!("[语音会话] 自动断句分句上屏结果: \"{}\"", seg_text);
-        if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-            ctx.event_tx.try_send(VoiceEvent::SegmentCommit(seg_text))
-        {
-            info!("[语音会话] 外部事件通道已关闭，退出录音循环");
-            return false;
+    ) {
+        Ok(seg_text) if !seg_text.is_empty() => {
+            info!("[语音会话] 自动断句分句上屏结果: \"{}\"", seg_text);
+            if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
+                ctx.event_tx.try_send(VoiceEvent::SegmentCommit(seg_text))
+            {
+                info!("[语音会话] 外部事件通道已关闭，退出录音循环");
+                return false;
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!("[语音会话] 分句识别结算失败: {}", e);
+            if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
+                ctx.event_tx.try_send(VoiceEvent::Error(e.to_string()))
+            {
+                info!("[语音会话] 外部事件通道已关闭，退出录音循环");
+                return false;
+            }
         }
     }
     ctx.recognizer.reset();
@@ -305,7 +316,7 @@ fn check_stream_dead(
         .unwrap_or(false)
     {
         warn!("[语音会话] 检测到底层麦克风音频流已异常中断（设备可能已拔出），立即终止会话");
-        let _ = event_tx.send(VoiceEvent::Error("麦克风音频设备已断开".to_string()));
+        let _ = event_tx.try_send(VoiceEvent::Error("麦克风音频设备已断开".to_string()));
         true
     } else {
         false

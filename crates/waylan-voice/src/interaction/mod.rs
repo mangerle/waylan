@@ -246,7 +246,7 @@ impl VoiceInteractionManager {
         }
 
         let is_finalizing_before = self.is_finalizing();
-        let mut final_commit = None;
+        let mut final_commit: Option<String> = None;
 
         for event in self.drain_session_events() {
             match event {
@@ -257,26 +257,31 @@ impl VoiceInteractionManager {
                     self.partial_text = self.config.interaction.real_time_preview.then_some(text);
                 }
                 VoiceEvent::SegmentCommit(text) => {
-                    let trimmed = text.trim().to_string();
+                    let trimmed = text.trim();
                     if !trimmed.is_empty() {
-                        final_commit = Some(trimmed);
+                        match final_commit {
+                            Some(ref mut existing) => existing.push_str(trimmed),
+                            None => final_commit = Some(trimmed.to_string()),
+                        }
                         self.partial_text = None;
-                        break;
                     }
                 }
                 VoiceEvent::FinalCommit(text) => {
-                    final_commit = self.handle_voice_final_commit(text);
-                    break;
+                    let committed = self.handle_voice_final_commit(text);
+                    if let Some(c) = committed {
+                        match final_commit {
+                            Some(ref mut existing) => existing.push_str(&c),
+                            None => final_commit = Some(c),
+                        }
+                    }
                 }
                 VoiceEvent::Cancelled => {
                     debug!("[微澜语音] 语音会话已取消");
                     self.clear_state();
-                    break;
                 }
                 VoiceEvent::Error(err) => {
                     error!("[微澜语音] 识别发生异常: {}", err);
                     self.clear_state();
-                    break;
                 }
             }
         }
