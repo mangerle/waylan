@@ -285,8 +285,17 @@ impl CandidateSurfaceManager {
         };
 
         if let (Some(shm), Some(surf), Some(qh)) = (shm, surface, qhandle) {
-            let aligned_w = (width / scale_u).max(1).saturating_mul(scale_u);
-            let aligned_h = (height / scale_u).max(1).saturating_mul(scale_u);
+            let (effective_scale, aligned_w, aligned_h) = if width >= scale_u && height >= scale_u {
+                (
+                    scale,
+                    (width / scale_u).saturating_mul(scale_u),
+                    (height / scale_u).saturating_mul(scale_u),
+                )
+            } else {
+                // 极端小尺寸无法按 scale_u 整除对齐时，回退 1x 提交以避免池尺寸越界
+                (1, width.max(1), height.max(1))
+            };
+            let effective_scale_u = effective_scale as u32;
             let stride = (width as i32).saturating_mul(4);
 
             let Some(ref mut slot) = self.shm_slots[self.current_slot] else {
@@ -305,10 +314,10 @@ impl CandidateSurfaceManager {
             }
             self.slot_buffers[self.current_slot] = Some(buffer.clone());
 
-            surf.set_buffer_scale(scale);
+            surf.set_buffer_scale(effective_scale);
             surf.attach(Some(&buffer), 0, 0);
-            let logical_w = (aligned_w / scale_u) as i32;
-            let logical_h = (aligned_h / scale_u) as i32;
+            let logical_w = (aligned_w / effective_scale_u) as i32;
+            let logical_h = (aligned_h / effective_scale_u) as i32;
             surf.damage(0, 0, logical_w, logical_h);
             surf.commit();
             *active_buffer = Some(buffer);

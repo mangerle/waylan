@@ -111,6 +111,14 @@ impl ShmSlot {
     }
 }
 
+impl Drop for ShmSlot {
+    fn drop(&mut self) {
+        if let Some((pool, _)) = self.pool.take() {
+            pool.destroy();
+        }
+    }
+}
+
 /// 创建用于跨进程传递给 Wayland 合成器的匿名共享内存文件
 ///
 /// # 设计原理

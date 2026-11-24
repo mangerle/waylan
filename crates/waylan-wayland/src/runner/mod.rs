@@ -140,10 +140,13 @@ fn run_v1_fallback_session(
     exit_requested: Option<Arc<AtomicBool>>,
     loop_wakeup: Option<LoopWakeup>,
 ) -> Result<(), WaylandRunnerError> {
+    let mut surface_manager = returned_session.surface.surface_manager;
+    // 清理 V2 连接创建的 WlShmPool / WlBuffer 代理，防止跨 Wayland 连接错误复用
+    surface_manager.clear_wayland_resources();
     let session_v1 = WaylanV1Session {
         runtime: returned_session.runtime,
         surface: WaylandV1SurfaceContext {
-            surface_manager: returned_session.surface.surface_manager,
+            surface_manager,
             ..Default::default()
         },
         watcher: WaylandV1WatcherContext {
