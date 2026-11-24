@@ -101,15 +101,7 @@ impl DaemonIbusConfigReloader {
 impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn reload(&self, core: &mut IbusSessionCore) -> bool {
         let new_cfg = AppConfig::load_or_create();
-        let current_has_tray = core.has_tray();
-        let is_gnome = waylan_sys::desktop::is_gnome_desktop();
-        let expected_tray = match new_cfg.desktop.enable_tray {
-            waylan_core::TrayDisplayMode::Always => true,
-            waylan_core::TrayDisplayMode::Never => false,
-            waylan_core::TrayDisplayMode::Auto => !is_gnome,
-        };
-
-        if expected_tray != current_has_tray {
+        if super::should_restart_for_tray_change(&new_cfg, core.has_tray(), true) {
             return true;
         }
 
@@ -205,15 +197,5 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
         menu_handler: Some(menu_handler),
         config_reloader: Some(config_reloader),
     });
-    match ibus_res {
-        Ok(_) => {
-            info!("[微澜守护进程] IBus 输入法事件循环已正常退出，所有资源已安全释放。");
-            Ok(())
-        }
-        Err(_) if opts.coordinator.is_shutting_down() => {
-            info!("[微澜守护进程] 收到退出信号，IBus 服务安全退场。");
-            Ok(())
-        }
-        Err(e) => Err(e.into()),
-    }
+    super::finalize_session_loop_result(ibus_res, &opts.coordinator, "IBus")
 }

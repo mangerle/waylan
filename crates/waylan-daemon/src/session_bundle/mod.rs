@@ -12,6 +12,44 @@ pub use ibus_dispatcher::{IbusDispatchOptions, dispatch_ibus_session};
 pub use system_env::{check_wayland_capabilities, trigger_graceful_restart_and_exit};
 pub use wayland_dispatcher::{WaylandDispatchOptions, dispatch_wayland_session};
 
+/// 判定配置热重载后托盘展示形态是否发生改变（决定是否需要优雅重启以重建托盘）
+#[inline]
+pub(super) fn should_restart_for_tray_change(
+    new_cfg: &waylan_core::config::AppConfig,
+    current_has_tray: bool,
+    use_ibus_backend: bool,
+) -> bool {
+    crate::system::determine_tray_should_spawn(new_cfg, use_ibus_backend) != current_has_tray
+}
+
+/// 统一收敛协议后端事件循环退出结果（屏蔽停机期间的预期中断错误）
+pub(super) fn finalize_session_loop_result<E>(
+    loop_result: Result<(), E>,
+    coordinator: &crate::system::ShutdownCoordinator,
+    backend_label: &str,
+) -> Result<(), crate::error::DaemonError>
+where
+    E: Into<crate::error::DaemonError>,
+{
+    match loop_result {
+        Ok(_) => {
+            log::info!(
+                "[微澜守护进程] {} 输入法事件循环已正常退出，所有资源已安全释放。",
+                backend_label
+            );
+            Ok(())
+        }
+        Err(_) if coordinator.is_shutting_down() => {
+            log::info!(
+                "[微澜守护进程] 收到退出信号或托盘退出请求，{} 服务安全退场。",
+                backend_label
+            );
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use waylan_algo::{AlgoConfig, AlgoEngine};

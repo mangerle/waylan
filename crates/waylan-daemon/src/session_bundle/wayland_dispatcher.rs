@@ -8,7 +8,6 @@
 use crate::error::DaemonError;
 use std::path::PathBuf;
 
-use log::info;
 use waylan_algo::AlgoEngine;
 use waylan_core::config::AppConfig;
 use waylan_ui::CandidateBoxRenderer;
@@ -51,18 +50,5 @@ pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), 
         voice_provider,
     });
 
-    match loop_result {
-        Ok(_) => {
-            info!("[微澜守护进程] Wayland 输入法事件循环已正常退出，所有资源已安全释放。");
-        }
-        Err(e) => {
-            if opts.coordinator.is_shutting_down() {
-                info!("[微澜守护进程] 收到退出信号或托盘退出请求，服务安全退场。");
-                return Ok(());
-            }
-            return Err(e.into());
-        }
-    }
-
-    Ok(())
+    super::finalize_session_loop_result(loop_result, opts.coordinator, "Wayland")
 }
