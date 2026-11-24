@@ -220,13 +220,25 @@ pub struct CloudProfile {
 
 impl Default for CloudProfile {
     fn default() -> Self {
+        let base = CloudAsrConfig::default();
         Self {
             id: "default-openai".to_string(),
             name: "OpenAI 官方".to_string(),
-            provider: CloudProviderType::default(),
-            endpoint: "https://api.openai.com/v1/audio/transcriptions".to_string(),
-            api_key: None,
-            model: "whisper-1".to_string(),
+            provider: base.provider,
+            endpoint: base.endpoint,
+            api_key: base.api_key,
+            model: base.model,
+        }
+    }
+}
+
+impl From<&CloudProfile> for CloudAsrConfig {
+    fn from(profile: &CloudProfile) -> Self {
+        Self {
+            provider: profile.provider,
+            endpoint: profile.endpoint.clone(),
+            api_key: profile.api_key.clone(),
+            model: profile.model.clone(),
         }
     }
 }
@@ -372,6 +384,31 @@ impl Default for VoiceConfig {
 }
 
 impl VoiceConfig {
+    /// 解析当前激活的云端 Profile 标识（当 `selected_asr` 为 `"cloud:<id>"` 时返回 `<id>`）
+    pub fn active_cloud_profile_id(&self) -> Option<&str> {
+        self.selected_asr
+            .as_deref()
+            .and_then(|sel| sel.strip_prefix("cloud:"))
+    }
+
+    /// 统一解析当前生效的云端识别配置（收敛 `selected_asr`、`cloud_profiles` 与旧版 `cloud` 的优先级）
+    pub fn resolve_active_cloud_config(&self) -> Option<CloudAsrConfig> {
+        if let Some(profile_id) = self.active_cloud_profile_id() {
+            return Some(
+                self.cloud_profiles
+                    .iter()
+                    .find(|p| p.id == profile_id)
+                    .map(CloudAsrConfig::from)
+                    .unwrap_or_else(|| self.cloud.clone()),
+            );
+        }
+        if self.engine_type == VoiceEngineType::Cloud {
+            Some(self.cloud.clone())
+        } else {
+            None
+        }
+    }
+
     /// 获取当前生效的连续听写开关快捷键 (Toggle)
     pub fn get_effective_toggle_shortcut(&self) -> Option<ParsedShortcut> {
         if !self.enabled {

@@ -18,13 +18,13 @@ pub enum ConfigError {
         source: std::io::Error,
     },
 
-    /// TOML 配置反序列化失败
+    /// TOML 配置反序列化失败（不暴露第三方 toml crate 内部错误类型）
     #[error("TOML 配置解析失败: {0}")]
-    TomlDe(#[from] toml::de::Error),
+    TomlParse(String),
 
-    /// TOML 配置序列化失败
+    /// TOML 配置序列化失败（不暴露第三方 toml crate 内部错误类型）
     #[error("TOML 配置序列化失败: {0}")]
-    TomlSer(#[from] toml::ser::Error),
+    TomlSerialize(String),
 
     /// 容错解析与合并失败
     #[error("TOML 容错解析失败，严格错误: {strict_err}，合并错误: {merge_err}")]

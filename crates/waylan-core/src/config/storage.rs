@@ -180,7 +180,8 @@ impl AppConfig {
                 })?;
             }
         }
-        let serialized = toml::to_string_pretty(self)?;
+        let serialized =
+            toml::to_string_pretty(self).map_err(|e| ConfigError::TomlSerialize(e.to_string()))?;
         // 使用原子写入：写入同目录临时文件，刷盘后原子 rename 覆盖目标文件
         let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
         if let Err(e) = write_serialized_atomically(&tmp_path, path, &serialized) {

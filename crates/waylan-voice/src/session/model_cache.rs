@@ -27,26 +27,7 @@ pub type AsrFingerprint = (
 
 /// 提取当前语音识别器的关键配置指纹，用于识别器缓存失效判定
 pub fn compute_asr_fingerprint(cfg: &VoiceConfig) -> AsrFingerprint {
-    let effective_cloud = if let Some(ref sel) = cfg.selected_asr {
-        if let Some(profile_id) = sel.strip_prefix("cloud:") {
-            cfg.cloud_profiles
-                .iter()
-                .find(|p| p.id == profile_id)
-                .map(|p| waylan_core::CloudAsrConfig {
-                    provider: p.provider,
-                    endpoint: p.endpoint.clone(),
-                    api_key: p.api_key.clone(),
-                    model: p.model.clone(),
-                })
-                .or_else(|| Some(cfg.cloud.clone()))
-        } else {
-            None
-        }
-    } else if cfg.engine_type == waylan_core::VoiceEngineType::Cloud {
-        Some(cfg.cloud.clone())
-    } else {
-        None
-    };
+    let effective_cloud = cfg.resolve_active_cloud_config();
 
     (
         cfg.engine_type,
