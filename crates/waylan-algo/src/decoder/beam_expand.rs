@@ -1,0 +1,199 @@
+//! 束搜索单位置状态扩展与跨边界增量恢复辅助模块
+//!
+//! # 设计原理
+//! - **实现初衷**：将 `PositionalBeamDecoder` 中单位置状态扩展（`expand_position_states`）
+//!   以及增量缓存跨边界恢复逻辑（`init_beam_from_cache`）从 `beam.rs` 剥离，控制单文件体量。
+//! - **核心优势**：保持 `beam.rs` 聚焦顶层束搜索调度与断链回退策略，扩展评分与转移细节独立内聚。
+
+use super::beam::{BeamWorkspace, InitContext, collect_start_matches};
+use super::beam_cache::{IncrementalBeamCache, MAX_PHRASE_SPAN_BYTES, merge_crossing_matches};
+use super::beam_scoring::{compute_edge_penalty, filter_and_rank_matches, unigram_log_score};
+use super::beam_types::{ArenaNode, BeamDecodeOptions, BeamState};
+use super::language_model::BigramLanguageModel;
+use super::matcher::{DatPhraseMatcher, PhraseMatch};
+use crate::table::LexiconTable;
+use crate::user_adaptive::UserAdaptiveModel;
+
+/// 单位置束搜索状态扩展上下文
+pub(super) struct ExpandContext<'a> {
+    pub(super) pos: usize,
+    pub(super) beam_offset: usize,
+    pub(super) seed_word: &'a str,
+    pub(super) spans_by_pos: &'a [Vec<PhraseMatch>],
+    pub(super) table: &'a LexiconTable,
+    pub(super) adaptive: Option<&'a UserAdaptiveModel>,
+    pub(super) options: &'a BeamDecodeOptions<'a>,
+    pub(super) fallback_mode: bool,
+    pub(super) node_arena: &'a mut Vec<ArenaNode>,
+    pub(super) beam: &'a mut [Vec<BeamState>],
+}
+
+/// 从增量缓存冻结边界恢复束搜索工作区，并补充跨边界匹配边
+pub(super) fn init_beam_from_cache(
+    ctx: &InitContext<'_>,
+    c: &mut IncrementalBeamCache,
+    freeze_pos: usize,
+    whole_words: &mut Vec<PhraseMatch>,
+    prefix_word_matches: &mut Vec<PhraseMatch>,
+) -> BeamWorkspace {
+    let len = ctx.lattice.len;
+    let mut beam = vec![Vec::new(); len + 1];
+    for (slot, cached) in beam
+        .iter_mut()
+        .zip(c.beam_slots.iter_mut())
+        .take(freeze_pos + 1)
+    {
+        *slot = std::mem::take(cached);
+    }
+
+    let mut node_arena = std::mem::take(&mut c.node_arena);
+    node_arena.truncate(c.arena_len_before_pos[freeze_pos]);
+    let mut arena_len_before_pos = vec![0usize; len];
+    arena_len_before_pos[..freeze_pos].copy_from_slice(&c.arena_len_before_pos[..freeze_pos]);
+
+    let mut spans_by_pos = vec![Vec::new(); len];
+    for (slot, cached) in spans_by_pos
+        .iter_mut()
+        .zip(c.spans_by_pos.iter_mut())
+        .take(freeze_pos)
+    {
+        *slot = std::mem::take(cached);
+    }
+
+    let mut pos_max_reach = vec![0usize; len];
+    pos_max_reach[..freeze_pos].copy_from_slice(&c.pos_max_reach[..freeze_pos]);
+
+    let bridge_start = freeze_pos.saturating_sub(MAX_PHRASE_SPAN_BYTES);
+    for pos in bridge_start..freeze_pos {
+        if beam[pos].is_empty() || pos_max_reach[pos] < freeze_pos {
+            if pos == ctx.start_pos {
+                collect_start_matches(
+                    &spans_by_pos[ctx.start_pos],
+                    len,
+                    whole_words,
+                    prefix_word_matches,
+                    false,
+                );
+            }
+            continue;
+        }
+        let (mut fresh, reach) = DatPhraseMatcher::match_ranked_from_with_reach(
+            ctx.lattice,
+            pos,
+            ctx.table,
+            &ctx.options.matcher_options,
+            &ctx.options.weights,
+            pos == ctx.start_pos,
+        );
+        pos_max_reach[pos] = reach;
+        if pos == ctx.start_pos {
+            collect_start_matches(&fresh, len, whole_words, prefix_word_matches, true);
+            filter_and_rank_matches(&mut fresh, len, &ctx.options.weights);
+        }
+        merge_crossing_matches(&mut spans_by_pos[pos], fresh, freeze_pos);
+
+        let (left, right) = beam.split_at_mut(pos + 1);
+        let mut expand_ctx = ExpandContext {
+            pos,
+            beam_offset: pos + 1,
+            seed_word: ctx.seed_word,
+            spans_by_pos: &spans_by_pos,
+            table: ctx.table,
+            adaptive: ctx.adaptive,
+            options: ctx.options,
+            fallback_mode: false,
+            node_arena: &mut node_arena,
+            beam: right,
+        };
+        expand_position_states(&left[pos], &mut expand_ctx, Some(freeze_pos));
+    }
+
+    if ctx.start_pos < bridge_start {
+        collect_start_matches(
+            &spans_by_pos[ctx.start_pos],
+            len,
+            whole_words,
+            prefix_word_matches,
+            false,
+        );
+    }
+
+    BeamWorkspace {
+        beam,
+        node_arena,
+        arena_len_before_pos,
+        spans_by_pos,
+        pos_max_reach,
+        loop_start: freeze_pos,
+    }
+}
+
+/// 在当前字节位置上扩展所有束状态与候选匹配边
+pub(super) fn expand_position_states(
+    cur_states: &[BeamState],
+    ctx: &mut ExpandContext<'_>,
+    min_next_pos: Option<usize>,
+) {
+    let pos = ctx.pos;
+    let pos_matches = &ctx.spans_by_pos[pos];
+    let max_typos = if ctx.fallback_mode {
+        u8::MAX
+    } else {
+        ctx.options.max_typos
+    };
+    for state in cur_states {
+        let last_word = match state.last_word_ref {
+            Some((p, idx)) => ctx.spans_by_pos[p][idx].word.as_str(),
+            None => ctx.seed_word,
+        };
+
+        for (idx, pm) in pos_matches.iter().enumerate() {
+            if let Some(freeze) = min_next_pos
+                && pm.end <= freeze
+            {
+                continue;
+            }
+            if !ctx.fallback_mode && state.has_initial && pm.has_initial && state.word_count > 0 {
+                continue;
+            }
+            let next_typo = state.typo_count.saturating_add(pm.typo_count);
+            if next_typo > max_typos {
+                continue;
+            }
+            let next_pos = pm.end;
+            let char_len = pm.word_char_len as i64;
+            let curr_unigram = unigram_log_score(pm.freq);
+            let lm_delta = BigramLanguageModel::transition_score_with_weights(
+                (last_word, state.last_word_id),
+                (&pm.word, pm.word_id, char_len),
+                curr_unigram,
+                (ctx.table, &ctx.options.weights),
+            );
+            let pair_boost = ctx
+                .adaptive
+                .filter(|_| !last_word.is_empty())
+                .map(|a| a.pair_boost_score(last_word, &pm.word, ctx.options.eval_ts))
+                .unwrap_or(0);
+            let edge_penalty = compute_edge_penalty(pm, &ctx.options.weights);
+
+            let node_idx = ctx.node_arena.len();
+            ctx.node_arena.push(ArenaNode {
+                parent: Some(state.node_idx),
+                word_ref: Some((pos, idx)),
+            });
+
+            ctx.beam[next_pos - ctx.beam_offset].push(BeamState {
+                node_idx,
+                score: state.score + lm_delta + pair_boost - edge_penalty,
+                typo_count: next_typo,
+                has_initial: state.has_initial || pm.has_initial,
+                has_partial_tail: state.has_partial_tail || pm.has_partial_tail,
+                is_exact_all: state.is_exact_all && pm.is_exact_all,
+                word_count: state.word_count + 1,
+                last_word_ref: Some((pos, idx)),
+                last_word_id: pm.word_id,
+                first_word_end: state.first_word_end.or(Some(pm.end)),
+            });
+        }
+    }
+}

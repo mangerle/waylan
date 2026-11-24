@@ -4,7 +4,10 @@ use crate::types::{AlgoCandidate, CandidateTier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-pub use wal::{UserAdaptiveWal, UserDictAppendParams, WAL_MAGIC, WAL_MAGIC_V1};
+pub use wal::{
+    UserAdaptiveWal, UserDictAppendParams, UserDictForgetParams, UserDictPairParams, WAL_MAGIC,
+    WAL_MAGIC_V1,
+};
 pub use waylan_core::MAX_USER_DICT_BYTES;
 
 /// 用户词条上屏次数记录的参数对象

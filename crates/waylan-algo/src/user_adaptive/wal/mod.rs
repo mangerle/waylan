@@ -53,6 +53,32 @@ pub struct UserDictAppendParams<'a> {
     pub timestamp: u64,
 }
 
+/// 用户词对搭配追加参数对象（收敛 5 参数签名并消除 `prev`/`curr` 顺序颠倒风险）
+#[derive(Debug, Clone, Copy)]
+pub struct UserDictPairParams<'a> {
+    /// WAL 日志文件路径
+    pub path: &'a Path,
+    /// 前导词条
+    pub prev: &'a str,
+    /// 当前词条
+    pub curr: &'a str,
+    /// 记录时间戳（秒级 UNIX 时间）
+    pub timestamp: u64,
+}
+
+/// 用户精准忘词追加参数对象
+#[derive(Debug, Clone, Copy)]
+pub struct UserDictForgetParams<'a> {
+    /// WAL 日志文件路径
+    pub path: &'a Path,
+    /// 需要忘记的词条文本
+    pub text: &'a str,
+    /// 可选关联拼音键
+    pub pinyin: Option<&'a str>,
+    /// 记录时间戳（秒级 UNIX 时间）
+    pub timestamp: u64,
+}
+
 /// 已打开的 WAL 追加句柄及其底层文件标识（缓存 dev/ino 以省去每次写入时的 fstat 调用）
 #[derive(Debug)]
 struct OpenedWalFile {
@@ -203,7 +229,10 @@ impl UserAdaptiveWal {
         if let Some(parent) = path_ref.parent()
             && !parent.as_os_str().is_empty()
         {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|e| AlgoError::UserDictPersistFailed {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
         }
 
         // 若目标文件已存在但并非当前 V2 WAL 格式，先合并重放旧数据再归并升级为标准 V2 WAL 格式
@@ -358,7 +387,7 @@ impl UserAdaptiveWal {
         }
         drop(guard);
 
-        self.wal_append_counter += 1;
+        self.wal_append_counter = self.wal_append_counter.saturating_add(1);
         Ok(())
     }
 
@@ -383,20 +412,19 @@ impl UserAdaptiveWal {
     pub fn append_pair(
         &mut self,
         model: &mut UserAdaptiveModel,
-        path: &Path,
-        prev: &str,
-        curr: &str,
-        timestamp: u64,
+        params: &UserDictPairParams<'_>,
     ) -> Result<(), AlgoError> {
-        if prev.is_empty() || curr.is_empty() {
+        if params.prev.is_empty() || params.curr.is_empty() {
             return Ok(());
         }
-        let encoded_prev = format!("{WAL_PAIR_PREFIX}{prev}");
-        let Some(frame_buf) = Self::serialize_wal_frame(curr, &encoded_prev, timestamp, 1) else {
+        let encoded_prev = format!("{WAL_PAIR_PREFIX}{}", params.prev);
+        let Some(frame_buf) =
+            Self::serialize_wal_frame(params.curr, &encoded_prev, params.timestamp, 1)
+        else {
             return Ok(());
         };
-        self.write_frame_locked(model, path, &frame_buf)?;
-        model.record_pair(prev, curr, timestamp);
+        self.write_frame_locked(model, params.path, &frame_buf)?;
+        model.record_pair(params.prev, params.curr, params.timestamp);
         Ok(())
     }
 
@@ -404,22 +432,21 @@ impl UserAdaptiveWal {
     pub fn append_forget(
         &mut self,
         model: &mut UserAdaptiveModel,
-        path: &Path,
-        text: &str,
-        pinyin: Option<&str>,
-        timestamp: u64,
+        params: &UserDictForgetParams<'_>,
     ) -> Result<bool, AlgoError> {
-        if text.is_empty() {
+        if params.text.is_empty() {
             return Ok(false);
         }
-        let encoded_py = match pinyin {
+        let encoded_py = match params.pinyin {
             Some(py) => format!("{WAL_FORGET_PREFIX}{py}"),
             None => WAL_FORGET_PREFIX.to_string(),
         };
-        if let Some(frame_buf) = Self::serialize_wal_frame(text, &encoded_py, timestamp, 0) {
-            self.write_frame_locked(model, path, &frame_buf)?;
+        if let Some(frame_buf) =
+            Self::serialize_wal_frame(params.text, &encoded_py, params.timestamp, 0)
+        {
+            self.write_frame_locked(model, params.path, &frame_buf)?;
         }
-        Ok(model.forget_word(text, pinyin))
+        Ok(model.forget_word(params.text, params.pinyin))
     }
 
     /// 检查并在达到压缩阈值时执行 WAL 文件的原子压缩归并 (Compaction)

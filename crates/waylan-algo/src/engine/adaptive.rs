@@ -67,9 +67,15 @@ impl UserAdaptiveState {
         }
         self.last_timestamp = self.last_timestamp.max(current_timestamp);
         if let Some(ref path) = self.dict_path {
-            let _ = self
-                .wal
-                .append_pair(&mut self.model, path, prev, curr, self.last_timestamp);
+            let _ = self.wal.append_pair(
+                &mut self.model,
+                &crate::user_adaptive::UserDictPairParams {
+                    path,
+                    prev,
+                    curr,
+                    timestamp: self.last_timestamp,
+                },
+            );
         } else {
             self.model.record_pair(prev, curr, self.last_timestamp);
         }
@@ -88,7 +94,15 @@ impl UserAdaptiveState {
         self.last_timestamp = self.last_timestamp.max(current_timestamp);
         if let Some(ref path) = self.dict_path {
             self.wal
-                .append_forget(&mut self.model, path, text, pinyin, self.last_timestamp)
+                .append_forget(
+                    &mut self.model,
+                    &crate::user_adaptive::UserDictForgetParams {
+                        path,
+                        text,
+                        pinyin,
+                        timestamp: self.last_timestamp,
+                    },
+                )
                 .unwrap_or_else(|_| self.model.forget_word(text, pinyin))
         } else {
             self.model.forget_word(text, pinyin)

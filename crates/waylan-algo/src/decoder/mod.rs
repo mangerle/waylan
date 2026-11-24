@@ -12,6 +12,7 @@ pub mod alias;
 pub mod beam;
 pub mod beam_cache;
 mod beam_english;
+mod beam_expand;
 mod beam_finalize;
 mod beam_scoring;
 mod beam_types;

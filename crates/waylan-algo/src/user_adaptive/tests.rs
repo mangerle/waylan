@@ -373,10 +373,26 @@ fn test_user_pairs_decay_wal_replay_and_forget() {
     let mut wal = UserAdaptiveWal::new();
     let t0 = 1_700_000_000u64;
 
-    wal.append_pair(&mut model, &wal_path, "开发", "高效", t0)
-        .expect("追加词对 1 成功");
-    wal.append_pair(&mut model, &wal_path, "开发", "高效", t0 + 1)
-        .expect("追加词对 2 成功");
+    wal.append_pair(
+        &mut model,
+        &super::UserDictPairParams {
+            path: &wal_path,
+            prev: "开发",
+            curr: "高效",
+            timestamp: t0,
+        },
+    )
+    .expect("追加词对 1 成功");
+    wal.append_pair(
+        &mut model,
+        &super::UserDictPairParams {
+            path: &wal_path,
+            prev: "开发",
+            curr: "高效",
+            timestamp: t0 + 1,
+        },
+    )
+    .expect("追加词对 2 成功");
 
     let boost_now = model.pair_boost_score("开发", "高效", t0 + 1);
     assert!(boost_now > 0, "刚记录的词对应当产生正加分");
@@ -386,13 +402,29 @@ fn test_user_pairs_decay_wal_replay_and_forget() {
     assert!(boost_30d > 0 && boost_30d < boost_now);
 
     // 忘词后应立即清除该词对加分并持久化到 WAL
-    wal.append_forget(&mut model, &wal_path, "高效", None, t0 + 10)
-        .expect("追加忘词记录成功");
+    wal.append_forget(
+        &mut model,
+        &super::UserDictForgetParams {
+            path: &wal_path,
+            text: "高效",
+            pinyin: None,
+            timestamp: t0 + 10,
+        },
+    )
+    .expect("追加忘词记录成功");
     assert_eq!(model.pair_boost_score("开发", "高效", t0 + 10), 0);
 
     // 再次写入一个词对并重放 WAL 验证持久化一致
-    wal.append_pair(&mut model, &wal_path, "编译", "通过", t0 + 20)
-        .expect("追加词对 3 成功");
+    wal.append_pair(
+        &mut model,
+        &super::UserDictPairParams {
+            path: &wal_path,
+            prev: "编译",
+            curr: "通过",
+            timestamp: t0 + 20,
+        },
+    )
+    .expect("追加词对 3 成功");
     let replayed = UserAdaptiveModel::load_or_replay_wal(&wal_path).expect("重放 WAL 成功");
     assert_eq!(replayed.pair_boost_score("开发", "高效", t0 + 30), 0);
     assert!(replayed.pair_boost_score("编译", "通过", t0 + 30) > 0);
