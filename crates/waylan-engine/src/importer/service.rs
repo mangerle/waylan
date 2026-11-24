@@ -231,15 +231,14 @@ impl DictImportService {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let parts: Vec<&str> = trimmed.split('\t').collect();
-            if parts.len() >= 2 {
-                let key = parts[0].trim().to_string();
-                let sym = parts[1].trim().to_string();
-                let desc = if parts.len() >= 3 {
-                    parts[2].trim().to_string()
-                } else {
-                    "外部符号".to_string()
-                };
+            let mut parts = trimmed.split('\t');
+            if let (Some(k_raw), Some(s_raw)) = (parts.next(), parts.next()) {
+                let key = k_raw.trim().to_string();
+                let sym = s_raw.trim().to_string();
+                let desc = parts
+                    .next()
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "外部符号".to_string());
                 if existing.insert((key.clone(), sym.clone())) {
                     aux.symbols.push((key, sym, desc));
                     added_count += 1;

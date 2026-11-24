@@ -327,14 +327,7 @@ impl DictImporter {
         }
 
         let word_bytes = &data[*cursor..word_end];
-        let u16_chars: Vec<u16> = word_bytes
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .copied()
-            .map(u16::from_le_bytes)
-            .collect();
-        let word_text = String::from_utf16_lossy(&u16_chars);
+        let word_text = decode_utf16le_lossy(word_bytes);
         *cursor = word_end;
 
         // 跳过扩展信息（通常包含权重、词频说明，占 12 字节左右），防御畸形 ext_len 越界
@@ -410,14 +403,7 @@ impl DictImporter {
                 break;
             }
 
-            let u16_chars: Vec<u16> = slice[cursor..end]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .copied()
-                .map(u16::from_le_bytes)
-                .collect();
-            let py = String::from_utf16_lossy(&u16_chars);
+            let py = decode_utf16le_lossy(&slice[cursor..end]);
             cursor = end;
 
             map.insert(index, py);
@@ -425,6 +411,21 @@ impl DictImporter {
 
         Ok(map)
     }
+}
+
+/// 直接将 UTF-16LE 字节流解码为 `String`，避免中间 `Vec<u16>` 临时堆分配
+fn decode_utf16le_lossy(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() / 2);
+    let iter = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .map(u16::from_le_bytes);
+    for ch in char::decode_utf16(iter) {
+        out.push(ch.unwrap_or(char::REPLACEMENT_CHARACTER));
+    }
+    out
 }
 
 #[cfg(test)]

@@ -158,7 +158,7 @@ impl PunctuationProcessor {
                 .map(|(i, _)| i)
                 .find(|&i| i >= keep_start)
                 .unwrap_or(0);
-            self.recent_context = self.recent_context[safe_start..].to_string();
+            self.recent_context.drain(..safe_start);
         }
         for ch in text.chars() {
             match ch {
@@ -186,19 +186,31 @@ impl PunctuationProcessor {
             return false;
         }
 
-        // 提取末尾紧邻的连续非空白 ASCII Token
+        // 提取末尾紧邻的连续非空白 ASCII Token，优先在栈缓冲内完成小写规整避免堆分配
         let last_token = trailing_ascii_token(trimmed);
         if last_token.is_empty() {
             return false;
         }
-        let lower = last_token.to_lowercase();
+        if last_token.len() <= 128 {
+            let mut buf = [0u8; 128];
+            let len = last_token.len();
+            for (dst, &src) in buf[..len].iter_mut().zip(last_token.as_bytes()) {
+                *dst = src.to_ascii_lowercase();
+            }
+            if let Ok(lower) = std::str::from_utf8(&buf[..len]) {
+                return contains_url_scheme(lower) || contains_domain_suffix(lower);
+            }
+        }
+        let lower = last_token.to_ascii_lowercase();
         contains_url_scheme(&lower) || contains_domain_suffix(&lower)
     }
 
-    /// 尝试处理标点符号输入（自动从内置 recent_context 获取上下文）
+    /// 尝试处理标点符号输入（自动从内置 recent_context 获取上下文，零堆分配）
     pub fn process_punctuation(&mut self, ch: char) -> Option<Vec<TextAction>> {
-        let ctx = self.recent_context.clone();
-        self.process_punctuation_with_context(ch, &ctx)
+        let ctx = std::mem::take(&mut self.recent_context);
+        let res = self.process_punctuation_with_context(ch, &ctx);
+        self.recent_context = ctx;
+        res
     }
 
     /// 结合当前输入缓冲区或应用上下文处理标点符号输入

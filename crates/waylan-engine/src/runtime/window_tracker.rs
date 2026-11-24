@@ -29,32 +29,46 @@ impl Default for WindowModeTracker {
     }
 }
 
-/// 判定给定的应用标识（app_id / client / wm_class）是否属于终端类应用
-pub fn is_terminal_app(app_identifier: &str) -> bool {
-    let lower = app_identifier.to_ascii_lowercase();
-    lower.contains("terminal")
-        || lower.contains("pty")
-        || lower.contains("alacritty")
-        || lower.contains("kitty")
-        || lower.contains("wezterm")
-        || lower.contains("konsole")
-        || lower.contains("terminator")
-        || lower.contains("tilix")
-        || lower.contains("tabby")
-        || lower.contains("xterm")
-        || lower.contains("foot")
-        || lower.contains("urxvt")
+/// 零堆分配的大小写无关 ASCII 子串包含判定
+#[inline]
+fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
+    let n = needle.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    let h = haystack.as_bytes();
+    h.len() >= n.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
 }
 
-/// 判定给定的应用标识是否命中用户自定义的默认英文应用列表（忽略大小写子串匹配）
+/// 判定给定的应用标识（app_id / client / wm_class）是否属于终端类应用
+pub fn is_terminal_app(app_identifier: &str) -> bool {
+    const TERMINAL_KEYWORDS: &[&str] = &[
+        "terminal",
+        "pty",
+        "alacritty",
+        "kitty",
+        "wezterm",
+        "konsole",
+        "terminator",
+        "tilix",
+        "tabby",
+        "xterm",
+        "foot",
+        "urxvt",
+    ];
+    TERMINAL_KEYWORDS
+        .iter()
+        .any(|kw| contains_ascii_ignore_case(app_identifier, kw))
+}
+
+/// 判定给定的应用标识是否命中用户自定义的默认英文应用列表（忽略大小写子串匹配，零堆分配）
 pub fn matches_english_app_list(app_identifier: &str, custom_apps: &[String]) -> bool {
     if custom_apps.is_empty() {
         return false;
     }
-    let lower = app_identifier.to_ascii_lowercase();
     custom_apps.iter().any(|pattern| {
         let trimmed = pattern.trim();
-        !trimmed.is_empty() && lower.contains(&trimmed.to_ascii_lowercase())
+        !trimmed.is_empty() && contains_ascii_ignore_case(app_identifier, trimmed)
     })
 }
 
