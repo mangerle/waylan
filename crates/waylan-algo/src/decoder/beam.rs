@@ -11,7 +11,9 @@
 use super::beam_cache::{
     CacheSnapshot, IncrementalBeamCache, MAX_PHRASE_SPAN_BYTES, merge_crossing_matches,
 };
-use super::beam_english::{append_english_lexicon_edges, append_fallback_edges};
+use super::beam_english::{
+    AlphaRunPinyinCache, append_english_lexicon_edges, append_fallback_edges,
+};
 use super::beam_finalize::finalize_decode_result;
 use super::beam_scoring::{
     compute_edge_penalty, filter_and_rank_matches, prune_beam_slot, unigram_log_score,
@@ -358,6 +360,7 @@ fn advance_beam(
         ctx.options.beam_width
     };
     let english_suggester = EnglishSuggestionManager::active_or_default();
+    let run_cache = AlphaRunPinyinCache::new(&ctx.lattice.raw);
     for pos in ws.loop_start..len {
         ws.arena_len_before_pos[pos] = ws.node_arena.len();
         let next_non_sep = ctx.lattice.skip_separators(pos);
@@ -393,7 +396,13 @@ fn advance_beam(
             pos == ctx.start_pos,
         );
         ws.pos_max_reach[pos] = reach;
-        append_english_lexicon_edges(ctx.lattice, pos, &english_suggester, &mut matches);
+        append_english_lexicon_edges(
+            ctx.lattice,
+            pos,
+            &english_suggester,
+            &run_cache,
+            &mut matches,
+        );
         if fallback_mode {
             append_fallback_edges(ctx.lattice, pos, &mut matches);
         }
@@ -470,7 +479,7 @@ fn expand_position_states(
                 continue;
             }
             let next_pos = pm.end;
-            let char_len = pm.word.chars().count() as i64;
+            let char_len = pm.word_char_len as i64;
             let curr_unigram = unigram_log_score(pm.freq);
             let lm_delta = BigramLanguageModel::transition_score_with_weights(
                 (last_word, state.last_word_id),

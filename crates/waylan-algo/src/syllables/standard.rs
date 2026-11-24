@@ -64,6 +64,24 @@ pub fn has_syllable_prefix(prefix: &str) -> bool {
     }
 }
 
+/// 基于动态规划缓冲判定字符串是否可完全切分为合法标准拼音音节
+fn can_segment_dp(s: &str, reachable: &mut [bool]) -> bool {
+    let n = s.len();
+    reachable[0] = true;
+    for i in 0..n {
+        if !reachable[i] {
+            continue;
+        }
+        let max_len = (n - i).min(6);
+        for len in 1..=max_len {
+            if is_valid_syllable(&s[i..i + len]) {
+                reachable[i + len] = true;
+            }
+        }
+    }
+    reachable[n]
+}
+
 /// 检查字符串是否可以完全由标准合法音节拼接而成（零堆分配，微秒级音节可达性动态规划剪枝）
 ///
 /// # 设计原理
@@ -76,22 +94,21 @@ pub fn can_segment_into_syllables(s: &str) -> bool {
         return false;
     }
     let mut reachable = [false; 33];
-    reachable[0] = true;
+    can_segment_dp(s, &mut reachable[..=n])
+}
 
-    for i in 0..n {
-        if !reachable[i] {
-            continue;
-        }
-        let max_len = (n - i).min(6);
-        for len in 1..=max_len {
-            let sub = &s[i..i + len];
-            if is_valid_syllable(sub) {
-                reachable[i + len] = true;
-            }
-        }
+/// 不限长度的拼音全切分可达性判定（64 字节以内走栈数组零堆分配，超长输入回退堆缓冲）
+pub fn can_segment_into_syllables_unbounded(s: &str) -> bool {
+    let n = s.len();
+    if n == 0 || !s.is_ascii() {
+        return false;
     }
-
-    reachable[n]
+    if n <= 64 {
+        let mut reachable = [false; 65];
+        return can_segment_dp(s, &mut reachable[..=n]);
+    }
+    let mut reachable = vec![false; n + 1];
+    can_segment_dp(s, &mut reachable)
 }
 
 /// 检查是否存在严格比当前字符串更长的合法音节以该字符串为前缀

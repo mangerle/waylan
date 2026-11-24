@@ -15,6 +15,8 @@ pub struct PhraseMatch {
     pub end: usize,
     /// 命中的中文词条文本
     pub word: String,
+    /// 词条字符数（物化时预计算，避免束搜索内层循环重复遍历 UTF-8）
+    pub word_char_len: usize,
     /// 词条在紧凑词典中的唯一 ID（用于 O(1) Bigram 查表）
     pub word_id: Option<u32>,
     /// 词条词频（经惯用音/长度校准前或后的词频得分）
@@ -191,6 +193,7 @@ pub(super) fn materialize_raw_matches(
             out.push(PhraseMatch {
                 start: start_pos,
                 end: r.end,
+                word_char_len: word.chars().count(),
                 word: word.to_string(),
                 word_id: Some(r.word_id),
                 freq: r.freq,
