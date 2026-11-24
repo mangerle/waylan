@@ -34,7 +34,7 @@ fn locate_extension_src_dir(assets: &str, subdir: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|dir| dir.is_dir())
 }
 
-/// 从扩展目录的 `metadata.json` 中读取整数 `version` 字段
+/// 从扩展目录的 `metadata.json` 中读取整数 `version` 字段（校验前面为 JSON 键边界，避免误匹配描述文本）
 fn read_extension_version(ext_dir: &Path) -> Option<u64> {
     let meta_path = ext_dir.join("metadata.json");
     let size = fs::metadata(&meta_path).ok()?.len();
@@ -42,15 +42,24 @@ fn read_extension_version(ext_dir: &Path) -> Option<u64> {
         return None;
     }
     let text = fs::read_to_string(&meta_path).ok()?;
-    let after_key = text.split_once("\"version\"")?.1;
-    let digits = after_key
-        .trim_start()
-        .strip_prefix(':')?
-        .trim_start()
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    digits.parse::<u64>().ok()
+    let mut rest = text.as_str();
+    while let Some((before, after)) = rest.split_once("\"version\"") {
+        let prev_char = before.trim_end().chars().next_back();
+        if matches!(prev_char, Some('{') | Some(','))
+            && let Some(after_colon) = after.trim_start().strip_prefix(':')
+        {
+            let digits = after_colon
+                .trim_start()
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            if let Ok(v) = digits.parse::<u64>() {
+                return Some(v);
+            }
+        }
+        rest = after;
+    }
+    None
 }
 
 /// 判定用户目录副本是否应让位给系统目录副本（版本不可判读时保守保留用户副本）
@@ -111,7 +120,9 @@ fn install_extension_to_user_dir(target: &Path, assets_subdir: &str) {
             continue;
         }
         let needs_copy = match (fs::metadata(&src_file), fs::metadata(&dst_file)) {
-            (Ok(s_meta), Ok(d_meta)) => s_meta.len() != d_meta.len(),
+            (Ok(s_meta), Ok(d_meta)) => {
+                s_meta.len() != d_meta.len() || fs::read(&src_file).ok() != fs::read(&dst_file).ok()
+            }
             (Ok(_), Err(_)) => true,
             _ => false,
         };

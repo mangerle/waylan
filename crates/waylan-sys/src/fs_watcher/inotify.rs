@@ -223,12 +223,23 @@ impl InotifyWatcher {
         let mut buf = [MaybeUninit::uninit(); 1024];
         let mut reader = Reader::new(&self.fd, &mut buf);
         let mut has_relevant_events = false;
+        let mut need_rewatch = false;
 
         loop {
             match reader.next() {
                 Ok(event) => {
                     if self.is_relevant_event(&event) {
                         has_relevant_events = true;
+                        let flags = event.events();
+                        if flags.intersects(
+                            ReadFlags::IGNORED
+                                | ReadFlags::DELETE_SELF
+                                | ReadFlags::MOVE_SELF
+                                | ReadFlags::MOVED_TO
+                                | ReadFlags::CREATE,
+                        ) {
+                            need_rewatch = true;
+                        }
                     }
                 }
                 Err(Errno::WOULDBLOCK) => break,
@@ -239,7 +250,7 @@ impl InotifyWatcher {
             }
         }
 
-        if has_relevant_events {
+        if need_rewatch {
             self.setup_watches();
         }
         has_relevant_events

@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, SyncSender};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
-use log::{error, info, warn};
+use log::{info, warn};
 
 use crate::error::VoiceError;
 
@@ -350,12 +350,11 @@ fn build_capture_pipeline(
     }
 }
 
-/// 构造底层音频流的异常回调，在流异常中止时置位中断标记供上层感知
+/// 构造底层音频流的异常回调，在流异常中止时原子置位中断标记供工作线程感知（避免在实时音频线程中打印日志引发锁竞争）
 fn build_stream_error_callback(
     is_stream_dead: Arc<AtomicBool>,
 ) -> impl FnMut(cpal::Error) + Send + 'static {
-    move |err| {
-        error!("[语音采集 错误] 麦克风音频捕获流异常: {}", err);
+    move |_err| {
         is_stream_dead.store(true, Ordering::Release);
     }
 }
