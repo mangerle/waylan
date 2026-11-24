@@ -106,154 +106,178 @@ fn default_offline_notice() -> String {
     "当前处于【本地离线模式】: 选用优质端侧离线 ASR 语音模型，所有音频识别与特征计算均在本地设备运行，不消耗公网流量，全面保障隐私与数据安全。".to_string()
 }
 
+/// ASR 模型卡片的 Slint UI 状态码枚举（与 `voice_tab.slint` 约定一一对应）
+#[derive(Debug, Clone, Copy)]
+#[repr(i32)]
+enum AsrCardState {
+    /// 官方预置模型尚未下载
+    NotDownloaded = 0,
+    /// 官方预置模型已在本地就绪，待启用
+    PresetReady = 2,
+    /// 官方预置模型物理存在且当前生效中
+    PresetActive = 3,
+    /// 本地自定义或云端 Profile 当前生效中
+    CustomOrCloudActive = 4,
+    /// 本地自定义或云端 Profile 未启用
+    CustomOrCloudInactive = 5,
+}
+
+/// 异构 ASR 模型条目列表构建器（依次汇总官方预置、本地自定义与云端服务）
+struct AsrModelListBuilder {
+    names: Vec<slint::SharedString>,
+    items: Vec<AsrModelCardItem>,
+    selected_idx: i32,
+}
+
+impl AsrModelListBuilder {
+    fn new() -> Self {
+        Self {
+            names: Vec::new(),
+            items: Vec::new(),
+            selected_idx: 0,
+        }
+    }
+
+    fn push_entry(&mut self, name: slint::SharedString, item: AsrModelCardItem, is_active: bool) {
+        if is_active {
+            self.selected_idx = self.items.len() as i32;
+        }
+        self.names.push(name);
+        self.items.push(item);
+    }
+
+    fn append_preset_models(&mut self, cfg: &AppConfig, is_cloud_mode: bool) {
+        for meta in waylan_voice::PRESET_ASR_MODELS {
+            let is_installed = waylan_voice::is_preset_model_installed(meta);
+            let is_configured = !is_cloud_mode
+                && (cfg.voice.offline.model_type == meta.model_type
+                    || cfg
+                        .voice
+                        .offline
+                        .model_dir
+                        .as_deref()
+                        .is_some_and(|d| d.contains(meta.dir_name)));
+
+            let state = match (is_installed, is_configured) {
+                (true, true) => AsrCardState::PresetActive,
+                (true, false) => AsrCardState::PresetReady,
+                (false, _) => AsrCardState::NotDownloaded,
+            };
+
+            let badge = if !is_installed && is_configured {
+                format!("{} · 待下载", meta.badge)
+            } else {
+                meta.badge.to_string()
+            };
+
+            let dest_path_str = waylan_voice::get_preset_model_dest_dir(meta)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let name = slint::SharedString::from(format!("[官方] {} ({})", meta.name, meta.badge));
+            let card = AsrModelCardItem {
+                id: slint::SharedString::from(meta.id),
+                name: slint::SharedString::from(meta.name),
+                badge: slint::SharedString::from(badge),
+                size_desc: slint::SharedString::from(meta.size_desc),
+                desc: slint::SharedString::from(meta.desc),
+                state: state as i32,
+                progress: 0.0,
+                progress_text: slint::SharedString::from(""),
+                is_cloud: false,
+                path_or_url: slint::SharedString::from(dest_path_str),
+            };
+            self.push_entry(name, card, is_configured);
+        }
+    }
+
+    fn append_local_models(&mut self, cfg: &AppConfig, is_cloud_mode: bool) {
+        let local_asrs = waylan_voice::list_asr_models();
+        for m in &local_asrs {
+            let path_str = m.path.as_deref().unwrap_or_default();
+            let is_preset_dir = waylan_voice::PRESET_ASR_MODELS
+                .iter()
+                .any(|meta| path_str.contains(meta.dir_name));
+            if is_preset_dir || m.display_name.contains("[推荐]") {
+                continue; // 官方预置项已在第一阶段收敛，避免重复
+            }
+
+            let is_active =
+                !is_cloud_mode && cfg.voice.offline.model_dir.as_deref() == Some(path_str);
+            let state = if is_active {
+                AsrCardState::CustomOrCloudActive
+            } else {
+                AsrCardState::CustomOrCloudInactive
+            };
+
+            let name = slint::SharedString::from(format!("[本地] {}", m.display_name));
+            let card = AsrModelCardItem {
+                id: slint::SharedString::from(format!("local:{}", path_str)),
+                name: slint::SharedString::from(&m.display_name),
+                badge: slint::SharedString::from("本地自定义"),
+                size_desc: slint::SharedString::from("本地已导入 · 端侧离线推理"),
+                desc: slint::SharedString::from(
+                    "用户手动导入或放置在本地共享目录中的自定义 ASR 模型权重文件",
+                ),
+                state: state as i32,
+                progress: 0.0,
+                progress_text: slint::SharedString::from(""),
+                is_cloud: false,
+                path_or_url: slint::SharedString::from(path_str),
+            };
+            self.push_entry(name, card, is_active);
+        }
+    }
+
+    fn append_cloud_profiles(&mut self, cfg: &AppConfig, is_cloud_mode: bool) {
+        for p in &cfg.voice.cloud_profiles {
+            let is_active = is_cloud_mode
+                && cfg
+                    .voice
+                    .selected_asr
+                    .as_deref()
+                    .and_then(|s| s.strip_prefix("cloud:"))
+                    .is_some_and(|id| id == p.id);
+            let state = if is_active {
+                AsrCardState::CustomOrCloudActive
+            } else {
+                AsrCardState::CustomOrCloudInactive
+            };
+
+            let name = slint::SharedString::from(format!("[云端] {} ({})", p.name, p.model));
+            let card = AsrModelCardItem {
+                id: slint::SharedString::from(format!("cloud:{}", p.id)),
+                name: slint::SharedString::from(&p.name),
+                badge: slint::SharedString::from("云端服务"),
+                size_desc: slint::SharedString::from(format!("云端 Whisper · 模型: {}", p.model)),
+                desc: slint::SharedString::from(format!(
+                    "说话结束后将音频打包发送至目标云端 API ({})，支持超大模型高精转写",
+                    p.endpoint
+                )),
+                state: state as i32,
+                progress: 0.0,
+                progress_text: slint::SharedString::from(""),
+                is_cloud: true,
+                path_or_url: slint::SharedString::from(&p.endpoint),
+            };
+            self.push_entry(name, card, is_active);
+        }
+    }
+}
+
 /// 同步 ASR 模型统一大列表（官方推荐离线模型 + 本地自定义导入模型 + 线上云端 Profile）至界面
 pub(crate) fn sync_asr_models_to_window(window: &SettingsWindow, cfg: &AppConfig) {
-    let mut all_asr_names: Vec<slint::SharedString> = Vec::new();
-    let mut card_items: Vec<AsrModelCardItem> = Vec::new();
-
     let is_cloud_mode = cfg.voice.engine_type == VoiceEngineType::Cloud
         || cfg
             .voice
             .selected_asr
             .as_deref()
-            .map(|s| s.starts_with("cloud:"))
-            .unwrap_or(false);
+            .is_some_and(|s| s.starts_with("cloud:"));
 
-    let mut selected_idx = 0;
-    let mut current_idx = 0;
-
-    // 1. 官方推荐四大端侧离线大模型
-    for meta in waylan_voice::PRESET_ASR_MODELS {
-        let is_installed = waylan_voice::is_preset_model_installed(meta);
-        let is_configured = !is_cloud_mode
-            && (cfg.voice.offline.model_type == meta.model_type
-                || cfg
-                    .voice
-                    .offline
-                    .model_dir
-                    .as_deref()
-                    .map(|d| d.contains(meta.dir_name))
-                    .unwrap_or(false));
-
-        if is_configured {
-            selected_idx = current_idx;
-        }
-
-        let state = if is_installed && is_configured {
-            3 // 物理存在且当前生效中
-        } else if is_installed {
-            2 // 本地已就绪，待启用
-        } else {
-            0 // 尚未下载
-        };
-
-        let badge = if !is_installed && is_configured {
-            format!("{} · 待下载", meta.badge)
-        } else {
-            meta.badge.to_string()
-        };
-
-        let dest_path_str = waylan_voice::get_preset_model_dest_dir(meta)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        all_asr_names.push(slint::SharedString::from(format!(
-            "[官方] {} ({})",
-            meta.name, meta.badge
-        )));
-
-        card_items.push(AsrModelCardItem {
-            id: slint::SharedString::from(meta.id),
-            name: slint::SharedString::from(meta.name),
-            badge: slint::SharedString::from(badge),
-            size_desc: slint::SharedString::from(meta.size_desc),
-            desc: slint::SharedString::from(meta.desc),
-            state,
-            progress: 0.0,
-            progress_text: slint::SharedString::from(""),
-            is_cloud: false,
-            path_or_url: slint::SharedString::from(dest_path_str),
-        });
-
-        current_idx += 1;
-    }
-
-    // 2. 本地自定义外部导入模型（扫描本地目录所得，且不属于官方四款预置目录）
-    let local_asrs = waylan_voice::list_asr_models();
-    for m in &local_asrs {
-        let path_str = m.path.as_deref().unwrap_or_default();
-        let is_preset_dir = waylan_voice::PRESET_ASR_MODELS
-            .iter()
-            .any(|meta| path_str.contains(meta.dir_name));
-        if is_preset_dir || m.display_name.contains("[推荐]") {
-            continue; // 官方预置项已在第一阶段收敛，避免重复
-        }
-
-        let is_active = !is_cloud_mode && cfg.voice.offline.model_dir.as_deref() == Some(path_str);
-        if is_active {
-            selected_idx = current_idx;
-        }
-
-        all_asr_names.push(slint::SharedString::from(format!(
-            "[本地] {}",
-            m.display_name
-        )));
-
-        card_items.push(AsrModelCardItem {
-            id: slint::SharedString::from(format!("local:{}", path_str)),
-            name: slint::SharedString::from(&m.display_name),
-            badge: slint::SharedString::from("本地自定义"),
-            size_desc: slint::SharedString::from("本地已导入 · 端侧离线推理"),
-            desc: slint::SharedString::from(
-                "用户手动导入或放置在本地共享目录中的自定义 ASR 模型权重文件",
-            ),
-            state: if is_active { 4 } else { 5 },
-            progress: 0.0,
-            progress_text: slint::SharedString::from(""),
-            is_cloud: false,
-            path_or_url: slint::SharedString::from(path_str),
-        });
-
-        current_idx += 1;
-    }
-
-    // 3. 线上云端服务 Profile
-    for p in &cfg.voice.cloud_profiles {
-        let is_active = is_cloud_mode
-            && cfg
-                .voice
-                .selected_asr
-                .as_deref()
-                .map(|s| s == format!("cloud:{}", p.id))
-                .unwrap_or(false);
-
-        if is_active {
-            selected_idx = current_idx;
-        }
-
-        all_asr_names.push(slint::SharedString::from(format!(
-            "[云端] {} ({})",
-            p.name, p.model
-        )));
-
-        card_items.push(AsrModelCardItem {
-            id: slint::SharedString::from(format!("cloud:{}", p.id)),
-            name: slint::SharedString::from(&p.name),
-            badge: slint::SharedString::from("云端服务"),
-            size_desc: slint::SharedString::from(format!("云端 Whisper · 模型: {}", p.model)),
-            desc: slint::SharedString::from(format!(
-                "说话结束后将音频打包发送至目标云端 API ({})，支持超大模型高精转写",
-                p.endpoint
-            )),
-            state: if is_active { 4 } else { 5 },
-            progress: 0.0,
-            progress_text: slint::SharedString::from(""),
-            is_cloud: true,
-            path_or_url: slint::SharedString::from(&p.endpoint),
-        });
-
-        current_idx += 1;
-    }
+    let mut builder = AsrModelListBuilder::new();
+    builder.append_preset_models(cfg, is_cloud_mode);
+    builder.append_local_models(cfg, is_cloud_mode);
+    builder.append_cloud_profiles(cfg, is_cloud_mode);
 
     let notice = if is_cloud_mode {
         "当前处于【云端服务模式】: 说话结束后将音频打包发送至已配置的远端 Whisper API 处理，依赖公网连接。".to_string()
@@ -262,12 +286,12 @@ pub(crate) fn sync_asr_models_to_window(window: &SettingsWindow, cfg: &AppConfig
     };
 
     window.set_asr_model_names(slint::ModelRc::from(std::rc::Rc::new(
-        slint::VecModel::from(all_asr_names),
+        slint::VecModel::from(builder.names),
     )));
     window.set_asr_models(slint::ModelRc::from(std::rc::Rc::new(
-        slint::VecModel::from(card_items),
+        slint::VecModel::from(builder.items),
     )));
-    window.set_asr_model_index(selected_idx);
+    window.set_asr_model_index(builder.selected_idx);
     window.set_asr_notice_text(slint::SharedString::from(notice));
     window.set_is_asr_cloud(is_cloud_mode);
 }
