@@ -9,7 +9,10 @@ mod dynamic_macro;
 mod manager;
 
 pub use aux_dict::{AUX_DICT_MAGIC, AuxiliaryDict};
-pub use aux_manager::{EnglishSuggestionManager, SymbolSuggestionManager, load_auxiliary_managers};
+pub use aux_manager::{
+    EnglishSuggestionManager, SymbolSuggestionManager, load_auxiliary_managers,
+    load_auxiliary_managers_from_paths,
+};
 pub use manager::CustomPhraseManager;
 
 #[cfg(test)]

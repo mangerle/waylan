@@ -88,7 +88,7 @@ impl From<&AppConfig> for AlgoConfig {
             enable_i_mode: cfg.pinyin.enable_i_mode,
             traditional_chinese: cfg.pinyin.traditional_chinese,
             filter_uncommon_charset: cfg.pinyin.filter_uncommon_charset,
-            filter_rare_ext_chars: true,
+            filter_rare_ext_chars: cfg.pinyin.filter_uncommon_charset,
             show_pinyin_comment: cfg.ui.show_pinyin_comment,
             auto_dedup: cfg.pinyin.auto_dedup,
             dynamic_adjust_freq: cfg.pinyin.dynamic_adjust_freq,

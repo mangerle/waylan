@@ -142,7 +142,9 @@ pub fn create_engine_with_table(table: LexiconTable, cfg: &AppConfig) -> AlgoEng
         );
     }
 
-    let (english_suggester, symbol_suggester) = load_auxiliary_managers();
+    let aux_paths = AppConfig::aux_dict_search_paths();
+    let (english_suggester, symbol_suggester) =
+        waylan_algo::load_auxiliary_managers_from_paths(&aux_paths);
     engine.resources_mut().english_suggester = english_suggester;
     engine.resources_mut().symbol_suggester = symbol_suggester;
 
@@ -190,7 +192,9 @@ pub fn reload_engine_resources(engine: &mut AlgoEngine, cfg: &AppConfig) {
     }
 
     // 3. 重新载入英文与符号表情辅助词库管理器
-    let (english_suggester, symbol_suggester) = load_auxiliary_managers();
+    let aux_paths = AppConfig::aux_dict_search_paths();
+    let (english_suggester, symbol_suggester) =
+        waylan_algo::load_auxiliary_managers_from_paths(&aux_paths);
     engine.resources_mut().english_suggester = english_suggester;
     engine.resources_mut().symbol_suggester = symbol_suggester;
 }

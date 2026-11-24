@@ -68,8 +68,12 @@ impl OpenCcDict {
     /// 按多级路径加载默认简繁词典
     pub fn load_default() -> Self {
         let bin_candidates = waylan_core::config::opencc_dict_search_paths();
+        Self::load_from_search_paths(&bin_candidates)
+    }
 
-        for path in &bin_candidates {
+    /// 从显式传入的二进制词典候选路径列表加载简繁词典，均未命中时回退至内置 TSV 或核心表
+    pub fn load_from_search_paths(bin_candidates: &[PathBuf]) -> Self {
+        for path in bin_candidates {
             if path.exists()
                 && let Ok(dict) = Self::load_from_file(path)
             {

@@ -224,15 +224,15 @@ impl SymbolSuggestionManager {
     }
 }
 
-/// 按照多级搜索策略加载并构建辅助与混输词库管理器
+/// 从显式给定的候选路径列表按序加载并构建辅助与混输词库管理器（解耦桌面 XDG 路径策略）
 ///
-/// 若磁盘存在用户定制或预编译辅助词库，则从文件反序列化构建；若不存在则零拷贝复用内置全局默认实例。
-pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
-    let search_paths = waylan_core::AppConfig::aux_dict_search_paths();
-
+/// 若所有候选路径均不可用，则零拷贝复用内置全局默认实例。
+pub fn load_auxiliary_managers_from_paths(
+    search_paths: &[std::path::PathBuf],
+) -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
     for path in search_paths {
         if path.exists()
-            && let Ok(dict) = AuxiliaryDict::load_from_file(&path)
+            && let Ok(dict) = AuxiliaryDict::load_from_file(path)
         {
             let en = Arc::new(EnglishSuggestionManager::from_words(dict.english_words));
             let sym = Arc::new(SymbolSuggestionManager::from_symbols(dict.symbols));
@@ -244,6 +244,14 @@ pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSu
         EnglishSuggestionManager::default_global(),
         SymbolSuggestionManager::default_global(),
     )
+}
+
+/// 按照多级搜索策略加载并构建辅助与混输词库管理器
+///
+/// 若磁盘存在用户定制或预编译辅助词库，则从文件反序列化构建；若不存在则零拷贝复用内置全局默认实例。
+pub fn load_auxiliary_managers() -> (Arc<EnglishSuggestionManager>, Arc<SymbolSuggestionManager>) {
+    let search_paths = waylan_core::AppConfig::aux_dict_search_paths();
+    load_auxiliary_managers_from_paths(&search_paths)
 }
 
 #[cfg(test)]

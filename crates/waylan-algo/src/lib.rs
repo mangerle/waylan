@@ -27,6 +27,7 @@ pub use bigram::CompactMmapBigram;
 pub use composition::Composition;
 pub use custom_phrase::{
     AuxiliaryDict, EnglishSuggestionManager, SymbolSuggestionManager, load_auxiliary_managers,
+    load_auxiliary_managers_from_paths,
 };
 pub use decoder::ScoringWeights;
 pub use engine::AlgoEngine;
