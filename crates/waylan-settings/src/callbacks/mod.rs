@@ -72,20 +72,18 @@ fn apply_save_settings(
     let Some(win) = window_weak.upgrade() else {
         return;
     };
-    let mut base_cfg = current_cfg_cell.lock().clone();
-    update_config_from_window(&win, &mut base_cfg);
-    match base_cfg.save_default() {
-        Ok(()) => {
-            let intent = gnome_extension_intent(&base_cfg);
-            *current_cfg_cell.lock() = base_cfg;
-            sync_gnome_indicator_mode(intent);
-            win.set_global_status_is_error(false);
-            win.set_global_status(SharedString::from("配置已成功保存并同步！"));
-        }
-        Err(e) => {
-            win.set_global_status_is_error(true);
-            win.set_global_status(SharedString::from(format!("保存失败: {}", e)));
-        }
+    if let Some(saved_cfg) = crate::voice::commit_config_transaction(
+        &win,
+        current_cfg_cell,
+        "保存失败",
+        false,
+        |base_cfg| {
+            update_config_from_window(&win, base_cfg);
+            Ok(Some("配置已成功保存并同步！".to_string()))
+        },
+    ) {
+        let intent = gnome_extension_intent(&saved_cfg);
+        sync_gnome_indicator_mode(intent);
     }
 }
 

@@ -77,13 +77,13 @@ fn update_shortcuts(window: &SettingsWindow, shortcuts: &mut ShortcutConfig) {
     shortcuts.shift_select_second = window.get_shift_select_second();
 }
 
-/// 快捷键字符串规整处理
+/// 快捷键字符串规整处理（统一将空值与 `disabled` 归一化为「已禁用」）
 fn sanitize_shortcut_string(val: slint::SharedString) -> String {
-    let s = val.trim().to_string();
-    if s.is_empty() {
+    let s = val.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("disabled") || s == "已禁用" {
         "已禁用".to_string()
     } else {
-        s
+        s.to_string()
     }
 }
 

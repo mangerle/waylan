@@ -409,30 +409,7 @@ fn update_asr_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     let Some(item) = models_rc.row_data(asr_idx) else {
         return;
     };
-
-    let item_id = item.id.as_str();
-    if let Some(meta) = waylan_voice::find_preset_model_by_id(item_id) {
-        cfg.voice.engine_type = VoiceEngineType::Offline;
-        cfg.voice.selected_asr = None;
-        cfg.voice.offline.model_type = meta.model_type;
-        if waylan_voice::is_preset_model_installed(meta)
-            && let Some(dest) = waylan_voice::get_preset_model_dest_dir(meta)
-        {
-            cfg.voice.offline.model_dir = Some(dest.to_string_lossy().to_string());
-        }
-    } else if let Some(local_path) = item_id.strip_prefix("local:") {
-        cfg.voice.engine_type = VoiceEngineType::Offline;
-        cfg.voice.selected_asr = None;
-        cfg.voice.offline.model_dir = Some(local_path.to_string());
-    } else if let Some(cloud_id) = item_id.strip_prefix("cloud:") {
-        cfg.voice.engine_type = VoiceEngineType::Cloud;
-        cfg.voice.selected_asr = Some(format!("cloud:{}", cloud_id));
-        if let Some(profile) = cfg.voice.cloud_profiles.iter().find(|p| p.id == cloud_id) {
-            cfg.voice.cloud.endpoint = profile.endpoint.clone();
-            cfg.voice.cloud.api_key = profile.api_key.clone();
-            cfg.voice.cloud.model = profile.model.clone();
-        }
-    }
+    let _ = crate::voice::apply_asr_model_selection(cfg, item.id.as_str(), false);
 }
 
 /// 依据界面下拉索引同步 VAD 端点检测模型类型与模型路径

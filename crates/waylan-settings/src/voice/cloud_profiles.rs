@@ -17,7 +17,7 @@ use waylan_voice::{CloudAsrConfig, CloudProfile, CloudProviderType, VoiceEngineT
 
 use crate::SettingsWindow;
 use crate::callbacks::TaskRunningGuard;
-use crate::sync::{sync_config_to_window, update_config_from_window};
+use crate::sync::update_config_from_window;
 
 /// 云端服务回调共享上下文
 ///
@@ -223,10 +223,13 @@ fn apply_cloud_profile_update(
     display_name
 }
 
+static PROFILE_ID_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// 向配置中追加一个新的云端语音服务条目
 fn apply_cloud_profile_insert(cfg: &mut AppConfig, values: CloudProfileValues) -> String {
     let display_name = values.name.clone();
-    let new_id = format!("cloud_{}", chrono::Utc::now().timestamp_millis());
+    let seq = PROFILE_ID_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let new_id = format!("cloud_{}_{}", chrono::Utc::now().timestamp_millis(), seq);
     cfg.voice.cloud_profiles.push(CloudProfile {
         id: new_id,
         name: values.name,
@@ -240,7 +243,7 @@ fn apply_cloud_profile_insert(cfg: &mut AppConfig, values: CloudProfileValues) -
 
 /// 统一执行配置修改、磁盘持久化、内存回写与窗口同步事务
 ///
-/// 在写盘成功后才覆盖共享内存状态并同步界面，写盘失败时自动保留原内存配置并提示错误。
+/// 复用全局 `commit_config_transaction` 持锁完成写盘，防止并发 Lost Update 竞态。
 fn commit_config_change<F>(
     win: &SettingsWindow,
     cfg_cell: &Arc<Mutex<AppConfig>>,
@@ -250,24 +253,14 @@ fn commit_config_change<F>(
 where
     F: FnOnce(&mut AppConfig) -> Option<String>,
 {
-    let mut next_cfg = cfg_cell.lock().clone();
-    update_config_from_window(win, &mut next_cfg);
-    let success_msg = mutate(&mut next_cfg)?;
-
-    match next_cfg.save_default() {
-        Ok(()) => {
-            sync_config_to_window(win, &next_cfg);
-            *cfg_cell.lock() = next_cfg;
-            win.set_global_status_is_error(false);
-            win.set_global_status(SharedString::from(&success_msg));
-            Some(success_msg)
-        }
-        Err(e) => {
-            win.set_global_status_is_error(true);
-            win.set_global_status(SharedString::from(format!("{}: {}", error_prefix, e)));
-            None
-        }
-    }
+    let mut result_msg = None;
+    super::commit_config_transaction(win, cfg_cell, error_prefix, true, |next_cfg| {
+        update_config_from_window(win, next_cfg);
+        let msg = mutate(next_cfg);
+        result_msg = msg.clone();
+        Ok(msg)
+    });
+    result_msg
 }
 
 /// 处理保存/更新云端语音服务配置
