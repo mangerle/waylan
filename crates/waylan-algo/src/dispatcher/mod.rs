@@ -74,8 +74,8 @@ impl ModeDispatcher {
             let today = now.format("%Y年%m月%d日").to_string();
             let time_str = now.format("%H:%M:%S").to_string();
             return Some(vec![
-                AlgoCandidate::new(today, "v", 99_000).with_comment("当前日期"),
-                AlgoCandidate::new(time_str, "v", 95_000).with_comment("当前时间"),
+                AlgoCandidate::new(today, "v", 99_000),
+                AlgoCandidate::new(time_str, "v", 95_000),
             ]);
         }
 
@@ -83,47 +83,26 @@ impl ModeDispatcher {
         let now = chrono::Local::now();
         let mut candidates = Vec::new();
 
-        // 声明式分组表：每个快捷指令对应若干组「候选条目 -> 基准分值 -> 备注」，
+        // 声明式分组表：每个快捷指令对应若干组「候选条目 -> 基准分值」，
         // 由同一条阶梯降序追加逻辑统一消费，新增指令仅需补一行映射。
-        let groups: Vec<(Vec<String>, u32, &'static str)> = match expr_lower.as_str() {
+        let groups: Vec<(Vec<String>, u32)> = match expr_lower.as_str() {
             "sd" | "now" => vec![
-                (
-                    DateTimeEvaluator::format_datetime_formats(now),
-                    99_000,
-                    "日期时间",
-                ),
-                (
-                    DateTimeEvaluator::format_date_formats(now),
-                    90_000,
-                    "当前日期",
-                ),
+                (DateTimeEvaluator::format_datetime_formats(now), 99_000),
+                (DateTimeEvaluator::format_date_formats(now), 90_000),
             ],
-            "rq" | "date" => vec![(
-                DateTimeEvaluator::format_date_formats(now),
-                99_000,
-                "当前日期",
-            )],
-            "sj" | "time" => vec![(
-                DateTimeEvaluator::format_time_formats(now),
-                99_000,
-                "当前时间",
-            )],
-            "xq" => vec![(
-                DateTimeEvaluator::format_weekday_formats(now),
-                99_000,
-                "星期",
-            )],
+            "rq" | "date" => vec![(DateTimeEvaluator::format_date_formats(now), 99_000)],
+            "sj" | "time" => vec![(DateTimeEvaluator::format_time_formats(now), 99_000)],
+            "xq" => vec![(DateTimeEvaluator::format_weekday_formats(now), 99_000)],
             _ => return None,
         };
 
-        for (items, base_score, comment) in groups {
+        for (items, base_score) in groups {
             append_staggered_candidates(
                 &mut candidates,
                 StaggeredCandidateParams {
                     items,
                     expr,
                     base_score,
-                    comment,
                 },
             );
         }
@@ -160,8 +139,6 @@ struct StaggeredCandidateParams<'a> {
     expr: &'a str,
     /// 首个条目的基准分值，后续条目按 100 分逐级递减
     base_score: u32,
-    /// 候选备注文案
-    comment: &'static str,
 }
 
 /// 将文本条目按分值阶梯递减包装为算法候选列表
@@ -173,7 +150,7 @@ fn append_staggered_candidates(
         let score = params
             .base_score
             .saturating_sub((idx as u32).saturating_mul(100));
-        candidates.push(AlgoCandidate::new(item, params.expr, score).with_comment(params.comment));
+        candidates.push(AlgoCandidate::new(item, params.expr, score));
     }
 }
 
@@ -223,7 +200,7 @@ mod tests {
         let result =
             ModeDispatcher::try_dispatch("v12345.67", &config).expect("应触发V模式金额转换");
         assert_eq!(result[0].text, "壹万贰仟叁佰肆拾伍元陆角柒分");
-        assert_eq!(result[0].comment.as_deref(), Some("人民币大写"));
+        assert_eq!(result[0].comment.as_deref(), None);
         assert_eq!(result[1].text, "壹万贰仟叁佰肆拾伍点陆柒");
         assert_eq!(result[2].text, "12,345.67");
     }

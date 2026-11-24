@@ -47,7 +47,7 @@ fn test_financial_evaluator() {
     // 1. 常见带角分金额
     let cands = FinancialEvaluator::try_evaluate("12345.67").expect("应解析金额");
     assert_eq!(cands[0].text, "壹万贰仟叁佰肆拾伍元陆角柒分");
-    assert_eq!(cands[0].comment.as_deref(), Some("人民币大写"));
+    assert_eq!(cands[0].comment.as_deref(), None);
     assert_eq!(cands[1].text, "壹万贰仟叁佰肆拾伍点陆柒");
     assert_eq!(cands[2].text, "12,345.67");
 

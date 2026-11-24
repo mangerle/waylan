@@ -24,15 +24,14 @@ impl MathEvaluator {
 
             // 避免与已有纯数字候选重复
             if !existing.iter().any(|c| c.text == val_str) {
-                candidates.push(
-                    AlgoCandidate::new(val_str.clone(), expr, 85_000).with_comment("计算结果"),
-                );
+                candidates.push(AlgoCandidate::new(val_str.clone(), expr, 85_000));
             }
             if expr.contains(|c| "+-*/%xX".contains(c)) {
-                candidates.push(
-                    AlgoCandidate::new(format!("{}={}", expr, val_str), expr, 80_000)
-                        .with_comment("完整算式"),
-                );
+                candidates.push(AlgoCandidate::new(
+                    format!("{}={}", expr, val_str),
+                    expr,
+                    80_000,
+                ));
             }
         }
         candidates

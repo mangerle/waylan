@@ -23,13 +23,11 @@ impl FinancialEvaluator {
         let accounting_num = Self::to_accounting_format(int_val, frac_val);
 
         let mut candidates = Vec::with_capacity(3);
-        candidates.push(AlgoCandidate::new(rmb_capital, input, 100_000).with_comment("人民币大写"));
+        candidates.push(AlgoCandidate::new(rmb_capital, input, 100_000));
         if let Some(ch_digits) = chinese_digits {
-            candidates
-                .push(AlgoCandidate::new(ch_digits, input, 95_000).with_comment("中文大写数字"));
+            candidates.push(AlgoCandidate::new(ch_digits, input, 95_000));
         }
-        candidates
-            .push(AlgoCandidate::new(accounting_num, input, 90_000).with_comment("财务千分位"));
+        candidates.push(AlgoCandidate::new(accounting_num, input, 90_000));
 
         Some(candidates)
     }
