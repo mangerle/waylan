@@ -183,6 +183,59 @@ pub enum DatCursor {
     Tail { offset: usize, pos: usize },
 }
 
+/// 栈上内联音节分支缓冲（最长 7 字节，零堆分配）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InlineBranchSyllable {
+    bytes: [u8; 8],
+    len: u8,
+}
+
+impl InlineBranchSyllable {
+    /// 从 UTF-8 字节切片构造栈内联音节（超长时截断至 8 字节）
+    #[inline]
+    fn from_bytes(src: &[u8]) -> Option<Self> {
+        if src.len() > 8 || std::str::from_utf8(src).is_err() {
+            return None;
+        }
+        let mut bytes = [0u8; 8];
+        bytes[..src.len()].copy_from_slice(src);
+        Some(Self {
+            bytes,
+            len: src.len() as u8,
+        })
+    }
+
+    /// 返回音节字符串切片
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        // SAFETY: 构造时已校验 `src` 为合法 UTF-8 且 `len <= 8`
+        unsafe { std::str::from_utf8_unchecked(&self.bytes[..self.len as usize]) }
+    }
+}
+
+impl std::ops::Deref for InlineBranchSyllable {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl PartialEq<&str> for InlineBranchSyllable {
+    #[inline]
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<str> for InlineBranchSyllable {
+    #[inline]
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
 impl DatCursor {
     /// 按单个 ASCII 字节在 DAT 中推进游标（支持 `a..=z` 与 `'`）
     #[inline]
@@ -257,29 +310,34 @@ impl DatCursor {
 
     /// 从当前游标出发，收集所有以 `prefix` 开头且在当前词典中实际存在的音节分支
     ///
-    /// 返回的每个元素为 `(完整音节, 音节末尾且未消费后续分隔符的游标)`。
+    /// 返回的每个元素为 `(栈内联音节, 音节末尾且未消费后续分隔符的游标)`，零堆分配。
     pub fn collect_syllable_branches(
         &self,
         reader: &DatReader<'_>,
         prefix: &str,
         max_branches: usize,
-        out: &mut Vec<(String, DatCursor)>,
+        out: &mut Vec<(InlineBranchSyllable, DatCursor)>,
     ) {
+        let prefix_bytes = prefix.as_bytes();
+        if prefix_bytes.len() > 8 {
+            return;
+        }
         let Some(after_prefix) = self.step_str(reader, prefix) else {
             return;
         };
-        let mut buf = Vec::with_capacity(8);
-        buf.extend_from_slice(prefix.as_bytes());
-        after_prefix.dfs_syllable_branches(reader, &mut buf, max_branches, out);
+        let mut buf = [0u8; 8];
+        buf[..prefix_bytes.len()].copy_from_slice(prefix_bytes);
+        after_prefix.dfs_syllable_branches(reader, &mut buf, prefix_bytes.len(), max_branches, out);
     }
 
     /// 在游标当前位置深度优先提取完整音节分支（深度上限 7 字节，防无效长链）
     fn dfs_syllable_branches(
         &self,
         reader: &DatReader<'_>,
-        buf: &mut Vec<u8>,
+        buf: &mut [u8; 8],
+        buf_len: usize,
         max_branches: usize,
-        out: &mut Vec<(String, DatCursor)>,
+        out: &mut Vec<(InlineBranchSyllable, DatCursor)>,
     ) {
         if out.len() >= max_branches {
             return;
@@ -291,44 +349,48 @@ impl DatCursor {
                 };
                 let mut end_rel = 0;
                 while end_rel < slice.len() && slice[end_rel] != b'\'' && slice[end_rel] != 0 {
-                    if !slice[end_rel].is_ascii_lowercase() || buf.len() + end_rel >= 8 {
+                    if !slice[end_rel].is_ascii_lowercase() || buf_len + end_rel >= 8 {
                         return;
                     }
                     end_rel += 1;
                 }
-                if buf.is_empty() && end_rel == 0 {
+                if buf_len == 0 && end_rel == 0 {
                     return;
                 }
-                let prev_len = buf.len();
-                buf.extend_from_slice(&slice[..end_rel]);
-                if let Ok(syl) = std::str::from_utf8(buf) {
+                let next_len = buf_len + end_rel;
+                buf[buf_len..next_len].copy_from_slice(&slice[..end_rel]);
+                if let Some(syl) = InlineBranchSyllable::from_bytes(&buf[..next_len]) {
                     out.push((
-                        syl.to_string(),
+                        syl,
                         Self::Tail {
                             offset,
                             pos: pos + end_rel,
                         },
                     ));
                 }
-                buf.truncate(prev_len);
             }
             Self::Trie { .. } => {
-                if !buf.is_empty() && self.is_syllable_boundary(reader) {
-                    if let Ok(syl) = std::str::from_utf8(buf) {
-                        out.push((syl.to_string(), *self));
+                if buf_len > 0 && self.is_syllable_boundary(reader) {
+                    if let Some(syl) = InlineBranchSyllable::from_bytes(&buf[..buf_len]) {
+                        out.push((syl, *self));
                     }
                     if out.len() >= max_branches {
                         return;
                     }
                 }
-                if buf.len() >= 7 {
+                if buf_len >= 7 {
                     return;
                 }
                 for b in b'a'..=b'z' {
                     if let Some(next_cursor) = self.step_byte(reader, b) {
-                        buf.push(b);
-                        next_cursor.dfs_syllable_branches(reader, buf, max_branches, out);
-                        buf.pop();
+                        buf[buf_len] = b;
+                        next_cursor.dfs_syllable_branches(
+                            reader,
+                            buf,
+                            buf_len + 1,
+                            max_branches,
+                            out,
+                        );
                         if out.len() >= max_branches {
                             break;
                         }

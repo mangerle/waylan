@@ -208,14 +208,15 @@ fn write_sections<W: Write>(
         writer.write_all(&c.to_le_bytes())?;
     }
     writer.write_all(&payload.dat.tail)?;
+    const ZERO_PAD: [u8; 4] = [0u8; 4];
     if offsets.pad1 > 0 {
-        writer.write_all(&vec![0u8; offsets.pad1])?;
+        writer.write_all(&ZERO_PAD[..offsets.pad1])?;
     }
 
     writer.write_all(payload.key_metas_data)?;
     writer.write_all(payload.candidates_data)?;
     if offsets.pad2 > 0 {
-        writer.write_all(&vec![0u8; offsets.pad2])?;
+        writer.write_all(&ZERO_PAD[..offsets.pad2])?;
     }
 
     for &off in &vocab_data.vocab_offsets {

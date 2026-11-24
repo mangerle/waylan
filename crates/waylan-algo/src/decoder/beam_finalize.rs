@@ -93,7 +93,7 @@ fn collect_decoded_sentences(
             continue;
         }
 
-        let mut pinyin = String::new();
+        let mut pinyin = String::with_capacity(refs.len().saturating_mul(6));
         for (i, &(p, idx)) in refs.iter().enumerate() {
             if i > 0 {
                 pinyin.push('\'');

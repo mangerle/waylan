@@ -16,7 +16,7 @@ use super::matcher_rank::{
     RawPhraseMatch, filter_and_truncate_raw_matches, materialize_raw_matches,
 };
 use super::weights::ScoringWeights;
-use crate::dat::{DatCursor, DatReader};
+use crate::dat::{DatCursor, DatReader, InlineBranchSyllable};
 use crate::pipeline::is_rare_ext_char;
 use crate::table::{CompactMmapLexicon, LexiconTable};
 
@@ -146,7 +146,7 @@ struct DatSearchCtx<'a> {
     /// DFS 共享可回溯拼音键拼接缓冲，消除每分支 Vec<String> 克隆与 join 堆分配
     key_buf: String,
     /// DFS 共享分支缓冲池，消除递归展开 Initial/PartialTail 时的 Vec 堆分配
-    branch_pool: Vec<(String, DatCursor)>,
+    branch_pool: Vec<(InlineBranchSyllable, DatCursor)>,
     results: &'a mut Vec<RawPhraseMatch>,
 }
 

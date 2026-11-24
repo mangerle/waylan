@@ -1,6 +1,6 @@
 //! 束搜索解码评分、边转移惩罚与束槽剪枝模块
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use super::beam_types::BeamState;
 use super::matcher::PhraseMatch;
@@ -98,7 +98,7 @@ pub(super) fn filter_and_rank_matches(
     matches.truncate(48);
 }
 
-/// 按 `(末词, 容错次数)` 去重并按 `beam_width` 截断束槽
+/// 按 `(末词, 容错次数)` 原地去重并按 `beam_width` 截断束槽（复用原有 Vec 容量，消除新 Vec 分配）
 pub(super) fn prune_beam_slot(
     slot: &mut Vec<BeamState>,
     beam_width: usize,
@@ -110,24 +110,26 @@ pub(super) fn prune_beam_slot(
     }
     slot.sort_by_key(|a| std::cmp::Reverse(a.score));
 
-    let mut best_by_key: HashMap<(&str, u8), usize> = HashMap::with_capacity(slot.len().min(64));
-    let mut kept = Vec::with_capacity(beam_width.min(slot.len()));
-    for state in slot.drain(..) {
+    let mut seen: HashSet<(&str, u8)> = HashSet::with_capacity(slot.len().min(64));
+    let mut write_idx = 0usize;
+    for read_idx in 0..slot.len() {
+        let state = &slot[read_idx];
         let last_word = match state.last_word_ref {
             Some((p, idx)) => spans_by_pos[p][idx].word.as_str(),
             None => seed_word,
         };
-        let key = (last_word, state.typo_count);
-        if best_by_key.contains_key(&key) {
+        if !seen.insert((last_word, state.typo_count)) {
             continue;
         }
-        best_by_key.insert(key, kept.len());
-        kept.push(state);
-        if kept.len() >= beam_width {
+        if write_idx != read_idx {
+            slot.swap(write_idx, read_idx);
+        }
+        write_idx += 1;
+        if write_idx >= beam_width {
             break;
         }
     }
-    *slot = kept;
+    slot.truncate(write_idx);
 }
 
 /// 原始轻量词匹配打分参数（用于延迟物化前排序截断）
