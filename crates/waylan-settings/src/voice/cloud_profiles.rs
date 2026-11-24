@@ -26,14 +26,13 @@ use crate::sync::{sync_config_to_window, update_config_from_window};
 ///   与当前编辑条目标识，逐回调重复展开会让每个闭包体都退化成多参数转发行。
 /// - **核心优势**：以单一可克隆上下文承载稳定依赖，闭包仅需一次具名函数转发。
 /// - **代价与局限**：上下文随每个回调注册点克隆一份（均为 `Rc` / `Arc` 级轻量句柄）。
-#[derive(Clone)]
 struct CloudProfileCallbackContext {
     /// 窗口弱引用（升级失败表示窗口已销毁，回调应静默跳过）
     window_weak: slint::Weak<SettingsWindow>,
     /// 共享配置单元
     cfg_cell: Arc<Mutex<AppConfig>>,
     /// 当前处于编辑态的云端服务条目 ID（None 表示新增态）
-    editing_id: Rc<RefCell<Option<String>>>,
+    editing_id: RefCell<Option<String>>,
 }
 
 /// 注册云端语音服务管理相关回调（新增、编辑、删除、保存、取消、连接测试）
@@ -41,28 +40,28 @@ pub(crate) fn register_cloud_profile_callbacks(
     window: &SettingsWindow,
     loaded_config: Arc<Mutex<AppConfig>>,
 ) {
-    let context = CloudProfileCallbackContext {
+    let context = Rc::new(CloudProfileCallbackContext {
         window_weak: window.as_weak(),
-        cfg_cell: loaded_config.clone(),
-        editing_id: Rc::new(RefCell::new(None)),
-    };
+        cfg_cell: Arc::clone(&loaded_config),
+        editing_id: RefCell::new(None),
+    });
 
-    let add_ctx = context.clone();
+    let add_ctx = Rc::clone(&context);
     window.on_start_add_cloud_profile(move || {
         apply_start_add_cloud_profile(&add_ctx);
     });
 
-    let edit_ctx = context.clone();
+    let edit_ctx = Rc::clone(&context);
     window.on_start_edit_cloud_profile(move |idx| {
         apply_start_edit_cloud_profile(&edit_ctx, idx);
     });
 
-    let cancel_ctx = context.clone();
+    let cancel_ctx = Rc::clone(&context);
     window.on_cancel_cloud_edit(move || {
         apply_cancel_cloud_edit(&cancel_ctx);
     });
 
-    let save_ctx = context.clone();
+    let save_ctx = Rc::clone(&context);
     window.on_save_cloud_profile(move |name, endpoint, key, model| {
         let form = CloudProfileFormData {
             name: &name,
@@ -193,36 +192,50 @@ fn normalize_cloud_profile_form(
 }
 
 /// 将归一化后的表单值回写到已存在的云端服务条目，并在其处于生效状态时同步当前云端参数
-fn apply_cloud_profile_update(cfg: &mut AppConfig, target_id: &str, values: &CloudProfileValues) {
+fn apply_cloud_profile_update(
+    cfg: &mut AppConfig,
+    target_id: &str,
+    values: CloudProfileValues,
+) -> String {
+    let display_name = values.name.clone();
+    let is_active = cfg
+        .voice
+        .selected_asr
+        .as_deref()
+        .and_then(|s| s.strip_prefix("cloud:"))
+        == Some(target_id);
+    if is_active {
+        cfg.voice.cloud.endpoint = values.endpoint.clone();
+        cfg.voice.cloud.api_key = values.api_key.clone();
+        cfg.voice.cloud.model = values.model.clone();
+    }
     if let Some(p) = cfg
         .voice
         .cloud_profiles
         .iter_mut()
         .find(|p| p.id == target_id)
     {
-        p.name = values.name.clone();
-        p.endpoint = values.endpoint.clone();
-        p.api_key = values.api_key.clone();
-        p.model = values.model.clone();
+        p.name = values.name;
+        p.endpoint = values.endpoint;
+        p.api_key = values.api_key;
+        p.model = values.model;
     }
-    if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", target_id)) {
-        cfg.voice.cloud.endpoint = values.endpoint.clone();
-        cfg.voice.cloud.api_key = values.api_key.clone();
-        cfg.voice.cloud.model = values.model.clone();
-    }
+    display_name
 }
 
 /// 向配置中追加一个新的云端语音服务条目
-fn apply_cloud_profile_insert(cfg: &mut AppConfig, values: &CloudProfileValues) {
+fn apply_cloud_profile_insert(cfg: &mut AppConfig, values: CloudProfileValues) -> String {
+    let display_name = values.name.clone();
     let new_id = format!("cloud_{}", chrono::Utc::now().timestamp_millis());
     cfg.voice.cloud_profiles.push(CloudProfile {
         id: new_id,
-        name: values.name.clone(),
+        name: values.name,
         provider: CloudProviderType::OpenAiCompatible,
-        endpoint: values.endpoint.clone(),
-        api_key: values.api_key.clone(),
-        model: values.model.clone(),
+        endpoint: values.endpoint,
+        api_key: values.api_key,
+        model: values.model,
     });
+    display_name
 }
 
 /// 统一执行配置修改、磁盘持久化、内存回写与窗口同步事务
@@ -261,7 +274,7 @@ where
 fn handle_save_cloud_profile(
     win: &SettingsWindow,
     current_cfg_cell: &Arc<Mutex<AppConfig>>,
-    editing_id_save: &Rc<RefCell<Option<String>>>,
+    editing_id_save: &RefCell<Option<String>>,
     form: CloudProfileFormData<'_>,
 ) {
     let Some(values) = normalize_cloud_profile_form(win, form) else {
@@ -269,13 +282,14 @@ fn handle_save_cloud_profile(
     };
 
     let target_id = editing_id_save.borrow_mut().take();
-    let display_name = values.name.clone();
+    let mut values_opt = Some(values);
     let saved = commit_config_change(win, current_cfg_cell, "保存云端服务失败", |cfg| {
-        if let Some(ref tid) = target_id {
-            apply_cloud_profile_update(cfg, tid, &values);
+        let vals = values_opt.take()?;
+        let display_name = if let Some(ref tid) = target_id {
+            apply_cloud_profile_update(cfg, tid, vals)
         } else {
-            apply_cloud_profile_insert(cfg, &values);
-        }
+            apply_cloud_profile_insert(cfg, vals)
+        };
         Some(format!("云端服务 [{}] 已保存生效！", display_name))
     });
     if saved.is_some() {
@@ -290,7 +304,7 @@ fn handle_save_cloud_profile(
 fn handle_delete_cloud_profile(
     win: &SettingsWindow,
     current_cfg_cell: &Arc<Mutex<AppConfig>>,
-    editing_id: &Rc<RefCell<Option<String>>>,
+    editing_id: &RefCell<Option<String>>,
     index: usize,
 ) {
     let deleted = commit_config_change(win, current_cfg_cell, "保存删除状态失败", |cfg| {
@@ -298,7 +312,13 @@ fn handle_delete_cloud_profile(
             return None;
         }
         let removed = cfg.voice.cloud_profiles.remove(index);
-        if cfg.voice.selected_asr.as_deref() == Some(&format!("cloud:{}", removed.id)) {
+        if cfg
+            .voice
+            .selected_asr
+            .as_deref()
+            .and_then(|s| s.strip_prefix("cloud:"))
+            == Some(removed.id.as_str())
+        {
             cfg.voice.selected_asr = None;
             cfg.voice.engine_type = VoiceEngineType::Offline;
         }
