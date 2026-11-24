@@ -137,7 +137,6 @@ impl LexiconTable {
                 candidates.push(
                     AlgoCandidate::new(text, key, score)
                         .with_tier(CandidateTier::Acronym)
-                        .with_comment("[简拼]")
                         .with_word_id(Some(word_id)),
                 );
             }
@@ -157,7 +156,6 @@ impl LexiconTable {
                 candidates.push(
                     AlgoCandidate::new(text, key, score)
                         .with_tier(CandidateTier::Acronym)
-                        .with_comment("[简拼]")
                         .with_word_id(Some(word_id)),
                 );
             }

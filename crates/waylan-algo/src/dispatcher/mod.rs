@@ -59,12 +59,9 @@ impl ModeDispatcher {
         // 3. 算术表达式安全求值（如 v20*5, v100+20）
         candidates.extend(MathEvaluator::try_evaluate(expr, &candidates));
 
-        // 4. 兜底友好引导
+        // 4. 兜底直通候选（纯净直出输入原始内容，不附加任何内部教学说明）
         if candidates.is_empty() {
-            candidates.push(
-                AlgoCandidate::new(format!("v{}", expr), expr, 50_000)
-                    .with_comment("V模式: 输入数字/算式/sd/sj/rq"),
-            );
+            candidates.push(AlgoCandidate::new(format!("v{}", expr), expr, 50_000));
         }
 
         candidates
@@ -206,6 +203,18 @@ mod tests {
 
         let div_zero = ModeDispatcher::try_dispatch("v10/0", &config).expect("V模式应拦截");
         assert!(!div_zero.iter().any(|c| c.text.contains('=')));
+    }
+
+    #[test]
+    fn test_v_mode_fallback_passthrough_no_comment() {
+        let config = AlgoConfig::default();
+        let res = ModeDispatcher::try_dispatch("v1.5.1", &config).expect("v开头应直通处理");
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].text, "v1.5.1");
+        assert_eq!(
+            res[0].comment, None,
+            "版本号等兜底直通候选绝不应包含任何内部教学提示"
+        );
     }
 
     #[test]

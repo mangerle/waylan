@@ -115,7 +115,6 @@ impl EnglishSuggestionManager {
         if let Some((orig_word, score)) = self.exact_index.get(&input_lower) {
             results.push(
                 AlgoCandidate::new(orig_word, input, 4_500_000_u32.saturating_add(*score))
-                    .with_comment("英文单词")
                     .with_tier(CandidateTier::Acronym),
             );
             return results;
@@ -141,7 +140,6 @@ impl EnglishSuggestionManager {
                                 input,
                                 3_000_000_u32.saturating_add(*score / 2),
                             )
-                            .with_comment("英文联想")
                             .with_tier(CandidateTier::PrefixPartial),
                         );
                     }

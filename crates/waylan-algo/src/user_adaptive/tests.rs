@@ -29,10 +29,10 @@ fn test_no_double_boost_on_user_history() {
     let mut user_cand = candidates[0].clone();
     let original_score = user_cand.score;
 
-    // 对 UserHistory 层级调用 apply_boost 不应重复加分或篡改自造词注释
+    // 对 UserHistory 层级调用 apply_boost 不应重复加分
     model.apply_boost(&mut user_cand, now + 10);
     assert_eq!(user_cand.score, original_score);
-    assert_eq!(user_cand.comment.as_deref(), Some("自造词"));
+    assert_eq!(user_cand.comment.as_deref(), None);
 }
 
 #[test]

@@ -225,7 +225,6 @@ impl UserAdaptiveModel {
                 let score = 5_000_000_u32.saturating_add(boost);
                 out.push(
                     AlgoCandidate::new(&entry.text, pinyin, score)
-                        .with_comment("自造词")
                         .with_tier(CandidateTier::UserHistory),
                 );
             }
