@@ -148,7 +148,6 @@ impl CustomPhraseManager {
                 let expanded = expand_dynamic_macros(text);
                 candidates.push(
                     AlgoCandidate::new(expanded, code, 9_999_999)
-                        .with_comment("自定义短语")
                         .with_tier(CandidateTier::ExactWord),
                 );
             }

@@ -57,7 +57,7 @@ impl AlgoEngine {
                 text: protected,
                 pinyin: raw_input.to_string(),
                 score: u32::MAX / 2,
-                comment: Some("专名".to_string()),
+                comment: None,
                 tier: CandidateTier::ProtectedEntity,
                 is_expandable: false,
                 consumed_len: Some(raw_input.len()),

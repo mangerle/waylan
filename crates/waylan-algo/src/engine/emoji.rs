@@ -146,9 +146,8 @@ pub(crate) fn suggest_emoji_candidate(
         return None;
     }
 
-    let mut cand = AlgoCandidate::new(emoji, raw_input, 1)
-        .with_tier(CandidateTier::SentenceViterbi)
-        .with_comment("[表情]");
+    let mut cand =
+        AlgoCandidate::new(emoji, raw_input, 1).with_tier(CandidateTier::SentenceViterbi);
     cand.consumed_len = Some(raw_input.len());
     Some(cand)
 }

@@ -176,7 +176,7 @@ impl AlgoEngine {
                 text: m.word,
                 pinyin: m.matched_key.to_string(),
                 score: to_positive_score(m_score),
-                comment: Some(format!("[模糊: {}]", m.matched_key)),
+                comment: Some(format!("({})", m.matched_key)),
                 tier: CandidateTier::RuleNormalization,
                 is_expandable: false,
                 consumed_len: Some(raw_input.len()),
