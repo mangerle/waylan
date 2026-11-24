@@ -61,6 +61,7 @@ impl IbusEngineService {
             selected_index: snap.selected_index,
             orientation: snap.orientation,
             index_style: snap.index_style,
+            show_pinyin_comment: snap.show_pinyin_comment,
         }) {
             let _ = Self::update_lookup_table(ctxt, Variant::from(table_val), true).await;
         }
@@ -169,6 +170,7 @@ pub(crate) fn emit_ui_snapshot_blocking(
         selected_index: snap.selected_index,
         orientation: snap.orientation,
         index_style: snap.index_style,
+        show_pinyin_comment: snap.show_pinyin_comment,
     })
     .ok()
     .map(|table_val| (Variant::from(table_val), table_visible));

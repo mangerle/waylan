@@ -27,6 +27,7 @@ impl IbusSessionCore {
                 page_size,
                 orientation,
                 index_style,
+                show_pinyin_comment: self.runtime.core.engine.config.show_pinyin_comment,
                 raw_v_preedit: None,
             };
             self.runtime.poll_voice_cycle(&mut frontend, false)

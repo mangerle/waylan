@@ -97,6 +97,8 @@ pub struct IbusLookupTableParams<'a> {
     pub orientation: i32,
     /// 候选词序号展示风格
     pub index_style: CandidateIndexStyle,
+    /// 全局标准拼音注音展示开关（为 false 时仍常驻展示读音差异与特异性提示）
+    pub show_pinyin_comment: bool,
 }
 
 /// 构造包含当前页候选词列表的 `IBusLookupTable` 变体对象，签名 `(sa{sv}uubbiavav)`
@@ -112,12 +114,14 @@ pub fn build_ibus_lookup_table(
         selected_index,
         orientation,
         index_style,
+        show_pinyin_comment,
     } = *params;
     let mut cand_vec = Vec::with_capacity(candidates.len());
     let mut label_vec = Vec::with_capacity(candidates.len());
 
     for (idx, cand) in candidates.iter().enumerate() {
-        let mut display_text = format_candidate_display(index_style, idx, &cand.text, None);
+        let text_with_comment = cand.format_display_text(show_pinyin_comment);
+        let mut display_text = format_candidate_display(index_style, idx, &text_with_comment, None);
         if cand.is_expandable && orientation != IBUS_ORIENTATION_VERTICAL {
             display_text.push_str(" ⇥ Tab");
         }

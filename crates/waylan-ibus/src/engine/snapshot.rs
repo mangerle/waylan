@@ -21,6 +21,7 @@ pub(crate) struct UiSnapshot {
     pub(crate) selected_index: usize,
     pub(crate) orientation: i32,
     pub(crate) index_style: CandidateIndexStyle,
+    pub(crate) show_pinyin_comment: bool,
 }
 
 impl UiSnapshot {
@@ -33,6 +34,7 @@ impl UiSnapshot {
             selected_index: 0,
             orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
             index_style: CandidateIndexStyle::None,
+            show_pinyin_comment: false,
         }
     }
 
@@ -45,6 +47,7 @@ impl UiSnapshot {
         page_size: usize,
         orientation: CandidateOrientation,
         index_style: CandidateIndexStyle,
+        show_pinyin_comment: bool,
     ) -> Self {
         if box_state.voice.is_some() {
             return Self {
@@ -54,6 +57,7 @@ impl UiSnapshot {
                 selected_index: 0,
                 orientation: super::super::types::IBUS_ORIENTATION_HORIZONTAL,
                 index_style: CandidateIndexStyle::None,
+                show_pinyin_comment,
             };
         }
 
@@ -85,6 +89,7 @@ impl UiSnapshot {
                     selected_index,
                     orientation: super::super::types::IBUS_ORIENTATION_VERTICAL,
                     index_style,
+                    show_pinyin_comment,
                 }
             }
             CandidateExpansion::Grid { selected_index } => {
@@ -97,6 +102,7 @@ impl UiSnapshot {
                     selected_index,
                     orientation: super::super::types::IBUS_ORIENTATION_VERTICAL,
                     index_style,
+                    show_pinyin_comment,
                 }
             }
             CandidateExpansion::None => {
@@ -115,6 +121,7 @@ impl UiSnapshot {
                     selected_index: box_state.selected_index,
                     orientation: ibus_orientation,
                     index_style,
+                    show_pinyin_comment,
                 }
             }
         }
@@ -145,6 +152,7 @@ impl UiSnapshot {
             core.runtime.core.engine.config.page_size,
             core.runtime.candidate_orientation(),
             core.runtime.candidate_index_style(),
+            core.runtime.core.engine.config.show_pinyin_comment,
         )
     }
 

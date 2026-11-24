@@ -66,9 +66,54 @@ mod tests {
             selected_index: 0,
             orientation: IBUS_ORIENTATION_HORIZONTAL,
             index_style: CandidateIndexStyle::ModernSpace,
+            show_pinyin_comment: false,
         })
         .expect("序列化 IBusLookupTable 失败");
         assert_eq!(table.value_signature(), "(sa{sv}uubbiavav)");
+    }
+
+    #[test]
+    fn test_ibus_lookup_table_preserves_special_comments() {
+        let cands = vec![
+            Candidate::new("藏", "cang", 1000),
+            Candidate::new("常", "chang", 900).with_comment("(chang)"),
+            Candidate::new("你好", "ni'hao", 800).with_comment("[纠错: ni'hao]"),
+            Candidate::new("世界", "shi'jie", 700).with_comment("[shi'jie]"),
+        ];
+
+        // 1. 当 show_pinyin_comment = false 时，常规注音隐藏，特异性读音 (chang) 与纠错常驻
+        let table = build_ibus_lookup_table(&IbusLookupTableParams {
+            candidates: &cands,
+            page_size: 5,
+            selected_index: 0,
+            orientation: IBUS_ORIENTATION_HORIZONTAL,
+            index_style: CandidateIndexStyle::ModernSpace,
+            show_pinyin_comment: false,
+        })
+        .expect("序列化 IBusLookupTable 失败");
+
+        // 从生成的 D-Bus 结构中解析候选条目文本 (sa{sv}uubbiavav) -> fields[7] 为 candidates
+        let structure = table.downcast_ref::<zbus::Structure<'_>>().unwrap();
+        let fields = structure.fields();
+        let cand_array = fields[7].downcast_ref::<zbus::Array<'_>>().unwrap();
+        let extract = |idx: usize| -> String {
+            let val = cand_array.get::<zbus::Variant<'_>>(idx).unwrap().unwrap();
+            let owned = OwnedVariant::try_from(val).unwrap();
+            extract_text_from_ibus_variant(&owned).unwrap()
+        };
+
+        assert_eq!(extract(0), "1 藏");
+        assert_eq!(
+            extract(1),
+            "2 常 (chang)",
+            "特异性读音必须被发送到 IBus 桌面显示"
+        );
+        assert_eq!(
+            extract(2),
+            "3 你好 [纠错: ni'hao]",
+            "纠错提示必须被发送到 IBus 桌面显示"
+        );
+        assert_eq!(extract(3), "4 世界", "普通注音在关闭时被隐藏");
     }
 
     #[test]
