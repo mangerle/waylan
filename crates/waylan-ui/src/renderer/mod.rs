@@ -242,7 +242,9 @@ impl CandidateBoxRenderer {
         let scale_bits = self.scale.to_bits();
         let state_hash = compute_state_fingerprint(state);
         let theme_hash = compute_theme_hash(&self.theme);
-        if let Some(snap) = self.last_render_snapshot
+        let has_time_animation = capsule::has_active_time_animation(state.voice.as_ref());
+        if !has_time_animation
+            && let Some(snap) = self.last_render_snapshot
             && snap.font_size_bits == font_size_bits
             && snap.scale_bits == scale_bits
             && snap.theme_hash == theme_hash

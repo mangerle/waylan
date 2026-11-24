@@ -67,14 +67,17 @@ fn resolve_voice_text(voice: &VoiceBoxState) -> &str {
     }
 }
 
-/// 解析波形字符序列为归一化振幅比例列表
-fn parse_waveform_ratios(waveform: &str) -> Vec<f32> {
+/// 解析波形字符序列为栈上归一化振幅比例数组与有效长度（最多 10 柱，零堆分配）
+fn parse_waveform_ratios(waveform: &str) -> ([f32; 10], usize) {
     if waveform.is_empty() {
-        return vec![0.3, 0.6, 0.8, 0.5, 0.3];
+        let mut arr = [0.0f32; 10];
+        arr[..5].copy_from_slice(&[0.3, 0.6, 0.8, 0.5, 0.3]);
+        return (arr, 5);
     }
-    waveform
-        .chars()
-        .map(|ch| match ch {
+    let mut arr = [0.0f32; 10];
+    let mut count = 0usize;
+    for ch in waveform.chars().take(10) {
+        arr[count] = match ch {
             ' ' => 0.15,
             '▂' => 0.25,
             '▃' => 0.40,
@@ -84,8 +87,37 @@ fn parse_waveform_ratios(waveform: &str) -> Vec<f32> {
             '▇' => 0.92,
             '█' => 1.00,
             _ => 0.35,
-        })
-        .collect()
+        };
+        count += 1;
+    }
+    (arr, count)
+}
+
+/// 解析语音胶囊当前实际生效的视觉动效类型
+pub(crate) fn resolve_effective_voice_effect(
+    voice: &VoiceBoxState,
+    voice_text: &str,
+) -> VoiceVisualEffect {
+    if voice.waveform.is_empty()
+        && (voice_text == "识别完成" || voice_text.starts_with("正在识别"))
+        && matches!(voice.visual_effect, VoiceVisualEffect::DynamicWaveform)
+    {
+        VoiceVisualEffect::BreathingPulse
+    } else {
+        voice.visual_effect
+    }
+}
+
+/// 判断语音胶囊当前是否处于依赖系统时间的呼吸动画阶段（需跳过静态帧缓存以保证逐帧刷新）
+pub(crate) fn has_active_time_animation(voice: Option<&VoiceBoxState>) -> bool {
+    let Some(v) = voice else {
+        return false;
+    };
+    let voice_text = resolve_voice_text(v);
+    matches!(
+        resolve_effective_voice_effect(v, voice_text),
+        VoiceVisualEffect::BreathingPulse
+    )
 }
 
 /// 依据渲染器样式解析语音胶囊栏的基础度量参数
@@ -317,15 +349,9 @@ pub fn render_voice_capsule_bar(
     let s = metrics.scale;
 
     let voice_text = resolve_voice_text(voice);
-    let ratios = parse_waveform_ratios(&voice.waveform);
-    let effective_effect = if voice.waveform.is_empty()
-        && (voice_text == "识别完成" || voice_text.starts_with("正在识别"))
-        && matches!(voice.visual_effect, VoiceVisualEffect::DynamicWaveform)
-    {
-        VoiceVisualEffect::BreathingPulse
-    } else {
-        voice.visual_effect
-    };
+    let (ratio_buf, ratio_len) = parse_waveform_ratios(&voice.waveform);
+    let ratios = &ratio_buf[..ratio_len];
+    let effective_effect = resolve_effective_voice_effect(voice, voice_text);
 
     let wave_total_w = compute_voice_wave_total_width(ratios.len(), s);
     let leading_width = resolve_voice_leading_width(effective_effect, wave_total_w, s);
@@ -343,7 +369,7 @@ pub fn render_voice_capsule_bar(
         &mut pixmap,
         &VoiceContentParams {
             effect: effective_effect,
-            ratios: &ratios,
+            ratios,
             voice_text,
             scale: s,
             bar_height: metrics.bar_height,

@@ -167,9 +167,13 @@ fn hash_voice(voice: Option<&VoiceBoxState>, h1: &mut DefaultHasher, h2: &mut Fn
             } else {
                 h2.write_u64(0);
             }
-            let effect_tag = format!("{:?}", v.visual_effect);
+            let effect_tag: u8 = match v.visual_effect {
+                waylan_core::VoiceVisualEffect::DynamicWaveform => 0,
+                waylan_core::VoiceVisualEffect::BreathingPulse => 1,
+                waylan_core::VoiceVisualEffect::ClassicText => 2,
+            };
             effect_tag.hash(h1);
-            h2.write_str(&effect_tag);
+            h2.write_u64(u64::from(effect_tag));
         }
     }
 }
