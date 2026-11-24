@@ -277,12 +277,25 @@ impl CandidateSurfaceManager {
     ) where
         S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
     {
-        let scale = self.scale.max(1);
-        let scale_u = scale as u32;
-        let Some((width, height, _)) = self.render_state(state) else {
+        if !state.visible || state.candidates.is_empty() {
+            self.hide_wayland_surface(surface, active_buffer);
+            return;
+        }
+        let was_active = self.is_visible && active_buffer.is_some();
+        let Some((width, height, _, cache_hit)) = self.renderer.render_rgba_with_hit(state) else {
             self.hide_wayland_surface(surface, active_buffer);
             return;
         };
+        // 若帧指纹命中且表面已处于激活挂载态且尺寸未变，跳过 SHM swizzle 拷贝与重复 Wayland 提交
+        if cache_hit && was_active && self.current_size == (width, height) {
+            return;
+        }
+        if !self.prepare_rendered_slot(width, height) {
+            return;
+        }
+
+        let scale = self.scale.max(1);
+        let scale_u = scale as u32;
 
         if let (Some(shm), Some(surf), Some(qh)) = (shm, surface, qhandle) {
             let (effective_scale, aligned_w, aligned_h) = if width >= scale_u && height >= scale_u {
@@ -376,6 +389,35 @@ impl CandidateSurfaceManager {
         true
     }
 
+    /// 将渲染器产出的最新像素写入空闲 SHM 槽位（供 `commit_to_wayland` 与 `render_state` 共用）
+    fn prepare_rendered_slot(&mut self, width: u32, height: u32) -> bool {
+        self.on_input_active(width, height);
+
+        let required_bytes = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+
+        let next_slot = self.select_available_slot();
+        if !self.prepare_slot_for_render(next_slot, required_bytes) {
+            return false;
+        }
+
+        let Some(rgba) = self.renderer.last_rgba_slice(required_bytes) else {
+            return false;
+        };
+        let Some(slot) = self.shm_slots[self.current_slot].as_mut() else {
+            return false;
+        };
+        if Self::write_rgba_to_slot(slot, rgba).is_none() {
+            warn!(
+                "[悬浮窗口] 写入候选框共享内存失败，槽位: {}",
+                self.current_slot
+            );
+            return false;
+        }
+        true
+    }
+
     /// 根据当前候选框状态渲染位图并复用共享内存槽位准备提交
     pub fn render_state(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &File)> {
         if !state.visible || state.candidates.is_empty() {
@@ -385,29 +427,10 @@ impl CandidateSurfaceManager {
 
         // 1. 调用矢量渲染器绘制候选框位图（复用渲染器内部像素缓冲，消除跨帧大块内存重分配）
         let (width, height, _) = self.renderer.render_rgba(state)?;
-        self.on_input_active(width, height);
-
-        let required_bytes = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
-
-        // 2. 轮转选取空闲的共享内存槽位并完成容量准备
-        let next_slot = self.select_available_slot();
-        if !self.prepare_slot_for_render(next_slot, required_bytes) {
+        if !self.prepare_rendered_slot(width, height) {
             return None;
         }
-
-        // 3. 复用持久映射句柄零拷贝写入像素数据，消除中间堆内存中转与重复 seek+write_all 内核拷贝
-        let rgba = self.renderer.last_rgba_slice(required_bytes)?;
-        let slot = self.shm_slots[self.current_slot].as_mut()?;
-        if Self::write_rgba_to_slot(slot, rgba).is_none() {
-            warn!(
-                "[悬浮窗口] 写入候选框共享内存失败，槽位: {}",
-                self.current_slot
-            );
-            return None;
-        }
-
+        let slot = self.shm_slots[self.current_slot].as_ref()?;
         Some((width, height, &slot.file))
     }
 

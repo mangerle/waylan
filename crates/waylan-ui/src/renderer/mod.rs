@@ -238,6 +238,15 @@ impl CandidateBoxRenderer {
     ///
     /// 若输入状态与渲染样式参数均与上次一致，则直接复用已有像素缓冲，跳过全量清零与矢量重绘。
     pub fn render_rgba(&mut self, state: &CandidateBoxState) -> Option<(u32, u32, &[u8])> {
+        let (w, h, slice, _) = self.render_rgba_with_hit(state)?;
+        Some((w, h, slice))
+    }
+
+    /// 渲染当前候选框状态并同时返回是否命中跨帧指纹缓存 `(宽, 高, RGBA 切片, cache_hit)`
+    pub fn render_rgba_with_hit(
+        &mut self,
+        state: &CandidateBoxState,
+    ) -> Option<(u32, u32, &[u8], bool)> {
         let font_size_bits = self.font_size.to_bits();
         let scale_bits = self.scale.to_bits();
         let state_hash = compute_state_fingerprint(state);
@@ -259,6 +268,7 @@ impl CandidateBoxRenderer {
                 snap.width,
                 snap.height,
                 &self.scratch_pixmap_buf[..required],
+                true,
             ));
         }
 
@@ -281,7 +291,7 @@ impl CandidateBoxRenderer {
             width,
             height,
         });
-        Some((width, height, &self.scratch_pixmap_buf[..required]))
+        Some((width, height, &self.scratch_pixmap_buf[..required], false))
     }
 
     /// 获取最近一次 `render_rgba` 产出的底层像素只读切片（用于避免调用方不相交字段借用冲突）
