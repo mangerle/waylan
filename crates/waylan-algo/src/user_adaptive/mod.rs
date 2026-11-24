@@ -201,9 +201,6 @@ impl UserAdaptiveModel {
         {
             let boost = Self::calculate_decay_score(entry, current_timestamp);
             candidate.score = candidate.score.saturating_add(boost);
-            if entry.commit_count >= 2 {
-                candidate.comment = Some("常用习惯".to_string());
-            }
         }
     }
 

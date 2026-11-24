@@ -40,7 +40,7 @@ pub(crate) fn empty_variant_vec() -> Vec<OwnedVariant> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use waylan_core::{Candidate, CandidateIndexStyle, InputMode};
+    use waylan_core::{Candidate, CandidateIndexStyle, CandidateTier, InputMode};
 
     #[test]
     fn test_ibus_text_and_preedit_signature() {
@@ -77,11 +77,13 @@ mod tests {
         let cands = vec![
             Candidate::new("藏", "cang", 1000),
             Candidate::new("常", "chang", 900).with_comment("(chang)"),
-            Candidate::new("你好", "ni'hao", 800).with_comment("[纠错: ni'hao]"),
+            Candidate::new("你好", "ni'hao", 800)
+                .with_tier(CandidateTier::TypoCorrection)
+                .with_comment("(ni'hao)"),
             Candidate::new("世界", "shi'jie", 700).with_comment("[shi'jie]"),
         ];
 
-        // 1. 当 show_pinyin_comment = false 时，常规注音隐藏，特异性读音 (chang) 与纠错常驻
+        // 1. 当 show_pinyin_comment = false 时，常规注音隐藏，特异性读音 (chang) 与纠错 (ni'hao) 常驻
         let table = build_ibus_lookup_table(&IbusLookupTableParams {
             candidates: &cands,
             page_size: 5,
@@ -110,8 +112,8 @@ mod tests {
         );
         assert_eq!(
             extract(2),
-            "3 你好 [纠错: ni'hao]",
-            "纠错提示必须被发送到 IBus 桌面显示"
+            "3 你好 (ni'hao)",
+            "纠错拼音必须被发送到 IBus 桌面显示"
         );
         assert_eq!(extract(3), "4 世界", "普通注音在关闭时被隐藏");
     }

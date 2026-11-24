@@ -223,11 +223,24 @@ fn test_candidate_comment_kind_and_formatting() {
     assert_eq!(c_diff.format_display_text(true), "常 (chang)");
     assert_eq!(c_diff.format_display_text(false), "常 (chang)");
 
-    // 3. 击键纠错提示 [纠错: ni'hao]
-    let c_typo = Candidate::new("你好", "ni'hao", 80).with_comment("[纠错: ni'hao]");
-    assert_eq!(c_typo.comment_kind(), Some(CommentKind::TypoCorrection));
-    assert!(c_typo.should_show_comment(false));
-    assert_eq!(c_typo.format_display_text(false), "你好 [纠错: ni'hao]");
+    // 3. 击键纠错提示（新规范为圆括号纯拼音注音 (ni'hao)，去除非必要汉字；同时兼容旧版 [纠错: ni'hao]）
+    let c_typo_new = Candidate::new("你好", "ni'hao", 80)
+        .with_tier(CandidateTier::TypoCorrection)
+        .with_comment("(ni'hao)");
+    assert_eq!(c_typo_new.comment_kind(), Some(CommentKind::TypoCorrection));
+    assert!(c_typo_new.should_show_comment(false));
+    assert_eq!(c_typo_new.format_display_text(false), "你好 (ni'hao)");
+
+    let c_typo_legacy = Candidate::new("你好", "ni'hao", 80).with_comment("[纠错: ni'hao]");
+    assert_eq!(
+        c_typo_legacy.comment_kind(),
+        Some(CommentKind::TypoCorrection)
+    );
+    assert!(c_typo_legacy.should_show_comment(false));
+    assert_eq!(
+        c_typo_legacy.format_display_text(false),
+        "你好 [纠错: ni'hao]"
+    );
 
     // 4. 标准普通全拼注音 [ni'hao]
     let c_std = Candidate::new("你好", "ni'hao", 70).with_comment("[ni'hao]");

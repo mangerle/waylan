@@ -20,7 +20,7 @@ pub enum CommentKind {
     /// 读音偏离键入拼音的特异性注音（如键入 cang 命中“常”，标注 `(chang)`）
     /// 属于重要读音纠偏提示，始终常驻展示。
     PhoneticDifference,
-    /// 物理击键纠错提示（如 `[纠错: ni'hao]`）
+    /// 物理击键纠错提示（如 `(ni'hao)` 或兼容旧版 `[纠错: ni'hao]`）
     /// 属于重要输入提示，始终常驻展示。
     TypoCorrection,
     /// 特殊功能或模式提示（如 `[混拼]`、`[习惯音]`、`当前时间`、`拆字` 等）
@@ -149,7 +149,11 @@ impl Candidate {
             return None;
         }
         if comment.starts_with('(') && comment.ends_with(')') {
-            Some(CommentKind::PhoneticDifference)
+            if self.tier == CandidateTier::TypoCorrection || self.typo_count > 0 {
+                Some(CommentKind::TypoCorrection)
+            } else {
+                Some(CommentKind::PhoneticDifference)
+            }
         } else if comment.starts_with("[纠错") {
             Some(CommentKind::TypoCorrection)
         } else if comment.starts_with('[') && comment.ends_with(']') {

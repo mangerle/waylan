@@ -61,17 +61,14 @@ fn test_engine_spatial_typo_tolerance_nihso() {
     let candidates = engine.candidates();
     assert!(!candidates.is_empty(), "应包含智能纠错置顶候选与降级备选");
 
-    // 验证 3：拼写断流态下，首位直接置顶带有 [纠错] 标识的邻键候选词“你好”
+    // 验证 3：拼写断流态下，首位直接置顶带有规范圆括号拼音注音 (ni'hao) 的邻键候选词“你好”
     let typo_cand = &candidates[0];
     assert_eq!(typo_cand.text, "你好");
     assert_eq!(typo_cand.tier, CandidateTier::TypoCorrection);
-    assert!(
-        typo_cand
-            .comment
-            .as_ref()
-            .unwrap()
-            .contains("[纠错: ni'hao]"),
-        "注释应包含纠错提示"
+    assert_eq!(
+        typo_cand.comment.as_deref(),
+        Some("(ni'hao)"),
+        "注释应仅包含正确拼音圆括号注音，无多余汉字"
     );
 
     // 验证 4：选中首位容错候选上屏，完全消费掉全部 5 个误触字符并清空输入
@@ -160,7 +157,7 @@ fn test_engine_habitual_alias_en_and_adaptive_boost() {
     assert!(candidates.len() >= 2);
     assert_eq!(candidates[0].text, "恩");
     assert_eq!(candidates[1].text, "嗯");
-    assert_eq!(candidates[1].comment.as_deref(), Some("[习惯音]"));
+    assert_eq!(candidates[1].comment.as_deref(), Some("(n)"));
 
     // 2. 用户选择“嗯”上屏（索引 1）
     let (committed, remaining) = engine.select_candidate(1, 1_700_000_000).expect("选中‘嗯’");

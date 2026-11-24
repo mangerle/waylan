@@ -195,3 +195,65 @@ fn test_engine_shenme_and_initial_l_recall() {
     assert!(!cands_l.is_empty());
     assert_eq!(cands_l[0].text, "了", "单声母 l 展开单字时‘了’必须排在首位");
 }
+
+#[test]
+fn test_engine_cang_fuzzy_preserves_phonetic_diff_and_no_habitual_comment() {
+    let mut cfg = AlgoConfig::default();
+    cfg.fuzzy.c_ch = true;
+    cfg.show_pinyin_comment = false;
+    let mut engine = AlgoEngine::with_sample_data(cfg);
+    engine.table_mut().insert("cang", "藏", 500_000);
+    engine.table_mut().insert("cang", "仓", 400_000);
+    engine.table_mut().insert("cang", "苍", 300_000);
+    engine.table_mut().insert("chang", "长", 600_000);
+    engine.table_mut().insert("chang", "常", 550_000);
+    engine.table_mut().insert("chang", "场", 450_000);
+
+    // 模拟用户两次输入 chang 并选择“长”，记录自适应词库
+    for ch in "chang".chars() {
+        engine.push_char(ch);
+    }
+    let _ = engine.select_candidate(0, 1_700_000_000);
+
+    for ch in "chang".chars() {
+        engine.push_char(ch);
+    }
+    let _ = engine.select_candidate(0, 1_700_000_010);
+
+    for ch in "cang".chars() {
+        engine.push_char(ch);
+    }
+
+    assert_eq!(
+        engine.formatted_preedit(),
+        "cang",
+        "预编辑必须严格所见即所得"
+    );
+
+    let cands = engine.candidates();
+    assert!(!cands.is_empty());
+    // 方案 A：首位锁定原生精确词
+    assert_eq!(cands[0].text, "藏");
+    assert_eq!(cands[0].comment, None);
+
+    // 模糊音高频词“长”与“常”同台混排打分，且特异性注音必须为 (chang)，绝不被“常用习惯”冲刷覆盖
+    let chang_cand = cands
+        .iter()
+        .find(|c| c.text == "长")
+        .expect("找到候选词 长");
+    assert_eq!(
+        chang_cand.comment.as_deref(),
+        Some("(chang)"),
+        "高频习惯词不得显示‘常用习惯’，且特异性读音圆括号必须完整保留"
+    );
+
+    let chang_cand2 = cands
+        .iter()
+        .find(|c| c.text == "常")
+        .expect("找到候选词 常");
+    assert_eq!(
+        chang_cand2.comment.as_deref(),
+        Some("(chang)"),
+        "模糊音候选词特异性读音圆括号必须完整保留"
+    );
+}

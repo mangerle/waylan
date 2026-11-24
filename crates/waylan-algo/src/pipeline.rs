@@ -73,12 +73,13 @@ fn should_boost_single_typo(candidates: &[AlgoCandidate], raw_input: Option<&str
         return false;
     };
 
-    // 提取混拼候选的最高分（必须为 SentenceViterbi 且带混拼注释）
+    // 提取混拼候选的最高分（必须为 SentenceViterbi 且非纠错、带有非一致拼音注音）
     let best_mixed = candidates
         .iter()
         .filter(|c| {
             c.tier == CandidateTier::SentenceViterbi
-                && c.comment.as_deref().is_some_and(|m| m.contains("混拼"))
+                && c.typo_count == 0
+                && (c.comment.is_some() || c.comment.as_deref().is_some_and(|m| m.contains("混拼")))
         })
         .map(|c| c.score)
         .max();
@@ -453,19 +454,19 @@ mod tests {
         let raw = vec![
             AlgoCandidate::new("胰腺癌", "yi'xian'ai", 20_285)
                 .with_tier(CandidateTier::SentenceViterbi)
-                .with_comment("[混拼]")
+                .with_comment("(yi'xian'ai)")
                 .with_typo_count(0),
             AlgoCandidate::new("一下", "yi'xia", 29_478)
                 .with_tier(CandidateTier::TypoCorrection)
-                .with_comment("[纠错: yi'xia]")
+                .with_comment("(yi'xia)")
                 .with_typo_count(1),
             AlgoCandidate::new("以下", "yi'xia", 18_000)
                 .with_tier(CandidateTier::TypoCorrection)
-                .with_comment("[纠错: yi'xia]")
+                .with_comment("(yi'xia)")
                 .with_typo_count(1),
             AlgoCandidate::new("异想天开", "yi'xiang'tian'kai", 35_000)
                 .with_tier(CandidateTier::TypoCorrection)
-                .with_comment("[纠错: yi'xiang'tian'kai]")
+                .with_comment("(yi'xiang'tian'kai)")
                 .with_typo_count(2),
         ];
 
@@ -496,7 +497,7 @@ mod tests {
                 .with_typo_count(0),
             AlgoCandidate::new("比", "bi", 60_000)
                 .with_tier(CandidateTier::TypoCorrection)
-                .with_comment("[纠错: bi]")
+                .with_comment("(bi)")
                 .with_typo_count(1),
         ];
 

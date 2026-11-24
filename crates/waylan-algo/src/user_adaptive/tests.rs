@@ -12,7 +12,10 @@ fn test_record_and_boost() {
     model.apply_boost(&mut candidate, now + 100);
 
     assert!(candidate.score > 100_000);
-    assert_eq!(candidate.comment.as_deref(), Some("常用习惯"));
+    assert_eq!(
+        candidate.comment, None,
+        "用户高频自适应提权时严禁附加冗余的‘常用习惯’文本"
+    );
 }
 
 #[test]

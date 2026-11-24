@@ -1,6 +1,6 @@
 use super::*;
 
-use waylan_core::{Candidate, CandidateExpansion};
+use waylan_core::{Candidate, CandidateExpansion, CandidateTier};
 
 #[test]
 fn test_renderer_basic() {
@@ -344,11 +344,13 @@ fn test_candidate_text_formatting_special_comments_preserved() {
         "与输入不一致的特异性读音圆括号注释在 show_pinyin_comment=false 时应常驻展示"
     );
 
-    // 3. 物理按键纠错注释应常驻保留展示
-    let typo_cand = Candidate::new("你好", "ni'hao", 80).with_comment("[纠错: ni'hao]");
+    // 3. 物理按键纠错注释（去除非必要汉字，仅标注纯拼音 (ni'hao)）应常驻保留展示
+    let typo_cand = Candidate::new("你好", "ni'hao", 80)
+        .with_tier(CandidateTier::TypoCorrection)
+        .with_comment("(ni'hao)");
     assert_eq!(
         renderer.display_text(&typo_cand),
-        "你好 [纠错: ni'hao]",
+        "你好 (ni'hao)",
         "纠错提示在 show_pinyin_comment=false 时应常驻展示"
     );
 }

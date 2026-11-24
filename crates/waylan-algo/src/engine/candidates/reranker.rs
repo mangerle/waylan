@@ -78,8 +78,17 @@ impl RerankFeatures {
             is_multi_char_phrase: flag(char_len >= 2),
             has_english_mix: flag(has_ascii),
             is_single_char: flag(char_len == 1),
-            has_typo_comment: flag(comment.contains("[纠错")),
-            has_mixed_comment: flag(comment.contains("[混拼")),
+            has_typo_comment: flag(
+                cand.typo_count > 0
+                    || cand.tier == CandidateTier::TypoCorrection
+                    || comment.contains("[纠错"),
+            ),
+            has_mixed_comment: flag(
+                cand.tier == CandidateTier::SentenceViterbi
+                    && cand.typo_count == 0
+                    && cand.comment.is_some()
+                    || comment.contains("[混拼"),
+            ),
         }
     }
 
