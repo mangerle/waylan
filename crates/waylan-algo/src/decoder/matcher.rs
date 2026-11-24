@@ -48,19 +48,34 @@ impl DatPhraseMatcher {
         let results = materialize_raw_matches(mmap, start_pos, raw);
         (results, max_reach)
     }
+}
 
+/// 束搜索热路径 DAT 排序匹配参数对象
+pub(super) struct RankedMatchParams<'a> {
+    pub(super) lattice: &'a SyllableLattice,
+    pub(super) start_pos: usize,
+    pub(super) table: &'a LexiconTable,
+    pub(super) options: &'a MatcherOptions,
+    pub(super) weights: &'a ScoringWeights,
+    pub(super) keep_start_extras: bool,
+}
+
+impl DatPhraseMatcher {
     /// 束搜索热路径专用：先对轻量索引结果执行生僻单字过滤、打分与 Top-48 截断，再惰性物化 `word: String`
     ///
     /// 当 `keep_start_extras` 为 `true` 时，额外保留覆盖全长整词与未容错无简拼的句首词段候选，
     /// 供起始位置收集 `whole_words` 与 `prefix_word_matches`。
     pub(super) fn match_ranked_from_with_reach(
-        lattice: &SyllableLattice,
-        start_pos: usize,
-        table: &LexiconTable,
-        options: &MatcherOptions,
-        weights: &ScoringWeights,
-        keep_start_extras: bool,
+        params: RankedMatchParams<'_>,
     ) -> (Vec<PhraseMatch>, usize) {
+        let RankedMatchParams {
+            lattice,
+            start_pos,
+            table,
+            options,
+            weights,
+            keep_start_extras,
+        } = params;
         let Some(mmap) = &table.compact_mmap else {
             return (Vec::new(), start_pos);
         };
@@ -234,6 +249,27 @@ fn handle_dat_standard_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, ed
     ctx.key_buf.truncate(saved_len);
 }
 
+/// 推进音节分隔符并收集当前前缀对应的 DAT 分支，返回 `ctx.branch_pool` 区间
+fn collect_edge_branches(
+    ctx: &mut DatSearchCtx<'_>,
+    state: &DatWalkState,
+    prefix: &str,
+) -> Option<(usize, usize)> {
+    let mut cursor = state.cursor;
+    if state.syl_count > 0 {
+        cursor = cursor.step_byte(&ctx.reader, b'\'')?;
+    }
+    let base_idx = ctx.branch_pool.len();
+    cursor.collect_syllable_branches(
+        &ctx.reader,
+        prefix,
+        base_idx.saturating_add(32),
+        &mut ctx.branch_pool,
+    );
+    let end_idx = ctx.branch_pool.len();
+    Some((base_idx, end_idx))
+}
+
 fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edge: &SyllableEdge) {
     if state.initial_steps >= ctx.options.max_initial_steps {
         return;
@@ -241,21 +277,9 @@ fn handle_dat_initial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
     let Some(initial) = edge.syllables.first() else {
         return;
     };
-    let mut cursor = state.cursor;
-    if state.syl_count > 0 {
-        let Some(sep_c) = cursor.step_byte(&ctx.reader, b'\'') else {
-            return;
-        };
-        cursor = sep_c;
-    }
-    let base_idx = ctx.branch_pool.len();
-    cursor.collect_syllable_branches(
-        &ctx.reader,
-        initial,
-        base_idx.saturating_add(32),
-        &mut ctx.branch_pool,
-    );
-    let end_idx = ctx.branch_pool.len();
+    let Some((base_idx, end_idx)) = collect_edge_branches(ctx, state, initial) else {
+        return;
+    };
     if end_idx > base_idx {
         ctx.max_reach = ctx.max_reach.max(edge.end);
     }
@@ -318,21 +342,9 @@ fn handle_dat_partial_edge(ctx: &mut DatSearchCtx<'_>, state: &DatWalkState, edg
     let Some(partial_prefix) = edge.syllables.first() else {
         return;
     };
-    let mut cursor = state.cursor;
-    if state.syl_count > 0 {
-        let Some(sep_c) = cursor.step_byte(&ctx.reader, b'\'') else {
-            return;
-        };
-        cursor = sep_c;
-    }
-    let base_idx = ctx.branch_pool.len();
-    cursor.collect_syllable_branches(
-        &ctx.reader,
-        partial_prefix,
-        base_idx.saturating_add(32),
-        &mut ctx.branch_pool,
-    );
-    let end_idx = ctx.branch_pool.len();
+    let Some((base_idx, end_idx)) = collect_edge_branches(ctx, state, partial_prefix) else {
+        return;
+    };
 
     let next_cost = state.edge_cost.saturating_add(edge.cost);
     let next_syl_count = state.syl_count + 1;

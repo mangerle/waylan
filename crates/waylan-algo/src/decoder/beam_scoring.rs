@@ -13,36 +13,86 @@ const INITIAL_MIX_PENALTY: i64 = 12_000;
 /// 末尾半成品补全的固定基础惩罚分
 const PARTIAL_TAIL_BASE_PENALTY: i64 = 2_500;
 
+/// 候选保留判定参数对象
+pub(super) struct RetainMatchCheck {
+    pub(super) freq: u32,
+    pub(super) syllable_count: usize,
+    pub(super) char_len: usize,
+    pub(super) is_exact_whole_query: bool,
+    pub(super) has_common_char_at_end: bool,
+    pub(super) has_common_phrase_at_end: bool,
+}
+
+/// 统一的生僻单字与低频多字词过滤判定（供全量与轻量匹配两条路径复用）
+#[inline]
+pub(super) fn should_retain_match(check: RetainMatchCheck) -> bool {
+    if check.is_exact_whole_query {
+        return true;
+    }
+    if check.syllable_count == 1 && check.freq < 10 && check.char_len == 1 {
+        return !check.has_common_char_at_end;
+    }
+    if check.syllable_count >= 2 && check.freq < 30 {
+        if check.freq <= 5 {
+            return false;
+        }
+        return !check.has_common_phrase_at_end;
+    }
+    true
+}
+
 /// 过滤低频生僻单字并按局部得分截取当前位置 Top-48 词匹配
 pub(super) fn filter_and_rank_matches(
     matches: &mut Vec<PhraseMatch>,
     target_len: usize,
     weights: &ScoringWeights,
 ) {
-    let has_common_at_end: Vec<usize> = matches
-        .iter()
-        .filter(|o| o.freq >= 10)
-        .map(|o| o.end)
-        .collect();
-    let has_common_phrase_at_end: Vec<usize> = matches
-        .iter()
-        .filter(|o| o.freq >= 30)
-        .map(|o| o.end)
-        .collect();
-    matches.retain(|m| {
-        if m.start == 0 && m.end == target_len {
-            return true;
-        }
-        if m.syllable_count == 1 && m.freq < 10 && m.word.chars().count() == 1 {
-            return !has_common_at_end.contains(&m.end);
-        }
-        if m.syllable_count >= 2 && m.freq < 30 {
-            if m.freq <= 5 {
-                return false;
+    let use_mask = target_len < 64;
+    let mut common_mask: u64 = 0;
+    let mut phrase_common_mask: u64 = 0;
+    let mut common_overflow: Vec<bool> = Vec::new();
+    let mut phrase_common_overflow: Vec<bool> = Vec::new();
+    if !use_mask {
+        common_overflow.resize(target_len + 1, false);
+        phrase_common_overflow.resize(target_len + 1, false);
+    }
+
+    for o in matches.iter() {
+        if o.freq >= 10 {
+            if use_mask {
+                common_mask |= 1u64 << o.end;
+            } else if let Some(slot) = common_overflow.get_mut(o.end) {
+                *slot = true;
             }
-            return !has_common_phrase_at_end.contains(&m.end);
         }
-        true
+        if o.freq >= 30 {
+            if use_mask {
+                phrase_common_mask |= 1u64 << o.end;
+            } else if let Some(slot) = phrase_common_overflow.get_mut(o.end) {
+                *slot = true;
+            }
+        }
+    }
+
+    matches.retain(|m| {
+        let has_common = if use_mask {
+            (common_mask & (1u64 << m.end)) != 0
+        } else {
+            common_overflow.get(m.end).copied().unwrap_or(false)
+        };
+        let has_common_phrase = if use_mask {
+            (phrase_common_mask & (1u64 << m.end)) != 0
+        } else {
+            phrase_common_overflow.get(m.end).copied().unwrap_or(false)
+        };
+        should_retain_match(RetainMatchCheck {
+            freq: m.freq,
+            syllable_count: m.syllable_count,
+            char_len: m.word.chars().count(),
+            is_exact_whole_query: m.start == 0 && m.end == target_len,
+            has_common_char_at_end: has_common,
+            has_common_phrase_at_end: has_common_phrase,
+        })
     });
     matches.sort_by_key(|m| std::cmp::Reverse(score_phrase_match(m, weights)));
     matches.truncate(48);
@@ -91,41 +141,54 @@ pub(super) struct RawScoreParams {
     pub has_partial_tail: bool,
 }
 
-/// 在延迟物化前基于纯数值元数据计算词组匹配排序分
+/// 根据边代价与路径标记统一计算惩罚分（消除原始打分与束边打分重复）
 #[inline]
-pub(super) fn compute_raw_match_score(params: RawScoreParams, weights: &ScoringWeights) -> i64 {
-    let length_bonus = (params.char_len as i64 - 1).saturating_mul(weights.length_bonus_per_char);
-    let mut penalty = (params.edge_cost as i64).saturating_mul(weights.typo_cost_penalty as i64);
-    if params.typo_count > 0 {
-        penalty = penalty.saturating_add((params.typo_count as i64) * TYPO_BASE_PENALTY);
+fn compute_penalty_from_parts(
+    edge_cost: u32,
+    typo_count: u8,
+    has_initial: bool,
+    has_partial_tail: bool,
+    weights: &ScoringWeights,
+) -> i64 {
+    let mut penalty = (edge_cost as i64).saturating_mul(weights.typo_cost_penalty as i64);
+    if typo_count > 0 {
+        penalty = penalty.saturating_add((typo_count as i64) * TYPO_BASE_PENALTY);
     }
-    if params.has_initial {
+    if has_initial {
         penalty = penalty.saturating_add(INITIAL_MIX_PENALTY);
     }
-    if params.has_partial_tail {
+    if has_partial_tail {
         penalty = penalty.saturating_add(
             (weights.partial_extension_penalty as i64) * 100 + PARTIAL_TAIL_BASE_PENALTY,
         );
     }
+    penalty
+}
+
+/// 在延迟物化前基于纯数值元数据计算词组匹配排序分
+#[inline]
+pub(super) fn compute_raw_match_score(params: RawScoreParams, weights: &ScoringWeights) -> i64 {
+    let length_bonus = (params.char_len as i64 - 1).saturating_mul(weights.length_bonus_per_char);
+    let penalty = compute_penalty_from_parts(
+        params.edge_cost,
+        params.typo_count,
+        params.has_initial,
+        params.has_partial_tail,
+        weights,
+    );
     unigram_log_score(params.freq) + length_bonus - penalty
 }
 
 /// 计算单条词边的基础转移代价（纠错/混简拼/半成品惩罚）
 #[inline]
 pub(super) fn compute_edge_penalty(pm: &PhraseMatch, weights: &ScoringWeights) -> i64 {
-    let mut penalty = (pm.edge_cost as i64).saturating_mul(weights.typo_cost_penalty as i64);
-    if pm.typo_count > 0 {
-        penalty = penalty.saturating_add((pm.typo_count as i64) * TYPO_BASE_PENALTY);
-    }
-    if pm.has_initial {
-        penalty = penalty.saturating_add(INITIAL_MIX_PENALTY);
-    }
-    if pm.has_partial_tail {
-        penalty = penalty.saturating_add(
-            (weights.partial_extension_penalty as i64) * 100 + PARTIAL_TAIL_BASE_PENALTY,
-        );
-    }
-    penalty
+    compute_penalty_from_parts(
+        pm.edge_cost,
+        pm.typo_count,
+        pm.has_initial,
+        pm.has_partial_tail,
+        weights,
+    )
 }
 
 /// 评估单条整词匹配的综合排序分（用于单位置候选排序与整词排序）

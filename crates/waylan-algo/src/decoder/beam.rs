@@ -16,7 +16,7 @@ use super::beam_expand::{ExpandContext, expand_position_states, init_beam_from_c
 use super::beam_finalize::finalize_decode_result;
 use super::beam_scoring::{filter_and_rank_matches, prune_beam_slot};
 use super::lattice::SyllableLattice;
-use super::matcher::{DatPhraseMatcher, PhraseMatch};
+use super::matcher::{DatPhraseMatcher, PhraseMatch, RankedMatchParams};
 use crate::custom_phrase::EnglishSuggestionManager;
 use crate::table::LexiconTable;
 use crate::user_adaptive::UserAdaptiveModel;
@@ -283,14 +283,15 @@ fn advance_beam(
             &ws.spans_by_pos,
             ctx.seed_word,
         );
-        let (mut matches, reach) = DatPhraseMatcher::match_ranked_from_with_reach(
-            ctx.lattice,
-            pos,
-            ctx.table,
-            &ctx.options.matcher_options,
-            &ctx.options.weights,
-            pos == ctx.start_pos,
-        );
+        let (mut matches, reach) =
+            DatPhraseMatcher::match_ranked_from_with_reach(RankedMatchParams {
+                lattice: ctx.lattice,
+                start_pos: pos,
+                table: ctx.table,
+                options: &ctx.options.matcher_options,
+                weights: &ctx.options.weights,
+                keep_start_extras: pos == ctx.start_pos,
+            });
         ws.pos_max_reach[pos] = reach;
         append_english_lexicon_edges(
             ctx.lattice,

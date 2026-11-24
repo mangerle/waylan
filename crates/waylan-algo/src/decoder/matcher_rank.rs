@@ -132,32 +132,24 @@ pub(super) fn filter_and_truncate_raw_matches(
 
     raw.retain(|m| {
         let is_exact_whole_query = start_pos == 0 && m.end == target_len;
-        if is_exact_whole_query {
-            return true;
-        }
-        // 1. 隔离低频生僻单字（同跨度存在常用字/词时）
-        if m.syllable_count == 1 && m.freq < 10 && m.char_len == 1 {
-            let has_common = if use_mask {
-                (common_mask & (1u64 << m.end)) != 0
-            } else {
-                common_overflow.get(m.end).copied().unwrap_or(false)
-            };
-            return !has_common;
-        }
-        // 2. 主词库长尾降噪分级：极低频生僻多字词（freq <= 5）禁止参与长句拼接；
-        //    低频多字词（freq < 30）在同跨度存在常用词（freq >= 30）时同样隔离，避免靠字长奖励污染整句
-        if m.syllable_count >= 2 && m.freq < 30 {
-            if m.freq <= 5 {
-                return false;
-            }
-            let has_common_phrase = if use_mask {
-                (phrase_common_mask & (1u64 << m.end)) != 0
-            } else {
-                phrase_common_overflow.get(m.end).copied().unwrap_or(false)
-            };
-            return !has_common_phrase;
-        }
-        true
+        let has_common = if use_mask {
+            (common_mask & (1u64 << m.end)) != 0
+        } else {
+            common_overflow.get(m.end).copied().unwrap_or(false)
+        };
+        let has_common_phrase = if use_mask {
+            (phrase_common_mask & (1u64 << m.end)) != 0
+        } else {
+            phrase_common_overflow.get(m.end).copied().unwrap_or(false)
+        };
+        super::beam_scoring::should_retain_match(super::beam_scoring::RetainMatchCheck {
+            freq: m.freq,
+            syllable_count: m.syllable_count,
+            char_len: m.char_len as usize,
+            is_exact_whole_query,
+            has_common_char_at_end: has_common,
+            has_common_phrase_at_end: has_common_phrase,
+        })
     });
 
     raw.sort_by_key(|m| std::cmp::Reverse(score_raw_match(m, weights)));

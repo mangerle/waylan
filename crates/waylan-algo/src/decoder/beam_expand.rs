@@ -10,7 +10,7 @@ use super::beam_cache::{IncrementalBeamCache, MAX_PHRASE_SPAN_BYTES, merge_cross
 use super::beam_scoring::{compute_edge_penalty, filter_and_rank_matches, unigram_log_score};
 use super::beam_types::{ArenaNode, BeamDecodeOptions, BeamState};
 use super::language_model::BigramLanguageModel;
-use super::matcher::{DatPhraseMatcher, PhraseMatch};
+use super::matcher::{DatPhraseMatcher, PhraseMatch, RankedMatchParams};
 use crate::table::LexiconTable;
 use crate::user_adaptive::UserAdaptiveModel;
 
@@ -77,14 +77,15 @@ pub(super) fn init_beam_from_cache(
             }
             continue;
         }
-        let (mut fresh, reach) = DatPhraseMatcher::match_ranked_from_with_reach(
-            ctx.lattice,
-            pos,
-            ctx.table,
-            &ctx.options.matcher_options,
-            &ctx.options.weights,
-            pos == ctx.start_pos,
-        );
+        let (mut fresh, reach) =
+            DatPhraseMatcher::match_ranked_from_with_reach(RankedMatchParams {
+                lattice: ctx.lattice,
+                start_pos: pos,
+                table: ctx.table,
+                options: &ctx.options.matcher_options,
+                weights: &ctx.options.weights,
+                keep_start_extras: pos == ctx.start_pos,
+            });
         pos_max_reach[pos] = reach;
         if pos == ctx.start_pos {
             collect_start_matches(&fresh, len, whole_words, prefix_word_matches, true);

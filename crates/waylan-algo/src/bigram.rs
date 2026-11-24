@@ -38,9 +38,9 @@ pub struct CompactMmapBigram {
     row_offsets_offset: usize,
     /// 列与分数数据数组起始偏移
     cols_offset: usize,
-    /// v3 同源一元对数分数组起始偏移（[i32; vocab_size]）
+    /// v3 同源一元对数分量化段起始偏移（1024B 码本 + [u8; vocab_size] 量化索引）
     unigram_offset: Option<usize>,
-    /// v3 前驱词绝对折扣回退权重数组起始偏移（[i32; vocab_size]）
+    /// v3 前驱词绝对折扣回退权重量化段起始偏移（1024B 码本 + [u8; vocab_size] 量化索引）
     backoff_offset: Option<usize>,
 }
 

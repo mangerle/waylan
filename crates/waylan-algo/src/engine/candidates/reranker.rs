@@ -81,13 +81,13 @@ impl RerankFeatures {
             has_typo_comment: flag(
                 cand.typo_count > 0
                     || cand.tier == CandidateTier::TypoCorrection
-                    || comment.contains("[纠错"),
+                    || comment.contains("(纠错"),
             ),
             has_mixed_comment: flag(
                 cand.tier == CandidateTier::SentenceViterbi
                     && cand.typo_count == 0
                     && cand.comment.is_some()
-                    || comment.contains("[混拼"),
+                    || comment.contains("(混拼"),
             ),
         }
     }
