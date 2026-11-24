@@ -104,6 +104,27 @@ fn should_boost_single_typo(candidates: &[AlgoCandidate], raw_input: Option<&str
 pub struct CandidateRanker;
 
 impl CandidateRanker {
+    /// 按有效层级与得分降序执行 $O(N)$ 部分选择，仅保留前 `limit` 个高价值候选
+    pub fn partial_select_top(
+        candidates: &mut Vec<AlgoCandidate>,
+        enable_typo_boost: bool,
+        limit: usize,
+    ) {
+        if limit == 0 {
+            candidates.clear();
+            return;
+        }
+        if candidates.len() <= limit {
+            return;
+        }
+        candidates.select_nth_unstable_by(limit - 1, |a, b| {
+            Self::effective_tier(b, enable_typo_boost)
+                .cmp(&Self::effective_tier(a, enable_typo_boost))
+                .then_with(|| b.score.cmp(&a.score))
+        });
+        candidates.truncate(limit);
+    }
+
     /// 执行完整候选词分级排序与首位保护
     pub fn rank(candidates: &mut [AlgoCandidate], enable_typo_boost: bool) {
         if candidates.len() <= 1 {
@@ -194,15 +215,16 @@ impl CandidatePipeline {
             candidates.retain(|c| !is_rare_ext_char(&c.text));
         }
 
-        // 2. 预排序并限制进入简繁转换与注释装饰的最大候选窗口，避免短拼长尾候选触发无谓开销
-        //    先按 Tier 与得分降序排列，保留前 160 条高价值候选再执行简繁展开与去重
+        // 2. 预截断并限制进入简繁转换与注释装饰的最大候选窗口，避免短拼长尾候选触发无谓开销
+        //    先以 O(N) 部分选择保留前 160 条高价值候选，避免对全部长尾候选执行 O(N log N) 全量排序
         const MAX_PRE_OPENCC_CANDIDATES: usize = 160;
         const MAX_PUBLISHED_CANDIDATES: usize = 120;
         let enable_typo_boost = should_boost_single_typo(&candidates, raw_input);
-        CandidateRanker::rank(&mut candidates, enable_typo_boost);
-        if candidates.len() > MAX_PRE_OPENCC_CANDIDATES {
-            candidates.truncate(MAX_PRE_OPENCC_CANDIDATES);
-        }
+        CandidateRanker::partial_select_top(
+            &mut candidates,
+            enable_typo_boost,
+            MAX_PRE_OPENCC_CANDIDATES,
+        );
 
         // 3. 简繁体转换（基于 STPhrases 正向最大匹配 FMM + STCharacters 单字表及一简多繁展开）
         if config.traditional_chinese {
@@ -211,9 +233,8 @@ impl CandidatePipeline {
             } else {
                 OpenCcDict::global().convert_candidates(&mut candidates);
             }
-            // 一简多繁展开可能引入新顺序，重排确保同层级得分有序
-            CandidateRanker::rank(&mut candidates, enable_typo_boost);
         }
+        CandidateRanker::rank(&mut candidates, enable_typo_boost);
 
         // 4. 候选词去重（在有序列表中保留最高优先级与最高分者）
         if config.auto_dedup {
