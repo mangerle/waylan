@@ -8,6 +8,7 @@
 //! - **代价与局限**：协议适配层需消费本模块产出的 [`ImeAction`] 或 [`KeyProcessResult`] 动作，
 //!   增加了单层轻量结果解构，但彻底隔绝了平台底层对复杂打字业务逻辑的污染。
 
+pub mod auto_passthrough;
 pub mod dispatch;
 pub mod grid;
 pub mod key_handler;
