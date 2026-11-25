@@ -8,7 +8,7 @@
 use log::{debug, info};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use waylan_sys::LoopWakeup;
 use zbus::Variant;
 use zbus::interface;
@@ -37,6 +37,7 @@ pub struct IbusEngineService {
     pub(crate) suppress_properties: bool,
     pub(crate) is_password: Arc<AtomicBool>,
     pub(crate) lock_healer: Arc<ScreenLockHealer>,
+    pub(crate) latest_ui_epoch: Arc<AtomicU64>,
 }
 
 #[interface(name = "org.freedesktop.IBus.Engine")]
@@ -52,7 +53,7 @@ impl IbusEngineService {
         keycode: u32,
         state: u32,
     ) -> bool {
-        let (outcome, snap, is_caps_locked) = {
+        let (outcome, snap, is_caps_locked, ui_epoch) = {
             let mut guard = self.core.lock();
             guard.active_engine_path = Some(ctxt.path().to_string());
             guard.is_password_context = self.is_password.load(Ordering::Acquire);
@@ -77,7 +78,9 @@ impl IbusEngineService {
             } else {
                 None
             };
-            (out, snap, guard.is_caps_locked())
+            let ui_epoch = guard.next_ui_epoch();
+            self.latest_ui_epoch.store(ui_epoch, Ordering::Release);
+            (out, snap, guard.is_caps_locked(), ui_epoch)
         };
 
         let consumed = outcome.consumed;
@@ -86,6 +89,7 @@ impl IbusEngineService {
             outcome,
             snap,
             is_caps_locked,
+            ui_epoch,
         })
         .await;
         consumed
@@ -161,9 +165,10 @@ impl IbusEngineService {
         );
         {
             let mut guard = self.core.lock();
-            let active_path = guard.active_engine_path.clone();
-            if let Some(ref path) = active_path {
-                guard.runtime.blur_window(path);
+            if guard.active_engine_path.as_deref() == Some(ctxt.path().as_str())
+                && let Some(win_id) = guard.active_window_id.take()
+            {
+                guard.runtime.blur_window(&win_id);
             } else {
                 guard.runtime.blur_window(ctxt.path().as_str());
             }

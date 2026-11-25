@@ -8,7 +8,7 @@
 
 use parking_lot::Mutex;
 use std::env;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, OnceLock};
 
 use log::{debug, info};
@@ -64,6 +64,7 @@ fn assemble_ibus_services(opts: IbusSessionOptions, ibus_addr: &str) -> Assemble
         suppress_properties: opts.suppress_properties,
         is_password: Arc::new(AtomicBool::new(false)),
         lock_healer,
+        latest_ui_epoch: Arc::new(AtomicU64::new(0)),
     };
 
     let monitor_params = IbusMonitorParams {
@@ -144,9 +145,11 @@ fn build_ibus_connection(
     };
     let factory_srv = IbusGenericService {
         core: Arc::clone(shared_core),
+        engine_path: None,
     };
     let engine_srv = IbusGenericService {
         core: Arc::clone(shared_core),
+        engine_path: Some(WAYLAN_ENGINE_OBJECT_PATH.to_string()),
     };
 
     let conn = zbus::block_on(async {

@@ -4,6 +4,7 @@
 //! - **实现初衷**：将原生候选词框的用户选词、翻页与上下导航事件从 D-Bus 接口总入口解耦。
 //! - **核心优势**：在原子锁临界区内推进状态并记录词频/标点上下文，随后在锁外通过 `dispatch_outcome` 或 `emit_ui_snapshot` 异步同步界面。
 
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::object_server::SignalEmitter;
 
@@ -15,7 +16,7 @@ use super::snapshot::UiSnapshot;
 impl IbusEngineService {
     /// 响应用户在 GNOME 候选框上使用鼠标点击候选词事件
     pub(crate) async fn handle_candidate_clicked(&self, ctxt: &SignalEmitter<'_>, index: u32) {
-        let (outcome, snap, is_caps_locked) = {
+        let (outcome, snap, is_caps_locked, ui_epoch) = {
             let mut guard = self.core.lock();
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -23,13 +24,16 @@ impl IbusEngineService {
                 .unwrap_or(0);
             let out = Self::apply_candidate_selection(&mut guard, index, now);
             let snap = UiSnapshot::capture(&guard);
-            (out, Some(snap), guard.is_caps_locked())
+            let ui_epoch = guard.next_ui_epoch();
+            self.latest_ui_epoch.store(ui_epoch, Ordering::Release);
+            (out, Some(snap), guard.is_caps_locked(), ui_epoch)
         };
         self.dispatch_outcome(OutcomeDispatchParams {
             ctxt,
             outcome,
             snap,
             is_caps_locked,
+            ui_epoch,
         })
         .await;
     }
@@ -85,53 +89,69 @@ impl IbusEngineService {
 
     /// 响应候选框上一页按钮事件
     pub(crate) async fn handle_page_up(&self, ctxt: &SignalEmitter<'_>) {
-        let snap = {
+        let (snap, ui_epoch) = {
             let mut guard = self.core.lock();
             if !guard.runtime.core.is_card_expanded() {
                 let _ = guard.runtime.core.prev_page();
             }
-            UiSnapshot::capture(&guard)
+            let ui_epoch = guard.next_ui_epoch();
+            self.latest_ui_epoch.store(ui_epoch, Ordering::Release);
+            (UiSnapshot::capture(&guard), ui_epoch)
         };
-        Self::emit_ui_snapshot(ctxt, &snap).await;
+        if self.is_ui_epoch_current(ui_epoch) {
+            Self::emit_ui_snapshot(ctxt, &snap).await;
+        }
     }
 
     /// 响应候选框下一页按钮事件
     pub(crate) async fn handle_page_down(&self, ctxt: &SignalEmitter<'_>) {
-        let snap = {
+        let (snap, ui_epoch) = {
             let mut guard = self.core.lock();
             if !guard.runtime.core.is_card_expanded() {
                 let _ = guard.runtime.core.next_page();
             }
-            UiSnapshot::capture(&guard)
+            let ui_epoch = guard.next_ui_epoch();
+            self.latest_ui_epoch.store(ui_epoch, Ordering::Release);
+            (UiSnapshot::capture(&guard), ui_epoch)
         };
-        Self::emit_ui_snapshot(ctxt, &snap).await;
+        if self.is_ui_epoch_current(ui_epoch) {
+            Self::emit_ui_snapshot(ctxt, &snap).await;
+        }
     }
 
     /// 响应候选框光标上移事件
     pub(crate) async fn handle_cursor_up(&self, ctxt: &SignalEmitter<'_>) {
-        let snap = {
+        let (snap, ui_epoch) = {
             let mut guard = self.core.lock();
             if guard.runtime.core.is_card_expanded() {
                 guard.runtime.core.prev_card_item();
             } else {
                 guard.runtime.core.prev_candidate();
             }
-            UiSnapshot::capture(&guard)
+            let ui_epoch = guard.next_ui_epoch();
+            self.latest_ui_epoch.store(ui_epoch, Ordering::Release);
+            (UiSnapshot::capture(&guard), ui_epoch)
         };
-        Self::emit_ui_snapshot(ctxt, &snap).await;
+        if self.is_ui_epoch_current(ui_epoch) {
+            Self::emit_ui_snapshot(ctxt, &snap).await;
+        }
     }
 
     /// 响应候选框光标下移事件
     pub(crate) async fn handle_cursor_down(&self, ctxt: &SignalEmitter<'_>) {
-        let snap = {
+        let (snap, ui_epoch) = {
             let mut guard = self.core.lock();
             if guard.runtime.core.is_card_expanded() {
                 guard.runtime.core.next_card_item();
             } else {
                 guard.runtime.core.next_candidate();
             }
-            UiSnapshot::capture(&guard)
+            let ui_epoch = guard.next_ui_epoch();
+            self.latest_ui_epoch.store(ui_epoch, Ordering::Release);
+            (UiSnapshot::capture(&guard), ui_epoch)
         };
-        Self::emit_ui_snapshot(ctxt, &snap).await;
+        if self.is_ui_epoch_current(ui_epoch) {
+            Self::emit_ui_snapshot(ctxt, &snap).await;
+        }
     }
 }

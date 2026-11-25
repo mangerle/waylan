@@ -83,26 +83,44 @@ fn handle_config_reload_event(
     false
 }
 
-/// 同步托盘模式切换并发射 IBus 引擎 UpdateProperty 信号
-fn sync_engine_mode_property(conn: &Connection, shared_core: &Arc<Mutex<IbusSessionCore>>) {
-    let mode_changed = {
+/// 同步托盘模式与 CapsLock 状态切换，并发射 IBus 引擎 UpdateProperty 信号
+fn sync_engine_mode_property(
+    conn: &Connection,
+    shared_core: &Arc<Mutex<IbusSessionCore>>,
+    last_prop_state: &mut Option<(waylan_core::InputMode, bool)>,
+) {
+    let emission = {
         let mut g = shared_core.lock();
-        g.sync_shared_mode().map(|m| (m, g.is_caps_locked()))
+        let mode_changed = g.sync_shared_mode();
+        let current = (g.runtime.effective_input_mode(), g.is_caps_locked());
+        if mode_changed.is_some() || last_prop_state.is_some_and(|prev| prev != current) {
+            *last_prop_state = Some(current);
+            let target_path = g
+                .active_engine_path
+                .clone()
+                .unwrap_or_else(|| WAYLAN_ENGINE_OBJECT_PATH.to_string());
+            Some((current.0, current.1, target_path))
+        } else {
+            if last_prop_state.is_none() {
+                *last_prop_state = Some(current);
+            }
+            None
+        }
     };
-    if let Some((new_mode, is_caps)) = mode_changed
+    if let Some((new_mode, is_caps, target_path)) = emission
         && let Ok(prop_val) = build_input_mode_property(new_mode, is_caps)
     {
         let _ = zbus::block_on(async {
             conn.emit_signal(
                 Option::<&str>::None,
-                WAYLAN_ENGINE_OBJECT_PATH,
+                target_path.as_str(),
                 "org.freedesktop.IBus.Engine",
                 "UpdateProperty",
                 &(Variant::from(prop_val),),
             )
             .await
         });
-        debug!("[微澜 IBus] 已同步托盘模式切换并发射 UpdateProperty 信号");
+        debug!("[微澜 IBus] 已同步托盘/大写状态切换并发射 UpdateProperty 信号");
     }
 }
 
@@ -173,7 +191,9 @@ pub(crate) fn run_ibus_monitor_loop(
     let initial_screen_locked = params.screen_locked_flag.load(Ordering::Acquire);
 
     if initial_screen_locked {
-        shared_core.lock().is_screen_locked = true;
+        let mut guard = shared_core.lock();
+        guard.is_screen_locked = true;
+        guard.runtime.set_protected_context(true);
         info!("[微澜 IBus] 启动时检测到系统处于锁屏状态，已进入密码直通保护模式。");
     }
 
@@ -220,6 +240,8 @@ struct MonitorLoopState {
     last_reload_instant: Instant,
     /// 系统锁屏状态共享标记
     screen_locked_flag: Arc<AtomicBool>,
+    /// 上一次向 IBus 发射的属性状态 `(有效输入模式, CapsLock 锁定状态)`
+    last_prop_state: Option<(waylan_core::InputMode, bool)>,
 }
 
 impl MonitorLoopState {
@@ -236,6 +258,7 @@ impl MonitorLoopState {
                 .checked_sub(Duration::from_secs(10))
                 .unwrap_or_else(Instant::now),
             screen_locked_flag,
+            last_prop_state: None,
         }
     }
 }
@@ -275,7 +298,7 @@ fn run_monitor_iteration(
         return false;
     }
 
-    sync_engine_mode_property(ctx.conn, ctx.shared_core);
+    sync_engine_mode_property(ctx.conn, ctx.shared_core, &mut state.last_prop_state);
     true
 }
 

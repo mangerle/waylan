@@ -30,10 +30,6 @@ impl IbusFactoryService {
     /// 响应 `ibus-daemon` 的引擎实例创建请求，返回动态创建并注册的微澜引擎对象路径
     async fn create_engine(&self, name: &str) -> fdo::Result<OwnedObjectPath> {
         debug!("[微澜 IBus] 收到 CreateEngine 请求，引擎名: {}", name);
-        {
-            let mut guard = self.core.lock();
-            guard.reset_context();
-        }
 
         let (obj_path, path_str) = self.build_engine_object_path()?;
         let conn_registered = match self.conn_slot.get() {
@@ -46,11 +42,11 @@ impl IbusFactoryService {
 
         if !conn_registered {
             warn!(
-                "[微澜 IBus 警告] D-Bus 宿主连接未就绪，无法为动态路径 {} 注册接口",
+                "[微澜 IBus 警告] D-Bus 宿主连接未就绪或接口注册失败，无法为动态路径 {} 注册接口",
                 path_str
             );
             return Err(fdo::Error::Failed(
-                "D-Bus 宿主连接尚未就绪，无法创建引擎实例".to_string(),
+                "D-Bus 宿主连接未就绪或接口注册失败，无法创建引擎实例".to_string(),
             ));
         }
 
@@ -74,10 +70,6 @@ impl IbusFactoryService {
     }
 
     /// 在动态对象路径上注册 Engine 与 Service 接口，返回是否注册成功
-    ///
-    /// # 设计原理
-    /// - Engine 与 Service 接口分别独立挂载：单个接口注册失败仅告警降级，
-    ///   另一个接口仍可正常工作，避免局部失败导致整个引擎实例不可用。
     async fn register_engine_interfaces(
         &self,
         conn: &Connection,
@@ -89,12 +81,14 @@ impl IbusFactoryService {
         srv.lock_healer = Arc::clone(&self.engine_template.lock_healer);
         let generic_srv = IbusGenericService {
             core: Arc::clone(&self.core),
+            engine_path: Some(path_str.to_string()),
         };
         if let Err(e) = conn.object_server().at(obj_path, srv).await {
             warn!(
                 "[微澜 IBus] 为动态路径 {} 注册 Engine 接口失败: {}",
                 path_str, e
             );
+            return false;
         }
         if let Err(e) = conn.object_server().at(obj_path, generic_srv).await {
             warn!(
@@ -113,14 +107,30 @@ impl IbusFactoryService {
 /// `org.freedesktop.IBus.Service` 通用生命周期接口实现
 pub struct IbusGenericService {
     pub(crate) core: Arc<Mutex<IbusSessionCore>>,
+    /// 若挂载在具体引擎实例路径上则为 `Some(path)`；全局工厂则为 `None`
+    pub(crate) engine_path: Option<String>,
 }
 
 #[interface(name = "org.freedesktop.IBus.Service")]
 impl IbusGenericService {
-    /// 响应服务对象销毁请求，安全重置内部预编辑与按键状态
+    /// 响应服务对象销毁请求：按引擎实例路径隔离清理，避免旧窗口迟到销毁误杀新焦点窗口
     fn destroy(&self) {
-        debug!("[微澜 IBus] 收到 Service.Destroy 请求，重置当前输入法上下文。");
         let mut guard = self.core.lock();
-        guard.reset_context();
+        match self.engine_path {
+            Some(ref path) => {
+                if guard.reset_context_for_path(path) {
+                    debug!("[微澜 IBus] 活跃引擎实例 {} 已销毁并重置上下文", path);
+                } else {
+                    debug!("[微澜 IBus] 忽略非当前活跃引擎实例 {} 的销毁重置请求", path);
+                }
+            }
+            None => {
+                debug!("[微澜 IBus] 收到全局 Service.Destroy 请求，重置输入法上下文。");
+                guard.reset_context();
+                guard.active_engine_path = None;
+                guard.active_window_id = None;
+                guard.next_ui_epoch();
+            }
+        }
     }
 }

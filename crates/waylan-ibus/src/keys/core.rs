@@ -36,8 +36,12 @@ pub struct IbusSessionCore {
     pub(crate) is_password_context: bool,
     pub(crate) is_screen_locked: bool,
     pub(crate) surrounding_text: Option<(String, u32, u32)>,
-    /// 当前拥有焦点的活跃 IBus 引擎对象路径
+    /// 当前拥有焦点的活跃 IBus 引擎 D-Bus 对象路径（例如 "/org/freedesktop/IBus/Engine/1"）
     pub(crate) active_engine_path: Option<String>,
+    /// 当前获焦窗口标识（用于 `WindowModeTracker` 独立模式记忆与失焦归档）
+    pub(crate) active_window_id: Option<String>,
+    /// 单调递增的 UI 状态版本号，用于在异步发射信号前淘汰过时快照、防止信号乱序
+    pub(crate) ui_epoch: u64,
 }
 
 impl IbusSessionCore {
@@ -49,6 +53,34 @@ impl IbusSessionCore {
             is_screen_locked: false,
             surrounding_text: None,
             active_engine_path: None,
+            active_window_id: None,
+            ui_epoch: 0,
+        }
+    }
+
+    /// 推进并返回最新的单调 UI 状态版本号
+    #[inline]
+    pub(crate) fn next_ui_epoch(&mut self) -> u64 {
+        self.ui_epoch = self.ui_epoch.wrapping_add(1).max(1);
+        self.ui_epoch
+    }
+
+    /// 仅当指定 D-Bus 引擎路径仍为当前活跃上下文（或当前尚无活跃路径）时才执行重置
+    ///
+    /// 防止旧窗口的 `Destroy`/`FocusOut` 延迟到达时误杀新聚焦窗口的组合缓冲或密码框状态。
+    pub(crate) fn reset_context_for_path(&mut self, path: &str) -> bool {
+        if self
+            .active_engine_path
+            .as_deref()
+            .is_none_or(|active| active == path)
+        {
+            self.reset_context();
+            self.active_engine_path = None;
+            self.active_window_id = None;
+            self.next_ui_epoch();
+            true
+        } else {
+            false
         }
     }
 

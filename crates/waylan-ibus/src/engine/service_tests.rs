@@ -3,7 +3,7 @@
 use super::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use waylan_engine::{AlgoConfig, AlgoEngine};
 
 use crate::keys::IbusSessionCore;
@@ -24,6 +24,7 @@ fn test_password_capabilities_and_reset_lifecycle() {
         lock_healer: Arc::new(ScreenLockHealer::new(
             crate::screensaver::SystemScreenSaverQuery::with_flag(Arc::new(AtomicBool::new(false))),
         )),
+        latest_ui_epoch: Arc::new(AtomicU64::new(0)),
     };
 
     // 1. 模拟进入密码框，设置密码能力位
@@ -64,6 +65,7 @@ fn test_screen_locked_recovery_on_plain_context() {
         lock_healer: Arc::new(ScreenLockHealer::new(
             crate::screensaver::SystemScreenSaverQuery::with_flag(Arc::new(AtomicBool::new(false))),
         )),
+        latest_ui_epoch: Arc::new(AtomicU64::new(0)),
     };
 
     // 1. 模拟系统此前记录为锁屏直通状态
@@ -106,6 +108,7 @@ fn test_plain_engine_resets_stale_password_context_on_key() {
         suppress_properties: false,
         is_password,
         lock_healer: Arc::new(ScreenLockHealer::default()),
+        latest_ui_epoch: Arc::new(AtomicU64::new(0)),
     };
 
     // 验证当普通窗口引擎准备处理按键前，精准同步能清除滞留的密码保护状态
@@ -117,4 +120,25 @@ fn test_plain_engine_resets_stale_password_context_on_key() {
             "普通窗口引擎必须即时复位残留的 is_password_context"
         );
     }
+}
+
+#[test]
+fn test_stale_engine_path_cannot_reset_active_context() {
+    let engine = AlgoEngine::with_sample_data(AlgoConfig::default());
+    let mut core = IbusSessionCore::new(engine);
+    core.active_engine_path = Some("/org/freedesktop/IBus/Engine/2".to_string());
+    core.is_password_context = true;
+
+    // 迟到的旧引擎路径销毁/失焦绝不能清除当前活跃引擎的状态
+    assert!(!core.reset_context_for_path("/org/freedesktop/IBus/Engine/1"));
+    assert_eq!(
+        core.active_engine_path.as_deref(),
+        Some("/org/freedesktop/IBus/Engine/2")
+    );
+    assert!(core.is_password_context);
+
+    // 只有活跃引擎路径本身才有权触发清理
+    assert!(core.reset_context_for_path("/org/freedesktop/IBus/Engine/2"));
+    assert!(core.active_engine_path.is_none());
+    assert!(!core.is_password_context);
 }

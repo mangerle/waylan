@@ -4,6 +4,7 @@
 //! - **实现初衷**：将预编辑文本更新、候选词表刷新、按键上屏与标点光标补偿等 D-Bus 异步信号发送逻辑从接口定义中解耦。
 //! - **核心优势**：在释放核心 Mutex 锁后进行纯异步信号发射，杜绝死锁与事件循环阻塞。
 
+use std::sync::atomic::Ordering;
 use zbus::Variant;
 use zbus::connection::Connection;
 use zbus::object_server::SignalEmitter;
@@ -34,9 +35,17 @@ pub(crate) struct OutcomeDispatchParams<'a, 'b> {
     pub snap: Option<UiSnapshot>,
     /// 当前大写锁定状态
     pub is_caps_locked: bool,
+    /// 本次状态对应的 UI 单调版本号，用于在并发发送中过滤已过期的快照
+    pub ui_epoch: u64,
 }
 
 impl IbusEngineService {
+    /// 校验给定的状态版本号是否仍为最新，防止并发异步信号发射乱序
+    #[inline]
+    pub(crate) fn is_ui_epoch_current(&self, ui_epoch: u64) -> bool {
+        ui_epoch >= self.latest_ui_epoch.load(Ordering::Acquire)
+    }
+
     /// 在锁作用域之外根据快照向 `ibus-daemon` 发射预编辑与候选词表更新信号
     pub(crate) async fn emit_ui_snapshot(ctxt: &SignalEmitter<'_>, snap: &UiSnapshot) {
         if snap.preedit.is_empty() {
@@ -74,6 +83,7 @@ impl IbusEngineService {
             outcome,
             snap,
             is_caps_locked,
+            ui_epoch,
         } = params;
         if let Some(ref text) = outcome.commit_text
             && let Ok(text_val) = build_ibus_text(text)
@@ -93,7 +103,9 @@ impl IbusEngineService {
             }
         }
 
-        if let Some(ref s) = snap {
+        if let Some(ref s) = snap
+            && self.is_ui_epoch_current(ui_epoch)
+        {
             Self::emit_ui_snapshot(ctxt, s).await;
         }
 
@@ -105,17 +117,29 @@ impl IbusEngineService {
         }
     }
 
-    /// 重置会话并向 `ibus-daemon` 发送隐藏预编辑与候选面板信号
+    /// 重置会话并向 `ibus-daemon` 发送隐藏预编辑与候选面板信号（按引擎路径隔离）
     pub(crate) async fn reset_and_hide_ui(&self, ctxt: &SignalEmitter<'_>) {
         self.clear_password_state();
-        let snap = {
+        let reset_info = {
             let mut guard = self.core.lock();
-            guard.reset_context();
-            UiSnapshot::capture(&guard)
+            if guard.reset_context_for_path(ctxt.path().as_str()) {
+                let epoch = guard.next_ui_epoch();
+                self.latest_ui_epoch.store(epoch, Ordering::Release);
+                Some((UiSnapshot::capture(&guard), epoch))
+            } else {
+                None
+            }
         };
-        Self::emit_ui_snapshot(ctxt, &snap).await;
-        let _ = Self::hide_preedit_text(ctxt).await;
-        let _ = Self::hide_lookup_table(ctxt).await;
+        if let Some((snap, ui_epoch)) = reset_info {
+            if self.is_ui_epoch_current(ui_epoch) {
+                Self::emit_ui_snapshot(ctxt, &snap).await;
+                let _ = Self::hide_preedit_text(ctxt).await;
+                let _ = Self::hide_lookup_table(ctxt).await;
+            }
+        } else {
+            let _ = Self::hide_preedit_text(ctxt).await;
+            let _ = Self::hide_lookup_table(ctxt).await;
+        }
     }
 }
 

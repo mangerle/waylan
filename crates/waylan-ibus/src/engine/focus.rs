@@ -84,9 +84,10 @@ impl IbusEngineService {
             window_id, app_name
         );
 
-        let (mode, is_caps, trad, punct, char_full, snap) = {
+        let (mode, is_caps, trad, punct, char_full, snap, ui_epoch) = {
             let mut guard = self.core.lock();
-            guard.active_engine_path = Some(window_id.clone());
+            guard.active_engine_path = Some(ctxt.path().to_string());
+            guard.active_window_id = Some(window_id.clone());
             // 切换窗口上下文独立记忆（自动感知终端类应用并按需初始化英文）
             guard.runtime.focus_window(&window_id, app_name.as_deref());
             // 焦点进入新输入上下文时同步当前 Engine 实例记录的密码框状态，
@@ -108,6 +109,8 @@ impl IbusEngineService {
             let trad = guard.runtime.core.engine.config.traditional_chinese;
             let punct = guard.runtime.core.is_full_width_punct();
             let char_full = guard.is_full_width_char();
+            let ui_epoch = guard.next_ui_epoch();
+            self.latest_ui_epoch.store(ui_epoch, Ordering::Release);
             (
                 guard.runtime.effective_input_mode(),
                 guard.is_caps_locked(),
@@ -115,6 +118,7 @@ impl IbusEngineService {
                 punct,
                 char_full,
                 UiSnapshot::capture(&guard),
+                ui_epoch,
             )
         };
         if !self.suppress_properties
@@ -128,7 +132,9 @@ impl IbusEngineService {
         {
             let _ = Self::register_properties(ctxt, Variant::from(prop_list)).await;
         }
-        Self::emit_ui_snapshot(ctxt, &snap).await;
+        if self.is_ui_epoch_current(ui_epoch) {
+            Self::emit_ui_snapshot(ctxt, &snap).await;
+        }
     }
 }
 
