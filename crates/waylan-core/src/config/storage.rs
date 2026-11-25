@@ -6,7 +6,11 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use parking_lot::Mutex;
 
 use super::AppConfig;
 use super::error::ConfigError;
@@ -182,8 +186,14 @@ impl AppConfig {
         }
         let serialized =
             toml::to_string_pretty(self).map_err(|e| ConfigError::TomlSerialize(e.to_string()))?;
-        // 使用原子写入：写入同目录临时文件，刷盘后原子 rename 覆盖目标文件
-        let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+
+        // 串行化同进程写盘操作，并附带单调递增序号避免多线程碰撞同一临时文件
+        static SAVE_SERIALIZER: OnceLock<Mutex<()>> = OnceLock::new();
+        static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
+        let _save_guard = SAVE_SERIALIZER.get_or_init(|| Mutex::new(())).lock();
+
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = path.with_extension(format!("tmp.{}.{}", std::process::id(), seq));
         if let Err(e) = write_serialized_atomically(&tmp_path, path, &serialized) {
             let _ = fs::remove_file(&tmp_path);
             return Err(ConfigError::Io {

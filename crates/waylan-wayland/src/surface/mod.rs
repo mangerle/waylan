@@ -12,6 +12,7 @@ pub(crate) use shm_slot::ShmSlot;
 pub use state_builder::*;
 
 use log::{debug, warn};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::os::fd::AsFd;
 use waylan_core::CandidateBoxState;
@@ -47,7 +48,7 @@ pub struct CandidateSurfaceManager {
     /// 目标显示器逻辑分辨率 (宽, 高)，用于贴边防溢出平移与向上翻转
     pub screen_size: (i32, i32),
     /// 待合成器 release 的退役缓冲区列表（附带所属槽位索引，防止隐藏表面后 is_busy 永久锁死）
-    pub(crate) pending_release_buffers: Vec<(usize, WlBuffer)>,
+    pub(crate) pending_release_buffers: VecDeque<(usize, WlBuffer)>,
 }
 
 impl Default for CandidateSurfaceManager {
@@ -62,15 +63,16 @@ const MAX_PENDING_RELEASE_BUFFERS: usize = 16;
 impl CandidateSurfaceManager {
     /// 安全暂存等待 release 的退役缓冲区，达到上限时主动销毁最旧的代理对象防止泄漏
     fn push_pending_release(&mut self, slot_idx: usize, buffer: WlBuffer) {
-        if self.pending_release_buffers.len() >= MAX_PENDING_RELEASE_BUFFERS {
-            let (old_slot, oldest_buf) = self.pending_release_buffers.remove(0);
+        if self.pending_release_buffers.len() >= MAX_PENDING_RELEASE_BUFFERS
+            && let Some((old_slot, oldest_buf)) = self.pending_release_buffers.pop_front()
+        {
             warn!(
                 "[悬浮窗口] 退役缓冲区队列达到上限 ({})，主动销毁最旧退役缓冲（槽位: {}）。",
                 MAX_PENDING_RELEASE_BUFFERS, old_slot
             );
             oldest_buf.destroy();
         }
-        self.pending_release_buffers.push((slot_idx, buffer));
+        self.pending_release_buffers.push_back((slot_idx, buffer));
     }
 
     /// 创建默认候选框悬浮表面管理器实例
@@ -91,7 +93,7 @@ impl CandidateSurfaceManager {
             slot_buffers: [None, None, None, None],
             current_slot: 0,
             screen_size: (1920, 1080),
-            pending_release_buffers: Vec::with_capacity(4),
+            pending_release_buffers: VecDeque::with_capacity(4),
         }
     }
 
@@ -186,8 +188,8 @@ impl CandidateSurfaceManager {
             .pending_release_buffers
             .iter()
             .position(|(_, b)| b == released_buffer)
+            && let Some((slot_idx, buf)) = self.pending_release_buffers.remove(pos)
         {
-            let (slot_idx, buf) = self.pending_release_buffers.remove(pos);
             if self.slot_buffers[slot_idx].is_none()
                 && let Some(ref mut slot) = self.shm_slots[slot_idx]
             {
