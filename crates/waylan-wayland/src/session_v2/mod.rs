@@ -44,13 +44,13 @@ impl WaylanV2Session {
     /// 获取核心输入法会话引用
     #[inline]
     pub fn core(&self) -> &waylan_engine::session::ImeCoreSession {
-        &self.runtime.core
+        WaylandSessionLifecycle::core(self)
     }
 
     /// 获取核心输入法会话可变引用
     #[inline]
     pub fn core_mut(&mut self) -> &mut waylan_engine::session::ImeCoreSession {
-        &mut self.runtime.core
+        WaylandSessionLifecycle::core_mut(self)
     }
 
     /// 查询 5 行大网格候选卡片当前是否处于展开状态
@@ -112,7 +112,7 @@ impl WaylanV2Session {
     /// 查询当前是否处于语音录音或语音浮条激活状态
     #[inline]
     pub fn is_voice_active(&self) -> bool {
-        self.runtime.is_voice_active()
+        WaylandSessionLifecycle::is_voice_active(self)
     }
 
     /// 轮询并消费后台语音引擎上报的事件，实时刷新波形或提取完成文字
@@ -129,8 +129,7 @@ impl WaylanV2Session {
 
     /// 根据当前算法引擎与输入模式构建候选框渲染状态
     pub(crate) fn build_candidate_box_state(&self) -> CandidateBoxState {
-        self.runtime
-            .build_candidate_box_state(self.focus.is_active, true)
+        WaylandSessionLifecycle::build_box_state(self, self.focus.is_active, true)
     }
 
     /// 触发候选框悬浮表面重绘并提交至 Wayland 表面

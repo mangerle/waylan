@@ -29,7 +29,7 @@ use crate::session_common::{
     HostReloadHook, SessionSetupOptions, SessionSetupTargets, WaylandSessionLifecycle,
     apply_session_setup,
 };
-use crate::session_v1::{WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext};
+use crate::session_v1::{WaylanV1Session, WaylandV1SurfaceContext};
 use crate::session_v2::WaylanV2Session;
 
 /// 启动并运行 Wayland V1 输入法事件循环（使用已初始化的会话实例）
@@ -150,21 +150,18 @@ fn run_v1_fallback_session(
     let mut surface_manager = returned_session.surface.surface_manager;
     // 清理 V2 连接创建的 WlShmPool / WlBuffer 代理，防止跨 Wayland 连接错误复用
     surface_manager.clear_wayland_resources();
+    let mut watcher = returned_session
+        .watcher
+        .into_rebound(Some(Box::new(reload_wayland_session)));
+    watcher.exit_requested = exit_requested;
+    watcher.loop_wakeup = loop_wakeup;
     let session_v1 = WaylanV1Session {
         runtime: returned_session.runtime,
         surface: WaylandV1SurfaceContext {
             surface_manager,
             ..Default::default()
         },
-        watcher: WaylandV1WatcherContext {
-            watched_paths: returned_session.watcher.watched_paths,
-            last_watched_mtime: returned_session.watcher.last_watched_mtime,
-            exit_requested,
-            loop_wakeup,
-            host_reload_hook: returned_session.watcher.host_reload_hook,
-            reload_callback: Some(Box::new(reload_wayland_session)),
-            ..Default::default()
-        },
+        watcher,
         ..WaylanV1Session::default()
     };
     run_session_v1_loop(session_v1)

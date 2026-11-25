@@ -63,6 +63,24 @@ impl<S> Default for WaylandWatcherContext<S> {
     }
 }
 
+impl<S> WaylandWatcherContext<S> {
+    /// 将当前监控上下文整体迁移至另一种会话类型（用于 V2 降级回退至 V1 时零遗漏移交）
+    pub fn into_rebound<T>(
+        self,
+        reload_callback: Option<SessionReloadCallback<T>>,
+    ) -> WaylandWatcherContext<T> {
+        WaylandWatcherContext {
+            reload_callback,
+            host_reload_hook: self.host_reload_hook,
+            watched_paths: self.watched_paths,
+            last_watched_mtime: self.last_watched_mtime,
+            inotify_watcher: self.inotify_watcher,
+            loop_wakeup: self.loop_wakeup,
+            exit_requested: self.exit_requested,
+        }
+    }
+}
+
 /// Wayland 会话装配环境参数（用于消除 V1 与 V2 镜像赋值代码）
 pub struct SessionSetupOptions<'a> {
     pub renderer: CandidateBoxRenderer,
@@ -149,6 +167,35 @@ pub trait WaylandSessionLifecycle: Sized {
 
     /// 刷新候选框悬浮表面
     fn refresh_surface(&mut self);
+
+    /// 获取核心输入法会话只读引用
+    #[inline]
+    fn core(&self) -> &waylan_engine::session::ImeCoreSession {
+        &self.runtime_ref().core
+    }
+
+    /// 获取核心输入法会话可变引用
+    #[inline]
+    fn core_mut(&mut self) -> &mut waylan_engine::session::ImeCoreSession {
+        &mut self.runtime().core
+    }
+
+    /// 查询当前是否处于语音录音或语音浮条激活状态
+    #[inline]
+    fn is_voice_active(&self) -> bool {
+        self.runtime_ref().is_voice_active()
+    }
+
+    /// 构造当前候选框的渲染状态
+    #[inline]
+    fn build_box_state(
+        &self,
+        is_active: bool,
+        supports_surrounding: bool,
+    ) -> waylan_core::CandidateBoxState {
+        self.runtime_ref()
+            .build_candidate_box_state(is_active, supports_surrounding)
+    }
 
     /// 同步外部系统托盘状态、配置热重载与文件变更
     fn sync_external_state(&mut self) {
