@@ -11,13 +11,12 @@
 //!   合入自适应词库时会触发 WAL 文件的压实（Compaction），超大词库首次合入需要毫秒级磁盘 I/O。
 
 use std::collections::HashSet;
-use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use waylan_algo::custom_phrase::AuxiliaryDict;
 use waylan_algo::user_adaptive::UserAdaptiveModel;
-use waylan_core::MAX_IMPORT_FILE_BYTES;
 
 use super::parser::DictImporter;
 use crate::error::DictImportError;
@@ -44,27 +43,6 @@ pub struct AuxImportReport {
 pub struct DictImportService;
 
 impl DictImportService {
-    /// 校验源词库文件是否存在且未超过 64MB 体积安全上限
-    fn validate_source_file(path: &Path) -> Result<(), DictImportError> {
-        if !path.is_file() {
-            return Err(DictImportError::FileNotFound {
-                path: path.to_path_buf(),
-            });
-        }
-        let meta = fs::metadata(path).map_err(|e| DictImportError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-        if meta.len() > MAX_IMPORT_FILE_BYTES {
-            return Err(DictImportError::FileTooLarge {
-                path: path.to_path_buf(),
-                limit_bytes: MAX_IMPORT_FILE_BYTES,
-                actual_bytes: meta.len(),
-            });
-        }
-        Ok(())
-    }
-
     /// 解析外部拼音词库文件并增量合入用户自适应模型 WAL
     ///
     /// # Errors
@@ -74,8 +52,6 @@ impl DictImportService {
         user_dict_path: Q,
     ) -> Result<DictImportReport, DictImportError> {
         let src = source_path.as_ref();
-        Self::validate_source_file(src)?;
-
         let entries = DictImporter::import_file(src)?;
         let imported_count = entries.len();
 
@@ -118,12 +94,7 @@ impl DictImportService {
         aux_save_path: Option<&Path>,
     ) -> Result<AuxImportReport, DictImportError> {
         let src = source_path.as_ref();
-        Self::validate_source_file(src)?;
-
-        let content = fs::read_to_string(src).map_err(|e| DictImportError::Io {
-            path: src.to_path_buf(),
-            source: e,
-        })?;
+        let file = DictImporter::open_checked_file(src)?;
 
         let mut existing: HashSet<String> = aux
             .english_words
@@ -131,7 +102,8 @@ impl DictImportService {
             .map(|(w, _)| w.to_lowercase())
             .collect();
 
-        let added_count = Self::parse_english_words(&content, &mut existing, aux);
+        let added_count =
+            Self::parse_english_words_reader(BufReader::new(file), src, &mut existing, aux)?;
 
         Self::save_aux_dict(aux, aux_save_path)?;
 
@@ -151,12 +123,7 @@ impl DictImportService {
         aux_save_path: Option<&Path>,
     ) -> Result<AuxImportReport, DictImportError> {
         let src = source_path.as_ref();
-        Self::validate_source_file(src)?;
-
-        let content = fs::read_to_string(src).map_err(|e| DictImportError::Io {
-            path: src.to_path_buf(),
-            source: e,
-        })?;
+        let file = DictImporter::open_checked_file(src)?;
 
         let mut existing: HashSet<(String, String)> = aux
             .symbols
@@ -164,7 +131,8 @@ impl DictImportService {
             .map(|(k, s, _)| (k.clone(), s.clone()))
             .collect();
 
-        let added_count = Self::parse_symbols(&content, &mut existing, aux);
+        let added_count =
+            Self::parse_symbols_reader(BufReader::new(file), src, &mut existing, aux)?;
 
         Self::save_aux_dict(aux, aux_save_path)?;
 
@@ -174,21 +142,30 @@ impl DictImportService {
         })
     }
 
-    /// 解析英文词表文本并去重合入辅助词库，返回本次新增条目数
-    ///
-    /// # 设计原理
-    /// - 词表可能带有 YAML 头部（`---` 与 `...` 之间），该区间一律跳过；
-    ///   仅接受纯 ASCII 字母与连字符构成的单词，杜绝符号与数字污染英文词库。
-    fn parse_english_words(
-        content: &str,
+    /// 流式逐行解析英文词表并去重合入辅助词库，返回本次新增条目数
+    fn parse_english_words_reader<R: BufRead>(
+        mut reader: R,
+        src: &Path,
         existing: &mut HashSet<String>,
         aux: &mut AuxiliaryDict,
-    ) -> usize {
+    ) -> Result<usize, DictImportError> {
         let mut added_count = 0;
         let mut in_yaml_header = false;
+        let mut line_buf = String::new();
 
-        for line in content.lines() {
-            let trimmed = line.trim();
+        loop {
+            line_buf.clear();
+            if reader
+                .read_line(&mut line_buf)
+                .map_err(|e| DictImportError::Io {
+                    path: src.to_path_buf(),
+                    source: e,
+                })?
+                == 0
+            {
+                break;
+            }
+            let trimmed = line_buf.trim();
             if trimmed == "---" {
                 in_yaml_header = true;
                 continue;
@@ -211,23 +188,32 @@ impl DictImportService {
             }
         }
 
-        added_count
+        Ok(added_count)
     }
 
-    /// 解析符号映射表文本并去重合入辅助词库，返回本次新增条目数
-    ///
-    /// # 设计原理
-    /// - 符号表以制表符分隔"快捷码 / 符号 / 描述"三列，缺省描述时统一回退为"外部符号"；
-    ///   以"快捷码 + 符号"二元组作为去重键，允许同一快捷码对应多个不同符号。
-    fn parse_symbols(
-        content: &str,
+    /// 流式逐行解析符号映射表文本并去重合入辅助词库，返回本次新增条目数
+    fn parse_symbols_reader<R: BufRead>(
+        mut reader: R,
+        src: &Path,
         existing: &mut HashSet<(String, String)>,
         aux: &mut AuxiliaryDict,
-    ) -> usize {
+    ) -> Result<usize, DictImportError> {
         let mut added_count = 0;
+        let mut line_buf = String::new();
 
-        for line in content.lines() {
-            let trimmed = line.trim();
+        loop {
+            line_buf.clear();
+            if reader
+                .read_line(&mut line_buf)
+                .map_err(|e| DictImportError::Io {
+                    path: src.to_path_buf(),
+                    source: e,
+                })?
+                == 0
+            {
+                break;
+            }
+            let trimmed = line_buf.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
@@ -246,7 +232,7 @@ impl DictImportService {
             }
         }
 
-        added_count
+        Ok(added_count)
     }
 
     /// 将辅助词库落盘到指定路径（未指定路径时仅在内存中生效）
@@ -268,6 +254,7 @@ impl DictImportService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::NamedTempFile;
 
     #[test]
