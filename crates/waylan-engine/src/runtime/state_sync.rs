@@ -58,12 +58,26 @@ impl ImeRuntime {
         next
     }
 
-    /// 设置简繁输出模式并单向广播状态快照
-    pub fn set_traditional(&mut self, val: bool) {
-        if self.core.is_traditional() != val {
-            self.core.set_traditional(val);
+    /// 内部通用布尔修饰标志设置辅助：仅在状态变更时更新核心会话并广播快照
+    fn update_core_bool_flag(
+        &mut self,
+        current: bool,
+        target: bool,
+        setter: fn(&mut crate::session::ImeCoreSession, bool),
+    ) {
+        if current != target {
+            setter(&mut self.core, target);
             self.broadcast_state_snapshot();
         }
+    }
+
+    /// 设置简繁输出模式并单向广播状态快照
+    pub fn set_traditional(&mut self, val: bool) {
+        self.update_core_bool_flag(
+            self.core.is_traditional(),
+            val,
+            crate::session::ImeCoreSession::set_traditional,
+        );
     }
 
     /// 切换简繁输出模式并单向广播状态快照
@@ -75,10 +89,11 @@ impl ImeRuntime {
 
     /// 设置标点全半角并单向广播状态快照
     pub fn set_full_width_punct(&mut self, val: bool) {
-        if self.core.is_full_width_punct() != val {
-            self.core.set_full_width_punct(val);
-            self.broadcast_state_snapshot();
-        }
+        self.update_core_bool_flag(
+            self.core.is_full_width_punct(),
+            val,
+            crate::session::ImeCoreSession::set_full_width_punct,
+        );
     }
 
     /// 切换标点全半角并单向广播状态快照
@@ -90,10 +105,11 @@ impl ImeRuntime {
 
     /// 设置字符全半角并单向广播状态快照
     pub fn set_full_width_char(&mut self, val: bool) {
-        if self.core.is_full_width_char() != val {
-            self.core.set_full_width_char(val);
-            self.broadcast_state_snapshot();
-        }
+        self.update_core_bool_flag(
+            self.core.is_full_width_char(),
+            val,
+            crate::session::ImeCoreSession::set_full_width_char,
+        );
     }
 
     /// 切换字符全半角并单向广播状态快照

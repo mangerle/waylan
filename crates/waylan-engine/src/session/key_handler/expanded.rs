@@ -88,17 +88,6 @@ fn toggle_expanded_card(session: &mut ImeCoreSession) -> Option<ImeOutputAction>
 /// - 无论子词条是否命中都先收起卡片，避免卡片残留于展开态遮挡后续候选；
 ///   命中子词条时按自定义文本上屏并同步登记标点上下文。
 fn commit_expanded_card_selection(session: &mut ImeCoreSession) -> ImeOutputAction {
-    let sel = session.selected_global_index();
     let sub_idx = session.card_selected_index();
-    session.collapse_card();
-
-    if let Some(cand) = session.engine.candidates().get(sel)
-        && let Some(sub_text) = cand.sub_candidates.get(sub_idx).cloned()
-    {
-        let (committed, _) = session.engine.commit_custom_text(&sub_text);
-        session.reset_viewport();
-        session.punctuation_processor.record_commit(&committed);
-        return ImeOutputAction::Commit(committed);
-    }
-    ImeOutputAction::Handled { update_ui: true }
+    session.commit_card_sub_candidate(sub_idx)
 }

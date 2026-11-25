@@ -47,18 +47,7 @@ pub(crate) fn handle_digit_selection(
     let digit = keycode_to_digit(key)?;
     if session.is_card_expanded() {
         let sub_idx = digit.saturating_sub(1);
-        let sel = session.selected_global_index();
-        session.collapse_card();
-
-        if let Some(cand) = session.engine.candidates().get(sel)
-            && let Some(sub_text) = cand.sub_candidates.get(sub_idx).cloned()
-        {
-            let (committed, _) = session.engine.commit_custom_text(&sub_text);
-            session.reset_viewport();
-            session.punctuation_processor.record_commit(&committed);
-            return Some(ImeOutputAction::Commit(committed));
-        }
-        Some(ImeOutputAction::Handled { update_ui: true })
+        Some(session.commit_card_sub_candidate(sub_idx))
     } else {
         let offset = digit.saturating_sub(1);
         if offset < session.current_page_candidates().len() {

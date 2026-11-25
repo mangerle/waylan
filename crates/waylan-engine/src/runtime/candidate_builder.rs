@@ -150,8 +150,12 @@ pub fn build_common_candidate_box_state(
     }
 
     let all = engine.candidates();
-    let candidates = slice_page_candidates(all, page_index, page_size);
     let (expansion, grid_candidates) = resolve_expansion_and_grid(all, expansion_in);
+    let candidates = if matches!(expansion, CandidateExpansion::Grid { .. }) {
+        Vec::new()
+    } else {
+        slice_page_candidates(all, page_index, page_size)
+    };
     let (preedit, mode_badge) = resolve_preedit_and_badge(engine, mode, inline_preedit);
 
     CandidateBoxState {

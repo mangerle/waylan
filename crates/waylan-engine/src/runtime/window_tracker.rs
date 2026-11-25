@@ -13,10 +13,12 @@ use waylan_core::InputMode;
 /// 窗口级输入状态上下文跟踪器
 #[derive(Debug, Clone)]
 pub struct WindowModeTracker {
-    /// 窗口唯一标识到基础输入模式的映射表
-    modes: HashMap<String, InputMode>,
+    /// 窗口唯一标识到 `(基础输入模式, 最近访问序号)` 的映射表
+    modes: HashMap<String, (InputMode, u64)>,
     /// 当前获焦的活动窗口标识
     active_window: Option<String>,
+    /// 单调递增的最近访问逻辑时钟（驱动精确 LRU 淘汰）
+    access_seq: u64,
     /// 最大缓存窗口数（防止长期运行无上限内存积压）
     max_capacity: usize,
     /// 默认初始输入模式
@@ -91,9 +93,17 @@ impl WindowModeTracker {
         Self {
             modes: HashMap::with_capacity(max_capacity.min(64)),
             active_window: None,
-            max_capacity,
+            access_seq: 0,
+            max_capacity: max_capacity.max(1),
             default_mode,
         }
+    }
+
+    /// 推进并返回下一个单调访问序号
+    #[inline]
+    fn next_seq(&mut self) -> u64 {
+        self.access_seq = self.access_seq.saturating_add(1);
+        self.access_seq
     }
 
     /// 获取当前活动窗口标识
@@ -132,18 +142,26 @@ impl WindowModeTracker {
         window_id: &str,
         policy: FocusWindowPolicy<'_>,
     ) -> InputMode {
-        self.active_window = Some(window_id.to_string());
+        if self.active_window.as_deref() != Some(window_id) {
+            self.active_window = Some(window_id.to_string());
+        }
         if !policy.window_mode_memory {
             return self.default_mode;
         }
-        if let Some(&mode) = self.modes.get(window_id) {
-            mode
+        let seq = self.next_seq();
+        if let Some(entry) = self.modes.get_mut(window_id) {
+            entry.1 = seq;
+            entry.0
         } else {
-            // 防御性容量检查：若超过上限，清理最早遍历到的条目
+            // 真实 LRU 淘汰：容量满时淘汰最近访问序号最小的冷窗口条目
             if self.modes.len() >= self.max_capacity
-                && let Some(first_key) = self.modes.keys().next().cloned()
+                && let Some(lru_key) = self
+                    .modes
+                    .iter()
+                    .min_by_key(|(_, (_, s))| *s)
+                    .map(|(k, _)| k.clone())
             {
-                self.modes.remove(&first_key);
+                self.modes.remove(&lru_key);
             }
             let default_to_english = policy.app_name.is_some_and(|app| {
                 (policy.terminal_default_english && is_terminal_app(app))
@@ -154,7 +172,8 @@ impl WindowModeTracker {
             } else {
                 self.default_mode
             };
-            self.modes.insert(window_id.to_string(), initial_mode);
+            self.modes
+                .insert(window_id.to_string(), (initial_mode, seq));
             initial_mode
         }
     }
@@ -174,17 +193,26 @@ impl WindowModeTracker {
         }
     }
 
-    /// 更新当前活动窗口的基础输入模式
+    /// 更新当前活动窗口的基础输入模式（优先原地更新已有槽位，避免重复克隆窗口 ID）
     pub fn update_active_mode(&mut self, mode: InputMode) {
+        let seq = self.next_seq();
         if let Some(ref win) = self.active_window {
-            self.modes.insert(win.clone(), mode);
+            if let Some(entry) = self.modes.get_mut(win) {
+                entry.0 = mode;
+                entry.1 = seq;
+            } else {
+                self.modes.insert(win.clone(), (mode, seq));
+            }
         }
     }
 
     /// 获取当前活动窗口记录的模式，若无活动窗口则返回默认模式
     pub fn current_base_mode(&self) -> InputMode {
         if let Some(ref win) = self.active_window {
-            self.modes.get(win).copied().unwrap_or(self.default_mode)
+            self.modes
+                .get(win)
+                .map(|(mode, _)| *mode)
+                .unwrap_or(self.default_mode)
         } else {
             self.default_mode
         }
@@ -296,5 +324,32 @@ mod tests {
             },
         );
         assert_eq!(mode_browser, InputMode::Chinese);
+    }
+
+    #[test]
+    fn test_window_mode_tracker_lru_eviction() {
+        let mut tracker = WindowModeTracker::new(2, InputMode::Chinese);
+        tracker.focus_window("w1", None, false, true);
+        tracker.update_active_mode(InputMode::English);
+        tracker.focus_window("w2", None, false, true);
+        tracker.update_active_mode(InputMode::English);
+
+        // 再次访问 w1，使其成为最近活跃窗口，w2 变为最久未访问窗口
+        assert_eq!(
+            tracker.focus_window("w1", None, false, true),
+            InputMode::English
+        );
+
+        // 插入第 3 个窗口 w3，容量满时应淘汰最久未访问的 w2，而非随机桶或 w1
+        tracker.focus_window("w3", None, false, true);
+        assert_eq!(
+            tracker.focus_window("w1", None, false, true),
+            InputMode::English
+        );
+        // w2 已被淘汰，重新聚焦应恢复默认中文模式
+        assert_eq!(
+            tracker.focus_window("w2", None, false, true),
+            InputMode::Chinese
+        );
     }
 }

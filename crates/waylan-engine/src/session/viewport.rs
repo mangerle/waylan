@@ -190,6 +190,22 @@ impl ImeCoreSession {
         }
     }
 
+    /// 提交二级展开卡片中指定索引的子词条并同步收起卡片、重置视口与登记标点上下文
+    pub(crate) fn commit_card_sub_candidate(&mut self, sub_idx: usize) -> ImeOutputAction {
+        let sel = self.selected_global_index();
+        self.collapse_card();
+
+        if let Some(cand) = self.engine.candidates().get(sel)
+            && let Some(sub_text) = cand.sub_candidates.get(sub_idx).cloned()
+        {
+            let (committed, _) = self.engine.commit_custom_text(&sub_text);
+            self.reset_viewport();
+            self.punctuation_processor.record_commit(&committed);
+            return ImeOutputAction::Commit(committed);
+        }
+        ImeOutputAction::Handled { update_ui: true }
+    }
+
     /// 重置候选词视口状态（翻页归零、光标归零、关闭展开卡片与网格）
     pub fn reset_viewport(&mut self) {
         self.page_index = 0;
