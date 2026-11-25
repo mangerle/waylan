@@ -5,6 +5,7 @@
 //! - **核心优势**：严格遵循 Linux XDG 规范，实现系统内置目录与用户导入目录的物理隔离。
 //! - **模块化裂变**：按关注点分离为 `scanner`（模型发现扫描）与 `importer`（物理导入与目录管理）。
 
+mod archive;
 pub mod downloader;
 pub mod importer;
 pub mod scanner;

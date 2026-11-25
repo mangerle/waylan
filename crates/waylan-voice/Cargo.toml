@@ -17,6 +17,8 @@ waylan-core = { path = "../waylan-core" }
 nnnoiseless = "0.5.2"
 hush-vani = { version = "0.1.1", default-features = false }
 tempfile.workspace = true
+tar = "0.4.46"
+bzip2 = "0.6.1"
 
 [dev-dependencies]
 tempfile.workspace = true

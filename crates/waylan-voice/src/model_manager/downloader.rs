@@ -10,14 +10,32 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use log::{info, warn};
 use waylan_core::OfflineModelType;
 
-use super::importer::{builtin_models_dir, user_models_dir};
+use super::archive::extract_tar_bz2_safely;
+use super::importer::{builtin_models_dir, copy_dir_all, user_models_dir};
 use crate::error::VoiceError;
+
+/// 模型压缩包最大允许下载体积（2 GiB），防止异常/恶意响应耗尽本地磁盘
+const MAX_MODEL_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// 全局复用模型下载 HTTP 客户端（共享连接池与 TLS 会话）
+fn download_http_agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        let config = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_per_read(Some(Duration::from_secs(60)))
+            .max_idle_connections(4)
+            .max_idle_connections_per_host(2)
+            .build();
+        config.into()
+    })
+}
 
 /// 官方精选支持的离线 ASR 模型元数据定义
 #[derive(Debug, Clone, Copy)]
@@ -184,15 +202,53 @@ where
         get_preset_model_dest_dir(meta).ok_or_else(|| VoiceError::ModelManagementFailed {
             message: "无法获取用户离线模型目标存储目录".to_string(),
         })?;
-
-    let temp_dir = tempfile::tempdir().map_err(|e| VoiceError::ModelManagementFailed {
-        message: format!("创建临时下载工作目录失败: {}", e),
+    let parent_dir = dest_dir
+        .parent()
+        .ok_or_else(|| VoiceError::ModelManagementFailed {
+            message: "目标模型目录缺少有效的父级目录".to_string(),
+        })?;
+    fs::create_dir_all(parent_dir).map_err(|e| VoiceError::ModelManagementFailed {
+        message: format!("创建目标模型父级目录失败: {}", e),
     })?;
+
+    // 在同级父目录下建立临时工作区，使后续原子 rename 零拷贝落盘
+    let temp_dir = tempfile::Builder::new()
+        .prefix(".download-")
+        .tempdir_in(parent_dir)
+        .map_err(|e| VoiceError::ModelManagementFailed {
+            message: format!("创建临时下载工作目录失败: {}", e),
+        })?;
     let temp_archive_path = temp_dir
         .path()
         .join(format!("{}.tar.bz2", meta.archive_name));
 
-    // 优先采用 ModelScope 国内高速文件下载源（针对社区已托管模型）
+    download_from_mirrors(meta, &temp_archive_path, &mut progress_fn)?;
+
+    progress_fn(0.99, "正在校验并解压模型权重...");
+    info!("[模型下载] 压缩包下载成功，正在安全流式解压至临时目录...");
+    extract_tar_bz2_safely(&temp_archive_path, temp_dir.path())?;
+
+    let extracted_sub_dir = find_extracted_model_dir(temp_dir.path(), &dest_dir)?;
+    deploy_extracted_model_dir(&extracted_sub_dir, &dest_dir)?;
+
+    progress_fn(1.0, "模型部署完成");
+    info!(
+        "[模型下载] 模型 [{}] 成功部署至: {}",
+        meta.name,
+        dest_dir.display()
+    );
+    Ok(dest_dir)
+}
+
+/// 依次尝试从国内镜像源与官方源下载预置模型归档
+fn download_from_mirrors<F>(
+    meta: &OnlineAsrModelMeta,
+    target_path: &Path,
+    progress_fn: &mut F,
+) -> Result<(), VoiceError>
+where
+    F: FnMut(f32, &str),
+{
     let modelscope_url = format!(
         "https://modelscope.cn/models/csukuangfj/asr-models/resolve/master/{}.tar.bz2",
         meta.archive_name
@@ -206,78 +262,184 @@ where
         "[模型下载] 正在尝试从 ModelScope 国内源下载: {}",
         modelscope_url
     );
-    let download_res = download_file_with_progress(
-        &modelscope_url,
-        &temp_archive_path,
-        &mut progress_fn,
-        "ModelScope",
-    );
-
-    if download_res.is_err() {
-        warn!(
-            "[模型下载] ModelScope 国内源下载未成功，正在尝试 GitHub Releases 兜底: {}",
-            github_url
-        );
-        download_file_with_progress(&github_url, &temp_archive_path, &mut progress_fn, "GitHub")?;
+    if download_file_with_progress(&modelscope_url, target_path, progress_fn, "ModelScope").is_ok()
+    {
+        return Ok(());
     }
 
-    progress_fn(0.99, "正在解压并规整模型权重...");
-    info!("[模型下载] 压缩包下载成功，正在解压至临时目录...");
+    warn!(
+        "[模型下载] ModelScope 国内源下载未成功，正在尝试 GitHub Releases 兜底: {}",
+        github_url
+    );
+    download_file_with_progress(&github_url, target_path, progress_fn, "GitHub")
+}
 
-    // 先列举归档条目校验路径安全，严防包含 `..` 或绝对路径的 Tar Slip 越权穿越
-    let archive_str =
-        temp_archive_path
-            .to_str()
-            .ok_or_else(|| VoiceError::ModelManagementFailed {
-                message: "模型归档路径包含非法 UTF-8 字符".to_string(),
-            })?;
-    let dest_str = temp_dir
-        .path()
-        .to_str()
-        .ok_or_else(|| VoiceError::ModelManagementFailed {
-            message: "临时解压路径包含非法 UTF-8 字符".to_string(),
-        })?;
-    verify_tar_archive_safety(archive_str)?;
-
-    // 调用系统 tar 解压（附带 180 秒超时保护，超时强杀并收割子进程）
-    run_tar_extract_with_timeout(archive_str, dest_str, Duration::from_secs(180))?;
-
-    // 在临时目录中寻找解压出来的子目录
-    let extracted_sub_dir = fs::read_dir(temp_dir.path())
+/// 在临时解压工作区中定位唯一模型内容子目录
+fn find_extracted_model_dir(work_dir: &Path, dest_dir: &Path) -> Result<PathBuf, VoiceError> {
+    fs::read_dir(work_dir)
         .map_err(|e| VoiceError::ModelManagementFailed {
             message: format!("遍历解压目录失败: {}", e),
         })?
         .flatten()
         .map(|entry| entry.path())
-        .find(|path| path.is_dir() && path != &dest_dir)
+        .find(|path| path.is_dir() && path != dest_dir)
         .ok_or_else(|| VoiceError::ModelManagementFailed {
             message: "解压后的目录结构不符合预期，未找到内容目录".to_string(),
-        })?;
+        })
+}
 
-    // 创建最终的目标目录
-    if let Some(parent) = dest_dir.parent() {
-        fs::create_dir_all(parent).map_err(|e| VoiceError::ModelManagementFailed {
-            message: format!("创建目标模型父级目录失败: {}", e),
+/// 将临时目录中解压完成的模型目录原子部署到目标路径（同文件系统优先零拷贝 rename，跨设备时回退拷贝）
+fn deploy_extracted_model_dir(src_dir: &Path, dest_dir: &Path) -> Result<(), VoiceError> {
+    let mut backup_dir: Option<PathBuf> = None;
+    if dest_dir.exists() {
+        let bak = dest_dir.with_extension("bak-deploy");
+        if bak.exists() {
+            let _ = fs::remove_dir_all(&bak);
+        }
+        fs::rename(dest_dir, &bak).map_err(|e| VoiceError::ModelManagementFailed {
+            message: format!("轮换旧模型目录失败: {}", e),
         })?;
+        backup_dir = Some(bak);
     }
-    if !dest_dir.exists() {
-        fs::create_dir_all(&dest_dir).map_err(|e| VoiceError::ModelManagementFailed {
-            message: format!("创建目标模型目录失败: {}", e),
-        })?;
+
+    let deploy_res = match fs::rename(src_dir, dest_dir) {
+        Ok(()) => Ok(()),
+        Err(_) => copy_dir_all(src_dir, dest_dir),
+    };
+
+    if let Err(e) = deploy_res {
+        if let Some(bak) = backup_dir {
+            let _ = fs::remove_dir_all(dest_dir);
+            let _ = fs::rename(bak, dest_dir);
+        }
+        return Err(VoiceError::ModelManagementFailed {
+            message: format!("部署模型目录至目标路径失败: {}", e),
+        });
     }
 
-    // 将解压出的全部文件复制到目标目录
-    copy_dir_all(&extracted_sub_dir, &dest_dir).map_err(|e| VoiceError::ModelManagementFailed {
-        message: format!("将模型文件同步至目标目录失败: {}", e),
-    })?;
+    if let Some(bak) = backup_dir {
+        let _ = fs::remove_dir_all(bak);
+    }
+    Ok(())
+}
 
-    progress_fn(1.0, "模型部署完成");
-    info!(
-        "[模型下载] 模型 [{}] 成功部署至: {}",
-        meta.name,
-        dest_dir.display()
-    );
-    Ok(dest_dir)
+/// 进度节流上报状态追踪器
+struct DownloadProgressTracker<'a, F> {
+    total_bytes: Option<u64>,
+    source_label: &'a str,
+    last_tick: Instant,
+    bytes_since_tick: u64,
+    progress_fn: &'a mut F,
+}
+
+impl<F: FnMut(f32, &str)> DownloadProgressTracker<'_, F> {
+    fn maybe_report(&mut self, downloaded_bytes: u64, chunk_len: u64) {
+        self.bytes_since_tick = self.bytes_since_tick.saturating_add(chunk_len);
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_tick);
+        if elapsed < Duration::from_millis(150) {
+            return;
+        }
+        let speed = (self.bytes_since_tick as f64) / elapsed.as_secs_f64();
+        self.bytes_since_tick = 0;
+        self.last_tick = now;
+
+        let formatted_speed = format_download_speed(speed);
+        let (fraction, desc) = match self.total_bytes {
+            Some(total) if total > 0 => {
+                let f = (downloaded_bytes as f32) / (total as f32);
+                let percent = (f * 100.0).clamp(0.0, 99.0);
+                (
+                    f.clamp(0.0, 0.98),
+                    format!("{:.1}% · {}", percent, formatted_speed),
+                )
+            }
+            _ => (
+                0.5,
+                format!(
+                    "已下载 {:.1} MB · {}",
+                    (downloaded_bytes as f64) / (1024.0 * 1024.0),
+                    formatted_speed
+                ),
+            ),
+        };
+        (self.progress_fn)(fraction, &desc);
+    }
+}
+
+/// 发起下载 HTTP 请求并校验状态码与声明体积上限
+fn open_download_stream(
+    url: &str,
+    source_label: &str,
+) -> Result<(Option<u64>, impl Read), VoiceError> {
+    let resp =
+        download_http_agent()
+            .get(url)
+            .call()
+            .map_err(|e| VoiceError::ModelManagementFailed {
+                message: format!("连接远程下载源 [{}] 失败: {}", source_label, e),
+            })?;
+
+    if !resp.status().is_success() {
+        return Err(VoiceError::ModelManagementFailed {
+            message: format!(
+                "远程下载源 [{}] 返回异常状态码: {}",
+                source_label,
+                resp.status()
+            ),
+        });
+    }
+
+    let total_bytes = resp.body().content_length();
+    if let Some(total) = total_bytes
+        && total > MAX_MODEL_ARCHIVE_BYTES
+    {
+        return Err(VoiceError::ModelManagementFailed {
+            message: format!(
+                "远程模型归档体积 ({} 字节) 超出安全上限 ({} 字节)",
+                total, MAX_MODEL_ARCHIVE_BYTES
+            ),
+        });
+    }
+
+    Ok((total_bytes, resp.into_body().into_reader()))
+}
+
+/// 将网络响应流分块写入本地文件并触发体积上限校验与节流进度汇报
+fn copy_download_stream<R: Read, F: FnMut(f32, &str)>(
+    reader: &mut R,
+    file: &mut File,
+    tracker: &mut DownloadProgressTracker<'_, F>,
+) -> Result<u64, VoiceError> {
+    let mut buffer = [0u8; 64 * 1024];
+    let mut downloaded_bytes: u64 = 0;
+
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .map_err(|e| VoiceError::ModelManagementFailed {
+                message: format!("数据传输过程中读取网络流中断: {}", e),
+            })?;
+        if n == 0 {
+            break;
+        }
+        downloaded_bytes = downloaded_bytes.saturating_add(n as u64);
+        if downloaded_bytes > MAX_MODEL_ARCHIVE_BYTES {
+            return Err(VoiceError::ModelManagementFailed {
+                message: format!(
+                    "模型下载体积超过安全上限 ({} 字节)，已中止传输",
+                    MAX_MODEL_ARCHIVE_BYTES
+                ),
+            });
+        }
+        file.write_all(&buffer[..n])
+            .map_err(|e| VoiceError::ModelManagementFailed {
+                message: format!("写入磁盘失败: {}", e),
+            })?;
+        tracker.maybe_report(downloaded_bytes, n as u64);
+    }
+
+    Ok(downloaded_bytes)
 }
 
 /// 流式分块下载文件并节流计算进度与速率
@@ -290,190 +452,33 @@ fn download_file_with_progress<F>(
 where
     F: FnMut(f32, &str),
 {
-    let config = ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(10)))
-        .timeout_per_read(Some(Duration::from_secs(60)))
-        .build();
-    let agent: ureq::Agent = config.into();
-
-    let resp = agent
-        .get(url)
-        .call()
-        .map_err(|e| VoiceError::ModelManagementFailed {
-            message: format!("连接远程下载源 [{}] 失败: {}", source_label, e),
-        })?;
-
-    let total_bytes: Option<u64> = resp.body().content_length();
-
-    let mut reader = resp.into_body().into_reader();
+    let (total_bytes, mut reader) = open_download_stream(url, source_label)?;
     let mut file = File::create(target_path).map_err(|e| VoiceError::ModelManagementFailed {
         message: format!("创建本地目标文件失败: {}", e),
     })?;
 
-    let mut buffer = [0u8; 64 * 1024]; // 64KB 缓冲区
-    let mut downloaded_bytes: u64 = 0;
     let start_time = Instant::now();
-    let mut last_progress_time = Instant::now();
-    let mut bytes_since_last_tick: u64 = 0;
-    let mut speed_desc = format!("正在从 {} 下载...", source_label);
-
-    loop {
-        let n = reader
-            .read(&mut buffer)
-            .map_err(|e| VoiceError::ModelManagementFailed {
-                message: format!("数据传输过程中读取网络流中断: {}", e),
-            })?;
-
-        if n == 0 {
-            break;
-        }
-
-        file.write_all(&buffer[..n])
-            .map_err(|e| VoiceError::ModelManagementFailed {
-                message: format!("写入磁盘失败: {}", e),
-            })?;
-
-        downloaded_bytes += n as u64;
-        bytes_since_last_tick += n as u64;
-
-        // 每隔 150 毫秒节流更新一次进度与下载速率，避免高频刷屏
-        let now = Instant::now();
-        let elapsed = now.duration_since(last_progress_time);
-        if elapsed >= Duration::from_millis(150) {
-            let speed = (bytes_since_last_tick as f64) / elapsed.as_secs_f64();
-            bytes_since_last_tick = 0;
-            last_progress_time = now;
-
-            let formatted_speed = format_download_speed(speed);
-            let fraction = match total_bytes {
-                Some(total) if total > 0 => {
-                    let f = (downloaded_bytes as f32) / (total as f32);
-                    let percent = (f * 100.0).clamp(0.0, 99.0);
-                    speed_desc = format!("{:.1}% · {}", percent, formatted_speed);
-                    f.clamp(0.0, 0.98)
-                }
-                _ => {
-                    speed_desc = format!(
-                        "已下载 {:.1} MB · {}",
-                        (downloaded_bytes as f64) / (1024.0 * 1024.0),
-                        formatted_speed
-                    );
-                    0.5
-                }
-            };
-
-            progress_fn(fraction, &speed_desc);
-        }
-    }
+    let mut tracker = DownloadProgressTracker {
+        total_bytes,
+        source_label,
+        last_tick: Instant::now(),
+        bytes_since_tick: 0,
+        progress_fn,
+    };
+    let downloaded_bytes = copy_download_stream(&mut reader, &mut file, &mut tracker)?;
 
     file.flush()
+        .and_then(|()| file.sync_all())
         .map_err(|e| VoiceError::ModelManagementFailed {
             message: format!("刷新磁盘缓存失败: {}", e),
         })?;
 
-    let total_secs = start_time.elapsed().as_secs_f64().max(0.001);
-    let avg_speed = (downloaded_bytes as f64) / total_secs;
+    let avg_speed = (downloaded_bytes as f64) / start_time.elapsed().as_secs_f64().max(0.001);
     info!(
-        "[模型下载] 下载完成，共计 {:.2} MB，平均速率: {}",
+        "[模型下载] 下载完成（源: {}），共计 {:.2} MB，平均速率: {}",
+        tracker.source_label,
         (downloaded_bytes as f64) / (1024.0 * 1024.0),
         format_download_speed(avg_speed)
     );
-
-    Ok(())
-}
-
-/// 校验 tar.bz2 归档内所有条目路径安全，严防绝对路径或 `..` 路径穿越（Tar Slip）
-fn verify_tar_archive_safety(archive_path: &str) -> Result<(), VoiceError> {
-    let output = Command::new("tar")
-        .args(["-tjf", archive_path])
-        .output()
-        .map_err(|e| VoiceError::ModelManagementFailed {
-            message: format!("校验模型归档目录失败: {}", e),
-        })?;
-    if !output.status.success() {
-        return Err(VoiceError::ModelManagementFailed {
-            message: "校验模型归档失败，可能文件损坏或格式不受支持".to_string(),
-        });
-    }
-    let listing = String::from_utf8_lossy(&output.stdout);
-    for raw_entry in listing.lines() {
-        let entry = raw_entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        let path = Path::new(entry);
-        if path.is_absolute()
-            || path
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
-            return Err(VoiceError::ModelManagementFailed {
-                message: format!("模型归档包含不安全的越权路径条目: {}", entry),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// 在指定超时限制内执行 `tar -xjf` 解压，超时强制终止并收割子进程
-fn run_tar_extract_with_timeout(
-    archive_path: &str,
-    dest_dir: &str,
-    timeout: Duration,
-) -> Result<(), VoiceError> {
-    let mut child = Command::new("tar")
-        .args(["-xjf", archive_path, "-C", dest_dir])
-        .spawn()
-        .map_err(|e| VoiceError::ModelManagementFailed {
-            message: format!("启动 tar 解压模型失败: {}", e),
-        })?;
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return Err(VoiceError::ModelManagementFailed {
-                        message: "解压模型归档文件失败，可能文件损坏或缺少解压工具".to_string(),
-                    });
-                }
-                return Ok(());
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(VoiceError::ModelManagementFailed {
-                        message: "解压模型归档超时，已安全中止并清理子进程".to_string(),
-                    });
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(VoiceError::ModelManagementFailed {
-                    message: format!("等待 tar 解压进程失败: {}", e),
-                });
-            }
-        }
-    }
-}
-
-/// 递归将源目录下的所有文件和子目录复制到目标目录
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    if !dst.exists() {
-        fs::create_dir_all(dst)?;
-    }
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let target_path = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &target_path)?;
-        } else {
-            fs::copy(entry.path(), target_path)?;
-        }
-    }
     Ok(())
 }
