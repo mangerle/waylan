@@ -184,7 +184,7 @@ impl AlgoEngine {
     /// 获取用户词库归并自写入时间戳追踪器（供外部 file watcher 抑制自身写盘触发的热重载）
     #[inline]
     pub fn user_dict_compact_tracker(&self) -> Arc<AtomicU64> {
-        self.adaptive.wal.last_compact_time()
+        self.adaptive.last_compact_time()
     }
 
     /// 重置用户自适应学习模型

@@ -6,6 +6,7 @@
 //! 3. 管理常驻文件追加写入句柄，消除高频选词时的重复 open/close 系统调用开销；
 //! 4. 彻底解耦领域纯内存模型与底层物理文件描述符的生命周期管理。
 
+pub mod async_writer;
 pub mod compactor;
 pub mod constants;
 pub mod lock;
@@ -27,6 +28,7 @@ use crate::error::AlgoError;
 use crate::user_adaptive::UserAdaptiveModel;
 use lock::ProcessFileLock;
 
+pub use async_writer::AsyncWalWriter;
 pub use compactor::compact_model;
 pub use constants::{
     WAL_CHECKSUM_SEED, WAL_FORGET_PREFIX, WAL_MAGIC, WAL_MAGIC_V1, WAL_PAIR_PREFIX,
@@ -165,6 +167,23 @@ impl UserAdaptiveWal {
         self.wal_append_counter = 0;
     }
 
+    /// 获取当前已打开 WAL 文件的底层物理标识 `(path, dev, ino, len)`
+    pub(super) fn current_opened_identity(&self) -> Option<(PathBuf, u64, u64, u64)> {
+        let guard = self.wal_file.lock();
+        let opened = guard.as_ref()?;
+        let len = opened.file.metadata().map(|m| m.len()).unwrap_or(0);
+        #[cfg(unix)]
+        let (dev, ino) = (opened.dev, opened.ino);
+        #[cfg(not(unix))]
+        let (dev, ino) = (0, 0);
+        Some((opened.path.clone(), dev, ino, len))
+    }
+
+    /// 显式关闭常驻追加句柄
+    pub(super) fn close_handle(&self) {
+        *self.wal_file.lock() = None;
+    }
+
     /// 判断磁盘上的 WAL 文件是否与当前管理器持有的常驻追加句柄指向同一底层文件（相同 inode 且长度一致）
     pub fn is_same_wal_file(&self, path: &Path) -> bool {
         let guard = self.wal_file.lock();
@@ -216,7 +235,7 @@ impl UserAdaptiveWal {
     /// 校验并初始化打开 WAL 追加写文件句柄（支持旧格式升级与跨进程排他锁）
     fn ensure_wal_file_opened(
         &mut self,
-        model: &mut UserAdaptiveModel,
+        mut model: Option<&mut UserAdaptiveModel>,
         path_ref: &Path,
     ) -> Result<(), AlgoError> {
         {
@@ -237,7 +256,12 @@ impl UserAdaptiveWal {
 
         // 若目标文件已存在但并非当前 V2 WAL 格式，先合并重放旧数据再归并升级为标准 V2 WAL 格式
         if Self::is_legacy_wal_format(path_ref) {
-            self.upgrade_legacy_wal(model, path_ref)?;
+            if let Some(ref mut m) = model {
+                self.upgrade_legacy_wal(m, path_ref)?;
+            } else {
+                let mut temp_model = UserAdaptiveModel::new();
+                self.upgrade_legacy_wal(&mut temp_model, path_ref)?;
+            }
         }
 
         let file = Self::open_wal_append_file(path_ref)?;
@@ -373,7 +397,7 @@ impl UserAdaptiveWal {
     /// 将已序列化的 WAL 帧在跨进程排他锁保护下追加写入磁盘
     fn write_frame_locked(
         &mut self,
-        model: &mut UserAdaptiveModel,
+        model: Option<&mut UserAdaptiveModel>,
         path_ref: &Path,
         frame_buf: &[u8],
     ) -> Result<(), AlgoError> {
@@ -402,6 +426,56 @@ impl UserAdaptiveWal {
         Ok(())
     }
 
+    /// 仅向磁盘追加单条上屏记录帧（不修改内存模型，供异步后台写入器调用）
+    pub(super) fn append_frame_only(
+        &mut self,
+        params: &UserDictAppendParams<'_>,
+    ) -> Result<(), AlgoError> {
+        let Some(frame_buf) =
+            Self::serialize_wal_frame(params.text, params.pinyin, params.timestamp, 1)
+        else {
+            return Ok(());
+        };
+        self.write_frame_locked(None, params.path, &frame_buf)
+    }
+
+    /// 仅向磁盘追加单条词对搭配帧（不修改内存模型，供异步后台写入器调用）
+    pub(super) fn append_pair_frame_only(
+        &mut self,
+        params: &UserDictPairParams<'_>,
+    ) -> Result<(), AlgoError> {
+        if params.prev.is_empty() || params.curr.is_empty() {
+            return Ok(());
+        }
+        let encoded_prev = format!("{WAL_PAIR_PREFIX}{}", params.prev);
+        let Some(frame_buf) =
+            Self::serialize_wal_frame(params.curr, &encoded_prev, params.timestamp, 1)
+        else {
+            return Ok(());
+        };
+        self.write_frame_locked(None, params.path, &frame_buf)
+    }
+
+    /// 仅向磁盘追加单条精准忘词帧（不修改内存模型，供异步后台写入器调用）
+    pub(super) fn append_forget_frame_only(
+        &mut self,
+        params: &UserDictForgetParams<'_>,
+    ) -> Result<(), AlgoError> {
+        if params.text.is_empty() {
+            return Ok(());
+        }
+        let encoded_py = match params.pinyin {
+            Some(py) => format!("{WAL_FORGET_PREFIX}{py}"),
+            None => WAL_FORGET_PREFIX.to_string(),
+        };
+        if let Some(frame_buf) =
+            Self::serialize_wal_frame(params.text, &encoded_py, params.timestamp, 0)
+        {
+            self.write_frame_locked(None, params.path, &frame_buf)?;
+        }
+        Ok(())
+    }
+
     /// 追加单条用户上屏记录到 WAL 中，并同步更新传入的内存领域模型
     pub fn append(
         &mut self,
@@ -414,7 +488,7 @@ impl UserAdaptiveWal {
             return Ok(());
         };
 
-        self.write_frame_locked(model, params.path, &frame_buf)?;
+        self.write_frame_locked(Some(model), params.path, &frame_buf)?;
         model.record_commit(params.text, params.pinyin, params.timestamp);
         Ok(())
     }
@@ -434,7 +508,7 @@ impl UserAdaptiveWal {
         else {
             return Ok(());
         };
-        self.write_frame_locked(model, params.path, &frame_buf)?;
+        self.write_frame_locked(Some(model), params.path, &frame_buf)?;
         model.record_pair(params.prev, params.curr, params.timestamp);
         Ok(())
     }
@@ -455,7 +529,7 @@ impl UserAdaptiveWal {
         if let Some(frame_buf) =
             Self::serialize_wal_frame(params.text, &encoded_py, params.timestamp, 0)
         {
-            self.write_frame_locked(model, params.path, &frame_buf)?;
+            self.write_frame_locked(Some(model), params.path, &frame_buf)?;
         }
         Ok(model.forget_word(params.text, params.pinyin))
     }

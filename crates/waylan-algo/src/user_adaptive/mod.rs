@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 pub use wal::{
-    UserAdaptiveWal, UserDictAppendParams, UserDictForgetParams, UserDictPairParams, WAL_MAGIC,
-    WAL_MAGIC_V1,
+    AsyncWalWriter, UserAdaptiveWal, UserDictAppendParams, UserDictForgetParams,
+    UserDictPairParams, WAL_MAGIC, WAL_MAGIC_V1,
 };
 pub use waylan_core::MAX_USER_DICT_BYTES;
 

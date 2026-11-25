@@ -6,20 +6,22 @@
 //! - **代价与局限**：引擎内部访问词条模型时需经由 `adaptive` 状态机层级转发。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::AlgoError;
 use crate::types::ImportedDictEntry;
-use crate::user_adaptive::{UserAdaptiveModel, UserAdaptiveWal, UserDictAppendParams};
+use crate::user_adaptive::{AsyncWalWriter, UserAdaptiveModel};
 
 /// 用户自适应词频学习与预写日志持久化子模型
 #[derive(Debug, Default)]
 pub struct UserAdaptiveState {
     /// 用户自适应词频纯内存模型
     pub model: UserAdaptiveModel,
-    /// 用户词库预写日志持久化管理器
-    pub wal: UserAdaptiveWal,
-    /// 用户自适应词库持久化文件路径（若设置则每次选词自动追加写盘）
+    /// 用户词库异步预写日志持久化调度器（通过有界通道将磁盘 I/O 移出按键热路径）
+    pub wal: AsyncWalWriter,
+    /// 用户自适应词库持久化文件路径（若设置则每次选词自动异步追加写盘）
     pub dict_path: Option<PathBuf>,
     /// 最近一次交互/选词的时间戳（秒级 UNIX 时间，用于驱动词频半衰期衰减评估）
     pub last_timestamp: u64,
@@ -42,46 +44,30 @@ impl UserAdaptiveState {
         self.dict_path = Some(p);
     }
 
-    /// 记录单次词条上屏并持久化追加至 WAL
+    /// 记录单次词条上屏：立即更新纯内存模型并异步投递 WAL 落盘
     pub fn record_commit(&mut self, text: &str, pinyin: &str, current_timestamp: u64) {
         self.last_timestamp = self.last_timestamp.max(current_timestamp);
+        self.model.record_commit(text, pinyin, self.last_timestamp);
         if let Some(ref path) = self.dict_path {
-            let _ = self.wal.append(
-                &mut self.model,
-                &UserDictAppendParams {
-                    path,
-                    text,
-                    pinyin,
-                    timestamp: self.last_timestamp,
-                },
-            );
-        } else {
-            self.model.record_commit(text, pinyin, self.last_timestamp);
+            self.wal
+                .send_append(path, text, pinyin, self.last_timestamp);
         }
     }
 
-    /// 记录用户词对搭配并持久化追加至 WAL
+    /// 记录用户词对搭配：立即更新纯内存模型并异步投递 WAL 落盘
     pub fn record_pair(&mut self, prev: &str, curr: &str, current_timestamp: u64) {
         if prev.is_empty() || curr.is_empty() {
             return;
         }
         self.last_timestamp = self.last_timestamp.max(current_timestamp);
+        self.model.record_pair(prev, curr, self.last_timestamp);
         if let Some(ref path) = self.dict_path {
-            let _ = self.wal.append_pair(
-                &mut self.model,
-                &crate::user_adaptive::UserDictPairParams {
-                    path,
-                    prev,
-                    curr,
-                    timestamp: self.last_timestamp,
-                },
-            );
-        } else {
-            self.model.record_pair(prev, curr, self.last_timestamp);
+            self.wal
+                .send_append_pair(path, prev, curr, self.last_timestamp);
         }
     }
 
-    /// 忘记指定用户词及其关联词对搭配，并同步写入 WAL 遗忘帧
+    /// 忘记指定用户词及其关联词对搭配，并异步写入 WAL 遗忘帧
     pub fn forget_word(
         &mut self,
         text: &str,
@@ -92,38 +78,35 @@ impl UserAdaptiveState {
             return false;
         }
         self.last_timestamp = self.last_timestamp.max(current_timestamp);
+        let removed = self.model.forget_word(text, pinyin);
         if let Some(ref path) = self.dict_path {
             self.wal
-                .append_forget(
-                    &mut self.model,
-                    &crate::user_adaptive::UserDictForgetParams {
-                        path,
-                        text,
-                        pinyin,
-                        timestamp: self.last_timestamp,
-                    },
-                )
-                .unwrap_or_else(|_| self.model.forget_word(text, pinyin))
-        } else {
-            self.model.forget_word(text, pinyin)
+                .send_append_forget(path, text, pinyin, self.last_timestamp);
         }
+        removed
     }
 
-    /// 强制执行用户自适应词库的归并与刷盘持久化 (WAL Compaction)
+    /// 强制执行用户自适应词库的同步归并与刷盘持久化 (WAL Compaction)
     pub fn compact(&mut self) -> Result<(), AlgoError> {
         if let Some(ref path) = self.dict_path {
-            self.wal.compact(&self.model, path)?;
+            self.wal.compact_sync(path, &self.model)?;
         }
         Ok(())
     }
 
-    /// 检查并在达到压缩阈值时对用户词库执行归并压缩（通常在会话失焦时调用）
+    /// 检查并在达到压缩阈值时异步触发用户词库归并压缩（通常在会话失焦时调用）
     pub fn maybe_compact(&mut self) -> Result<bool, AlgoError> {
         if let Some(ref path) = self.dict_path {
-            self.wal.maybe_compact(&self.model, path)
+            Ok(self.wal.maybe_compact(path, &self.model))
         } else {
             Ok(false)
         }
+    }
+
+    /// 获取最近一次内部 WAL 归并落盘时间戳追踪器
+    #[inline]
+    pub fn last_compact_time(&self) -> Arc<AtomicU64> {
+        self.wal.last_compact_time()
     }
 
     /// 判断磁盘上的 WAL 文件是否与当前持有的常驻追加句柄指向同一文件
