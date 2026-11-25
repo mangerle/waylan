@@ -168,6 +168,39 @@ pub(crate) fn is_offline_model_dir_complete(path: &Path, model_type: OfflineMode
     path.is_dir() && detect_offline_files(path, model_type).is_some()
 }
 
+/// 根据模型目录内部权重文件布局及目录命名自动推断离线 ASR 架构类型
+///
+/// # 设计原理
+/// - **实现初衷**：设置中心切换或导入本地自定义模型目录时，不能盲目保持上一个模型的 `model_type`，
+///   需由真实文件结构自动判定架构以避免推理期参数错配。
+/// - **核心优势**：优先依据唯一特征权重文件名探测，仅在权重格式共用的情况参考目录名兜底，
+///   全无命中时默认回落到 `SenseVoice`。
+pub fn infer_offline_model_type(path: &Path) -> OfflineModelType {
+    if path.is_dir() {
+        if detect_offline_files(path, OfflineModelType::Qwen3Asr).is_some() {
+            return OfflineModelType::Qwen3Asr;
+        }
+        if detect_offline_files(path, OfflineModelType::FunAsrNano).is_some() {
+            return OfflineModelType::FunAsrNano;
+        }
+        let lower_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if lower_name.contains("firered") || lower_name.contains("fire-red") {
+            return OfflineModelType::FireRedAsr2;
+        }
+        if detect_offline_files(path, OfflineModelType::SenseVoice).is_some() {
+            return OfflineModelType::SenseVoice;
+        }
+        if detect_offline_files(path, OfflineModelType::FireRedAsr2).is_some() {
+            return OfflineModelType::FireRedAsr2;
+        }
+    }
+    OfflineModelType::SenseVoice
+}
+
 /// 根据探测到的模型文件配置并创建 sherpa-onnx 离线识别器
 fn create_offline_recognizer(
     detected: &DetectedOfflineModel,

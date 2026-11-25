@@ -6,15 +6,15 @@
 //!   后台复制、结果回传与配置落盘流程；大文件 I/O 派发至独立后台线程，杜绝大模型复制导致 Slint UI 线程挂起假死。
 //! - **代价与局限**：模型文件复制需要目标磁盘具有足够的剩余空间。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
 use waylan_core::config::AppConfig;
-use waylan_voice::{ModelSubdirectory, VadModelType};
+use waylan_voice::{ModelSubdirectory, VadModelType, VoiceEngineType, infer_offline_model_type};
 
-use super::{SaveConfigParams, save_config_and_notify_status};
+use super::commit_config_transaction;
 use crate::SettingsWindow;
 use crate::callbacks::{pick_directory_dialog_async, pick_file_dialog_async};
 use crate::sync::update_config_from_window;
@@ -142,9 +142,12 @@ fn register_model_import(
     );
 }
 
-/// 将导入的 ASR 复合模型包目录写入配置
+/// 将导入的 ASR 复合模型包目录写入配置，并同步切换为离线引擎与推断的模型架构
 fn apply_asr_model_path(cfg: &mut AppConfig, path: &str) {
+    cfg.voice.engine_type = VoiceEngineType::Offline;
+    cfg.voice.selected_asr = None;
     cfg.voice.offline.model_dir = Some(path.to_string());
+    cfg.voice.offline.model_type = infer_offline_model_type(Path::new(path));
 }
 
 /// 将导入的 VAD 神经网络模型路径写入配置
@@ -318,15 +321,12 @@ fn handle_imported_model_event(params: ImportedModelEventParams<'_>) {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let mut cfg = cfg_cell.lock().clone();
-            update_config_from_window(win, &mut cfg);
-            apply_fn(&mut cfg, &imported_path.to_string_lossy());
-            save_config_and_notify_status(SaveConfigParams {
-                win,
-                current_cfg_cell: cfg_cell,
-                cfg,
-                success_msg: &format!("成功导入 {} 模型: {}", label, name),
-                fail_prefix: &format!("保存 {} 模型配置失败", label),
+            let path_str = imported_path.to_string_lossy().to_string();
+            let fail_prefix = format!("保存 {} 模型配置失败", label);
+            let _ = commit_config_transaction(win, cfg_cell, &fail_prefix, true, |cfg| {
+                update_config_from_window(win, cfg);
+                apply_fn(cfg, &path_str);
+                Ok(Some(format!("成功导入 {} 模型: {}", label, name)))
             });
         }
         None => {

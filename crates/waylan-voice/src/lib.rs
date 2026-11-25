@@ -33,7 +33,7 @@ pub use model_manager::{
 };
 pub use recognizer::{
     CloudVoiceRecognizer, MockVoiceRecognizer, OfflineVoiceRecognizer, VoiceRecognizer,
-    create_recognizer, encode_pcm_to_wav, test_cloud_profile_connection,
+    create_recognizer, encode_pcm_to_wav, infer_offline_model_type, test_cloud_profile_connection,
 };
 pub use session::{VoiceEvent, VoiceSessionController, VoiceSessionOptions};
 pub use vad::{

@@ -103,8 +103,11 @@ fn apply_start_edit_cloud_profile(ctx: &CloudProfileCallbackContext, idx: i32) {
     let Some(win) = ctx.window_weak.upgrade() else {
         return;
     };
+    let Ok(index) = usize::try_from(idx) else {
+        return;
+    };
     let guard = ctx.cfg_cell.lock();
-    let Some(profile) = guard.voice.cloud_profiles.get(idx as usize) else {
+    let Some(profile) = guard.voice.cloud_profiles.get(index) else {
         return;
     };
     *ctx.editing_id.borrow_mut() = Some(profile.id.clone());
@@ -142,7 +145,10 @@ fn apply_delete_cloud_profile(ctx: &CloudProfileCallbackContext, idx: i32) {
     let Some(win) = ctx.window_weak.upgrade() else {
         return;
     };
-    handle_delete_cloud_profile(&win, &ctx.cfg_cell, &ctx.editing_id, idx as usize);
+    let Ok(index) = usize::try_from(idx) else {
+        return;
+    };
+    handle_delete_cloud_profile(&win, &ctx.cfg_cell, &ctx.editing_id, index);
 }
 
 /// 云端语音服务表单提交数据
@@ -219,6 +225,9 @@ fn apply_cloud_profile_update(
         p.endpoint = values.endpoint;
         p.api_key = values.api_key;
         p.model = values.model;
+        if is_active {
+            cfg.voice.cloud.provider = p.provider;
+        }
     }
     display_name
 }
@@ -243,7 +252,7 @@ fn apply_cloud_profile_insert(cfg: &mut AppConfig, values: CloudProfileValues) -
 
 /// 统一执行配置修改、磁盘持久化、内存回写与窗口同步事务
 ///
-/// 复用全局 `commit_config_transaction` 持锁完成写盘，防止并发 Lost Update 竞态。
+/// 复用全局 `commit_config_transaction` 持锁完成写盘；仅在写盘真正成功后返回状态文本，防止上层误判成功。
 fn commit_config_change<F>(
     win: &SettingsWindow,
     cfg_cell: &Arc<Mutex<AppConfig>>,
@@ -254,13 +263,13 @@ where
     F: FnOnce(&mut AppConfig) -> Option<String>,
 {
     let mut result_msg = None;
-    super::commit_config_transaction(win, cfg_cell, error_prefix, true, |next_cfg| {
+    let saved = super::commit_config_transaction(win, cfg_cell, error_prefix, true, |next_cfg| {
         update_config_from_window(win, next_cfg);
         let msg = mutate(next_cfg);
         result_msg = msg.clone();
         Ok(msg)
     });
-    result_msg
+    saved.and(result_msg)
 }
 
 /// 处理保存/更新云端语音服务配置
@@ -314,6 +323,7 @@ fn handle_delete_cloud_profile(
         {
             cfg.voice.selected_asr = None;
             cfg.voice.engine_type = VoiceEngineType::Offline;
+            cfg.voice.cloud = CloudAsrConfig::default();
         }
         Some(format!("已删除云端服务: {}", removed.name))
     });
@@ -340,7 +350,10 @@ fn handle_test_cloud_profile(
         ));
         return;
     }
-    let index = idx as usize;
+    let Ok(index) = usize::try_from(idx) else {
+        testing_flag.store(false, Ordering::Release);
+        return;
+    };
     let cfg = current_cfg_cell.lock().clone();
     if let Some(p) = cfg.voice.cloud_profiles.get(index) {
         let profile_name = p.name.clone();

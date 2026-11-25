@@ -9,13 +9,17 @@ pub mod cloud_profiles;
 pub mod model_download;
 pub mod model_import;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use slint::SharedString;
 use waylan_core::config::AppConfig;
-use waylan_core::{OfflineModelType, VoiceEngineType};
-use waylan_voice::{find_preset_model_by_id, get_preset_model_dest_dir, is_preset_model_installed};
+use waylan_core::{CloudAsrConfig, VoiceEngineType};
+use waylan_voice::{
+    find_preset_model_by_id, get_preset_model_dest_dir, infer_offline_model_type,
+    is_preset_model_installed,
+};
 
 use crate::SettingsWindow;
 use crate::sync::sync_config_to_window;
@@ -99,7 +103,7 @@ pub(crate) fn apply_asr_model_selection(
         cfg.voice.engine_type = VoiceEngineType::Offline;
         cfg.voice.selected_asr = None;
         cfg.voice.offline.model_dir = Some(local_path.to_string());
-        let _ = OfflineModelType::SenseVoice;
+        cfg.voice.offline.model_type = infer_offline_model_type(Path::new(local_path));
         return Ok(Some(
             "已成功切换至本地自定义 ASR 模型，配置已落盘热重载生效".to_string(),
         ));
@@ -116,37 +120,11 @@ pub(crate) fn apply_asr_model_selection(
         };
         cfg.voice.engine_type = VoiceEngineType::Cloud;
         cfg.voice.selected_asr = Some(format!("cloud:{}", cloud_id));
-        cfg.voice.cloud.endpoint = profile.endpoint;
-        cfg.voice.cloud.api_key = profile.api_key;
-        cfg.voice.cloud.model = profile.model;
+        cfg.voice.cloud = CloudAsrConfig::from(&profile);
         return Ok(Some(format!(
             "已成功切换至 [{}] 云端转写模式，配置已落盘生效",
             profile.name
         )));
     }
     Ok(None)
-}
-
-/// 保存配置并更新主窗口全局状态栏提示的参数对象
-pub(crate) struct SaveConfigParams<'a> {
-    pub win: &'a SettingsWindow,
-    pub current_cfg_cell: &'a Arc<Mutex<AppConfig>>,
-    pub cfg: AppConfig,
-    pub success_msg: &'a str,
-    pub fail_prefix: &'a str,
-}
-
-/// 保存配置并更新主窗口全局状态栏提示（跨子模块复用）
-pub(crate) fn save_config_and_notify_status(params: SaveConfigParams<'_>) {
-    let SaveConfigParams {
-        win,
-        current_cfg_cell,
-        cfg,
-        success_msg,
-        fail_prefix,
-    } = params;
-    let _ = commit_config_transaction(win, current_cfg_cell, fail_prefix, true, |target| {
-        *target = cfg;
-        Ok(Some(success_msg.to_string()))
-    });
 }

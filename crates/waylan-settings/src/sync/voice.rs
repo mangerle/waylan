@@ -149,14 +149,24 @@ impl AsrModelListBuilder {
     fn append_preset_models(&mut self, cfg: &AppConfig, is_cloud_mode: bool) {
         for meta in waylan_voice::PRESET_ASR_MODELS {
             let is_installed = waylan_voice::is_preset_model_installed(meta);
-            let is_configured = !is_cloud_mode
-                && (cfg.voice.offline.model_type == meta.model_type
-                    || cfg
-                        .voice
-                        .offline
-                        .model_dir
-                        .as_deref()
-                        .is_some_and(|d| d.contains(meta.dir_name)));
+            let is_configured = if is_cloud_mode {
+                false
+            } else if let Some(dir) = cfg
+                .voice
+                .offline
+                .model_dir
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+            {
+                std::path::Path::new(dir)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| name == meta.dir_name)
+                    || dir.contains(meta.dir_name)
+            } else {
+                cfg.voice.offline.model_type == meta.model_type && meta.id == "sensevoice-small"
+            };
 
             let state = match (is_installed, is_configured) {
                 (true, true) => AsrCardState::PresetActive,
@@ -404,18 +414,23 @@ fn update_voice_models_from_window(window: &SettingsWindow, cfg: &mut AppConfig)
 
 /// 依据界面统一模型列表中的当前索引同步 ASR 识别引擎配置
 fn update_asr_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
-    let asr_idx = window.get_asr_model_index() as usize;
+    let Ok(asr_idx) = usize::try_from(window.get_asr_model_index()) else {
+        return;
+    };
     let models_rc = window.get_asr_models();
     let Some(item) = models_rc.row_data(asr_idx) else {
         return;
     };
-    let _ = crate::voice::apply_asr_model_selection(cfg, item.id.as_str(), false);
+    // 仅允许写回已安装到本地的预置模型、本地自定义目录或云端档案，禁止把未下载的预置模型写入配置
+    let _ = crate::voice::apply_asr_model_selection(cfg, item.id.as_str(), true);
 }
 
 /// 依据界面下拉索引同步 VAD 端点检测模型类型与模型路径
 fn update_vad_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
     let vad_models = waylan_voice::list_vad_models();
-    let vad_idx = window.get_vad_model_index() as usize;
+    let Ok(vad_idx) = usize::try_from(window.get_vad_model_index()) else {
+        return;
+    };
     if let Some(m) = vad_models.get(vad_idx) {
         if m.path.as_deref() == Some("__energy__") {
             cfg.voice.vad.vad_type = VadModelType::Energy;
@@ -434,7 +449,9 @@ fn update_ns_model_from_window(window: &SettingsWindow, cfg: &mut AppConfig) {
         .into_iter()
         .filter(|m| m.path.as_deref() != Some("__bypass__"))
         .collect();
-    let ns_idx = window.get_ns_model_index() as usize;
+    let Ok(ns_idx) = usize::try_from(window.get_ns_model_index()) else {
+        return;
+    };
     if let Some(m) = ns_filtered.get(ns_idx) {
         cfg.voice.afe.ns_engine = match m.path.as_deref() {
             Some("__deepfilternet__") => NsEngineType::DeepFilterNet,
