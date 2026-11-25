@@ -8,6 +8,7 @@
 //! - **代价与局限**：独立监听线程常驻阻塞于 D-Bus 消息读取，通过 RAII 句柄在退场时关闭连接安全回收。
 
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 
@@ -20,15 +21,17 @@ use zbus::message::Message;
 
 use crate::IbusShutdownCoordinator;
 
-/// 后台常驻引擎变更信号监听器 RAII 句柄，Drop 时自动关闭连接唤醒并回收工作线程
+/// 后台常驻引擎变更信号监听器 RAII 句柄，Drop 时自动关闭连接与中断退避等待并回收工作线程
 pub(crate) struct EngineChangeListenerHandle {
     conn_slot: Arc<Mutex<Option<Connection>>>,
+    stop_tx: SyncSender<()>,
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl EngineChangeListenerHandle {
     /// 停止后台引擎信号监听线程并回收其句柄
     pub(crate) fn stop(&mut self) {
+        let _ = self.stop_tx.try_send(());
         if let Some(conn) = self.conn_slot.lock().take() {
             let _ = zbus::block_on(async { conn.close().await });
         }
@@ -61,6 +64,7 @@ fn run_engine_change_listener(
     ibus_addr: String,
     coordinator: IbusShutdownCoordinator,
     conn_slot: Arc<Mutex<Option<Connection>>>,
+    stop_rx: Receiver<()>,
 ) {
     while !coordinator.is_shutting_down() {
         let conn_res = zbus::block_on(async {
@@ -69,7 +73,9 @@ fn run_engine_change_listener(
                 .await
         });
         let Ok(conn) = conn_res else {
-            std::thread::sleep(Duration::from_millis(500));
+            if stop_rx.recv_timeout(Duration::from_millis(500)).is_ok() {
+                break;
+            }
             continue;
         };
         if coordinator.is_shutting_down() {
@@ -100,10 +106,11 @@ fn run_engine_change_listener(
             }
         });
         *conn_slot.lock() = None;
-        if coordinator.is_shutting_down() {
+        if coordinator.is_shutting_down()
+            || stop_rx.recv_timeout(Duration::from_millis(200)).is_ok()
+        {
             break;
         }
-        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -115,14 +122,18 @@ pub(crate) fn spawn_engine_change_listener(
     let conn_slot = Arc::new(Mutex::new(None));
     let conn_slot_thread = Arc::clone(&conn_slot);
     let addr_thread = ibus_addr.to_string();
+    let (stop_tx, stop_rx) = sync_channel(1);
     let handle = ThreadBuilder::new()
         .name("waylan-engine-listener".to_string())
-        .spawn(move || run_engine_change_listener(addr_thread, coordinator, conn_slot_thread))
+        .spawn(move || {
+            run_engine_change_listener(addr_thread, coordinator, conn_slot_thread, stop_rx)
+        })
         .map_err(|e| warn!("[微澜 IBus 警告] 创建引擎变更信号监听线程失败: {}", e))
         .ok();
 
     EngineChangeListenerHandle {
         conn_slot,
+        stop_tx,
         join_handle: handle,
     }
 }

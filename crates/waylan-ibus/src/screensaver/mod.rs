@@ -15,7 +15,7 @@ mod listener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use log::info;
 use waylan_sys::LoopWakeup;
@@ -83,6 +83,7 @@ impl ScreenLockQuery for SystemScreenSaverQuery {
 
 /// 锁屏状态残留自愈器
 pub(crate) struct ScreenLockHealer<Q = SystemScreenSaverQuery> {
+    anchor: Instant,
     last_check_ms: AtomicU64,
     throttle_ms: u64,
     query: Q,
@@ -106,7 +107,8 @@ impl<Q: ScreenLockQuery> ScreenLockHealer<Q> {
     /// 创建带有指定查询器与防抖节流周期的自愈器
     pub(crate) fn with_throttle(query: Q, throttle_ms: u64) -> Self {
         Self {
-            last_check_ms: AtomicU64::new(0),
+            anchor: Instant::now(),
+            last_check_ms: AtomicU64::new(u64::MAX),
             throttle_ms,
             query,
         }
@@ -125,7 +127,7 @@ impl<Q: ScreenLockQuery> ScreenLockHealer<Q> {
     }
 
     /// 按键级锁屏残留即时自愈：
-    /// 当内部状态仍处于锁屏直通模式时，按节流周期非阻塞触发后台异步核实，
+    /// 当内部状态仍处于锁屏直通模式时，基于单调时钟按节流周期非阻塞触发后台异步核实，
     /// 并基于最新原子状态即时解除直通保护。
     pub(crate) fn maybe_heal_on_key(
         &self,
@@ -134,12 +136,9 @@ impl<Q: ScreenLockQuery> ScreenLockHealer<Q> {
         loop_wakeup: Option<&LoopWakeup>,
     ) -> bool {
         if !is_password_context && *is_screen_locked {
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
+            let now_ms = self.anchor.elapsed().as_millis() as u64;
             let last_ms = self.last_check_ms.load(Ordering::Acquire);
-            if now_ms.saturating_sub(last_ms) >= self.throttle_ms {
+            if last_ms == u64::MAX || now_ms.saturating_sub(last_ms) >= self.throttle_ms {
                 self.last_check_ms.store(now_ms, Ordering::Release);
                 self.query.request_async_probe();
                 if !self.query.is_screen_locked() {

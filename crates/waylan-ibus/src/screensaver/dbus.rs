@@ -22,42 +22,52 @@ const DBUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 static CACHED_SESSION_CONN: Mutex<Option<Connection>> = Mutex::new(None);
 static CACHED_SYSTEM_CONN: Mutex<Option<Connection>> = Mutex::new(None);
 
-/// 获取或安全重建可复用的 Session 总线探测长连接
-fn get_or_reconnect_session() -> Option<Connection> {
-    let mut lock = CACHED_SESSION_CONN.lock();
-    if let Some(ref conn) = *lock
+/// 在全局连接缓存锁外安全获取或按需重建 D-Bus 连接，避免持锁阻塞 I/O 拖死调用线程
+fn get_or_reconnect_bus(
+    cache: &Mutex<Option<Connection>>,
+    builder: fn() -> Option<Connection>,
+) -> Option<Connection> {
+    if let Some(ref conn) = *cache.lock()
         && !conn.is_closed()
     {
         return Some(conn.clone());
     }
-    let new_conn = zbus::block_on(async {
-        ConnectionBuilder::session()
-            .method_timeout(DBUS_PROBE_TIMEOUT)
-            .build()
-            .await
-            .ok()
-    });
-    *lock = new_conn.clone();
-    new_conn
+
+    let built = builder()?;
+    let mut lock = cache.lock();
+    if let Some(ref existing) = *lock
+        && !existing.is_closed()
+    {
+        return Some(existing.clone());
+    }
+    *lock = Some(built.clone());
+    Some(built)
+}
+
+/// 获取或安全重建可复用的 Session 总线探测长连接
+fn get_or_reconnect_session() -> Option<Connection> {
+    get_or_reconnect_bus(&CACHED_SESSION_CONN, || {
+        zbus::block_on(async {
+            ConnectionBuilder::session()
+                .method_timeout(DBUS_PROBE_TIMEOUT)
+                .build()
+                .await
+                .ok()
+        })
+    })
 }
 
 /// 获取或安全重建可复用的 System 总线探测长连接
 fn get_or_reconnect_system() -> Option<Connection> {
-    let mut lock = CACHED_SYSTEM_CONN.lock();
-    if let Some(ref conn) = *lock
-        && !conn.is_closed()
-    {
-        return Some(conn.clone());
-    }
-    let new_conn = zbus::block_on(async {
-        ConnectionBuilder::system()
-            .method_timeout(DBUS_PROBE_TIMEOUT)
-            .build()
-            .await
-            .ok()
-    });
-    *lock = new_conn.clone();
-    new_conn
+    get_or_reconnect_bus(&CACHED_SYSTEM_CONN, || {
+        zbus::block_on(async {
+            ConnectionBuilder::system()
+                .method_timeout(DBUS_PROBE_TIMEOUT)
+                .build()
+                .await
+                .ok()
+        })
+    })
 }
 
 /// 查询 `systemd-logind` 系统总线中当前会话的 `LockedHint` 属性

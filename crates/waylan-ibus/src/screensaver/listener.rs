@@ -9,9 +9,9 @@
 //!   2. 监听线程退出时通过广播唤醒与 `Connection::close()` 即时中断阻塞迭代，停机无卡死。
 //! - **代价与局限**：需维护最多三个轻量常驻监听/探测线程句柄并在 `Drop` 时统一回收。
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 
@@ -28,6 +28,37 @@ use super::dbus::{
 };
 use crate::IbusShutdownCoordinator;
 
+/// 可即时中断的重连退避通知器，避免监听线程在 `sleep` 中拖慢停机回收
+#[derive(Default)]
+struct StopSignal {
+    stopped: StdMutex<bool>,
+    cv: Condvar,
+}
+
+impl StopSignal {
+    /// 广播停机信号，立即唤醒所有等待重试的监听线程
+    fn notify_stop(&self) {
+        if let Ok(mut guard) = self.stopped.lock() {
+            *guard = true;
+            self.cv.notify_all();
+        }
+    }
+
+    /// 等待指定退避时间，若期间收到停机信号立即返回 `true`
+    fn wait_or_stopped(&self, timeout: Duration) -> bool {
+        let Ok(guard) = self.stopped.lock() else {
+            return true;
+        };
+        if *guard {
+            return true;
+        }
+        let Ok((after, _)) = self.cv.wait_timeout_while(guard, timeout, |s| !*s) else {
+            return true;
+        };
+        *after
+    }
+}
+
 /// 后台常驻锁屏信号监听器 RAII 句柄，Drop 时自动唤醒并回收所有工作线程
 pub(crate) struct ScreenSaverListenerHandle {
     session_handle: Option<JoinHandle<()>>,
@@ -35,11 +66,14 @@ pub(crate) struct ScreenSaverListenerHandle {
     probe_handle: Option<JoinHandle<()>>,
     session_conn: Arc<Mutex<Option<Connection>>>,
     system_conn: Arc<Mutex<Option<Connection>>>,
+    stop_signal: Arc<StopSignal>,
 }
 
 impl ScreenSaverListenerHandle {
     /// 停止所有后台锁屏监听与探测线程并回收句柄
     pub(crate) fn stop(&mut self) {
+        self.stop_signal.notify_stop();
+
         // 1. 主动关闭 Session 总线连接以即时中断 ScreenSaver MessageStream，避免广播虚假信号
         if let Some(conn) = self.session_conn.lock().take() {
             let _ = zbus::block_on(async { conn.close().await });
@@ -74,10 +108,13 @@ fn run_session_screen_saver_listener(
     screen_locked: Arc<AtomicBool>,
     coordinator: IbusShutdownCoordinator,
     conn_slot: Arc<Mutex<Option<Connection>>>,
+    stop_signal: Arc<StopSignal>,
 ) {
     while !coordinator.is_shutting_down() {
         let Ok(conn) = zbus::block_on(async { Connection::session().await }) else {
-            std::thread::sleep(Duration::from_millis(500));
+            if stop_signal.wait_or_stopped(Duration::from_millis(500)) {
+                break;
+            }
             continue;
         };
         if coordinator.is_shutting_down() {
@@ -109,10 +146,10 @@ fn run_session_screen_saver_listener(
         });
         *conn_slot.lock() = None;
 
-        if coordinator.is_shutting_down() {
+        if coordinator.is_shutting_down() || stop_signal.wait_or_stopped(Duration::from_millis(200))
+        {
             break;
         }
-        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -121,10 +158,13 @@ fn run_system_logind_listener(
     screen_locked: Arc<AtomicBool>,
     coordinator: IbusShutdownCoordinator,
     conn_slot: Arc<Mutex<Option<Connection>>>,
+    stop_signal: Arc<StopSignal>,
 ) {
     while !coordinator.is_shutting_down() {
         let Ok(conn) = zbus::block_on(async { Connection::system().await }) else {
-            std::thread::sleep(Duration::from_millis(1000));
+            if stop_signal.wait_or_stopped(Duration::from_millis(1000)) {
+                break;
+            }
             continue;
         };
         if coordinator.is_shutting_down() {
@@ -149,10 +189,10 @@ fn run_system_logind_listener(
         });
         *conn_slot.lock() = None;
 
-        if coordinator.is_shutting_down() {
+        if coordinator.is_shutting_down() || stop_signal.wait_or_stopped(Duration::from_millis(500))
+        {
             break;
         }
-        std::thread::sleep(Duration::from_millis(500));
     }
 }
 
@@ -187,14 +227,22 @@ pub(crate) fn spawn_screen_saver_listener_with_probe(
     coordinator: IbusShutdownCoordinator,
     probe_rx: Option<Receiver<()>>,
 ) -> ScreenSaverListenerHandle {
+    let stop_signal = Arc::new(StopSignal::default());
+
     let session_conn = Arc::new(Mutex::new(None));
     let session_flag = Arc::clone(&screen_locked);
     let session_coord = coordinator.clone();
     let session_conn_slot = Arc::clone(&session_conn);
+    let session_stop = Arc::clone(&stop_signal);
     let session_handle = ThreadBuilder::new()
         .name("waylan-screen-saver-listener".to_string())
         .spawn(move || {
-            run_session_screen_saver_listener(session_flag, session_coord, session_conn_slot)
+            run_session_screen_saver_listener(
+                session_flag,
+                session_coord,
+                session_conn_slot,
+                session_stop,
+            )
         })
         .map_err(|e| warn!("[微澜 IBus 警告] 创建会话锁屏信号监听线程失败: {}", e))
         .ok();
@@ -203,9 +251,12 @@ pub(crate) fn spawn_screen_saver_listener_with_probe(
     let system_flag = Arc::clone(&screen_locked);
     let system_coord = coordinator.clone();
     let conn_slot = Arc::clone(&system_conn);
+    let system_stop = Arc::clone(&stop_signal);
     let system_handle = ThreadBuilder::new()
         .name("waylan-logind-listener".to_string())
-        .spawn(move || run_system_logind_listener(system_flag, system_coord, conn_slot))
+        .spawn(move || {
+            run_system_logind_listener(system_flag, system_coord, conn_slot, system_stop)
+        })
         .map_err(|e| warn!("[微澜 IBus 警告] 创建 logind 锁屏信号监听线程失败: {}", e))
         .ok();
 
@@ -225,6 +276,7 @@ pub(crate) fn spawn_screen_saver_listener_with_probe(
         probe_handle,
         session_conn,
         system_conn,
+        stop_signal,
     }
 }
 
