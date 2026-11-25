@@ -115,14 +115,14 @@ impl ImeRuntime {
     pub fn sync_shared_mode(&mut self) -> Option<InputMode> {
         let mut mode_changed = None;
         if let Some(ref flags) = self.shared_flags {
-            let snap = flags.snapshot();
+            let snap = flags.consume_pending_snapshot();
 
             // 1. 同步 CapsLock 大写锁定状态
             if self.core.is_caps_locked() != snap.is_caps_locked {
                 self.core.set_caps_lock(snap.is_caps_locked);
             }
 
-            // 2. 同步中英文输入语言模式
+            // 2. 同步中英文输入语言模式（同步更新当前窗口记忆，避免切回窗口模式回退）
             let current_zh = matches!(
                 self.core.input_mode(),
                 InputMode::Chinese | InputMode::VMode
@@ -134,6 +134,7 @@ impl ImeRuntime {
                     InputMode::English
                 };
                 self.core.set_input_mode(new_mode);
+                self.window_tracker.update_active_mode(new_mode);
                 mode_changed = Some(new_mode);
             }
 

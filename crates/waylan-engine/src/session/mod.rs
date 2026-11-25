@@ -269,6 +269,23 @@ impl ImeCoreSession {
         self.modifiers.locked
     }
 
+    /// 记录最近一次拼音整句/词组上屏的撤回快照（供紧随其后的 `Ctrl+Backspace` 恢复编辑态）
+    #[inline]
+    pub(crate) fn record_undo_snapshot(
+        &mut self,
+        raw_pinyin: String,
+        committed_text: String,
+        now: u64,
+    ) {
+        if !raw_pinyin.is_empty() && !committed_text.is_empty() {
+            self.last_commit_undo = Some(LastCommitUndoState {
+                raw_pinyin,
+                committed_text,
+                committed_at: now,
+            });
+        }
+    }
+
     /// 显式同步修饰键掩码
     #[inline]
     pub fn set_modifiers(&mut self, depressed: u32, locked: u32) {

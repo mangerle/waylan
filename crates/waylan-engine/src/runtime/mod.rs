@@ -27,7 +27,7 @@ pub mod window_tracker;
 mod tests;
 
 pub use candidate_builder::{CandidateBoxBuildOptions, build_common_candidate_box_state};
-pub use types::ProcessKeyEventParams;
+pub use types::{CandidateCommitOutcome, CandidateSelectTarget, ProcessKeyEventParams};
 pub use window_tracker::WindowModeTracker;
 
 use crate::session::{ImeCoreSession, InputDecorationFlags};

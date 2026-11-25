@@ -270,27 +270,15 @@ fn handle_pointer_select_candidate(state: &mut WaylanV2Session, idx: usize) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let select_res = if state.runtime.core.is_grid_expanded() {
+    if let Some(outcome) =
         state
             .runtime
-            .core
-            .engine
-            .select_candidate_from_all(idx, now)
-    } else {
-        state.runtime.core.engine.select_candidate(idx, now)
-    };
-    if let Some((commit_text, remaining_len)) = select_res {
-        state.runtime.core.collapse_grid();
-        state
-            .runtime
-            .core
-            .punctuation_processor_mut()
-            .record_commit(&commit_text);
-        if remaining_len == 0 {
-            state.commit_text(&commit_text);
+            .commit_candidate(waylan_engine::CandidateSelectTarget::Auto, idx, now)
+    {
+        if let Some(formatted) = outcome.remaining_preedit {
+            state.commit_partial(&outcome.committed_text, &formatted);
         } else {
-            let formatted = state.runtime.core.engine.formatted_preedit();
-            state.commit_partial(&commit_text, &formatted);
+            state.commit_text(&outcome.committed_text);
         }
     }
 }

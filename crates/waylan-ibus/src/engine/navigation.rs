@@ -55,33 +55,12 @@ impl IbusEngineService {
             update_ui: true,
             ..Default::default()
         };
-        let committed = if guard.runtime.core.is_card_expanded() {
-            let sel = guard.runtime.core.selected_global_index();
-            guard.runtime.core.collapse_card();
-            guard
-                .runtime
-                .core
-                .engine
-                .select_expanded_item(sel, index as usize)
-        } else {
-            guard
-                .runtime
-                .core
-                .engine
-                .select_candidate(index as usize, now)
-        };
-        if let Some((text, _)) = committed {
-            let final_text = if guard.runtime.core.is_full_width_char() {
-                waylan_core::to_full_width_string(&text)
-            } else {
-                text
-            };
-            guard
-                .runtime
-                .core
-                .punctuation_processor_mut()
-                .record_commit(&final_text);
-            out.commit_text = Some(final_text);
+        if let Some(outcome) = guard.runtime.commit_candidate(
+            waylan_engine::CandidateSelectTarget::Auto,
+            index as usize,
+            now,
+        ) {
+            out.commit_text = Some(outcome.committed_text);
         }
         out
     }

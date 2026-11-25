@@ -27,7 +27,8 @@ pub use factory::{
 };
 pub use frontend::InputMethodFrontend;
 pub use runtime::{
-    CandidateBoxBuildOptions, ImeRuntime, ProcessKeyEventParams, build_common_candidate_box_state,
+    CandidateBoxBuildOptions, CandidateCommitOutcome, CandidateSelectTarget, ImeRuntime,
+    ProcessKeyEventParams, build_common_candidate_box_state,
 };
 pub use session::{
     CompositionKeyParams, ImeCoreSession, ImeOutputAction, KeyProcessContext, ShortcutToggleAction,

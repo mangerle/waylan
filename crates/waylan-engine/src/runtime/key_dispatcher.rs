@@ -200,14 +200,15 @@ impl ImeRuntime {
     /// 派发文本上屏动作：提交文本、刷新界面并返回消费结果
     ///
     /// # 设计原理
-    /// - `consumed` 区分普通上屏与"上屏并透传"两种语义，其余处理步骤完全一致。
+    /// - 标点上下文记账已由 `ImeCoreSession` 在产出 `Commit` / `CommitPartial` 时完成，
+    ///   此处不再重复调用 `record_commit` 以免造成双倍记账。
     fn dispatch_commit_action<F: InputMethodFrontend>(
         &mut self,
         ctx: &mut ActionDispatchContext<'_, F>,
         text: String,
         consumed: bool,
     ) -> (bool, Option<String>) {
-        self.commit_text_with_record(ctx.frontend, &text);
+        ctx.frontend.commit_text(&text);
         self.refresh_frontend_ui(ctx.frontend, ctx.inline_preedit);
         (consumed, Some(text))
     }
@@ -223,12 +224,67 @@ impl ImeRuntime {
         text: String,
         cursor_offset: i32,
     ) -> (bool, Option<String>) {
-        self.commit_text_with_record(ctx.frontend, &text);
+        ctx.frontend.commit_text(&text);
         if cursor_offset != 0 {
             ctx.frontend.move_cursor(cursor_offset);
         }
         self.refresh_frontend_ui(ctx.frontend, ctx.inline_preedit);
         (true, Some(text))
+    }
+
+    /// 统一候选词选词上屏管线（供 Wayland 鼠标点选、IBus 候选项点击等路径共用）
+    ///
+    /// # 设计原理
+    /// - 收敛普通分页选词、5 行大网格全量选词与二级卡片展开子项选词三大路径，
+    ///   统一补齐全角字符转换、`last_commit_undo` 撤回快照、视口重置与标点上下文记账，
+    ///   彻底消除协议端绕过 `ImeRuntime` 直接操作 `engine` 引发的行为分裂。
+    pub fn commit_candidate(
+        &mut self,
+        target: super::CandidateSelectTarget,
+        idx: usize,
+        now: u64,
+    ) -> Option<super::CandidateCommitOutcome> {
+        let raw_before = self.core.engine.raw_input().to_string();
+        let is_card =
+            matches!(target, super::CandidateSelectTarget::Auto) && self.core.is_card_expanded();
+        let use_grid_all = match target {
+            super::CandidateSelectTarget::GridAll => true,
+            super::CandidateSelectTarget::Auto => self.core.is_grid_expanded(),
+            super::CandidateSelectTarget::PageCandidate => false,
+        };
+
+        let select_res = if is_card {
+            let sel = self.core.selected_global_index();
+            self.core.engine.select_expanded_item(sel, idx)
+        } else if use_grid_all {
+            self.core.engine.select_candidate_from_all(idx, now)
+        } else {
+            self.core.engine.select_candidate(idx, now)
+        };
+
+        let (text, remaining_len) = select_res?;
+        self.core.reset_viewport();
+        let final_text = if self.core.is_full_width_char() {
+            waylan_core::to_full_width_string(&text)
+        } else {
+            text
+        };
+        self.core.punctuation_processor.record_commit(&final_text);
+
+        let remaining_preedit = if remaining_len == 0 {
+            if !is_card {
+                self.core
+                    .record_undo_snapshot(raw_before, final_text.clone(), now);
+            }
+            None
+        } else {
+            Some(self.core.engine.formatted_preedit())
+        };
+
+        Some(super::CandidateCommitOutcome {
+            committed_text: final_text,
+            remaining_preedit,
+        })
     }
 
     /// 派发输入模式切换的状态同步：广播状态快照、同步前端输入模式并提交附带文本
@@ -246,7 +302,7 @@ impl ImeRuntime {
         self.broadcast_state_snapshot();
         ctx.frontend.sync_input_mode(new_mode);
         if let Some(text) = committed {
-            ctx.frontend.commit_text(text);
+            self.commit_text_with_record(ctx.frontend, text);
         }
         self.refresh_frontend_ui(ctx.frontend, ctx.inline_preedit);
     }
