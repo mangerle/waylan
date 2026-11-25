@@ -9,6 +9,7 @@
 pub mod async_writer;
 pub mod compactor;
 pub mod constants;
+pub mod frame;
 pub mod lock;
 pub mod replay;
 
@@ -21,7 +22,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use log::warn;
 use parking_lot::Mutex;
 
 use crate::error::AlgoError;
@@ -33,53 +33,9 @@ pub use compactor::compact_model;
 pub use constants::{
     WAL_CHECKSUM_SEED, WAL_FORGET_PREFIX, WAL_MAGIC, WAL_MAGIC_V1, WAL_PAIR_PREFIX,
 };
+use frame::serialize_wal_frame;
+pub use frame::{UserDictAppendParams, UserDictForgetParams, UserDictPairParams};
 pub use replay::load_or_replay;
-
-/// 单条用户上屏记录的 WAL 追加参数
-///
-/// # 设计原理
-/// - **实现初衷**：上屏记录追加需同时携带"日志路径、文本、拼音键与时间戳"四项同源信息，
-///   平铺传参易发生文本与拼音键顺序颠倒，导致写入不可解码的 WAL 帧。
-/// - **核心优势**：以参数对象聚合同源信息，调用点按名传参即可完成语义绑定；
-///   同时去除泛型路径参数，统一以 `&Path` 传入，杜绝类型推断歧义。
-/// - **代价与局限**：调用点需显式书写字段名。
-#[derive(Debug, Clone, Copy)]
-pub struct UserDictAppendParams<'a> {
-    /// WAL 日志文件路径
-    pub path: &'a Path,
-    /// 上屏文本
-    pub text: &'a str,
-    /// 上屏文本对应的拼音键
-    pub pinyin: &'a str,
-    /// 上屏时间戳（毫秒级 UNIX 时间）
-    pub timestamp: u64,
-}
-
-/// 用户词对搭配追加参数对象（收敛 5 参数签名并消除 `prev`/`curr` 顺序颠倒风险）
-#[derive(Debug, Clone, Copy)]
-pub struct UserDictPairParams<'a> {
-    /// WAL 日志文件路径
-    pub path: &'a Path,
-    /// 前导词条
-    pub prev: &'a str,
-    /// 当前词条
-    pub curr: &'a str,
-    /// 记录时间戳（秒级 UNIX 时间）
-    pub timestamp: u64,
-}
-
-/// 用户精准忘词追加参数对象
-#[derive(Debug, Clone, Copy)]
-pub struct UserDictForgetParams<'a> {
-    /// WAL 日志文件路径
-    pub path: &'a Path,
-    /// 需要忘记的词条文本
-    pub text: &'a str,
-    /// 可选关联拼音键
-    pub pinyin: Option<&'a str>,
-    /// 记录时间戳（秒级 UNIX 时间）
-    pub timestamp: u64,
-}
 
 /// 已打开的 WAL 追加句柄及其底层文件标识（缓存 dev/ino 以省去每次写入时的 fstat 调用）
 #[derive(Debug)]
@@ -353,45 +309,7 @@ impl UserAdaptiveWal {
         timestamp: u64,
         count: u32,
     ) -> bool {
-        let py_bytes = pinyin.as_bytes();
-        let text_bytes = text.as_bytes();
-        if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
-            warn!(
-                "待写入的用户词条长度超过 65535 字节上限，跳过写入: py_len={}, text_len={}",
-                py_bytes.len(),
-                text_bytes.len()
-            );
-            return false;
-        }
-
-        let py_len = py_bytes.len() as u16;
-        let text_len = text_bytes.len() as u16;
-
-        buf.clear();
-        buf.reserve(20 + py_bytes.len() + text_bytes.len());
-        buf.extend_from_slice(&timestamp.to_le_bytes());
-        buf.extend_from_slice(&count.to_le_bytes());
-        buf.extend_from_slice(&py_len.to_le_bytes());
-        buf.extend_from_slice(&text_len.to_le_bytes());
-        buf.extend_from_slice(py_bytes);
-        buf.extend_from_slice(text_bytes);
-
-        let checksum: u32 = buf
-            .iter()
-            .fold(WAL_CHECKSUM_SEED, |acc, &b| acc.wrapping_add(b as u32));
-        buf.extend_from_slice(&checksum.to_le_bytes());
-        true
-    }
-
-    /// 序列化单条用户上屏 WAL 帧二进制数据包（包含校验和）
-    fn serialize_wal_frame(
-        text: &str,
-        pinyin: &str,
-        timestamp: u64,
-        count: u32,
-    ) -> Option<Vec<u8>> {
-        let mut buf = Vec::with_capacity(20 + pinyin.len() + text.len());
-        Self::serialize_wal_frame_into(&mut buf, text, pinyin, timestamp, count).then_some(buf)
+        frame::serialize_wal_frame_into(buf, text, pinyin, timestamp, count)
     }
 
     /// 将已序列化的 WAL 帧在跨进程排他锁保护下追加写入磁盘
@@ -431,8 +349,7 @@ impl UserAdaptiveWal {
         &mut self,
         params: &UserDictAppendParams<'_>,
     ) -> Result<(), AlgoError> {
-        let Some(frame_buf) =
-            Self::serialize_wal_frame(params.text, params.pinyin, params.timestamp, 1)
+        let Some(frame_buf) = serialize_wal_frame(params.text, params.pinyin, params.timestamp, 1)
         else {
             return Ok(());
         };
@@ -448,8 +365,7 @@ impl UserAdaptiveWal {
             return Ok(());
         }
         let encoded_prev = format!("{WAL_PAIR_PREFIX}{}", params.prev);
-        let Some(frame_buf) =
-            Self::serialize_wal_frame(params.curr, &encoded_prev, params.timestamp, 1)
+        let Some(frame_buf) = serialize_wal_frame(params.curr, &encoded_prev, params.timestamp, 1)
         else {
             return Ok(());
         };
@@ -468,8 +384,7 @@ impl UserAdaptiveWal {
             Some(py) => format!("{WAL_FORGET_PREFIX}{py}"),
             None => WAL_FORGET_PREFIX.to_string(),
         };
-        if let Some(frame_buf) =
-            Self::serialize_wal_frame(params.text, &encoded_py, params.timestamp, 0)
+        if let Some(frame_buf) = serialize_wal_frame(params.text, &encoded_py, params.timestamp, 0)
         {
             self.write_frame_locked(None, params.path, &frame_buf)?;
         }
@@ -482,8 +397,7 @@ impl UserAdaptiveWal {
         model: &mut UserAdaptiveModel,
         params: &UserDictAppendParams<'_>,
     ) -> Result<(), AlgoError> {
-        let Some(frame_buf) =
-            Self::serialize_wal_frame(params.text, params.pinyin, params.timestamp, 1)
+        let Some(frame_buf) = serialize_wal_frame(params.text, params.pinyin, params.timestamp, 1)
         else {
             return Ok(());
         };
@@ -503,8 +417,7 @@ impl UserAdaptiveWal {
             return Ok(());
         }
         let encoded_prev = format!("{WAL_PAIR_PREFIX}{}", params.prev);
-        let Some(frame_buf) =
-            Self::serialize_wal_frame(params.curr, &encoded_prev, params.timestamp, 1)
+        let Some(frame_buf) = serialize_wal_frame(params.curr, &encoded_prev, params.timestamp, 1)
         else {
             return Ok(());
         };
@@ -526,8 +439,7 @@ impl UserAdaptiveWal {
             Some(py) => format!("{WAL_FORGET_PREFIX}{py}"),
             None => WAL_FORGET_PREFIX.to_string(),
         };
-        if let Some(frame_buf) =
-            Self::serialize_wal_frame(params.text, &encoded_py, params.timestamp, 0)
+        if let Some(frame_buf) = serialize_wal_frame(params.text, &encoded_py, params.timestamp, 0)
         {
             self.write_frame_locked(Some(model), params.path, &frame_buf)?;
         }
