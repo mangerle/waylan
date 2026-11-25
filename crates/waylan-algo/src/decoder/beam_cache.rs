@@ -58,6 +58,17 @@ impl IncrementalBeamCache {
             .flatten()
     }
 
+    /// 取出与指定配置签名匹配的缓存音节格所有权，供原地增量复用（零拷贝）
+    #[inline]
+    pub fn take_lattice(&mut self, config_sig: u64) -> Option<SyllableLattice> {
+        if self.config_sig == config_sig {
+            self.last_lattice.take()
+        } else {
+            self.last_lattice = None;
+            None
+        }
+    }
+
     /// 保存最新构建的音节格供下一轮增量复用
     #[inline]
     pub fn store_lattice(&mut self, lattice: SyllableLattice) {

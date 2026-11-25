@@ -126,11 +126,8 @@ impl AlgoEngine {
             self.config.enable_acronym,
             &beam_opts,
         );
-        let lattice = SyllableLattice::build_incremental(
-            raw,
-            &lattice_opts,
-            self.beam_cache.cached_lattice(config_sig),
-        );
+        let prev_lattice = self.beam_cache.take_lattice(config_sig);
+        let lattice = SyllableLattice::build_incremental_reuse(prev_lattice, raw, &lattice_opts);
         let decode = PositionalBeamDecoder::decode_with_cache(
             &lattice,
             &self.resources.table,

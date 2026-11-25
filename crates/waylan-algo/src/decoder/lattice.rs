@@ -34,6 +34,43 @@ impl SyllableLattice {
         Self::build_incremental(raw, options, None)
     }
 
+    /// 增量构建统一音节格（复用已有 `SyllableLattice` 所有权，前缀部分零堆分配零深拷贝）
+    pub fn build_incremental_reuse(
+        prev: Option<SyllableLattice>,
+        raw: &str,
+        options: &LatticeOptions,
+    ) -> Self {
+        const SAFE_MARGIN_BYTES: usize = 14;
+        let len = raw.len();
+
+        let Some(mut lattice) = prev else {
+            return Self::build_incremental(raw, options, None);
+        };
+
+        let reuse_end = if !lattice.raw.is_empty() && raw.starts_with(&lattice.raw) {
+            lattice.len.saturating_sub(SAFE_MARGIN_BYTES)
+        } else {
+            0
+        };
+
+        if lattice.edges_from.len() < len {
+            lattice.edges_from.resize_with(len, Vec::new);
+        } else {
+            lattice.edges_from.truncate(len);
+        }
+        for slot in &mut lattice.edges_from[reuse_end..len] {
+            slot.clear();
+        }
+        lattice.raw.clear();
+        lattice.raw.push_str(raw);
+        lattice.len = len;
+
+        if len > 0 {
+            lattice.populate_edges_from(reuse_end, options);
+        }
+        lattice
+    }
+
     /// 增量构建统一音节格：当新输入是旧输入的前缀追加时，复用安全边界之前已计算的边
     pub fn build_incremental(
         raw: &str,
@@ -61,46 +98,52 @@ impl SyllableLattice {
             edges_from[..reuse_end].clone_from_slice(&p.edges_from[..reuse_end]);
         }
 
-        let bytes = raw.as_bytes();
-        let mut start = reuse_end;
+        let mut lattice = Self {
+            raw: raw.to_string(),
+            len,
+            edges_from,
+        };
+        lattice.populate_edges_from(reuse_end, options);
+        lattice
+    }
+
+    /// 从指定字节偏移 `start_pos` 开始填充音节格出边
+    fn populate_edges_from(&mut self, start_pos: usize, options: &LatticeOptions) {
+        let len = self.len;
+        let bytes = self.raw.as_bytes();
+        let mut start = start_pos;
         while start < len {
             if bytes[start] == b'\'' {
                 start += 1;
                 continue;
             }
             let seg_end = find_segment_end(bytes, start);
-            let seg = &raw[start..seg_end];
+            let seg = &self.raw[start..seg_end];
             let has_prev_letter = start > 0 && bytes[start - 1].is_ascii_alphabetic();
 
             populate_exact_and_fuzzy_edges(
-                raw,
+                &self.raw,
                 start,
                 seg,
                 has_prev_letter,
                 options,
-                &mut edges_from[start],
+                &mut self.edges_from[start],
             );
 
             if options.enable_typo_edges {
-                populate_typo_edges(start, seg, options, &mut edges_from[start]);
+                populate_typo_edges(start, seg, options, &mut self.edges_from[start]);
             }
 
             if options.enable_mixed_jianpin {
-                populate_initial_edge(start, bytes[start], &mut edges_from[start]);
+                populate_initial_edge(start, bytes[start], &mut self.edges_from[start]);
             }
 
             if seg_end == len {
-                populate_partial_tail_edge(start, seg, &mut edges_from[start]);
+                populate_partial_tail_edge(start, seg, &mut self.edges_from[start]);
             }
 
-            sort_and_dedup_edges(&mut edges_from[start]);
+            sort_and_dedup_edges(&mut self.edges_from[start]);
             start += 1;
-        }
-
-        Self {
-            raw: raw.to_string(),
-            len,
-            edges_from,
         }
     }
 
