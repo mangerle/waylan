@@ -8,10 +8,8 @@
 
 use crate::error::DaemonError;
 use log::{info, warn};
-use rustix::fs::{FlockOperation, flock};
 use std::env;
 use std::fs;
-use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -24,6 +22,7 @@ use std::os::unix::fs::MetadataExt;
 
 use waylan_algo::custom_phrase::CustomPhraseManager;
 use waylan_sys::LoopWakeup;
+pub use waylan_sys::{SingleInstanceLock, try_acquire_lock_at_path};
 
 use crate::config::AppConfig;
 
@@ -237,54 +236,16 @@ pub fn launch_settings_gui() -> Result<(), DaemonError> {
     Ok(())
 }
 
-/// 单实例运行互斥锁守护对象 (RAII)
-///
-/// # 设计原理
-/// - **实现初衷**：消除基于 `/proc` 扫描的 TOCTOU 竞态条件，保证并发启动时仅有一个实例存活。
-/// - **核心优势**：基于 Linux 内核级 `flock(2)` 独占锁，进程崩溃或正常退出时内核自动释放锁，避免死锁与脏锁文件残留。
-/// - **代价与局限**：必须在守护进程整个运行生命周期内持有该守护对象。
-pub struct SingleInstanceLock {
-    _file: fs::File,
-}
-
-/// 尝试获取微澜守护进程的全局单例锁
+/// 尝试获取微澜守护进程的全局单例锁（复用 `waylan-sys` 的 `0600` 权限与防符号链接 `flock(2)` 实现）
 ///
 /// 若成功获取，返回 `Ok(Some(lock))`；
 /// 若锁已被其他运行中的实例独占持有，返回 `Ok(None)`；
-/// 若遇到底层 IO 异常，返回 `Err(...)`。
+/// 若遇到底层 I/O 异常，返回 `Err(...)`。
+///
+/// # Errors
+/// 当锁文件被恶意替换为符号链接或底层文件系统无法锁定且发生非 `WOULDBLOCK` 异常时返回错误。
 pub fn try_acquire_single_instance_lock() -> std::io::Result<Option<SingleInstanceLock>> {
-    let lock_dir = env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(waylan_core::config::fallback_runtime_dir);
-    let _ = fs::create_dir_all(&lock_dir);
-    let lock_path = lock_dir.join(format!(
-        "waylan_{}.lock",
-        rustix::process::getuid().as_raw()
-    ));
-    try_acquire_lock_at_path(&lock_path)
-}
-
-/// 在指定路径尝试获取独占文件锁（供单元测试与主入口复用）
-pub fn try_acquire_lock_at_path(
-    lock_path: &std::path::Path,
-) -> std::io::Result<Option<SingleInstanceLock>> {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path)?;
-
-    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => {
-            let mut file_clone = file.try_clone()?;
-            let _ = file_clone.set_len(0);
-            let _ = writeln!(file_clone, "{}", process::id());
-            Ok(Some(SingleInstanceLock { _file: file }))
-        }
-        Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
-        Err(e) => Err(std::io::Error::from(e)),
-    }
+    waylan_sys::try_acquire_user_runtime_lock("waylan")
 }
 
 /// 检查当前系统桌面会话中是否已有活跃的微澜输入法守护进程正在运行

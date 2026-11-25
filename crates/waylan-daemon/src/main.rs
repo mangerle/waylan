@@ -95,22 +95,26 @@ fn is_greeter_or_system_session() -> bool {
 
 /// 启动并运行输入法常驻守护服务
 fn run_daemon(opts: DaemonOptions) -> Result<(), DaemonError> {
-    if let Err(e) = logger::init_logger() {
-        eprintln!("[微澜] 日志系统初始化失败: {}", e);
-    }
-
     if is_greeter_or_system_session() {
-        info!(
-            "[微澜守护进程] 检测到当前处于登录管理器或系统受限会话 (Greeter)，微澜静默退出以保障系统密码输入纯净。"
-        );
         return Ok(());
     }
 
-    let _single_instance_lock = match acquire_daemon_instance_lock(&opts) {
-        Ok(Some(lock)) => Some(lock),
-        Ok(None) => return Ok(()),
-        Err(e) => return Err(e),
+    // 在完成单例排他抢占后再初始化全局日志文件，防止重复唤起进程并发轮转损坏活跃守护进程的 waylan.log
+    let (_single_instance_lock, lock_fallback_err) = match acquire_daemon_instance_lock(&opts) {
+        InstanceLockOutcome::Acquired(lock) => (Some(lock), None),
+        InstanceLockOutcome::ConflictHandled => return Ok(()),
+        InstanceLockOutcome::FallbackContinue(err_msg) => (None, Some(err_msg)),
     };
+
+    if let Err(e) = logger::init_logger() {
+        eprintln!("[微澜] 日志系统初始化失败: {}", e);
+    }
+    if let Some(err_msg) = lock_fallback_err {
+        warn!(
+            "[微澜] 单例文件锁获取异常 ({}) 且未检测到其他活跃实例，已降级继续启动",
+            err_msg
+        );
+    }
 
     let loop_wakeup = LoopWakeup::new().ok();
     let coordinator = ShutdownCoordinator::new(loop_wakeup);
@@ -140,26 +144,31 @@ fn run_daemon(opts: DaemonOptions) -> Result<(), DaemonError> {
     dispatch_active_session(opts, cfg, engine, coordinator)
 }
 
-/// 尝试获取单实例运行文件锁并在冲突时优雅处理
-fn acquire_daemon_instance_lock(
-    opts: &DaemonOptions,
-) -> Result<Option<SingleInstanceLock>, DaemonError> {
+/// 守护进程单实例锁抢占结果
+enum InstanceLockOutcome {
+    /// 成功独占文件锁
+    Acquired(SingleInstanceLock),
+    /// 检测到已有活跃实例运行并已完成冲突唤起，当前进程应安全退出
+    ConflictHandled,
+    /// 文件锁系统调用异常，但经进程探测确认无其他实例存活，带错误信息降级启动
+    FallbackContinue(String),
+}
+
+/// 尝试获取单实例运行文件锁并在冲突时优雅处理（异常回退未发现竞争实例时绝不静默退出）
+fn acquire_daemon_instance_lock(opts: &DaemonOptions) -> InstanceLockOutcome {
     match try_acquire_single_instance_lock() {
-        Ok(Some(lock)) => Ok(Some(lock)),
+        Ok(Some(lock)) => InstanceLockOutcome::Acquired(lock),
         Ok(None) => {
             handle_instance_conflict(opts);
-            Ok(None)
+            InstanceLockOutcome::ConflictHandled
         }
         Err(e) => {
-            warn!(
-                "[微澜] 获取单例运行文件锁遇到异常 ({})，回退至进程扫描校验...",
-                e
-            );
-            if !opts.ibus_backend && !opts.self_check && check_another_instance_running() {
+            if check_another_instance_running() {
                 handle_instance_conflict(opts);
-                return Ok(None);
+                InstanceLockOutcome::ConflictHandled
+            } else {
+                InstanceLockOutcome::FallbackContinue(e.to_string())
             }
-            Ok(None)
         }
     }
 }
