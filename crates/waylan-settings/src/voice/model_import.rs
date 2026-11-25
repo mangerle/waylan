@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use slint::{ComponentHandle, SharedString};
@@ -16,7 +17,7 @@ use waylan_voice::{ModelSubdirectory, VadModelType, VoiceEngineType, infer_offli
 
 use super::commit_config_transaction;
 use crate::SettingsWindow;
-use crate::callbacks::{pick_directory_dialog_async, pick_file_dialog_async};
+use crate::callbacks::{TaskRunningGuard, pick_directory_dialog_async, pick_file_dialog_async};
 use crate::sync::update_config_from_window;
 
 /// 导入成功后写入配置的回调（采用函数指针以便在多个界面入口间共享同一实现）
@@ -64,11 +65,13 @@ pub(crate) fn register_model_import_callbacks(
     window: &SettingsWindow,
     loaded_config: Arc<Mutex<AppConfig>>,
 ) {
+    let is_importing = Arc::new(AtomicBool::new(false));
     register_model_import(
         ModelImportRegistration {
             window,
             kind: ModelImportKind::AsrPackage,
             loaded_config: loaded_config.clone(),
+            is_importing: is_importing.clone(),
             apply_fn: apply_asr_model_path,
         },
         |win, cb| win.on_import_asr_model(cb),
@@ -78,6 +81,7 @@ pub(crate) fn register_model_import_callbacks(
             window,
             kind: ModelImportKind::Onnx(ModelSubdirectory::Vad),
             loaded_config,
+            is_importing,
             apply_fn: apply_vad_model_path,
         },
         |win, cb| win.on_import_vad_model(cb),
@@ -111,6 +115,8 @@ struct ModelImportRegistration<'a> {
     kind: ModelImportKind,
     /// 与界面共享的持久化配置
     loaded_config: Arc<Mutex<AppConfig>>,
+    /// 模型导入防重入标志
+    is_importing: Arc<AtomicBool>,
     /// 导入成功后写入配置的回调
     apply_fn: ApplyConfigFn,
 }
@@ -124,6 +130,7 @@ fn register_model_import(
         window,
         kind,
         loaded_config,
+        is_importing,
         apply_fn,
     } = params;
     let window_weak = window.as_weak();
@@ -134,6 +141,7 @@ fn register_model_import(
                 handle_model_import(ModelImportOptions {
                     win: &win,
                     current_cfg_cell: &loaded_config,
+                    is_importing: &is_importing,
                     kind,
                     apply_fn,
                 });
@@ -162,6 +170,8 @@ struct ModelImportOptions<'a> {
     win: &'a SettingsWindow,
     /// 共享配置单元
     current_cfg_cell: &'a Arc<Mutex<AppConfig>>,
+    /// 导入防重入标志
+    is_importing: &'a Arc<AtomicBool>,
     /// 导入种类
     kind: ModelImportKind,
     /// 导入成功后将目标路径写入配置的回调
@@ -169,19 +179,14 @@ struct ModelImportOptions<'a> {
 }
 
 /// 待派发的模型导入上下文
-///
-/// # 设计原理
-/// - **实现初衷**：模型导入链路需跨越"文件选择器异步回调 -> Slint 主线程派发 -> 后台复制线程 ->
-///   回投主线程回填"四个阶段传递窗口弱引用、配置单元、导入种类与落盘回调，
-///   逐阶段平铺传参会在每处留下五六个位置参数。
-/// - **核心优势**：以单一可克隆上下文承载稳定依赖，各阶段仅需追加本阶段新增的动态数据。
-/// - **代价与局限**：上下文需随每次跨线程投递克隆一份（均为轻量 Arc/Weak 句柄）。
 #[derive(Clone)]
 struct PendingModelImport {
     /// 界面窗口弱引用（升级失败表示窗口已销毁，流程应静默终止）
     win_weak: slint::Weak<SettingsWindow>,
     /// 共享配置单元
     cfg_cell: Arc<Mutex<AppConfig>>,
+    /// 导入防重入标志
+    is_importing: Arc<AtomicBool>,
     /// 导入种类
     kind: ModelImportKind,
     /// 导入成功后将目标路径写入配置的回调
@@ -193,11 +198,22 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
     let ModelImportOptions {
         win,
         current_cfg_cell,
+        is_importing,
         kind,
         apply_fn,
     } = options;
-    let label = kind.label();
+    if is_importing
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        win.set_global_status_is_error(false);
+        win.set_global_status(SharedString::from(
+            "已有本地模型导入任务正在进行中，请稍候...",
+        ));
+        return;
+    }
 
+    let label = kind.label();
     win.set_global_status_is_error(false);
     win.set_global_status(SharedString::from(format!(
         "正在等待选择 {} 模型...",
@@ -207,6 +223,7 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
     let pending = PendingModelImport {
         win_weak: win.as_weak(),
         cfg_cell: current_cfg_cell.clone(),
+        is_importing: is_importing.clone(),
         kind,
         apply_fn,
     };
@@ -229,17 +246,24 @@ fn handle_model_import(options: ModelImportOptions<'_>) {
 
 /// 接收文件选择结果并回投 Slint 主线程派发模型导入后台任务
 fn queue_model_import_dispatch(pending: PendingModelImport, selected: Option<PathBuf>) {
-    let _ = slint::invoke_from_event_loop(move || {
+    let flag_fallback = pending.is_importing.clone();
+    if slint::invoke_from_event_loop(move || {
         dispatch_model_import(pending, selected);
-    });
+    })
+    .is_err()
+    {
+        flag_fallback.store(false, Ordering::Release);
+    }
 }
 
 /// 在 Slint 主线程中接收用户选择结果并派发后台导入任务
 fn dispatch_model_import(pending: PendingModelImport, selected: Option<PathBuf>) {
     let Some(win) = pending.win_weak.upgrade() else {
+        pending.is_importing.store(false, Ordering::Release);
         return;
     };
     let Some(src_path) = selected else {
+        pending.is_importing.store(false, Ordering::Release);
         win.set_global_status(SharedString::from(format!(
             "已取消选择 {} 模型",
             pending.kind.label()
@@ -252,11 +276,13 @@ fn dispatch_model_import(pending: PendingModelImport, selected: Option<PathBuf>)
         pending.kind.label()
     )));
 
+    let flag_fallback = pending.is_importing.clone();
     let thread_name = format!("{}-model-importer", pending.kind.label().to_lowercase());
     if let Err(e) = std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || run_model_import_worker(pending, src_path))
     {
+        flag_fallback.store(false, Ordering::Release);
         log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
         win.set_global_status_is_error(true);
         win.set_global_status(SharedString::from(format!("启动模型导入线程失败: {}", e)));
@@ -265,10 +291,12 @@ fn dispatch_model_import(pending: PendingModelImport, selected: Option<PathBuf>)
 
 /// 后台线程体：按导入种类完成模型文件物理复制并回投主线程回填结果
 fn run_model_import_worker(pending: PendingModelImport, src_path: PathBuf) {
+    let _guard = TaskRunningGuard(pending.is_importing.clone());
     let imported_opt = match pending.kind {
         ModelImportKind::AsrPackage => waylan_voice::import_asr_model_from_dir(&src_path),
         ModelImportKind::Onnx(sub) => waylan_voice::import_onnx_model_from_file(sub, &src_path),
     };
+    drop(_guard);
     let _ = slint::invoke_from_event_loop(move || {
         report_model_import_result(pending, imported_opt);
     });

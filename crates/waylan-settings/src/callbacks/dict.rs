@@ -23,15 +23,15 @@ use crate::{PhraseItem, SettingsWindow};
 
 /// 词库与短语初始化统计模型集合
 pub struct LexiconStatsBundle {
-    /// 辅助与混输词库（英文与表情符号）
-    pub aux_dict: AuxiliaryDict,
+    /// 辅助与混输词库（英文与表情符号），由后台统计线程异步填充
+    pub aux_dict: Arc<Mutex<AuxiliaryDict>>,
     /// 界面自定义短语数据模型
     pub phrases_model: Rc<VecModel<PhraseItem>>,
     /// 用户自定义短语文件绝对路径
     pub phrase_path: PathBuf,
 }
 
-/// 统计与装载词库信息到窗口
+/// 统计与装载词库信息到窗口（耗时的 WAL 重放与系统词典扫描均卸载至后台线程执行，保障窗口秒开）
 pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundle {
     let phrase_path = CustomPhraseManager::default_path();
     let phrase_manager = CustomPhraseManager::load_or_init(&phrase_path);
@@ -46,27 +46,13 @@ pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundl
     let phrases_model = Rc::new(VecModel::from(phrases_data));
     window.set_phrase_list(ModelRc::from(phrases_model.clone()));
 
-    // 辅助词库装载与展示
-    let aux_dict = LexiconSummaryService::load_auxiliary_dict();
-    window.set_english_dict_info(SharedString::from(format!(
-        "已就绪常用英文单词: {} 词",
-        aux_dict.english_words.len()
-    )));
-    window.set_symbols_dict_info(SharedString::from(format!(
-        "已收录语义符号与表情: {} 项",
-        aux_dict.symbols.len()
-    )));
+    window.set_english_dict_info(SharedString::from("正在统计常用英文词库..."));
+    window.set_symbols_dict_info(SharedString::from("正在统计语义符号与表情..."));
+    window.set_user_model_info(SharedString::from("正在统计自适应个性化历史词模型..."));
+    window.set_base_dict_info(SharedString::from("正在扫描系统预编译主词库..."));
 
-    // 自造词模型统计
-    let user_model_count = LexiconSummaryService::query_user_adaptive_entry_count();
-    window.set_user_model_info(SharedString::from(format!(
-        "自适应个性化历史词模型: {} 条记忆",
-        user_model_count
-    )));
-
-    // 系统预编译主词库状态统计
-    let base_dict_info = LexiconSummaryService::query_system_dict_info();
-    window.set_base_dict_info(SharedString::from(base_dict_info));
+    let aux_dict = Arc::new(Mutex::new(AuxiliaryDict::default()));
+    spawn_lexicon_stats_loader(window.as_weak(), Arc::clone(&aux_dict));
 
     LexiconStatsBundle {
         aux_dict,
@@ -75,8 +61,50 @@ pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundl
     }
 }
 
+/// 在后台线程加载辅助词典、重放用户 WAL 统计与扫描系统词库并回投主线程刷新 UI
+fn spawn_lexicon_stats_loader(
+    win_weak: slint::Weak<SettingsWindow>,
+    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+) {
+    if let Err(e) = std::thread::Builder::new()
+        .name("settings-lexicon-stats".to_string())
+        .spawn(move || {
+            let loaded_aux = LexiconSummaryService::load_auxiliary_dict();
+            let en_count = loaded_aux.english_words.len();
+            let sym_count = loaded_aux.symbols.len();
+            *aux_lock.lock() = loaded_aux;
+
+            let user_model_count = LexiconSummaryService::query_user_adaptive_entry_count();
+            let base_dict_info = LexiconSummaryService::query_system_dict_info();
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(win) = win_weak.upgrade() {
+                    win.set_english_dict_info(SharedString::from(format!(
+                        "已就绪常用英文单词: {} 词",
+                        en_count
+                    )));
+                    win.set_symbols_dict_info(SharedString::from(format!(
+                        "已收录语义符号与表情: {} 项",
+                        sym_count
+                    )));
+                    win.set_user_model_info(SharedString::from(format!(
+                        "自适应个性化历史词模型: {} 条记忆",
+                        user_model_count
+                    )));
+                    win.set_base_dict_info(SharedString::from(base_dict_info));
+                }
+            });
+        })
+    {
+        log::warn!("[偏好设置 警告] 派发词库后台统计线程失败: {e}");
+    }
+}
+
 /// 注册拼音、英文与符号等外部词库文件选取与异步导入回调
-pub(crate) fn register_dict_import_callbacks(window: &SettingsWindow, aux_dict: AuxiliaryDict) {
+pub(crate) fn register_dict_import_callbacks(
+    window: &SettingsWindow,
+    aux_dict_lock: Arc<Mutex<AuxiliaryDict>>,
+) {
     // 拼音词库导入回调
     let is_pinyin_importing = Arc::new(AtomicBool::new(false));
     let pinyin_running = is_pinyin_importing;
@@ -89,7 +117,6 @@ pub(crate) fn register_dict_import_callbacks(window: &SettingsWindow, aux_dict: 
 
     // 英文与符号辅助词库导入回调（共享同一个互斥锁与防重入标志）
     let is_aux_importing = Arc::new(AtomicBool::new(false));
-    let aux_dict_lock = Arc::new(Mutex::new(aux_dict));
 
     let window_weak = window.as_weak();
     let aux_for_en = aux_dict_lock.clone();

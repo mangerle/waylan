@@ -99,7 +99,9 @@ fn apply_delete_custom_phrase(ctx: &PhraseCallbackContext, idx: i32) {
     let Some(win) = ctx.window_weak.upgrade() else {
         return;
     };
-    let index = idx as usize;
+    let Ok(index) = usize::try_from(idx) else {
+        return;
+    };
     let Some(item) = ctx.phrases_model.row_data(index) else {
         return;
     };

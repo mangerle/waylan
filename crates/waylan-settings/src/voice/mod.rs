@@ -31,7 +31,7 @@ pub fn register_voice_callbacks(window: &SettingsWindow, loaded_config: Arc<Mute
     cloud_profiles::register_cloud_profile_callbacks(window, loaded_config);
 }
 
-/// 持锁原子执行配置变更、磁盘落盘与状态栏反馈（消除并发 Lost Update 竞态）
+/// 持锁原子执行配置变更与磁盘落盘，并在释放互斥锁后再执行界面刷新与状态栏反馈（消除并发 Lost Update 与持锁刷 UI）
 pub(crate) fn commit_config_transaction<F>(
     win: &SettingsWindow,
     current_cfg_cell: &Arc<Mutex<AppConfig>>,
@@ -42,32 +42,35 @@ pub(crate) fn commit_config_transaction<F>(
 where
     F: FnOnce(&mut AppConfig) -> Result<Option<String>, String>,
 {
-    let mut guard = current_cfg_cell.lock();
-    let mut next_cfg = guard.clone();
-    let success_msg = match mutate(&mut next_cfg) {
-        Ok(Some(msg)) => msg,
-        Ok(None) => return None,
-        Err(err_msg) => {
-            win.set_global_status_is_error(true);
-            win.set_global_status(SharedString::from(err_msg));
-            return None;
+    let tx_outcome: Result<Option<(String, AppConfig)>, String> = {
+        let mut guard = current_cfg_cell.lock();
+        let mut next_cfg = guard.clone();
+        match mutate(&mut next_cfg) {
+            Ok(Some(msg)) => match next_cfg.save_default() {
+                Ok(()) => {
+                    *guard = next_cfg.clone();
+                    Ok(Some((msg, next_cfg)))
+                }
+                Err(e) => Err(format!("{fail_prefix}: {e}")),
+            },
+            Ok(None) => Ok(None),
+            Err(err_msg) => Err(err_msg),
         }
     };
 
-    match next_cfg.save_default() {
-        Ok(()) => {
-            *guard = next_cfg.clone();
-            drop(guard);
+    match tx_outcome {
+        Ok(Some((success_msg, saved_cfg))) => {
             if sync_ui {
-                sync_config_to_window(win, &next_cfg);
+                sync_config_to_window(win, &saved_cfg);
             }
             win.set_global_status_is_error(false);
             win.set_global_status(SharedString::from(success_msg));
-            Some(next_cfg)
+            Some(saved_cfg)
         }
-        Err(e) => {
+        Ok(None) => None,
+        Err(err_msg) => {
             win.set_global_status_is_error(true);
-            win.set_global_status(SharedString::from(format!("{}: {}", fail_prefix, e)));
+            win.set_global_status(SharedString::from(err_msg));
             None
         }
     }

@@ -20,6 +20,7 @@ use waylan_voice::{download_and_extract_model, find_preset_model_by_id};
 
 use super::{apply_asr_model_selection, commit_config_transaction};
 use crate::SettingsWindow;
+use crate::callbacks::TaskRunningGuard;
 use crate::sync::sync_asr_models_to_window;
 
 /// 注册预置离线大模型的一键下载与启用回调
@@ -84,15 +85,25 @@ fn register_download_action(
         let win_weak_clone = window_weak.clone();
         let cfg_clone = loaded_config.clone();
         let downloading_guard = Arc::clone(&is_downloading);
-        thread::spawn(move || {
-            run_download_worker(
-                win_weak_clone,
-                cfg_clone,
-                model_id,
-                model_name,
-                downloading_guard,
-            );
-        });
+        if let Err(e) = thread::Builder::new()
+            .name("asr-model-downloader".to_string())
+            .spawn(move || {
+                run_download_worker(
+                    win_weak_clone,
+                    cfg_clone,
+                    model_id,
+                    model_name,
+                    downloading_guard,
+                );
+            })
+        {
+            is_downloading.store(false, Ordering::Release);
+            error!("[模型下载] 派发模型下载线程失败: {}", e);
+            if let Some(win) = window_weak.upgrade() {
+                win.set_global_status_is_error(true);
+                win.set_global_status(SharedString::from(format!("启动下载线程失败: {}", e)));
+            }
+        }
     });
 }
 
@@ -104,6 +115,7 @@ fn run_download_worker(
     model_name: &'static str,
     is_downloading: Arc<AtomicBool>,
 ) {
+    let _guard = TaskRunningGuard(is_downloading);
     let win_for_progress = win_weak.clone();
     let id_for_progress = model_id.clone();
 
@@ -115,7 +127,7 @@ fn run_download_worker(
         });
     });
 
-    is_downloading.store(false, Ordering::Release);
+    drop(_guard);
 
     let _ = win_weak.upgrade_in_event_loop(move |win| {
         let current_cfg = cfg_cell.lock().clone();

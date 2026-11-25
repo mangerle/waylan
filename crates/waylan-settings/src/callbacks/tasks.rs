@@ -139,7 +139,7 @@ fn run_pinyin_import(
     });
 }
 
-/// 英文词库导入后台线程体：在辅助词典锁内合并词条并回投 UI 线程刷新状态
+/// 英文词库导入后台线程体：锁外执行大文件解析与落盘，成功后再短暂持锁提交内存镜像
 fn run_english_import(
     path_str: String,
     aux_lock: Arc<Mutex<AuxiliaryDict>>,
@@ -147,11 +147,10 @@ fn run_english_import(
     win_weak: slint::Weak<SettingsWindow>,
 ) {
     let _guard = TaskRunningGuard(guard_flag);
-    let result = {
-        let mut aux = aux_lock.lock();
-        import_english_dict_file(&path_str, &mut aux)
-    };
+    let mut working_aux = aux_lock.lock().clone();
+    let result = import_english_dict_file(&path_str, &mut working_aux);
     if result.is_ok() {
+        *aux_lock.lock() = working_aux;
         AppConfig::touch_config_for_reload();
     }
     let _ = slint::invoke_from_event_loop(move || {
@@ -165,7 +164,7 @@ fn run_english_import(
     });
 }
 
-/// 特殊符号库导入后台线程体：在辅助词典锁内合并符号并回投 UI 线程刷新状态
+/// 特殊符号库导入后台线程体：锁外执行文件解析与落盘，成功后再短暂持锁提交内存镜像
 fn run_symbols_import(
     path_str: String,
     aux_lock: Arc<Mutex<AuxiliaryDict>>,
@@ -173,11 +172,10 @@ fn run_symbols_import(
     win_weak: slint::Weak<SettingsWindow>,
 ) {
     let _guard = TaskRunningGuard(guard_flag);
-    let result = {
-        let mut aux = aux_lock.lock();
-        import_symbols_dict_file(&path_str, &mut aux)
-    };
+    let mut working_aux = aux_lock.lock().clone();
+    let result = import_symbols_dict_file(&path_str, &mut working_aux);
     if result.is_ok() {
+        *aux_lock.lock() = working_aux;
         AppConfig::touch_config_for_reload();
     }
     let _ = slint::invoke_from_event_loop(move || {

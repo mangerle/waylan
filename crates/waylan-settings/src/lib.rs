@@ -46,6 +46,18 @@ pub enum SettingsError {
 /// # Errors
 /// 当窗口初始化或事件循环运行失败时返回错误。
 pub fn run_settings_gui() -> Result<(), SettingsError> {
+    let _instance_lock = match waylan_sys::try_acquire_user_runtime_lock("waylan_settings") {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            log::info!("[偏好设置] 检测到偏好设置中心已在运行中，跳过重复启动实例");
+            return Ok(());
+        }
+        Err(e) => {
+            log::warn!("[偏好设置 警告] 获取设置中心单实例锁失败，继续带警告启动: {e}");
+            None
+        }
+    };
+
     let window = SettingsWindow::new()?;
 
     // 设置 XDG 应用标识（app_id / WM_CLASS），必须在窗口实例初始化后、首次呈现到桌面之前配置。
