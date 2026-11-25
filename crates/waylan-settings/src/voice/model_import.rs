@@ -278,10 +278,9 @@ fn dispatch_model_import(pending: PendingModelImport, selected: Option<PathBuf>)
 
     let flag_fallback = pending.is_importing.clone();
     let thread_name = format!("{}-model-importer", pending.kind.label().to_lowercase());
-    if let Err(e) = std::thread::Builder::new()
-        .name(thread_name)
-        .spawn(move || run_model_import_worker(pending, src_path))
-    {
+    if let Err(e) = crate::task_runner::global_task_runner().spawn_named(&thread_name, move || {
+        run_model_import_worker(pending, src_path)
+    }) {
         flag_fallback.store(false, Ordering::Release);
         log::warn!("[偏好设置 警告] 派发模型导入后台线程失败: {}", e);
         win.set_global_status_is_error(true);

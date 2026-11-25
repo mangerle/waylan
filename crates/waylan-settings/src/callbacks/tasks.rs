@@ -44,16 +44,12 @@ fn spawn_import_worker<F>(
 ) where
     F: FnOnce() + Send + 'static,
 {
-    match std::thread::Builder::new()
-        .name(thread_name.to_string())
-        .spawn(worker)
-    {
-        Ok(_) => {}
-        Err(e) => {
-            running_flag.store(false, Ordering::Release);
-            log::warn!("[偏好设置 警告] {}：{}", failure_hint, e);
-        }
-    }
+    crate::task_runner::global_task_runner().spawn_guarded(
+        thread_name,
+        running_flag,
+        failure_hint,
+        worker,
+    );
 }
 
 /// 在主事件循环回填拼音词库导入结果与自适应模型统计
@@ -139,18 +135,22 @@ fn run_pinyin_import(
     });
 }
 
-/// 英文词库导入后台线程体：锁外执行大文件解析与落盘，成功后再短暂持锁提交内存镜像
+/// 英文词库导入后台线程体：锁外按需构建增量字典并落盘，成功后再短暂持锁原子替换 Arc 镜像
 fn run_english_import(
     path_str: String,
-    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+    aux_lock: Arc<Mutex<Arc<AuxiliaryDict>>>,
     guard_flag: Arc<AtomicBool>,
     win_weak: slint::Weak<SettingsWindow>,
 ) {
     let _guard = TaskRunningGuard(guard_flag);
-    let mut working_aux = aux_lock.lock().clone();
+    let base_arc = Arc::clone(&*aux_lock.lock());
+    let mut working_aux = AuxiliaryDict {
+        english_words: base_arc.english_words.clone(),
+        symbols: base_arc.symbols.clone(),
+    };
     let result = import_english_dict_file(&path_str, &mut working_aux);
     if result.is_ok() {
-        *aux_lock.lock() = working_aux;
+        *aux_lock.lock() = Arc::new(working_aux);
         AppConfig::touch_config_for_reload();
     }
     let _ = slint::invoke_from_event_loop(move || {
@@ -164,18 +164,22 @@ fn run_english_import(
     });
 }
 
-/// 特殊符号库导入后台线程体：锁外执行文件解析与落盘，成功后再短暂持锁提交内存镜像
+/// 特殊符号库导入后台线程体：锁外按需构建增量字典并落盘，成功后再短暂持锁原子替换 Arc 镜像
 fn run_symbols_import(
     path_str: String,
-    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+    aux_lock: Arc<Mutex<Arc<AuxiliaryDict>>>,
     guard_flag: Arc<AtomicBool>,
     win_weak: slint::Weak<SettingsWindow>,
 ) {
     let _guard = TaskRunningGuard(guard_flag);
-    let mut working_aux = aux_lock.lock().clone();
+    let base_arc = Arc::clone(&*aux_lock.lock());
+    let mut working_aux = AuxiliaryDict {
+        english_words: base_arc.english_words.clone(),
+        symbols: base_arc.symbols.clone(),
+    };
     let result = import_symbols_dict_file(&path_str, &mut working_aux);
     if result.is_ok() {
-        *aux_lock.lock() = working_aux;
+        *aux_lock.lock() = Arc::new(working_aux);
         AppConfig::touch_config_for_reload();
     }
     let _ = slint::invoke_from_event_loop(move || {
@@ -208,7 +212,7 @@ pub(crate) fn spawn_pinyin_import_task(
 pub(crate) fn spawn_english_import_task(
     win_weak: slint::Weak<SettingsWindow>,
     path_str: String,
-    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+    aux_lock: Arc<Mutex<Arc<AuxiliaryDict>>>,
     running_flag: Arc<AtomicBool>,
 ) {
     let guard_flag = running_flag.clone();
@@ -224,7 +228,7 @@ pub(crate) fn spawn_english_import_task(
 pub(crate) fn spawn_symbols_import_task(
     win_weak: slint::Weak<SettingsWindow>,
     path_str: String,
-    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+    aux_lock: Arc<Mutex<Arc<AuxiliaryDict>>>,
     running_flag: Arc<AtomicBool>,
 ) {
     let guard_flag = running_flag.clone();

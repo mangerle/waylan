@@ -450,11 +450,10 @@ fn spawn_cloud_test_task(
     running_flag: Arc<AtomicBool>,
 ) {
     let guard_flag = running_flag.clone();
-    if let Err(e) = std::thread::Builder::new()
-        .name("cloud-profile-tester".to_string())
-        .spawn(move || execute_cloud_test_thread(win_weak, profile_name, test_config, guard_flag))
-    {
-        running_flag.store(false, Ordering::Release);
-        log::warn!("[偏好设置 警告] 派发云端测试线程失败: {}", e);
-    }
+    crate::task_runner::global_task_runner().spawn_guarded(
+        "cloud-profile-tester",
+        &running_flag,
+        "派发云端测试线程失败",
+        move || execute_cloud_test_thread(win_weak, profile_name, test_config, guard_flag),
+    );
 }

@@ -12,6 +12,7 @@ slint::include_modules!();
 pub mod callbacks;
 pub mod importer;
 pub mod sync;
+pub mod task_runner;
 pub mod voice;
 pub use voice as voice_handlers;
 
@@ -101,6 +102,7 @@ pub fn run_settings_gui() -> Result<(), SettingsError> {
     register_voice_callbacks(&window, loaded_config);
 
     window.run()?;
+    task_runner::global_task_runner().shutdown();
     Ok(())
 }
 

@@ -101,9 +101,8 @@ fn spawn_zenity_picker<F>(
 ) where
     F: FnOnce(Option<PathBuf>) + Send + 'static,
 {
-    if let Err(e) = std::thread::Builder::new()
-        .name(thread_name.to_string())
-        .spawn(move || on_selected(picker()))
+    if let Err(e) = crate::task_runner::global_task_runner()
+        .spawn_named(thread_name, move || on_selected(picker()))
     {
         log::warn!("[偏好设置 警告] 派发 Zenity 选择器线程失败 ({thread_name}): {e}");
     }

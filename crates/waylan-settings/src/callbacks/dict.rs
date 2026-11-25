@@ -24,7 +24,7 @@ use crate::{PhraseItem, SettingsWindow};
 /// 词库与短语初始化统计模型集合
 pub struct LexiconStatsBundle {
     /// 辅助与混输词库（英文与表情符号），由后台统计线程异步填充
-    pub aux_dict: Arc<Mutex<AuxiliaryDict>>,
+    pub aux_dict: Arc<Mutex<Arc<AuxiliaryDict>>>,
     /// 界面自定义短语数据模型
     pub phrases_model: Rc<VecModel<PhraseItem>>,
     /// 用户自定义短语文件绝对路径
@@ -51,7 +51,7 @@ pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundl
     window.set_user_model_info(SharedString::from("正在统计自适应个性化历史词模型..."));
     window.set_base_dict_info(SharedString::from("正在扫描系统预编译主词库..."));
 
-    let aux_dict = Arc::new(Mutex::new(AuxiliaryDict::default()));
+    let aux_dict = Arc::new(Mutex::new(Arc::new(AuxiliaryDict::default())));
     spawn_lexicon_stats_loader(window.as_weak(), Arc::clone(&aux_dict));
 
     LexiconStatsBundle {
@@ -64,15 +64,14 @@ pub fn populate_lexicon_statistics(window: &SettingsWindow) -> LexiconStatsBundl
 /// 在后台线程加载辅助词典、重放用户 WAL 统计与扫描系统词库并回投主线程刷新 UI
 fn spawn_lexicon_stats_loader(
     win_weak: slint::Weak<SettingsWindow>,
-    aux_lock: Arc<Mutex<AuxiliaryDict>>,
+    aux_lock: Arc<Mutex<Arc<AuxiliaryDict>>>,
 ) {
-    if let Err(e) = std::thread::Builder::new()
-        .name("settings-lexicon-stats".to_string())
-        .spawn(move || {
+    if let Err(e) =
+        crate::task_runner::global_task_runner().spawn_named("settings-lexicon-stats", move || {
             let loaded_aux = LexiconSummaryService::load_auxiliary_dict();
             let en_count = loaded_aux.english_words.len();
             let sym_count = loaded_aux.symbols.len();
-            *aux_lock.lock() = loaded_aux;
+            *aux_lock.lock() = Arc::new(loaded_aux);
 
             let user_model_count = LexiconSummaryService::query_user_adaptive_entry_count();
             let base_dict_info = LexiconSummaryService::query_system_dict_info();
@@ -103,7 +102,7 @@ fn spawn_lexicon_stats_loader(
 /// 注册拼音、英文与符号等外部词库文件选取与异步导入回调
 pub(crate) fn register_dict_import_callbacks(
     window: &SettingsWindow,
-    aux_dict_lock: Arc<Mutex<AuxiliaryDict>>,
+    aux_dict_lock: Arc<Mutex<Arc<AuxiliaryDict>>>,
 ) {
     // 拼音词库导入回调
     let is_pinyin_importing = Arc::new(AtomicBool::new(false));
@@ -187,7 +186,7 @@ fn handle_pick_and_import_pinyin(win: &SettingsWindow, running_flag: &Arc<Atomic
 
 /// 辅助词库后台导入任务派发函数签名
 type AuxDictSpawnTask =
-    fn(slint::Weak<SettingsWindow>, String, Arc<Mutex<AuxiliaryDict>>, Arc<AtomicBool>);
+    fn(slint::Weak<SettingsWindow>, String, Arc<Mutex<Arc<AuxiliaryDict>>>, Arc<AtomicBool>);
 
 /// 辅助词库（英文/符号）导入链路描述
 ///
@@ -250,7 +249,7 @@ struct AuxDictPickContext {
     /// 窗口弱引用
     win_weak: slint::Weak<SettingsWindow>,
     /// 辅助词库共享互斥锁
-    aux_dict: Arc<Mutex<AuxiliaryDict>>,
+    aux_dict: Arc<Mutex<Arc<AuxiliaryDict>>>,
     /// 防重入标志
     running_flag: Arc<AtomicBool>,
 }
@@ -289,7 +288,7 @@ fn apply_aux_dict_selection(ctx: AuxDictPickContext, selected: Option<PathBuf>) 
 /// 处理辅助词库文件选取与异步导入派发
 fn handle_pick_and_import_aux_dict(
     win: &SettingsWindow,
-    aux_dict: &Arc<Mutex<AuxiliaryDict>>,
+    aux_dict: &Arc<Mutex<Arc<AuxiliaryDict>>>,
     running_flag: &Arc<AtomicBool>,
     flow: AuxDictImportFlow,
 ) {
@@ -323,7 +322,7 @@ fn handle_pick_and_import_aux_dict(
 /// 处理英文辅助词库文件选取与异步导入派发
 fn handle_pick_and_import_english(
     win: &SettingsWindow,
-    aux_dict: &Arc<Mutex<AuxiliaryDict>>,
+    aux_dict: &Arc<Mutex<Arc<AuxiliaryDict>>>,
     running_flag: &Arc<AtomicBool>,
 ) {
     handle_pick_and_import_aux_dict(win, aux_dict, running_flag, ENGLISH_IMPORT_FLOW);
@@ -332,7 +331,7 @@ fn handle_pick_and_import_english(
 /// 处理特殊符号库文件选取与异步导入派发
 fn handle_pick_and_import_symbols(
     win: &SettingsWindow,
-    aux_dict: &Arc<Mutex<AuxiliaryDict>>,
+    aux_dict: &Arc<Mutex<Arc<AuxiliaryDict>>>,
     running_flag: &Arc<AtomicBool>,
 ) {
     handle_pick_and_import_aux_dict(win, aux_dict, running_flag, SYMBOLS_IMPORT_FLOW);

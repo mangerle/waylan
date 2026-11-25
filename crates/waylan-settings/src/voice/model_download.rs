@@ -10,7 +10,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 
 use log::{error, info};
 use parking_lot::Mutex;
@@ -85,9 +84,11 @@ fn register_download_action(
         let win_weak_clone = window_weak.clone();
         let cfg_clone = loaded_config.clone();
         let downloading_guard = Arc::clone(&is_downloading);
-        if let Err(e) = thread::Builder::new()
-            .name("asr-model-downloader".to_string())
-            .spawn(move || {
+        if !crate::task_runner::global_task_runner().spawn_guarded(
+            "asr-model-downloader",
+            &is_downloading,
+            "派发模型下载线程失败",
+            move || {
                 run_download_worker(
                     win_weak_clone,
                     cfg_clone,
@@ -95,14 +96,11 @@ fn register_download_action(
                     model_name,
                     downloading_guard,
                 );
-            })
+            },
+        ) && let Some(win) = window_weak.upgrade()
         {
-            is_downloading.store(false, Ordering::Release);
-            error!("[模型下载] 派发模型下载线程失败: {}", e);
-            if let Some(win) = window_weak.upgrade() {
-                win.set_global_status_is_error(true);
-                win.set_global_status(SharedString::from(format!("启动下载线程失败: {}", e)));
-            }
+            win.set_global_status_is_error(true);
+            win.set_global_status(SharedString::from("启动下载线程失败"));
         }
     });
 }
