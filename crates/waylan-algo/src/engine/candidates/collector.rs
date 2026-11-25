@@ -142,20 +142,17 @@ impl AlgoEngine {
         let (tier, comment) = if pm.is_exact_all {
             (CandidateTier::ExactWord, None)
         } else if pm.typo_count > 0 {
-            // 物理按键纠错：统一只标注正确拼音圆括号（如 (ni'hao)），彻底去除非必要汉字
-            (
-                CandidateTier::TypoCorrection,
-                Some(format!("({})", pm.matched_key)),
-            )
+            // 物理按键纠错：使用空字符串标记延迟格式化，避免在 Top-N 截断前分配大量注音字符串
+            (CandidateTier::TypoCorrection, Some(String::new()))
         } else if pm.has_initial {
             let tier = if pm.has_partial_tail && has_positive_typo_word && score <= 100 {
                 CandidateTier::PrefixPartial
             } else {
                 CandidateTier::SentenceViterbi
             };
-            // 混拼候选：统一去除非必要汉字前缀，仅在拼音不一致时标注拼音圆括号 (pinyin)
+            // 混拼候选：延迟至流水线截断后再格式化 (pinyin)
             let comment = if is_pinyin_different_from_raw(&pm.matched_key, raw_input) {
-                Some(format!("({})", pm.matched_key))
+                Some(String::new())
             } else {
                 None
             };
@@ -168,9 +165,9 @@ impl AlgoEngine {
             };
             (tier, None)
         } else {
-            // 模糊音、习惯音或规则归一：当规范拼音与原始输入切片不一致时，在候选词后附带正确拼音圆括号
+            // 模糊音、习惯音或规则归一：延迟至流水线截断后再格式化 (pinyin)
             let comment = if is_pinyin_different_from_raw(&pm.matched_key, raw_input) {
-                Some(format!("({})", pm.matched_key))
+                Some(String::new())
             } else {
                 None
             };
@@ -229,12 +226,11 @@ impl AlgoEngine {
                 } else {
                     CandidateTier::SentenceViterbi
                 };
-            let comment = if sent.typo_count > 0 {
-                // 物理按键纠错：统一只标注正确拼音圆括号
-                Some(format!("({})", sent.pinyin))
-            } else if !sent.is_exact_all && is_pinyin_different_from_raw(&sent.pinyin, raw_input) {
-                // 混拼或模糊音整句：统一去除非必要汉字，仅在拼音不一致时标注拼音圆括号
-                Some(format!("({})", sent.pinyin))
+            let comment = if sent.typo_count > 0
+                || (!sent.is_exact_all && is_pinyin_different_from_raw(&sent.pinyin, raw_input))
+            {
+                // 延迟至 Top-N 截断后再格式化正确拼音圆括号
+                Some(String::new())
             } else {
                 None
             };

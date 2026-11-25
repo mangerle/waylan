@@ -113,8 +113,8 @@ impl PositionalBeamDecoder {
             return DecodeResult::default();
         }
 
-        let mut whole_words: Vec<PhraseMatch> = Vec::new();
-        let mut prefix_word_matches: Vec<PhraseMatch> = Vec::new();
+        let mut whole_words: Vec<PhraseMatch> = Vec::with_capacity(16);
+        let mut prefix_word_matches: Vec<PhraseMatch> = Vec::with_capacity(16);
 
         let init_ctx = InitContext {
             lattice,
@@ -125,18 +125,21 @@ impl PositionalBeamDecoder {
             seed_word,
         };
 
-        let mut ws = if let Some(c) = cache.as_deref_mut()
-            && let Some(freeze_pos) = c
+        let mut ws = if let Some(c) = cache.as_deref_mut() {
+            if let Some(freeze_pos) = c
                 .compute_safe_freeze(lattice, options, config_sig)
                 .filter(|&f| f > start_pos)
-        {
-            init_beam_from_cache(
-                &init_ctx,
-                c,
-                freeze_pos,
-                &mut whole_words,
-                &mut prefix_word_matches,
-            )
+            {
+                init_beam_from_cache(
+                    &init_ctx,
+                    c,
+                    freeze_pos,
+                    &mut whole_words,
+                    &mut prefix_word_matches,
+                )
+            } else {
+                init_beam_reusing_cache(len, start_pos, seed_word_id, c)
+            }
         } else {
             init_beam_cold(len, start_pos, seed_word_id)
         };
@@ -179,6 +182,72 @@ impl PositionalBeamDecoder {
         }
 
         result
+    }
+}
+
+/// 复用已有缓存底层向量容量冷启动构造空束搜索工作区（零外层/内层重新堆分配）
+fn init_beam_reusing_cache(
+    len: usize,
+    start_pos: usize,
+    seed_word_id: Option<u32>,
+    c: &mut IncrementalBeamCache,
+) -> BeamWorkspace {
+    let mut beam = std::mem::take(&mut c.beam_slots);
+    if beam.len() < len + 1 {
+        beam.resize_with(len + 1, Vec::new);
+    } else {
+        beam.truncate(len + 1);
+    }
+    for slot in &mut beam {
+        slot.clear();
+    }
+
+    let mut node_arena = std::mem::take(&mut c.node_arena);
+    node_arena.clear();
+
+    let mut arena_len_before_pos = std::mem::take(&mut c.arena_len_before_pos);
+    arena_len_before_pos.clear();
+    arena_len_before_pos.resize(len, 0);
+
+    let mut spans_by_pos = std::mem::take(&mut c.spans_by_pos);
+    if spans_by_pos.len() < len {
+        spans_by_pos.resize_with(len, Vec::new);
+    } else {
+        spans_by_pos.truncate(len);
+    }
+    for slot in &mut spans_by_pos {
+        slot.clear();
+    }
+
+    let mut pos_max_reach = std::mem::take(&mut c.pos_max_reach);
+    pos_max_reach.clear();
+    pos_max_reach.resize(len, 0);
+
+    let root_idx = node_arena.len();
+    node_arena.push(ArenaNode {
+        parent: None,
+        word_ref: None,
+    });
+    beam[start_pos].push(BeamState {
+        node_idx: root_idx,
+        score: 0,
+        typo_count: 0,
+        has_initial: false,
+        has_partial_tail: false,
+        is_exact_all: true,
+        word_count: 0,
+        last_word_ref: None,
+        last_word_id: seed_word_id,
+        first_word_end: None,
+    });
+
+    BeamWorkspace {
+        beam,
+        node_arena,
+        arena_len_before_pos,
+        spans_by_pos,
+        pos_max_reach,
+        loop_start: start_pos,
     }
 }
 

@@ -243,8 +243,24 @@ impl CandidatePipeline {
         if candidates.len() > MAX_PUBLISHED_CANDIDATES {
             candidates.truncate(MAX_PUBLISHED_CANDIDATES);
         }
+        Self::materialize_deferred_comments(&mut candidates);
 
         candidates
+    }
+
+    /// 为通过延迟标记（空字符串哨兵）保留的候选词统一格式化 `(pinyin)` 圆括号注释
+    fn materialize_deferred_comments(candidates: &mut [AlgoCandidate]) {
+        for cand in candidates.iter_mut() {
+            if let Some(ref mut comment) = cand.comment
+                && comment.is_empty()
+                && !cand.pinyin.is_empty()
+            {
+                comment.reserve(cand.pinyin.len() + 2);
+                comment.push('(');
+                comment.push_str(&cand.pinyin);
+                comment.push(')');
+            }
+        }
     }
 
     /// 执行完整候选词清洗与排序流水线，返回全量排序列（不执行分页截断）
