@@ -52,6 +52,9 @@ pub fn run_session_v1_loop(mut session: WaylanV1Session) -> Result<(), WaylandRu
     loop {
         if !run_session_loop_step(&mut event_queue, &mut session)? {
             info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V1 事件循环。");
+            if let Err(e) = session.runtime.core.engine.persist_user_dict() {
+                warn!("[微澜 Wayland V1] 退出时用户词库归并落盘失败: {}", e);
+            }
             return Ok(());
         }
     }
@@ -88,6 +91,9 @@ pub fn run_session_v2_loop_fallible(
             Ok(true) => continue,
             Ok(false) => {
                 info!("[微澜 Wayland] 收到退出请求信号，正在安全退出 V2 事件循环。");
+                if let Err(e) = session.runtime.core.engine.persist_user_dict() {
+                    warn!("[微澜 Wayland V2] 退出时用户词库归并落盘失败: {}", e);
+                }
                 return Ok(());
             }
             Err(e) => return Err((e, Box::new(session))),

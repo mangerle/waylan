@@ -108,22 +108,6 @@ impl AlgoEngine {
     }
 }
 
-impl Drop for AlgoEngine {
-    fn drop(&mut self) {
-        if let Some(ref path) = self.adaptive.dict_path {
-            log::info!(
-                "[算法引擎] 引擎正在析构，确保用户自适应词库落盘: {:?}",
-                path
-            );
-            if let Err(e) = self.adaptive.compact() {
-                log::warn!("[算法引擎] 析构保存用户词库失败: {}", e);
-            } else {
-                log::info!("[算法引擎] 析构已成功完成用户词库安全落盘。");
-            }
-        }
-    }
-}
-
 impl AlgoEngine {
     /// 使用内置样例数据创建算法引擎（用于测试）
     pub fn with_sample_data(config: AlgoConfig) -> Self {
