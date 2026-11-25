@@ -46,6 +46,13 @@ impl LoopWakeup {
         }
     }
 
+    /// 供异步信号处理上下文调用的纯系统调用脉冲唤醒（无日志、无锁、零分配，严格 async-signal-safe）
+    #[inline]
+    pub fn wake_signal_safe(&self) {
+        let val = 1u64.to_ne_bytes();
+        let _ = rustix::io::write(&*self.fd, &val);
+    }
+
     /// 清空并消耗当前挂起的全部唤醒事件计数
     pub fn drain(&self) {
         let mut buf = [0u8; 8];

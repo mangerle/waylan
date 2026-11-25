@@ -62,6 +62,9 @@ impl ShutdownCoordinator {
     }
 
     /// 注册进程系统退出信号拦截 (SIGINT / SIGTERM)
+    ///
+    /// 在原子置位退出标志的同时，通过 async-signal-safe 的 `eventfd` 写入立即唤醒阻塞在
+    /// `poll(..., -1)` 上的主事件循环（避免信号被工作线程捕获导致主线程收不到 EINTR 而挂死）。
     pub fn register_system_signals(&self) {
         let flag = Arc::clone(&self.exit_requested);
         for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
@@ -72,6 +75,19 @@ impl ShutdownCoordinator {
             }
             if let Err(e) = signal_hook::flag::register(sig, Arc::clone(&flag)) {
                 warn!("[微澜守护进程] 注册信号标志置位失败: {}", e);
+            }
+            if let Some(ref wakeup) = self.loop_wakeup {
+                let wakeup_clone = wakeup.clone();
+                // SAFETY: 闭包的唯一系统调用为 `LoopWakeup::wake_signal_safe`（单次 `write(2)`），
+                // 完全满足 POSIX async-signal-safety 约束，无分配、无锁、无日志。
+                let res = unsafe {
+                    signal_hook::low_level::register(sig, move || {
+                        wakeup_clone.wake_signal_safe();
+                    })
+                };
+                if let Err(e) = res {
+                    warn!("[微澜守护进程] 注册信号事件循环唤醒钩子失败: {}", e);
+                }
             }
         }
     }
@@ -303,6 +319,15 @@ mod tests {
         coordinator.request_shutdown();
         assert!(coordinator.is_shutting_down());
         assert!(coordinator.flag().load(Ordering::Acquire));
+
+        if let Some(ref w) = wakeup {
+            w.wake_signal_safe();
+            let mut buf = [0u8; 8];
+            let read_bytes = rustix::io::read(w.as_fd(), &mut buf)
+                .expect("信号安全唤醒后 eventfd 必须立即就绪可读");
+            assert_eq!(read_bytes, 8);
+            assert!(u64::from_ne_bytes(buf) >= 1);
+        }
     }
 
     #[test]
