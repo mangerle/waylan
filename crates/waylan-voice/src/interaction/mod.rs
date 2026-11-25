@@ -286,8 +286,12 @@ impl VoiceInteractionManager {
             }
         }
 
-        if let Some(fallback) = self.check_finalizing_timeout_fallback() {
-            return Some(fallback);
+        if final_commit.is_none() {
+            if let Some(fallback) = self.check_finalizing_timeout_fallback() {
+                return Some(fallback);
+            }
+        } else {
+            let _ = self.check_finalizing_timeout_fallback();
         }
 
         final_commit
@@ -295,7 +299,7 @@ impl VoiceInteractionManager {
 
     /// 启动语音录音会话
     pub(crate) fn start_recording(&mut self, is_ptt: bool, main_key: Option<u32>) -> bool {
-        let (tx, rx) = sync_channel(32);
+        let (tx, rx) = sync_channel(64);
         let opts = VoiceSessionOptions {
             voice_config: self.config.clone(),
         };

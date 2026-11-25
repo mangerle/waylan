@@ -1,5 +1,7 @@
 //! 线上云端语音识别器（基于 OpenAI/Whisper 规范 API 与 HTTP 连接池）
 
+use std::io::Read;
+
 use log::info;
 use waylan_core::{CloudAsrConfig, CloudProviderType};
 
@@ -8,6 +10,9 @@ use crate::error::VoiceError;
 
 /// 单次云端识别允许缓存的最大 PCM 采样数（16kHz 下 5 分钟）
 const MAX_CLOUD_PCM_SAMPLES: usize = 16_000 * 300;
+
+/// 云端 ASR HTTP 响应体最大读取体积（2 MiB），防止异常响应耗尽内存
+const MAX_CLOUD_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// 校验本次追加采样后是否仍处于单次云端识别上限内
 fn validate_buffer_growth(
@@ -82,7 +87,7 @@ impl CloudVoiceRecognizer {
             "[云端 ASR] 正在初始化线上语音服务客户端 (协议: {:?}, 地址: {})",
             config.provider, config.endpoint
         );
-        let timeout = std::time::Duration::from_secs(15);
+        let timeout = std::time::Duration::from_secs(45);
         let agent_config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .max_idle_connections(8)
@@ -109,10 +114,12 @@ impl CloudVoiceRecognizer {
 
 impl VoiceRecognizer for CloudVoiceRecognizer {
     fn is_ready(&self) -> bool {
-        self.config
-            .api_key
-            .as_deref()
-            .is_some_and(|key| !key.trim().is_empty())
+        self.config.provider == CloudProviderType::OpenAiCompatible
+            && self
+                .config
+                .api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty())
     }
 
     fn feed_pcm(&mut self, samples: &[f32]) -> Result<Option<String>, VoiceError> {
@@ -217,7 +224,7 @@ fn build_multipart_payload(model: &str, wav_data: &[u8]) -> (String, Vec<u8>) {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
-    let mut body = Vec::new();
+    let mut body = Vec::with_capacity(wav_data.len().saturating_add(512));
 
     // 1. model 字段
     body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
@@ -250,17 +257,36 @@ fn build_multipart_payload(model: &str, wav_data: &[u8]) -> (String, Vec<u8>) {
     (boundary, body)
 }
 
+/// 有界读取云端响应文本，避免异常超大响应导致内存耗尽
+fn read_bounded_response_text(
+    resp: &mut ureq::http::Response<ureq::Body>,
+) -> Result<String, VoiceError> {
+    let mut raw = Vec::new();
+    resp.body_mut()
+        .as_reader()
+        .take(MAX_CLOUD_RESPONSE_BYTES + 1)
+        .read_to_end(&mut raw)
+        .map_err(|e| VoiceError::RecognizerFailed {
+            engine_type: "云端 Whisper".to_string(),
+            message: format!("读取云端响应流失败: {}", e),
+        })?;
+    if raw.len() as u64 > MAX_CLOUD_RESPONSE_BYTES {
+        return Err(VoiceError::RecognizerFailed {
+            engine_type: "云端 Whisper".to_string(),
+            message: format!("云端响应体积超出限制 ({MAX_CLOUD_RESPONSE_BYTES} 字节)"),
+        });
+    }
+    String::from_utf8(raw).map_err(|e| VoiceError::RecognizerFailed {
+        engine_type: "云端 Whisper".to_string(),
+        message: format!("云端响应非有效 UTF-8 字符串: {}", e),
+    })
+}
+
 /// 解析云端 HTTP 响应与错误提取
 fn parse_cloud_response(mut resp: ureq::http::Response<ureq::Body>) -> Result<String, VoiceError> {
     let status = resp.status().as_u16();
     if (200..300).contains(&status) {
-        let resp_str =
-            resp.body_mut()
-                .read_to_string()
-                .map_err(|e| VoiceError::RecognizerFailed {
-                    engine_type: "云端 Whisper".to_string(),
-                    message: format!("解析云端响应字符串失败: {}", e),
-                })?;
+        let resp_str = read_bounded_response_text(&mut resp)?;
         // 尝试从标准 Whisper 返回 JSON 中解析识别文本
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&resp_str)
             && let Some(text) = val.get("text").and_then(|t| t.as_str())
@@ -275,7 +301,7 @@ fn parse_cloud_response(mut resp: ureq::http::Response<ureq::Body>) -> Result<St
             .canonical_reason()
             .unwrap_or("未知状态")
             .to_string();
-        let resp_body = resp.body_mut().read_to_string().unwrap_or_default();
+        let resp_body = read_bounded_response_text(&mut resp).unwrap_or_default();
         let detail = if !resp_body.trim().is_empty() {
             format!(
                 "状态码: {} ({}), 详情: {}",
@@ -304,6 +330,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             ..Default::default()
         });
+        assert!(!recognizer.is_ready(), "未实现的云端协议必须在录音前即拦截");
         assert!(matches!(
             recognizer.finish(),
             Err(VoiceError::UnsupportedCloudProvider { .. })

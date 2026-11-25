@@ -104,12 +104,16 @@ impl VadProcessor for ModelVad {
                 // 已检测到完整语音段落，或当前静音持续时间已超时
                 if !detector.is_empty() {
                     detector.clear();
+                    self.has_speech_started = false;
+                    self.last_speech_time = None;
                     return true;
                 }
                 if let Some(last_speech) = self.last_speech_time
                     && now.duration_since(last_speech) >= self.silence_duration_threshold
                 {
                     detector.clear();
+                    self.has_speech_started = false;
+                    self.last_speech_time = None;
                     return true;
                 }
                 false

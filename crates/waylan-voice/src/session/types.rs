@@ -2,10 +2,11 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Duration;
 
+use log::warn;
 use waylan_core::VoiceConfig;
 
 use crate::afe::AudioFrontEndPipeline;
@@ -48,21 +49,58 @@ pub struct VoiceSessionOptions {
 pub(super) enum WorkerCommand {
     /// 开始新一轮录音与识别会话
     Start {
+        session_id: u64,
         options: Box<VoiceSessionOptions>,
         event_tx: SyncSender<VoiceEvent>,
     },
     /// 停止录音并确认提交最终文字
-    StopAndCommit,
+    StopAndCommit { session_id: u64 },
     /// 取消当前录音并丢弃
-    Cancel,
+    Cancel { session_id: u64 },
     /// 卸载并释放已加载的模型权重，释放系统内存
     UnloadModels,
     /// 销毁常驻线程平滑退出
     Shutdown,
 }
 
+/// 仅当全局活跃会话 ID 仍为指定 `session_id` 时才将其原子清零
+#[inline]
+pub(super) fn clear_session_if_matches(active_session_id: &Arc<AtomicU64>, session_id: u64) {
+    if session_id != 0 {
+        let _ =
+            active_session_id.compare_exchange(session_id, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
+
+/// 可靠发送不可丢失的语音终态/关键事件（分段提交、最终提交、取消、异常）
+///
+/// 在有界事件通道瞬时满载时进行短窗口退让重试，避免因波浪形预览积压而直接丢弃最终上屏结果；
+/// 若对端接收通道已断开返回 `false`。
+pub(super) fn send_critical_event(
+    event_tx: &SyncSender<VoiceEvent>,
+    mut event: VoiceEvent,
+) -> bool {
+    const MAX_RETRIES: usize = 10;
+    for attempt in 0..=MAX_RETRIES {
+        match event_tx.try_send(event) {
+            Ok(()) => return true,
+            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Full(returned)) => {
+                if attempt == MAX_RETRIES {
+                    warn!("[语音会话] 外部事件通道持续满载，关键识别事件发送退让超时被丢弃");
+                    return true;
+                }
+                event = returned;
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+    true
+}
+
 /// 语音会话主动停止与优雅排空提交参数上下文
 pub(super) struct StopCommitContext<'a> {
+    pub session_id: u64,
     pub capture: Option<AudioCapture>,
     pub pcm_rx: &'a Receiver<Vec<f32>>,
     pub recognizer: &'a mut dyn VoiceRecognizer,
@@ -71,11 +109,12 @@ pub(super) struct StopCommitContext<'a> {
     pub last_partial_text: &'a mut String,
     pub voice_config: &'a VoiceConfig,
     pub event_tx: &'a SyncSender<VoiceEvent>,
-    pub is_active: &'a Arc<AtomicBool>,
+    pub active_session_id: &'a Arc<AtomicU64>,
 }
 
 /// 活跃录音与实时推理运行上下文参数结构体
 pub(super) struct ActiveRecordingContext<'a> {
+    pub session_id: u64,
     pub capture: Option<AudioCapture>,
     pub pcm_rx: Receiver<Vec<f32>>,
     pub recycle_tx: SyncSender<Vec<f32>>,
@@ -85,7 +124,7 @@ pub(super) struct ActiveRecordingContext<'a> {
     pub vad: &'a mut dyn VadProcessor,
     pub recognizer: &'a mut dyn VoiceRecognizer,
     pub voice_config: &'a VoiceConfig,
-    pub is_active: &'a Arc<AtomicBool>,
+    pub active_session_id: &'a Arc<AtomicU64>,
     pub shutdown_requested: &'a Arc<AtomicBool>,
 }
 

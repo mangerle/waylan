@@ -7,7 +7,7 @@
 //! - **代价与局限**：线程间交互依赖强类型有界通道，需显式传递原子标志与接收端。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
@@ -15,7 +15,10 @@ use log::{info, warn};
 
 use super::model_cache::{WorkerModelCache, check_idle_timeout_and_calculate_deadline};
 use super::pipeline::active_recording_loop;
-use super::types::{ActiveRecordingContext, VoiceEvent, VoiceSessionOptions, WorkerCommand};
+use super::types::{
+    ActiveRecordingContext, VoiceEvent, VoiceSessionOptions, WorkerCommand,
+    clear_session_if_matches, send_critical_event,
+};
 use crate::capture::AudioCapture;
 use crate::vad::WaveformVisualizer;
 
@@ -27,7 +30,7 @@ struct VoiceWorkerLoopState<'a> {
     cache: &'a mut WorkerModelCache,
     visualizer: &'a mut WaveformVisualizer,
     cmd_rx: &'a Receiver<WorkerCommand>,
-    is_active: &'a Arc<AtomicBool>,
+    active_session_id: &'a Arc<AtomicU64>,
     shutdown_requested: &'a Arc<AtomicBool>,
 }
 
@@ -59,16 +62,20 @@ fn wait_for_worker_command(
 /// 分发常驻工作线程收到的控制命令，返回是否应退出常驻工作线程
 fn dispatch_worker_command(cmd: WorkerCommand, state: &mut VoiceWorkerLoopState<'_>) -> bool {
     match cmd {
-        WorkerCommand::Start { options, event_tx } => {
-            if handle_start_command(state, *options, event_tx) {
+        WorkerCommand::Start {
+            session_id,
+            options,
+            event_tx,
+        } => {
+            if handle_start_command(state, session_id, *options, event_tx) {
                 info!("[语音会话] 录音过程中收到销毁指令，后台常驻语音工作线程平滑退出");
                 true
             } else {
                 false
             }
         }
-        WorkerCommand::StopAndCommit | WorkerCommand::Cancel => {
-            state.is_active.store(false, Ordering::Release);
+        WorkerCommand::StopAndCommit { session_id } | WorkerCommand::Cancel { session_id } => {
+            clear_session_if_matches(state.active_session_id, session_id);
             false
         }
         WorkerCommand::UnloadModels => {
@@ -86,7 +93,7 @@ fn dispatch_worker_command(cmd: WorkerCommand, state: &mut VoiceWorkerLoopState<
 /// 常驻工作线程主入口：纳管模型单例生命周期与会话状态机
 pub(crate) fn run_worker_main(
     cmd_rx: Receiver<WorkerCommand>,
-    is_active: Arc<AtomicBool>,
+    active_session_id: Arc<AtomicU64>,
     shutdown_requested: Arc<AtomicBool>,
 ) {
     let mut visualizer = WaveformVisualizer::new();
@@ -99,7 +106,7 @@ pub(crate) fn run_worker_main(
         cache: &mut cache,
         visualizer: &mut visualizer,
         cmd_rx: &cmd_rx,
-        is_active: &is_active,
+        active_session_id: &active_session_id,
         shutdown_requested: &shutdown_requested,
     };
 
@@ -121,25 +128,26 @@ pub(crate) fn run_worker_main(
         }
     }
 
-    is_active.store(false, Ordering::Release);
+    active_session_id.store(0, Ordering::Release);
 }
 
 /// 处理 Start 指令并拉起活动录音事件循环，返回是否收到了全局销毁指令需要退出常驻工作线程
 fn handle_start_command(
     state: &mut VoiceWorkerLoopState<'_>,
+    session_id: u64,
     options: VoiceSessionOptions,
     event_tx: SyncSender<VoiceEvent>,
 ) -> bool {
     if state.shutdown_requested.load(Ordering::Acquire) {
-        state.is_active.store(false, Ordering::Release);
+        clear_session_if_matches(state.active_session_id, session_id);
         return true;
     }
 
     let Some((recognizer, vad)) = state.cache.prepare_models(&options.voice_config) else {
         let message = "语音识别模型未就绪，已取消本次录音；请检查本地模型文件或云端 API Key 配置";
         warn!("[语音会话] {}", message);
-        let _ = event_tx.try_send(VoiceEvent::Error(message.to_string()));
-        state.is_active.store(false, Ordering::Release);
+        let _ = send_critical_event(&event_tx, VoiceEvent::Error(message.to_string()));
+        clear_session_if_matches(state.active_session_id, session_id);
         return false;
     };
     state.visualizer.reset();
@@ -159,14 +167,15 @@ fn handle_start_command(
         Ok(c) => c,
         Err(e) => {
             warn!("[语音会话] 启动音频采集硬件失败: {}", e);
-            let _ = event_tx.try_send(VoiceEvent::Error(e.to_string()));
-            state.is_active.store(false, Ordering::Release);
+            let _ = send_critical_event(&event_tx, VoiceEvent::Error(e.to_string()));
+            clear_session_if_matches(state.active_session_id, session_id);
             return false;
         }
     };
 
     info!("[语音会话] 录音捕获流与识别管道启动就绪，正在聆听用户语音...");
     active_recording_loop(ActiveRecordingContext {
+        session_id,
         capture: Some(capture),
         pcm_rx,
         recycle_tx,
@@ -176,7 +185,7 @@ fn handle_start_command(
         vad,
         recognizer,
         voice_config: &options.voice_config,
-        is_active: state.is_active,
+        active_session_id: state.active_session_id,
         shutdown_requested: state.shutdown_requested,
     })
 }

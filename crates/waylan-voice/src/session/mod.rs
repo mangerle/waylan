@@ -15,21 +15,23 @@ mod worker_loop;
 pub use types::{VoiceEvent, VoiceSessionOptions};
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 
 use log::warn;
 
-use self::types::WorkerCommand;
+use self::types::{WorkerCommand, clear_session_if_matches};
 use self::worker_loop::run_worker_main;
 
 use crate::error::VoiceError;
 
 /// 语音会话状态纳管器（长生命周期常驻控制器）
 pub struct VoiceSessionController {
-    /// 录音活动标志（供外界高频原子查询）
-    is_active: Arc<AtomicBool>,
+    /// 当前活跃会话代数 ID（0 表示空闲，非 0 为正在运行或交接中的会话编号，防跨会话状态覆盖）
+    active_session_id: Arc<AtomicU64>,
+    /// 下一个分配的单调递增会话编号（始终 >= 1）
+    next_session_id: u64,
     /// 常驻工作线程停机请求标志（跨线程可靠传递销毁意图）
     shutdown_requested: Arc<AtomicBool>,
     /// 命令发送端
@@ -50,11 +52,11 @@ impl VoiceSessionController {
     /// # Errors
     /// 当系统底层线程资源耗尽或创建工作线程失败时返回错误。
     pub fn try_new() -> Result<Self, VoiceError> {
-        let is_active = Arc::new(AtomicBool::new(false));
+        let active_session_id = Arc::new(AtomicU64::new(0));
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         let (cmd_tx, cmd_rx) = sync_channel::<WorkerCommand>(16);
 
-        let active_clone = Arc::clone(&is_active);
+        let active_clone = Arc::clone(&active_session_id);
         let shutdown_clone = Arc::clone(&shutdown_requested);
         let handle = thread::Builder::new()
             .name("waylan-voice-worker".to_string())
@@ -66,7 +68,8 @@ impl VoiceSessionController {
             })?;
 
         Ok(Self {
-            is_active,
+            active_session_id,
+            next_session_id: 1,
             shutdown_requested,
             cmd_tx,
             worker_handle: Some(handle),
@@ -97,7 +100,8 @@ impl VoiceSessionController {
         );
         let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
         Self {
-            is_active: Arc::new(AtomicBool::new(false)),
+            active_session_id: Arc::new(AtomicU64::new(0)),
+            next_session_id: 1,
             shutdown_requested: Arc::new(AtomicBool::new(true)),
             cmd_tx,
             worker_handle: None,
@@ -106,7 +110,7 @@ impl VoiceSessionController {
 
     /// 当前是否正处于录音识别中
     pub fn is_recording(&self) -> bool {
-        self.worker_handle.is_some() && self.is_active.load(Ordering::Acquire)
+        self.worker_handle.is_some() && self.active_session_id.load(Ordering::Acquire) != 0
     }
 
     /// 启动语音录制与识别会话
@@ -130,17 +134,23 @@ impl VoiceSessionController {
             });
         }
 
-        if self.is_recording() {
+        let session_id = self.next_session_id;
+        if self
+            .active_session_id
+            .compare_exchange(0, session_id, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             warn!("[语音会话] 录音已在进行中，忽略重复启动请求");
             return Ok(());
         }
+        self.next_session_id = self.next_session_id.wrapping_add(1).max(1);
 
-        self.is_active.store(true, Ordering::Release);
         if let Err(e) = self.cmd_tx.try_send(WorkerCommand::Start {
+            session_id,
             options: Box::new(options),
             event_tx,
         }) {
-            self.is_active.store(false, Ordering::Release);
+            clear_session_if_matches(&self.active_session_id, session_id);
             return Err(VoiceError::StreamStartFailed {
                 message: format!("向语音工作线程发送启动指令失败: {}", e),
             });
@@ -151,23 +161,36 @@ impl VoiceSessionController {
 
     /// 停止录音并请求最终提交识别结果
     pub fn stop_and_commit(&mut self) {
-        if self.worker_handle.is_some() && self.is_recording() {
-            // 使用非阻塞 try_send 防止工作线程加载模型或网络请求期间卡死输入法事件主循环
-            if let Err(e) = self.cmd_tx.try_send(WorkerCommand::StopAndCommit) {
-                warn!("[语音会话] 发送停止并提交指令失败: {}", e);
-            }
-            self.is_active.store(false, Ordering::Release);
+        if self.worker_handle.is_none() {
+            return;
         }
+        let session_id = self.active_session_id.load(Ordering::Acquire);
+        if session_id == 0 {
+            return;
+        }
+        // 使用非阻塞 try_send 防止工作线程加载模型或网络请求期间卡死输入法事件主循环
+        if let Err(e) = self
+            .cmd_tx
+            .try_send(WorkerCommand::StopAndCommit { session_id })
+        {
+            warn!("[语音会话] 发送停止并提交指令失败: {}", e);
+        }
+        clear_session_if_matches(&self.active_session_id, session_id);
     }
 
     /// 取消当前录音并丢弃未完成的识别
     pub fn cancel(&mut self) {
-        if self.worker_handle.is_some() && self.is_recording() {
-            if let Err(e) = self.cmd_tx.try_send(WorkerCommand::Cancel) {
-                warn!("[语音会话] 发送取消指令失败: {}", e);
-            }
-            self.is_active.store(false, Ordering::Release);
+        if self.worker_handle.is_none() {
+            return;
         }
+        let session_id = self.active_session_id.load(Ordering::Acquire);
+        if session_id == 0 {
+            return;
+        }
+        if let Err(e) = self.cmd_tx.try_send(WorkerCommand::Cancel { session_id }) {
+            warn!("[语音会话] 发送取消指令失败: {}", e);
+        }
+        clear_session_if_matches(&self.active_session_id, session_id);
     }
 
     /// 卸载并释放常驻工作线程中已加载的全部模型权重，归还系统内存
@@ -184,7 +207,7 @@ impl VoiceSessionController {
     /// - **核心优势**：先通过非阻塞 `try_send` 派发 `Shutdown` 指令（杜绝通道积压导致的析构死锁），
     ///   随后主动等待线程句柄 `join()` 彻底析构，确保 RAII 确定性资源释放与 Panic 感知。
     pub fn shutdown(&mut self) {
-        self.is_active.store(false, Ordering::Release);
+        self.active_session_id.store(0, Ordering::Release);
         self.shutdown_requested.store(true, Ordering::Release);
         if let Some(handle) = self.worker_handle.take() {
             // 命令通道可能已满，不能依赖 try_send 一定能送达；
@@ -223,7 +246,8 @@ mod tests {
         // 手动构造一个工作线程派生失败时的降级控制器实例
         let (cmd_tx, _cmd_rx) = sync_channel::<WorkerCommand>(1);
         let mut controller = VoiceSessionController {
-            is_active: Arc::new(AtomicBool::new(false)),
+            active_session_id: Arc::new(AtomicU64::new(0)),
+            next_session_id: 1,
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             cmd_tx,
             worker_handle: None,
@@ -322,7 +346,8 @@ mod tests {
         let (cmd_tx, cmd_rx) = sync_channel::<WorkerCommand>(4);
         let dummy_handle = thread::spawn(|| {});
         let controller = VoiceSessionController {
-            is_active: Arc::new(AtomicBool::new(false)),
+            active_session_id: Arc::new(AtomicU64::new(0)),
+            next_session_id: 1,
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             cmd_tx,
             worker_handle: Some(dummy_handle),
@@ -347,9 +372,10 @@ mod tests {
         let mut afe = AudioFrontEndPipeline::new(&voice_cfg.afe);
         let mut pre_speech = VecDeque::new();
         let mut last_partial = String::new();
-        let is_active = Arc::new(AtomicBool::new(true));
+        let active_session_id = Arc::new(AtomicU64::new(7));
 
         let ctx = StopCommitContext {
+            session_id: 7,
             capture: None,
             pcm_rx: &pcm_rx,
             recognizer: &mut recognizer,
@@ -358,7 +384,7 @@ mod tests {
             last_partial_text: &mut last_partial,
             voice_config: &voice_cfg,
             event_tx: &event_tx,
-            is_active: &is_active,
+            active_session_id: &active_session_id,
         };
 
         handle_stop_and_commit(ctx);
@@ -367,7 +393,7 @@ mod tests {
         assert!(pcm_rx.try_recv().is_err(), "音频通道中的切片应已被全部排空");
 
         // 验证活跃标志已安全复位
-        assert!(!is_active.load(Ordering::Acquire));
+        assert_eq!(active_session_id.load(Ordering::Acquire), 0);
 
         // 验证成功收到包含文本的 FinalCommit 事件
         let mut final_commit_received = false;
@@ -378,6 +404,15 @@ mod tests {
             }
         }
         assert!(final_commit_received, "必须收到 FinalCommit 终态事件");
+    }
+
+    #[test]
+    fn test_stale_session_cannot_clear_newer_active_session() {
+        let active_session_id = Arc::new(AtomicU64::new(2));
+        clear_session_if_matches(&active_session_id, 1);
+        assert_eq!(active_session_id.load(Ordering::Acquire), 2);
+        clear_session_if_matches(&active_session_id, 2);
+        assert_eq!(active_session_id.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -404,28 +439,28 @@ mod tests {
     #[test]
     fn test_stop_and_commit_command_reaches_worker() {
         let (cmd_tx, cmd_rx) = sync_channel::<WorkerCommand>(4);
-        let (seen_tx, seen_rx) = sync_channel::<()>(1);
-        let is_active = Arc::new(AtomicBool::new(true));
+        let (seen_tx, seen_rx) = sync_channel::<u64>(1);
+        let active_session_id = Arc::new(AtomicU64::new(42));
         let worker = thread::spawn(move || {
-            if let Ok(WorkerCommand::StopAndCommit) = cmd_rx.recv() {
-                let _ = seen_tx.send(());
+            if let Ok(WorkerCommand::StopAndCommit { session_id }) = cmd_rx.recv() {
+                let _ = seen_tx.send(session_id);
             }
             // 模拟工作线程后续退出，避免控制器 Drop 时 join 永久阻塞
             let _ = cmd_rx.recv();
         });
 
         let mut controller = VoiceSessionController {
-            is_active,
+            active_session_id,
+            next_session_id: 43,
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             cmd_tx,
             worker_handle: Some(worker),
         };
         controller.stop_and_commit();
-        assert!(
-            seen_rx
-                .recv_timeout(std::time::Duration::from_secs(1))
-                .is_ok(),
-            "停止录音时必须先确保 StopAndCommit 命令送达工作线程"
+        assert_eq!(
+            seen_rx.recv_timeout(std::time::Duration::from_secs(1)),
+            Ok(42),
+            "停止录音时必须先确保携带当前会话 ID 的 StopAndCommit 命令送达工作线程"
         );
         controller.shutdown();
     }

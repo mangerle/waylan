@@ -7,13 +7,13 @@
 //! - **代价与局限**：跨文件调用需传递上下文借用参数。
 
 use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
 
 use super::types::{
     PRE_SPEECH_BUFFER_CAPACITY, RecognitionFeedContext, StopCommitContext, VoiceEvent,
+    clear_session_if_matches, send_critical_event,
 };
 use crate::recognizer::VoiceRecognizer;
 
@@ -51,8 +51,8 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
                 ctx.last_partial_text.clone()
             } else {
                 warn!("[语音会话] 最终整句识别失败: {}", e);
-                let _ = ctx.event_tx.try_send(VoiceEvent::Error(e.to_string()));
-                ctx.is_active.store(false, Ordering::Release);
+                let _ = send_critical_event(ctx.event_tx, VoiceEvent::Error(e.to_string()));
+                clear_session_if_matches(ctx.active_session_id, ctx.session_id);
                 return;
             }
         }
@@ -67,8 +67,8 @@ pub(super) fn handle_stop_and_commit(mut ctx: StopCommitContext<'_>) {
     }
 
     info!("[语音会话] 主动提交识别结果: \"{}\"", final_text);
-    let _ = ctx.event_tx.try_send(VoiceEvent::FinalCommit(final_text));
-    ctx.is_active.store(false, Ordering::Release);
+    let _ = send_critical_event(ctx.event_tx, VoiceEvent::FinalCommit(final_text));
+    clear_session_if_matches(ctx.active_session_id, ctx.session_id);
 }
 
 /// 排空管道中残留的在途音频并彻底终止麦克风硬件录入
@@ -148,7 +148,7 @@ pub(super) fn process_recognition_feed(ctx: RecognitionFeedContext<'_>, samples:
         Ok(None) => {}
         Err(e) => {
             warn!("[语音会话] 语音识别推理遇到异常: {}", e);
-            let _ = ctx.event_tx.try_send(VoiceEvent::Error(e.to_string()));
+            let _ = send_critical_event(ctx.event_tx, VoiceEvent::Error(e.to_string()));
             return false;
         }
     }

@@ -13,7 +13,7 @@ pub(super) use super::commit::{
 };
 use super::types::{
     ActiveRecordingContext, PRE_SPEECH_BUFFER_CAPACITY, RecognitionFeedContext, StopCommitContext,
-    VoiceEvent, WorkerCommand,
+    VoiceEvent, WorkerCommand, clear_session_if_matches, send_critical_event,
 };
 use crate::afe::AudioFrontEndPipeline;
 use crate::capture::AudioCapture;
@@ -115,7 +115,7 @@ pub(super) fn active_recording_loop(mut ctx: ActiveRecordingContext<'_>) -> bool
         }
     }
 
-    ctx.is_active.store(false, Ordering::Release);
+    clear_session_if_matches(ctx.active_session_id, ctx.session_id);
     info!("[语音会话] 录音会话结束，音频捕获硬件已释放");
     is_shutdown
 }
@@ -137,8 +137,9 @@ fn handle_recording_command(
     ctx: &mut ActiveRecordingContext<'_>,
 ) -> RecordingCommandOutcome {
     match cmd {
-        WorkerCommand::StopAndCommit => {
+        WorkerCommand::StopAndCommit { session_id } if session_id == ctx.session_id => {
             let commit_ctx = StopCommitContext {
+                session_id: ctx.session_id,
                 capture: ctx.capture.take(),
                 pcm_rx: &ctx.pcm_rx,
                 recognizer: ctx.recognizer,
@@ -147,28 +148,35 @@ fn handle_recording_command(
                 last_partial_text: &mut state.last_partial_text,
                 voice_config: ctx.voice_config,
                 event_tx: ctx.event_tx,
-                is_active: ctx.is_active,
+                active_session_id: ctx.active_session_id,
             };
             handle_stop_and_commit(commit_ctx);
             RecordingCommandOutcome::StopRecording
         }
-        WorkerCommand::Cancel => {
+        WorkerCommand::Cancel { session_id } if session_id == ctx.session_id => {
             info!("[语音会话] 收到外部取消指令，放弃本次录音");
             release_recording_resources(state, ctx);
-            let _ = ctx.event_tx.try_send(VoiceEvent::Cancelled);
-            ctx.is_active.store(false, Ordering::Release);
+            let _ = send_critical_event(ctx.event_tx, VoiceEvent::Cancelled);
+            clear_session_if_matches(ctx.active_session_id, ctx.session_id);
             RecordingCommandOutcome::StopRecording
+        }
+        WorkerCommand::StopAndCommit { session_id } | WorkerCommand::Cancel { session_id } => {
+            warn!(
+                "[语音会话] 忽略与当前会话编号不匹配的过期控制指令: cmd_session={}, current={}",
+                session_id, ctx.session_id
+            );
+            RecordingCommandOutcome::Continue
         }
         WorkerCommand::Shutdown => {
             info!("[语音会话] 录音过程中收到销毁指令，准备彻底退出语音工作线程");
             release_recording_resources(state, ctx);
-            ctx.is_active.store(false, Ordering::Release);
+            clear_session_if_matches(ctx.active_session_id, ctx.session_id);
             RecordingCommandOutcome::Shutdown
         }
         WorkerCommand::UnloadModels => {
             info!("[语音会话] 录音过程中收到卸载指令，中止当前录音并退出");
             release_recording_resources(state, ctx);
-            ctx.is_active.store(false, Ordering::Release);
+            clear_session_if_matches(ctx.active_session_id, ctx.session_id);
             RecordingCommandOutcome::StopRecording
         }
         WorkerCommand::Start { .. } => {
@@ -279,9 +287,7 @@ fn handle_vad_segment(
     ) {
         Ok(seg_text) if !seg_text.is_empty() => {
             info!("[语音会话] 自动断句分句上屏结果: \"{}\"", seg_text);
-            if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-                ctx.event_tx.try_send(VoiceEvent::SegmentCommit(seg_text))
-            {
+            if !send_critical_event(ctx.event_tx, VoiceEvent::SegmentCommit(seg_text)) {
                 info!("[语音会话] 外部事件通道已关闭，退出录音循环");
                 return false;
             }
@@ -289,9 +295,7 @@ fn handle_vad_segment(
         Ok(_) => {}
         Err(e) => {
             warn!("[语音会话] 分句识别结算失败: {}", e);
-            if let Err(std::sync::mpsc::TrySendError::Disconnected(_)) =
-                ctx.event_tx.try_send(VoiceEvent::Error(e.to_string()))
-            {
+            if !send_critical_event(ctx.event_tx, VoiceEvent::Error(e.to_string())) {
                 info!("[语音会话] 外部事件通道已关闭，退出录音循环");
                 return false;
             }
@@ -316,7 +320,10 @@ fn check_stream_dead(
         .unwrap_or(false)
     {
         warn!("[语音会话] 检测到底层麦克风音频流已异常中断（设备可能已拔出），立即终止会话");
-        let _ = event_tx.try_send(VoiceEvent::Error("麦克风音频设备已断开".to_string()));
+        let _ = send_critical_event(
+            event_tx,
+            VoiceEvent::Error("麦克风音频设备已断开".to_string()),
+        );
         true
     } else {
         false
