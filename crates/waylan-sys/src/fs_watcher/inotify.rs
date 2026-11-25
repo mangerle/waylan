@@ -106,7 +106,7 @@ pub fn create_timed_file_event_filter(
 pub struct InotifyWatcher {
     fd: Arc<OwnedFd>,
     watched_paths: Vec<PathBuf>,
-    file_watches: HashSet<i32>,
+    file_watches: HashMap<i32, PathBuf>,
     dir_watches: HashMap<i32, PathBuf>,
     event_filter: Option<DirEventFilter>,
 }
@@ -136,7 +136,7 @@ impl InotifyWatcher {
         let mut watcher = Self {
             fd: Arc::new(fd),
             watched_paths: paths.to_vec(),
-            file_watches: HashSet::with_capacity(paths.len()),
+            file_watches: HashMap::with_capacity(paths.len()),
             dir_watches: HashMap::with_capacity(paths.len()),
             event_filter: filter,
         };
@@ -160,7 +160,7 @@ impl InotifyWatcher {
             | WatchFlags::CREATE
             | WatchFlags::DELETE;
 
-        for wd in self.file_watches.drain() {
+        for (wd, _) in self.file_watches.drain() {
             let _ = inotify::remove_watch(&self.fd, wd);
         }
         for (wd, _) in self.dir_watches.drain() {
@@ -172,7 +172,7 @@ impl InotifyWatcher {
             if path.exists() {
                 match inotify::add_watch(&self.fd, path, file_flags) {
                     Ok(wd) => {
-                        self.file_watches.insert(wd);
+                        self.file_watches.insert(wd, path.clone());
                     }
                     Err(e) => {
                         debug!("[微澜 Inotify] 监听具体文件 {:?} 失败: {}", path, e);
@@ -198,21 +198,28 @@ impl InotifyWatcher {
     /// 判断单条 inotify 事件是否对应被监控的目标配置文件或外部词库重置操作
     fn is_relevant_event(&self, event: &InotifyEvent<'_>) -> bool {
         let wd = event.wd();
-        if self.file_watches.contains(&wd) {
+        if let Some(file_path) = self.file_watches.get(&wd) {
+            if let Some(ref filter) = self.event_filter
+                && let Some(dir_path) = file_path.parent()
+                && let Some(os_name) = file_path.file_name()
+                && let Some(decision) = filter(dir_path, os_name, event.events())
+            {
+                return decision;
+            }
             return true;
         }
         if let Some(dir_path) = self.dir_watches.get(&wd)
             && let Some(c_name) = event.file_name()
         {
             let os_name = OsStr::from_bytes(c_name.to_bytes());
-            let full_path = dir_path.join(os_name);
-            if self.watched_paths.iter().any(|p| p == &full_path) {
-                return true;
-            }
             if let Some(ref filter) = self.event_filter
                 && let Some(decision) = filter(dir_path, os_name, event.events())
             {
                 return decision;
+            }
+            let full_path = dir_path.join(os_name);
+            if self.watched_paths.iter().any(|p| p == &full_path) {
+                return true;
             }
         }
         false

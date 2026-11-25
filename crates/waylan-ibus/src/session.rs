@@ -104,7 +104,8 @@ pub fn run_ibus_session(opts: IbusSessionOptions) -> Result<(), IbusError> {
     register_or_activate_ibus_engine(&conn, is_child)?;
 
     let mut inotify_watcher: Option<InotifyWatcher> = None;
-    let filter = create_timed_file_event_filter("user_dict.bin", None, 2000);
+    let compact_tracker = shared_core.lock().runtime.user_dict_compact_tracker();
+    let filter = create_timed_file_event_filter("user_dict.bin", Some(compact_tracker), 2000);
     init_session_inotify_watcher_with_filter(
         &monitor_params.watched_paths,
         &mut inotify_watcher,

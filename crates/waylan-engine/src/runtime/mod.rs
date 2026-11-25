@@ -8,7 +8,7 @@
 //! - **代价与局限**：协议层需以借用形式提供前端抽象实例。
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::SyncSender;
 
 use waylan_algo::AlgoEngine;
@@ -155,6 +155,12 @@ impl ImeRuntime {
     #[inline]
     pub fn core_mut(&mut self) -> &mut ImeCoreSession {
         &mut self.core
+    }
+
+    /// 获取用户词库归并自写入时间戳追踪器（供文件监听过滤自身写盘引发的冗余重载）
+    #[inline]
+    pub fn user_dict_compact_tracker(&self) -> Arc<AtomicU64> {
+        self.core.engine.user_dict_compact_tracker()
     }
 
     /// 获取语音管理器不可变引用

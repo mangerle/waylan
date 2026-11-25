@@ -122,6 +122,41 @@ fn test_inotify_timed_file_filter_suppression_and_replacement() {
 }
 
 #[test]
+fn test_inotify_direct_watched_file_respects_self_write_filter() {
+    let temp_dir = tempfile::tempdir().expect("创建临时目录应当成功");
+    let target_file = temp_dir.path().join("user_dict.bin");
+    File::create(&target_file)
+        .expect("创建目标文件")
+        .write_all(b"INIT")
+        .expect("写入初始数据");
+
+    let tracker = Arc::new(AtomicU64::new(0));
+    let filter = create_timed_file_event_filter("user_dict.bin", Some(tracker.clone()), 2000);
+    let mut watcher =
+        InotifyWatcher::try_new_with_filter(std::slice::from_ref(&target_file), Some(filter))
+            .expect("创建 InotifyWatcher 应当成功");
+    assert!(!watcher.drain_events());
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("系统时间应当晚于 UNIX 纪元")
+        .as_millis() as u64;
+    tracker.store(now, Ordering::Release);
+
+    let tmp_file = temp_dir.path().join("user_dict.bin.tmp");
+    File::create(&tmp_file)
+        .expect("创建临时归并文件")
+        .write_all(b"COMPACT")
+        .expect("写入归并数据");
+    std::fs::rename(&tmp_file, &target_file).expect("原子替换 user_dict.bin");
+
+    assert!(
+        !watcher.drain_events(),
+        "即使目标文件本身在 watched_paths 中，抑制窗口内的自写入也绝不能绕过过滤器触发重载"
+    );
+}
+
+#[test]
 fn test_check_watched_paths_changed_multiple_files_and_deletion() {
     let temp_dir = tempfile::tempdir().expect("创建临时目录");
     let file_a = temp_dir.path().join("a.toml");

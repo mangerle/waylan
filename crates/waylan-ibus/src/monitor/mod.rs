@@ -234,6 +234,8 @@ struct MonitorLoopState {
     last_screen_locked: bool,
     /// 上一轮观测到的语音激活状态
     last_voice_active: bool,
+    /// 上一次向 IBus 发射的语音界面快照
+    last_voice_snapshot: Option<super::engine::UiSnapshot>,
     /// 上次锁屏状态探活时刻
     last_lock_probe_instant: Instant,
     /// 上次配置热重载触发时刻（用于防抖窗口判定）
@@ -253,6 +255,7 @@ impl MonitorLoopState {
             unlock_heal_deadline: None,
             last_screen_locked: initial_screen_locked,
             last_voice_active: false,
+            last_voice_snapshot: None,
             last_lock_probe_instant: Instant::now(),
             last_reload_instant: Instant::now()
                 .checked_sub(Duration::from_secs(10))
@@ -367,6 +370,7 @@ fn monitor_poll_phase(
         target_engine_path: target_engine_path.as_str(),
         is_voice_active,
         last_voice_active: &mut state.last_voice_active,
+        last_voice_snapshot: &mut state.last_voice_snapshot,
     });
 
     !is_shutdown_requested(&params.coordinator)

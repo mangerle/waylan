@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 
 use log::info;
@@ -178,12 +178,13 @@ pub trait WaylandSessionLifecycle: Sized {
     /// 尝试根据当前被监控路径列表初始化 inotify 事件监控器
     fn init_inotify_watcher(&mut self) {
         let label = self.session_label();
+        let tracker = self.runtime_ref().user_dict_compact_tracker();
         let watcher = self.watcher();
         init_session_inotify_watcher_with_filter(
             &watcher.watched_paths,
             &mut watcher.inotify_watcher,
             label,
-            Some(default_user_dict_filter()),
+            Some(default_user_dict_filter(Some(tracker))),
         );
     }
 
@@ -209,8 +210,8 @@ pub trait WaylandSessionLifecycle: Sized {
 }
 
 /// 构造默认的用户词库过滤回调（忽略短时间内的 WAL 内部写落盘事件）
-pub fn default_user_dict_filter() -> DirEventFilter {
-    create_timed_file_event_filter("user_dict.bin", None, 2000)
+pub fn default_user_dict_filter(tracker: Option<Arc<AtomicU64>>) -> DirEventFilter {
+    create_timed_file_event_filter("user_dict.bin", tracker, 2000)
 }
 
 /// 判断热重载原子标志是否被触发（用于按键热路径轻量检测，避免高频系统调用）

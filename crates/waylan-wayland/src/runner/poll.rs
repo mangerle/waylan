@@ -83,7 +83,7 @@ pub(super) fn poll_and_read_events(
 ) -> Result<PollEventOutcome, WaylandRunnerError> {
     let wayland_fd = guard.connection_fd();
     let mut fds = [
-        PollFd::new(&wayland_fd, PollFlags::IN | PollFlags::ERR),
+        PollFd::new(&wayland_fd, PollFlags::IN | PollFlags::ERR | PollFlags::HUP),
         PollFd::new(&wayland_fd, PollFlags::empty()),
         PollFd::new(&wayland_fd, PollFlags::empty()),
     ];
@@ -118,8 +118,18 @@ pub(super) fn poll_and_read_events(
             let (wakeup_triggered, inotify_triggered) =
                 interpret_poll_result(&fds, inotify_idx, wakeup_idx);
 
-            let wayland_ready = fds[0].revents().intersects(PollFlags::IN | PollFlags::ERR);
+            let revents = fds[0].revents();
+            let wayland_ready = revents.intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP);
             read_wayland_events(if wayland_ready { Some(guard) } else { None })?;
+            if revents.intersects(PollFlags::HUP | PollFlags::ERR)
+                && !revents.contains(PollFlags::IN)
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::BrokenPipe,
+                    "Wayland 连接描述符已挂断或发生异常",
+                )
+                .into());
+            }
 
             Ok(PollEventOutcome::WokenUp {
                 wakeup_triggered,
@@ -267,6 +277,9 @@ pub(super) fn run_session_loop_step<S: WaylandLoopSession>(
             }
             PollEventOutcome::Interrupted => {}
         }
+    } else {
+        event_queue.dispatch_pending(session)?;
+        session.on_poll_completed();
     }
 
     Ok(true)

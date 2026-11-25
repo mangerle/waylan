@@ -47,6 +47,8 @@ pub(crate) struct VoiceStreamCycleParams<'a> {
     pub(crate) is_voice_active: bool,
     /// 上一轮观测到的语音激活状态（跨轮次延续的可变槽位）
     pub(crate) last_voice_active: &'a mut bool,
+    /// 上一次实际发射给 IBus 的语音界面快照（用于抑制完全相同帧的重复 D-Bus 推送）
+    pub(crate) last_voice_snapshot: &'a mut Option<UiSnapshot>,
 }
 
 /// 处理单轮语音事件轮询、流式更新与过渡退出
@@ -63,11 +65,15 @@ pub(crate) fn handle_voice_stream_cycle(params: &mut VoiceStreamCycleParams<'_>)
             );
             emit_commit_text_blocking(params.conn, params.target_engine_path, commit_text);
         }
-        if let Some(ref snap) = outcome.ui_snapshot.take() {
-            emit_ui_snapshot_blocking(params.conn, params.target_engine_path, snap);
+        if let Some(snap) = outcome.ui_snapshot.take()
+            && params.last_voice_snapshot.as_ref() != Some(&snap)
+        {
+            emit_ui_snapshot_blocking(params.conn, params.target_engine_path, &snap);
+            *params.last_voice_snapshot = Some(snap);
         }
     } else if *params.last_voice_active {
         emit_ui_snapshot_blocking(params.conn, params.target_engine_path, &UiSnapshot::empty());
+        *params.last_voice_snapshot = None;
     }
     *params.last_voice_active = params.is_voice_active;
 }
