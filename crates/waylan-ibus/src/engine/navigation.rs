@@ -55,34 +55,33 @@ impl IbusEngineService {
             update_ui: true,
             ..Default::default()
         };
-        if guard.runtime.core.is_card_expanded() {
+        let committed = if guard.runtime.core.is_card_expanded() {
             let sel = guard.runtime.core.selected_global_index();
             guard.runtime.core.collapse_card();
-            if let Some((committed, _)) = guard
+            guard
                 .runtime
                 .core
                 .engine
                 .select_expanded_item(sel, index as usize)
-            {
-                guard
-                    .runtime
-                    .core
-                    .punctuation_processor_mut()
-                    .record_commit(&committed);
-                out.commit_text = Some(committed);
-            }
-        } else if let Some((committed, _)) = guard
-            .runtime
-            .core
-            .engine
-            .select_candidate(index as usize, now)
-        {
+        } else {
+            guard
+                .runtime
+                .core
+                .engine
+                .select_candidate(index as usize, now)
+        };
+        if let Some((text, _)) = committed {
+            let final_text = if guard.runtime.core.is_full_width_char() {
+                waylan_core::to_full_width_string(&text)
+            } else {
+                text
+            };
             guard
                 .runtime
                 .core
                 .punctuation_processor_mut()
-                .record_commit(&committed);
-            out.commit_text = Some(committed);
+                .record_commit(&final_text);
+            out.commit_text = Some(final_text);
         }
         out
     }

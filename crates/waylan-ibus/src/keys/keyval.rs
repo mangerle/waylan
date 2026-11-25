@@ -7,11 +7,7 @@
 //! - **代价与局限**：非常规特殊多媒体键需要保留 fallback_keycode 回退。
 
 use waylan_core::input::*;
-
-/// 字母 F 的 evdev 扫描码 (33)
-pub const KEY_F: u32 = 33;
-/// 字母 T 的 evdev 扫描码 (20)
-pub const KEY_T: u32 = 20;
+pub use waylan_core::input::{KEY_F, KEY_T};
 
 /// IBus Shift 修饰位掩码 (`IBUS_SHIFT_MASK`)
 pub const IBUS_SHIFT_MASK: u32 = 1 << 0;
@@ -117,6 +113,7 @@ fn map_punct_or_control_keyval(keyval: u32) -> Option<u32> {
         0x002c | 0x003c => KEY_COMMA,
         0x002e | 0x003e => KEY_DOT,
         0x002f | 0x003f => KEY_SLASH,
+        0x005c | 0x007c => KEY_BACKSLASH,
         0xff08 => KEY_BACKSPACE,
         0xff09 | 0xfe20 => KEY_TAB,
         0xff0d => KEY_ENTER,

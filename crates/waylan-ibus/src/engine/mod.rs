@@ -17,7 +17,7 @@ pub mod snapshot;
 
 pub use factory::{IbusFactoryService, IbusGenericService};
 pub use service::IbusEngineService;
-pub(crate) use snapshot::UiSnapshot;
+pub(crate) use snapshot::{UiSnapshot, extract_expanded_card_candidates};
 
 /// 微澜 IBus 引擎固定导出的 D-Bus 对象路径
 pub const WAYLAN_ENGINE_OBJECT_PATH: &str = "/org/freedesktop/IBus/Engine/1";

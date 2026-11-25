@@ -12,6 +12,8 @@ fn test_ibus_keyval_mapping() {
     assert_eq!(ibus_keyval_to_evdev(0xffe1, 0), KEY_LEFTSHIFT);
     assert_eq!(ibus_keyval_to_evdev(0xffe5, 0), KEY_CAPSLOCK);
     assert_eq!(ibus_keyval_to_evdev(0xffe6, 0), KEY_CAPSLOCK);
+    assert_eq!(ibus_keyval_to_evdev(b'\\' as u32, 0), KEY_BACKSLASH);
+    assert_eq!(ibus_keyval_to_evdev(b'|' as u32, 0), KEY_BACKSLASH);
 }
 
 #[test]

@@ -255,22 +255,8 @@ fn activate_global_ibus_engine(conn: &Connection) {
     }
 }
 
-/// 从 IBus `GetGlobalEngine` 返回的 `IBusEngineDesc` D-Bus 结构体/变体中提取引擎名称
-pub(crate) fn extract_engine_name_from_desc_variant(val: &Variant<'_>) -> Option<String> {
-    let mut current = val;
-    while let Variant::Variant(inner) = current {
-        current = inner;
-    }
-    if let Variant::Structure(st) = current {
-        let fields = st.fields();
-        if fields.len() >= 3
-            && let Variant::Str(s) = &fields[2]
-        {
-            return Some(s.to_string());
-        }
-    }
-    None
-}
+#[cfg(test)]
+use super::types::extract_text_from_ibus_variant as extract_engine_name_from_desc_variant;
 
 #[cfg(test)]
 mod tests {

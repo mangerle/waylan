@@ -24,6 +24,29 @@ pub(crate) struct UiSnapshot {
     pub(crate) show_pinyin_comment: bool,
 }
 
+/// 从候选列表与选中下标提取二级卡片展开子项集合（供界面快照与按键核心共用，消除重复提取）
+pub(crate) fn extract_expanded_card_candidates(
+    candidates: &[Candidate],
+    selected_index: usize,
+) -> Vec<Candidate> {
+    let cand_opt = candidates
+        .get(selected_index)
+        .filter(|c| c.is_expandable && !c.sub_candidates.is_empty())
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|c| c.is_expandable && !c.sub_candidates.is_empty())
+        });
+    cand_opt
+        .map(|cand| {
+            cand.sub_candidates
+                .iter()
+                .map(|sub| Candidate::new(sub.clone(), cand.pinyin.clone(), cand.score))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl UiSnapshot {
     /// 构造空 UI 快照（零堆分配开销）
     pub(crate) fn empty() -> Self {
@@ -63,24 +86,10 @@ impl UiSnapshot {
 
         match box_state.expansion {
             CandidateExpansion::Card { selected_index } => {
-                let cand_opt = box_state
-                    .candidates
-                    .get(box_state.selected_index)
-                    .filter(|c| c.is_expandable && !c.sub_candidates.is_empty())
-                    .or_else(|| {
-                        box_state
-                            .candidates
-                            .iter()
-                            .find(|c| c.is_expandable && !c.sub_candidates.is_empty())
-                    });
-                let candidates: Vec<Candidate> = cand_opt
-                    .map(|cand| {
-                        cand.sub_candidates
-                            .iter()
-                            .map(|sub| Candidate::new(sub.clone(), cand.pinyin.clone(), cand.score))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let candidates = extract_expanded_card_candidates(
+                    &box_state.candidates,
+                    box_state.selected_index,
+                );
                 let count = candidates.len().max(1);
                 Self {
                     preedit: box_state.preedit.clone(),

@@ -60,7 +60,7 @@ pub(crate) fn ensure_global_engine_active(conn: &Connection) {
             .body()
             .deserialize::<Variant<'_>>()
             .ok()
-            .and_then(|val| super::super::session::extract_engine_name_from_desc_variant(&val))
+            .and_then(|val| crate::types::extract_text_from_ibus_variant(&val))
             .as_deref()
             == Some("waylan");
 

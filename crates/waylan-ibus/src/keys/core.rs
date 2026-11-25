@@ -5,7 +5,7 @@
 //! - **核心优势**：纯内存数据结构，加锁保护仅限于单次按键决策的微秒级临界区内。
 //! - **代价与局限**：受 Mutex 保护，不可跨 await 持有。
 
-use super::super::engine::UiSnapshot;
+use super::super::engine::{UiSnapshot, extract_expanded_card_candidates};
 use std::sync::mpsc::SyncSender;
 use waylan_core::input::VoiceProvider;
 use waylan_core::state::SharedInputFlags;
@@ -161,27 +161,10 @@ impl IbusSessionCore {
     pub fn current_candidates(&self) -> Vec<Candidate> {
         if self.runtime.core.is_card_expanded() {
             let sel = self.runtime.core.selected_global_index();
-            let cand_opt = self
-                .runtime
-                .core
-                .engine
-                .candidates()
-                .get(sel)
-                .filter(|c| c.is_expandable && !c.sub_candidates.is_empty())
-                .or_else(|| {
-                    self.runtime
-                        .core
-                        .engine
-                        .candidates()
-                        .iter()
-                        .find(|c| c.is_expandable && !c.sub_candidates.is_empty())
-                });
-            if let Some(cand) = cand_opt {
-                let mut out = Vec::with_capacity(cand.sub_candidates.len());
-                for sub in &cand.sub_candidates {
-                    out.push(Candidate::new(sub.clone(), cand.pinyin.clone(), cand.score));
-                }
-                return out;
+            let expanded =
+                extract_expanded_card_candidates(self.runtime.core.engine.candidates(), sel);
+            if !expanded.is_empty() {
+                return expanded;
             }
         }
         if self.runtime.core.is_grid_expanded() {
