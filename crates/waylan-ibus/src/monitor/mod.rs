@@ -22,9 +22,7 @@ use zbus::connection::Connection;
 
 use super::engine::WAYLAN_ENGINE_OBJECT_PATH;
 use super::keys::IbusSessionCore;
-use super::screensaver::{
-    query_current_screen_saver_active, spawn_screen_saver_listener_with_probe,
-};
+use super::screensaver::spawn_screen_saver_listener_with_probe;
 use super::types::build_input_mode_property;
 use crate::{IbusConfigReloader, IbusShutdownCoordinator};
 
@@ -142,19 +140,10 @@ struct ScreensaverProbeParams<'a> {
     last_lock_probe_instant: &'a mut Instant,
 }
 
-/// 处于锁屏保护期时的自愈探活与状态迁移处理，返回 (current_locked, just_unlocked)
+/// 处于锁屏保护期时的状态迁移处理，返回 (current_locked, just_unlocked)
 fn probe_and_handle_screensaver(params: &mut ScreensaverProbeParams<'_>) -> (bool, bool) {
-    let mut current_locked = params.screen_locked_flag.load(Ordering::Acquire);
-    if params.last_lock_probe_instant.elapsed() >= Duration::from_secs(3) {
-        *params.last_lock_probe_instant = Instant::now();
-        let real_locked = query_current_screen_saver_active();
-        if real_locked != current_locked {
-            params
-                .screen_locked_flag
-                .store(real_locked, Ordering::Release);
-            current_locked = real_locked;
-        }
-    }
+    let current_locked = params.screen_locked_flag.load(Ordering::Acquire);
+    let _ = &params.last_lock_probe_instant;
     let just_unlocked = handle_screen_saver_transition(
         params.shared_core,
         current_locked,
@@ -163,19 +152,19 @@ fn probe_and_handle_screensaver(params: &mut ScreensaverProbeParams<'_>) -> (boo
     (current_locked, just_unlocked)
 }
 
-/// 计算当前监控循环的 poll 等待超时策略（毫秒）
+/// 计算当前监控循环的 poll 等待超时策略（毫秒；返回 `-1` 表示无限阻塞等待事件唤醒）
 fn compute_monitor_poll_timeout(
     is_voice_active: bool,
     startup_healing_rounds: u32,
     has_pending_unlock_heal: bool,
-    is_locked: bool,
+    has_wakeup: bool,
 ) -> i32 {
     if is_voice_active {
         60
     } else if startup_healing_rounds > 0 || has_pending_unlock_heal {
         100
-    } else if is_locked {
-        3000
+    } else if has_wakeup {
+        -1
     } else {
         1000
     }
@@ -335,7 +324,7 @@ fn monitor_poll_phase(
         ensure_global_engine_active(ctx.conn);
     }
 
-    let (current_locked, just_unlocked) =
+    let (_current_locked, just_unlocked) =
         probe_and_handle_screensaver(&mut ScreensaverProbeParams {
             shared_core: ctx.shared_core,
             screen_locked_flag: &state.screen_locked_flag,
@@ -355,7 +344,7 @@ fn monitor_poll_phase(
         is_voice_active,
         state.startup_healing_rounds,
         has_pending_unlock_heal,
-        current_locked || state.last_screen_locked,
+        params.coordinator.loop_wakeup().is_some(),
     );
 
     poll_wakeup_and_inotify(
