@@ -10,7 +10,7 @@ use super::fsa::PrismFsa;
 use super::lattice::{EdgeKind, EdgeSyllables, LatticeOptions, SyllableEdge, TypoKind};
 use crate::syllables::is_valid_syllable;
 use crate::syllables::spatial::{
-    get_spatial_typo_corrections, get_typo_corrections_with_rules, weighted_edit_distance,
+    for_each_typo_correction_with_rules, get_spatial_typo_corrections_static,
 };
 
 /// 生成四类容错边（含单音节空间纠错、跨音节倒置、边界共享漏按）
@@ -31,28 +31,28 @@ pub(super) fn populate_typo_edges(
         {
             continue;
         }
-        for (corrected, dist) in get_spatial_typo_corrections(slice, 35) {
-            let kind = classify_single_typo(slice, &corrected);
+        for (corrected, dist) in get_spatial_typo_corrections_static(slice, 35) {
+            let kind = classify_single_typo(slice, corrected);
             let cost = dist.max(12);
             out.push(SyllableEdge {
                 start,
                 end: start + l,
-                syllables: EdgeSyllables::from_one(&corrected),
+                syllables: EdgeSyllables::from_one(corrected),
                 kind: EdgeKind::Typo(kind),
                 typo_count: 1,
                 cost,
             });
         }
-        for corrected in get_typo_corrections_with_rules(slice, &options.typo_rules) {
+        for_each_typo_correction_with_rules(slice, &options.typo_rules, |corrected| {
             out.push(SyllableEdge {
                 start,
                 end: start + l,
-                syllables: EdgeSyllables::from_one(&corrected),
+                syllables: EdgeSyllables::from_one(corrected),
                 kind: EdgeKind::RuleNormalized,
                 typo_count: 0,
                 cost: 14,
             });
-        }
+        });
     }
 
     // 1.5 单音节内相邻字符倒置（如 cehng -> cheng, xaing -> xiang）
@@ -76,7 +76,6 @@ fn classify_single_typo(source: &str, target: &str) -> TypoKind {
                 return TypoKind::Transpose;
             }
         }
-        let _ = weighted_edit_distance(source, target);
         TypoKind::Neighbor
     } else if source.len() < target.len() {
         TypoKind::Missing

@@ -177,15 +177,26 @@ pub(super) fn expand_position_states(
                 .unwrap_or(0);
             let edge_penalty = compute_edge_penalty(pm, &ctx.options.weights);
 
+            let score = state.score + lm_delta + pair_boost - edge_penalty;
+            let slot = &mut ctx.beam[next_pos - ctx.beam_offset];
+            let limit = ctx.options.beam_width.max(1);
+            if slot.len() >= limit * 2 {
+                slot.sort_unstable_by_key(|a| std::cmp::Reverse(a.score));
+                slot.truncate(limit);
+            }
+            if slot.len() == limit && slot.last().is_some_and(|worst| score <= worst.score) {
+                continue;
+            }
+
             let node_idx = ctx.node_arena.len();
             ctx.node_arena.push(ArenaNode {
                 parent: Some(state.node_idx),
                 word_ref: Some((pos, idx)),
             });
 
-            ctx.beam[next_pos - ctx.beam_offset].push(BeamState {
+            slot.push(BeamState {
                 node_idx,
-                score: state.score + lm_delta + pair_boost - edge_penalty,
+                score,
                 typo_count: next_typo,
                 has_initial: state.has_initial || pm.has_initial,
                 has_partial_tail: state.has_partial_tail || pm.has_partial_tail,

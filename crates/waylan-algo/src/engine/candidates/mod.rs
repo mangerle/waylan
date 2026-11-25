@@ -44,6 +44,7 @@ impl AlgoEngine {
         // 3. 收集多层级候选并叠加用户学习权重（复用 scratch_candidates 容量）
         let mut raw_candidates = std::mem::take(&mut self.scratch_candidates);
         self.collect_all_raw_candidates_into(&lattice, &decode, &mut raw_candidates);
+        self.beam_cache.store_lattice(lattice);
 
         // 4. 流水线后处理、零页扩展注入与候选发布
         self.finalize_and_publish_candidates(&decode, raw_candidates);
@@ -138,7 +139,6 @@ impl AlgoEngine {
             &mut self.beam_cache,
             config_sig,
         );
-        self.beam_cache.store_lattice(lattice.clone());
         (lattice, decode)
     }
 

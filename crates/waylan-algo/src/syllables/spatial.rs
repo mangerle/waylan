@@ -20,8 +20,9 @@ pub fn get_qwerty_neighbors(c: char) -> &'static [(char, u8)] {
     }
 }
 
-/// 计算两按键在物理键盘上的几何欧氏距离
-pub fn key_spatial_distance(c1: char, c2: char) -> f32 {
+/// 计算两按键在物理键盘上的几何欧氏距离平方（避免热路径调用浮点 `sqrt()`）
+#[inline]
+pub fn key_spatial_distance_sq(c1: char, c2: char) -> f32 {
     if c1 == c2 {
         return 0.0;
     }
@@ -29,10 +30,15 @@ pub fn key_spatial_distance(c1: char, c2: char) -> f32 {
         (Some((x1, y1)), Some((x2, y2))) => {
             let dx = x1 - x2;
             let dy = y1 - y2;
-            (dx * dx + dy * dy).sqrt()
+            dx * dx + dy * dy
         }
-        _ => 5.0,
+        _ => 25.0,
     }
+}
+
+/// 计算两按键在物理键盘上的几何欧氏距离
+pub fn key_spatial_distance(c1: char, c2: char) -> f32 {
+    key_spatial_distance_sq(c1, c2).sqrt()
 }
 
 /// 计算字符替换的高斯几何惩罚代价（单位：惩罚分）
@@ -152,37 +158,47 @@ fn chars_weighted_edit_distance(s_chars: &[char], t_chars: &[char]) -> u32 {
     dp[m][n]
 }
 
-/// 获取输入拼音片段基于物理键盘加权的高斯纠错候选音节列表
-///
-/// 限制最大返回代价 `max_cost`（默认 25），返回 `(合法标准音节, 编辑代价)` 列表，按代价升序排列
-pub fn get_spatial_typo_corrections(slice: &str, max_cost: u32) -> Vec<(String, u32)> {
+/// 获取输入拼音片段基于物理键盘加权的高斯纠错候选音节静态切片列表（零字符串堆分配）
+pub(crate) fn get_spatial_typo_corrections_static(
+    slice: &str,
+    max_cost: u32,
+) -> Vec<(&'static str, u32)> {
     if slice.is_empty() {
         return Vec::new();
     }
-    let mut candidates = Vec::new();
+    let mut candidates = Vec::with_capacity(8);
     let slice_len = slice.len();
     let first_char = slice.chars().next().unwrap_or('\0');
 
     for &std_syl in STANDARD_SYLLABLES {
-        // 长度差超过 1 快速剪枝
         if std_syl.len().abs_diff(slice_len) > 1 {
             continue;
         }
-        // 声母首字母物理距离相差过大快速剪枝（仅探索紧邻误触按键）
+        // 距离平方阈值 2.25 等价于距离 1.5，彻底免去热路径浮点开方
         if let Some(target_first) = std_syl.chars().next()
-            && key_spatial_distance(first_char, target_first) > 1.5
+            && key_spatial_distance_sq(first_char, target_first) > 2.25
         {
             continue;
         }
         let cost = weighted_edit_distance(slice, std_syl);
         if cost > 0 && cost <= max_cost {
-            candidates.push((std_syl.to_string(), cost));
+            candidates.push((std_syl, cost));
         }
     }
 
     candidates.sort_by_key(|item| item.1);
     candidates.truncate(4);
     candidates
+}
+
+/// 获取输入拼音片段基于物理键盘加权的高斯纠错候选音节列表
+///
+/// 限制最大返回代价 `max_cost`（默认 25），返回 `(合法标准音节, 编辑代价)` 列表，按代价升序排列
+pub fn get_spatial_typo_corrections(slice: &str, max_cost: u32) -> Vec<(String, u32)> {
+    get_spatial_typo_corrections_static(slice, max_cost)
+        .into_iter()
+        .map(|(s, cost)| (s.to_string(), cost))
+        .collect()
 }
 
 /// 获取输入拼音片段的通用容错纠错音节列表
@@ -199,91 +215,131 @@ pub fn get_typo_corrections(slice: &str) -> Vec<String> {
 ///
 /// 每个细分规则只负责自己声明的变换；主开关关闭时直接返回空列表。
 pub fn get_typo_corrections_with_rules(slice: &str, rules: &TypoCorrectionRules) -> Vec<String> {
-    if !rules.enable || slice.is_empty() {
-        return Vec::new();
-    }
-
     let mut results = Vec::new();
-
-    // 1. 韵母易混颠倒属于通用拼写容错，受主开关控制
-    collect_rhyme_swap_typos(slice, &mut results);
-
-    // 2. 鼻音与辅音快速键入倒置
-    collect_nasal_typos(slice, rules, &mut results);
-
-    // 3. 韵母缩写与 ü 系列输入习惯变换
-    collect_abbrev_typos(slice, rules, &mut results);
-
+    for_each_typo_correction_with_rules(slice, rules, |cand| {
+        if !results.iter().any(|existing: &String| existing == cand) {
+            results.push(cand.to_string());
+        }
+    });
     results
 }
 
-/// 收集韵母易混颠倒的容错音节（ie/ei 与 ui/iu 双向互换）
-fn collect_rhyme_swap_typos(slice: &str, results: &mut Vec<String>) {
+/// 在栈上零堆分配构造规则纠错候选并通过回调逐个输出（供音节格构建热路径使用）
+pub(crate) fn for_each_typo_correction_with_rules(
+    slice: &str,
+    rules: &TypoCorrectionRules,
+    mut on_match: impl FnMut(&str),
+) {
+    if !rules.enable || slice.is_empty() || slice.len() > 12 || !slice.is_ascii() {
+        return;
+    }
+
+    let mut stack = [0u8; 16];
+
+    // 1. 韵母易混颠倒
     if slice.contains("ie") {
-        push_valid_typo(results, slice, slice.replace("ie", "ei"));
+        emit_replaced(slice, "ie", "ei", &mut stack, &mut on_match);
     } else if slice.contains("ei") {
-        push_valid_typo(results, slice, slice.replace("ei", "ie"));
+        emit_replaced(slice, "ei", "ie", &mut stack, &mut on_match);
     }
     if slice.contains("ui") {
-        push_valid_typo(results, slice, slice.replace("ui", "iu"));
+        emit_replaced(slice, "ui", "iu", &mut stack, &mut on_match);
     } else if slice.contains("iu") {
-        push_valid_typo(results, slice, slice.replace("iu", "ui"));
+        emit_replaced(slice, "iu", "ui", &mut stack, &mut on_match);
     }
-}
 
-/// 收集鼻音与辅音快速键入倒置的容错音节（gn、neg、mg 尾部误触归一）
-fn collect_nasal_typos(slice: &str, rules: &TypoCorrectionRules, results: &mut Vec<String>) {
+    // 2. 鼻音与辅音快速键入倒置
     if rules.gn_ng {
         if let Some(prefix) = slice.strip_suffix("gn") {
-            push_valid_typo(results, slice, format!("{}ng", prefix));
+            emit_suffixed(slice, prefix, "ng", &mut stack, &mut on_match);
         }
         if let Some(prefix) = slice.strip_suffix("neg") {
-            push_valid_typo(results, slice, format!("{}eng", prefix));
+            emit_suffixed(slice, prefix, "eng", &mut stack, &mut on_match);
         }
     }
     if rules.mg_ng
         && let Some(prefix) = slice.strip_suffix("mg")
     {
-        push_valid_typo(results, slice, format!("{}ng", prefix));
+        emit_suffixed(slice, prefix, "ng", &mut stack, &mut on_match);
     }
-}
 
-/// 收集韵母缩写与 ü 系列输入习惯变换的容错音节
-fn collect_abbrev_typos(slice: &str, rules: &TypoCorrectionRules, results: &mut Vec<String>) {
+    // 3. 韵母缩写与 ü 系列输入习惯变换
     if rules.iou_iu && slice.contains("iou") {
-        push_valid_typo(results, slice, slice.replace("iou", "iu"));
+        emit_replaced(slice, "iou", "iu", &mut stack, &mut on_match);
     }
     if rules.uei_ui && slice.contains("uei") {
-        push_valid_typo(results, slice, slice.replace("uei", "ui"));
+        emit_replaced(slice, "uei", "ui", &mut stack, &mut on_match);
     }
     if rules.uen_un && slice.contains("uen") {
-        push_valid_typo(results, slice, slice.replace("uen", "un"));
+        emit_replaced(slice, "uen", "un", &mut stack, &mut on_match);
     }
     if rules.ue_ve && slice.contains("ue") {
-        push_valid_typo(results, slice, slice.replace("ue", "ve"));
+        emit_replaced(slice, "ue", "ve", &mut stack, &mut on_match);
     }
     if rules.v_u {
         if slice.contains('v') {
-            push_valid_typo(results, slice, slice.replace('v', "u"));
+            emit_replaced(slice, "v", "u", &mut stack, &mut on_match);
         }
         if slice.contains("ve") {
-            push_valid_typo(results, slice, slice.replace("ve", "ue"));
+            emit_replaced(slice, "ve", "ue", &mut stack, &mut on_match);
         }
         if slice.contains("van") {
-            push_valid_typo(results, slice, slice.replace("van", "uan"));
+            emit_replaced(slice, "van", "uan", &mut stack, &mut on_match);
         }
     }
     if rules.on_ong
         && let Some(prefix) = slice.strip_suffix("on")
     {
-        push_valid_typo(results, slice, format!("{}ong", prefix));
+        emit_suffixed(slice, prefix, "ong", &mut stack, &mut on_match);
     }
 }
 
-/// 将合法且不重复的纠错音节追加到结果列表
-fn push_valid_typo(results: &mut Vec<String>, slice: &str, alternative: String) {
-    if alternative != slice && is_valid_syllable(&alternative) && !results.contains(&alternative) {
-        results.push(alternative);
+/// 在栈缓冲中执行首次子串替换并校验标准音节合法性
+fn emit_replaced(
+    slice: &str,
+    from: &str,
+    to: &str,
+    stack: &mut [u8; 16],
+    on_match: &mut impl FnMut(&str),
+) {
+    let Some(pos) = slice.find(from) else {
+        return;
+    };
+    let tail = &slice[pos + from.len()..];
+    let total = pos + to.len() + tail.len();
+    if total > stack.len() {
+        return;
+    }
+    stack[..pos].copy_from_slice(&slice.as_bytes()[..pos]);
+    stack[pos..pos + to.len()].copy_from_slice(to.as_bytes());
+    stack[pos + to.len()..total].copy_from_slice(tail.as_bytes());
+    if let Ok(cand) = std::str::from_utf8(&stack[..total])
+        && cand != slice
+        && is_valid_syllable(cand)
+    {
+        on_match(cand);
+    }
+}
+
+/// 在栈缓冲中拼接前缀与替换后缀并校验标准音节合法性
+fn emit_suffixed(
+    slice: &str,
+    prefix: &str,
+    suffix: &str,
+    stack: &mut [u8; 16],
+    on_match: &mut impl FnMut(&str),
+) {
+    let total = prefix.len() + suffix.len();
+    if total > stack.len() {
+        return;
+    }
+    stack[..prefix.len()].copy_from_slice(prefix.as_bytes());
+    stack[prefix.len()..total].copy_from_slice(suffix.as_bytes());
+    if let Ok(cand) = std::str::from_utf8(&stack[..total])
+        && cand != slice
+        && is_valid_syllable(cand)
+    {
+        on_match(cand);
     }
 }
 
