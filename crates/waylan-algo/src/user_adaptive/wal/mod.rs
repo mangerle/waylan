@@ -321,13 +321,14 @@ impl UserAdaptiveWal {
         Ok(file)
     }
 
-    /// 序列化单条用户上屏 WAL 帧二进制数据包（包含校验和）
-    fn serialize_wal_frame(
+    /// 原地编码单条用户上屏 WAL 帧二进制数据包写入复用的缓冲区（供追加与压缩模块共用）
+    pub(super) fn serialize_wal_frame_into(
+        buf: &mut Vec<u8>,
         text: &str,
         pinyin: &str,
         timestamp: u64,
         count: u32,
-    ) -> Option<Vec<u8>> {
+    ) -> bool {
         let py_bytes = pinyin.as_bytes();
         let text_bytes = text.as_bytes();
         if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
@@ -336,13 +337,14 @@ impl UserAdaptiveWal {
                 py_bytes.len(),
                 text_bytes.len()
             );
-            return None;
+            return false;
         }
 
         let py_len = py_bytes.len() as u16;
         let text_len = text_bytes.len() as u16;
 
-        let mut buf = Vec::with_capacity(20 + py_bytes.len() + text_bytes.len());
+        buf.clear();
+        buf.reserve(20 + py_bytes.len() + text_bytes.len());
         buf.extend_from_slice(&timestamp.to_le_bytes());
         buf.extend_from_slice(&count.to_le_bytes());
         buf.extend_from_slice(&py_len.to_le_bytes());
@@ -350,13 +352,22 @@ impl UserAdaptiveWal {
         buf.extend_from_slice(py_bytes);
         buf.extend_from_slice(text_bytes);
 
-        // 简易校验和防部分写入损坏（带非零初始种子，杜绝全零块绕过）
         let checksum: u32 = buf
             .iter()
             .fold(WAL_CHECKSUM_SEED, |acc, &b| acc.wrapping_add(b as u32));
         buf.extend_from_slice(&checksum.to_le_bytes());
+        true
+    }
 
-        Some(buf)
+    /// 序列化单条用户上屏 WAL 帧二进制数据包（包含校验和）
+    fn serialize_wal_frame(
+        text: &str,
+        pinyin: &str,
+        timestamp: u64,
+        count: u32,
+    ) -> Option<Vec<u8>> {
+        let mut buf = Vec::with_capacity(20 + pinyin.len() + text.len());
+        Self::serialize_wal_frame_into(&mut buf, text, pinyin, timestamp, count).then_some(buf)
     }
 
     /// 将已序列化的 WAL 帧在跨进程排他锁保护下追加写入磁盘

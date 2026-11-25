@@ -431,3 +431,20 @@ fn test_user_pairs_decay_wal_replay_and_forget() {
 
     let _ = std::fs::remove_file(&wal_path);
 }
+
+#[test]
+fn test_merge_preserves_pairs() {
+    let t0 = 1_700_000_000;
+    let mut base = UserAdaptiveModel::new();
+    base.record_commit("微澜", "wei'lan", t0);
+
+    let mut incoming = UserAdaptiveModel::new();
+    incoming.record_commit("输入法", "shu'ru'fa", t0 + 10);
+    incoming.record_pair("微澜", "输入法", t0 + 10);
+
+    base.merge(&incoming);
+    assert!(
+        base.pair_boost_score("微澜", "输入法", t0 + 20) > 0,
+        "merge 必须同步合入 pairs 词对搭配权重"
+    );
+}

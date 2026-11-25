@@ -82,6 +82,31 @@ impl AlgoEngine {
         removed
     }
 
+    /// 统一应用盘古之白中英文间距并同步更新跨句历史上下文
+    fn apply_pangu_and_update_context(&mut self, raw_commit: std::borrow::Cow<'_, str>) -> String {
+        let trimmed = raw_commit.trim();
+        let last_context = if !trimmed.is_empty() {
+            Some(trimmed.to_string())
+        } else {
+            None
+        };
+
+        let commit_text = if self.config.auto_pangu_spacing
+            && let Some(prev) = self.composition.last_commit_context()
+            && PanguSpacing::should_insert_pangu_space(prev, &raw_commit)
+        {
+            format!(" {}", raw_commit)
+        } else {
+            raw_commit.into_owned()
+        };
+
+        if let Some(ctx) = last_context {
+            self.composition.set_last_commit_context(Some(ctx));
+        }
+
+        commit_text
+    }
+
     /// 准备上屏文本并根据盘古之白规则注入空格，同时更新跨句历史上下文
     fn prepare_commit_text(&mut self, selected: &mut AlgoCandidate, should_record: bool) -> String {
         let raw_commit = if selected.is_expandable && !selected.sub_candidates.is_empty() {
@@ -91,33 +116,7 @@ impl AlgoEngine {
         } else {
             std::mem::take(&mut selected.text)
         };
-
-        let trimmed_commit = raw_commit.trim();
-        let last_context = if !trimmed_commit.is_empty() {
-            Some(trimmed_commit.to_string())
-        } else {
-            None
-        };
-
-        let commit_text = if self.config.auto_pangu_spacing {
-            if let Some(prev) = self.composition.last_commit_context() {
-                if PanguSpacing::should_insert_pangu_space(prev, &raw_commit) {
-                    format!(" {}", raw_commit)
-                } else {
-                    raw_commit
-                }
-            } else {
-                raw_commit
-            }
-        } else {
-            raw_commit
-        };
-
-        if let Some(ctx) = last_context {
-            self.composition.set_last_commit_context(Some(ctx));
-        }
-
-        commit_text
+        self.apply_pangu_and_update_context(std::borrow::Cow::Owned(raw_commit))
     }
 
     /// 计算选词提交需要消费的拼音长度，具备多级对齐与防死锁保底策略
@@ -237,25 +236,7 @@ impl AlgoEngine {
 
     /// 直接提交指定文本上屏并消费全部拼音（用于二级扩展项、自定义短语等直接上屏）
     pub fn commit_custom_text(&mut self, raw_text: &str) -> (String, usize) {
-        let commit_text = if self.config.auto_pangu_spacing {
-            if let Some(prev) = self.composition.last_commit_context() {
-                if PanguSpacing::should_insert_pangu_space(prev, raw_text) {
-                    format!(" {}", raw_text)
-                } else {
-                    raw_text.to_string()
-                }
-            } else {
-                raw_text.to_string()
-            }
-        } else {
-            raw_text.to_string()
-        };
-
-        let trimmed_text = raw_text.trim();
-        if !trimmed_text.is_empty() {
-            self.composition
-                .set_last_commit_context(Some(trimmed_text.to_string()));
-        }
+        let commit_text = self.apply_pangu_and_update_context(std::borrow::Cow::Borrowed(raw_text));
 
         self.composition.reset();
         self.candidates.clear();

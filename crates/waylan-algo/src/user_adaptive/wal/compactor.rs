@@ -15,9 +15,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::error::AlgoError;
-use crate::user_adaptive::wal::constants::{WAL_CHECKSUM_SEED, WAL_MAGIC, WAL_PAIR_PREFIX};
+use crate::user_adaptive::UserAdaptiveModel;
+use crate::user_adaptive::wal::constants::{WAL_MAGIC, WAL_PAIR_PREFIX};
 use crate::user_adaptive::wal::lock::ProcessFileLock;
-use crate::user_adaptive::{UserAdaptiveModel, UserEntry};
 
 struct TempFileGuard<'a>(&'a Path, bool);
 
@@ -62,12 +62,20 @@ fn write_compact_model_to_temp(
             source: e,
         })?;
 
+    let mut frame_buf = Vec::with_capacity(128);
+
     for list in model.entries.values() {
         for entry in list {
-            let Some(buf) = encode_wal_frame(entry) else {
+            if !super::UserAdaptiveWal::serialize_wal_frame_into(
+                &mut frame_buf,
+                &entry.text,
+                &entry.pinyin,
+                entry.last_used_timestamp,
+                entry.commit_count,
+            ) {
                 continue;
-            };
-            file.write_all(&buf)
+            }
+            file.write_all(&frame_buf)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: temp_path.to_path_buf(),
                     source: e,
@@ -77,16 +85,17 @@ fn write_compact_model_to_temp(
 
     for (prev, next_map) in &model.pairs {
         for (curr, pair_entry) in next_map {
-            let synthetic = UserEntry {
-                text: curr.clone(),
-                pinyin: format!("{WAL_PAIR_PREFIX}{prev}"),
-                commit_count: pair_entry.count,
-                last_used_timestamp: pair_entry.last_used_timestamp,
-            };
-            let Some(buf) = encode_wal_frame(&synthetic) else {
+            let synthetic_pinyin = format!("{WAL_PAIR_PREFIX}{prev}");
+            if !super::UserAdaptiveWal::serialize_wal_frame_into(
+                &mut frame_buf,
+                curr,
+                &synthetic_pinyin,
+                pair_entry.last_used_timestamp,
+                pair_entry.count,
+            ) {
                 continue;
-            };
-            file.write_all(&buf)
+            }
+            file.write_all(&frame_buf)
                 .map_err(|e| AlgoError::UserDictPersistFailed {
                     path: temp_path.to_path_buf(),
                     source: e,
@@ -114,31 +123,6 @@ fn open_wal_temp_file(temp_path: &Path) -> Result<File, AlgoError> {
             path: temp_path.to_path_buf(),
             source: e,
         })
-}
-
-/// 将单条用户词条编码为 WAL 二进制帧（超出长度上限的词条返回 None 予以跳过）
-fn encode_wal_frame(entry: &UserEntry) -> Option<Vec<u8>> {
-    let py_bytes = entry.pinyin.as_bytes();
-    let text_bytes = entry.text.as_bytes();
-    if py_bytes.len() > u16::MAX as usize || text_bytes.len() > u16::MAX as usize {
-        return None;
-    }
-    let py_len = py_bytes.len() as u16;
-    let text_len = text_bytes.len() as u16;
-
-    let mut buf = Vec::with_capacity(20 + py_bytes.len() + text_bytes.len());
-    buf.extend_from_slice(&entry.last_used_timestamp.to_le_bytes());
-    buf.extend_from_slice(&entry.commit_count.to_le_bytes());
-    buf.extend_from_slice(&py_len.to_le_bytes());
-    buf.extend_from_slice(&text_len.to_le_bytes());
-    buf.extend_from_slice(py_bytes);
-    buf.extend_from_slice(text_bytes);
-    let checksum: u32 = buf
-        .iter()
-        .fold(WAL_CHECKSUM_SEED, |acc, &b| acc.wrapping_add(b as u32));
-    buf.extend_from_slice(&checksum.to_le_bytes());
-
-    Some(buf)
 }
 
 /// 在已持有排他锁的上下文中执行核心 WAL 压缩落盘与原子重命名

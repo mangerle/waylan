@@ -70,7 +70,7 @@ impl UserAdaptiveModel {
         Self::default()
     }
 
-    /// 合并另一个模型的所有用户词条记录
+    /// 合并另一个模型的所有用户词条与词对搭配记录
     pub fn merge(&mut self, other: &Self) {
         for (py, list) in &other.entries {
             for entry in list {
@@ -80,6 +80,21 @@ impl UserAdaptiveModel {
                     current_timestamp: entry.last_used_timestamp,
                     count: entry.commit_count,
                 });
+            }
+        }
+        for (prev, next_map) in &other.pairs {
+            let dst_map = self.pairs.entry(prev.clone()).or_default();
+            for (curr, pair_entry) in next_map {
+                self.max_timestamp = self.max_timestamp.max(pair_entry.last_used_timestamp);
+                dst_map
+                    .entry(curr.clone())
+                    .and_modify(|existing| {
+                        existing.count = existing.count.saturating_add(pair_entry.count);
+                        existing.last_used_timestamp = existing
+                            .last_used_timestamp
+                            .max(pair_entry.last_used_timestamp);
+                    })
+                    .or_insert(*pair_entry);
             }
         }
     }
@@ -104,9 +119,23 @@ impl UserAdaptiveModel {
         } = *params;
 
         self.max_timestamp = self.max_timestamp.max(current_timestamp);
-        let key = pinyin.to_string();
-        let list = self.entries.entry(key).or_default();
+        if let Some(list) = self.entries.get_mut(pinyin) {
+            Self::upsert_entry(list, text, pinyin, current_timestamp, count);
+            return;
+        }
+        let mut list = Vec::with_capacity(1);
+        Self::upsert_entry(&mut list, text, pinyin, current_timestamp, count);
+        self.entries.insert(pinyin.to_string(), list);
+    }
 
+    /// 在给定拼音桶内原地更新已有词条或追加新词条
+    fn upsert_entry(
+        list: &mut Vec<UserEntry>,
+        text: &str,
+        pinyin: &str,
+        current_timestamp: u64,
+        count: u32,
+    ) {
         if let Some(existing) = list.iter_mut().find(|e| e.text == text) {
             existing.commit_count = existing.commit_count.saturating_add(count);
             existing.last_used_timestamp = existing.last_used_timestamp.max(current_timestamp);
