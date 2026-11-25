@@ -36,6 +36,7 @@ pub(crate) struct DBusMenuOptions {
     pub(crate) coordinator: ShutdownCoordinator,
     pub(crate) settings_running: Arc<AtomicBool>,
     pub(crate) icon_update_tx: SyncSender<()>,
+    pub(crate) subprocess_manager: Arc<SubprocessManager>,
 }
 
 /// 标准 FreeDesktop DBusMenu 菜单实现
@@ -49,16 +50,15 @@ pub struct DBusMenu {
 }
 
 impl DBusMenu {
-    /// 由托盘菜单装配参数构造 `com.canonical.dbusmenu` 菜单服务对象
+    /// 由托盘菜单装配参数构造 `com.canonical.dbusmenu` 菜单服务对象（复用会话唯一子进程管理器）
     pub(crate) fn new(opts: DBusMenuOptions) -> Self {
-        let subprocess_manager = Arc::new(SubprocessManager::new(opts.coordinator.flag()));
         Self {
             shared_flags: opts.shared_flags,
             reload_requested: opts.reload_requested,
             coordinator: opts.coordinator,
             settings_running: opts.settings_running,
             icon_update_tx: opts.icon_update_tx,
-            subprocess_manager,
+            subprocess_manager: opts.subprocess_manager,
         }
     }
 
@@ -254,6 +254,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(false));
         let settings = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = mpsc::sync_channel(1);
+        let subprocess_manager = Arc::new(SubprocessManager::new(Arc::clone(&exit)));
         let coordinator = ShutdownCoordinator::from_parts(exit, None);
 
         let menu = DBusMenu::new(DBusMenuOptions {
@@ -262,6 +263,7 @@ mod tests {
             coordinator,
             settings_running: settings,
             icon_update_tx: tx,
+            subprocess_manager,
         });
         let (_rev, (_root_id, _props, items)) = menu.get_layout(0, -1, Vec::new());
         assert_eq!(items.len(), 9);

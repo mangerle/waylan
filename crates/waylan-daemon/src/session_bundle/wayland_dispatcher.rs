@@ -7,12 +7,14 @@
 
 use crate::error::DaemonError;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use waylan_algo::AlgoEngine;
 use waylan_core::config::AppConfig;
 use waylan_ui::CandidateBoxRenderer;
 use waylan_wayland::{WaylandCapabilities, WaylandSessionOptions, run_wayland_session};
 
+use super::{HostReloadBridge, HostReloadBridgeOptions, build_voice_provider};
 use crate::system::ShutdownCoordinator;
 use crate::tray::TrayService;
 
@@ -31,9 +33,17 @@ pub struct WaylandDispatchOptions<'a> {
 /// 运行 Wayland 会话并处理异常退出
 pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), DaemonError> {
     let prefer_v2 = opts.caps.has_input_method_v2 && opts.caps.has_seat;
-    let voice_provider = Some(Box::new(waylan_voice::VoiceInteractionManager::new(
-        opts.cfg.voice.clone(),
-    )) as Box<dyn waylan_core::input::VoiceProvider>);
+    let voice_provider = build_voice_provider(opts.cfg);
+    let has_tray = opts.tray.is_some_and(TrayService::is_dbus_ready);
+    let reload_bridge = Arc::new(HostReloadBridge::new(HostReloadBridgeOptions {
+        cfg: opts.cfg,
+        has_tray,
+        use_ibus_backend: false,
+        coordinator: opts.coordinator.clone(),
+        tray_sync: opts.tray.map(TrayService::sync_handle),
+    }));
+    let host_reload_hook =
+        Arc::new(move |new_cfg: &AppConfig| reload_bridge.handle_reload(new_cfg, true, true));
 
     let loop_result = run_wayland_session(WaylandSessionOptions {
         engine: opts.engine,
@@ -48,6 +58,7 @@ pub fn dispatch_wayland_session(opts: WaylandDispatchOptions<'_>) -> Result<(), 
         exit_requested: Some(opts.coordinator.flag()),
         loop_wakeup: opts.coordinator.loop_wakeup(),
         voice_provider,
+        on_host_reload: Some(host_reload_hook),
     });
 
     super::finalize_session_loop_result(loop_result, opts.coordinator, "Wayland")

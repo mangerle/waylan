@@ -1,6 +1,8 @@
 use log::{info, warn};
 use std::env;
 use std::process;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use waylan_core::config::AppConfig;
 use waylan_daemon::cli::{self, CliCommand, DaemonOptions};
@@ -10,8 +12,9 @@ use waylan_daemon::session_bundle::{
     dispatch_ibus_session, dispatch_wayland_session,
 };
 use waylan_daemon::system::{
-    ShutdownCoordinator, SingleInstanceLock, check_another_instance_running, collect_watched_paths,
-    determine_tray_should_spawn, launch_settings_gui, try_acquire_single_instance_lock,
+    ShutdownCoordinator, SingleInstanceLock, SubprocessManager, check_another_instance_running,
+    collect_watched_paths, determine_tray_should_spawn, launch_settings_gui,
+    try_acquire_single_instance_lock,
 };
 use waylan_daemon::{desktop, logger, tray};
 use waylan_ibus::{print_ibus_component_xml, print_ibus_engines_xml};
@@ -205,10 +208,16 @@ fn dispatch_active_session(
     let (watched_paths, initial_mtime) = collect_watched_paths();
     let should_spawn_tray = determine_tray_should_spawn(&cfg, use_ibus);
 
+    // 提升为会话级唯一子进程管理器与设置启动防重入锁，由托盘菜单与 IBus 原生菜单共同持有
+    let subprocess_manager = Arc::new(SubprocessManager::new(coordinator.flag()));
+    let settings_running = Arc::new(AtomicBool::new(false));
+
     let tray = if should_spawn_tray {
         Some(tray::TrayService::spawn_with_config(
             &cfg,
             coordinator.clone(),
+            Arc::clone(&subprocess_manager),
+            Arc::clone(&settings_running),
         ))
     } else {
         None
@@ -219,10 +228,11 @@ fn dispatch_active_session(
             engine,
             cfg: &cfg,
             is_ibus_arg: opts.ibus_backend,
-            should_spawn_tray,
             watched_paths,
             initial_mtime,
             tray: tray.as_ref(),
+            subprocess_manager,
+            settings_running,
             coordinator,
         })
     } else {

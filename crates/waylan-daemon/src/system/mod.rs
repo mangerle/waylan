@@ -235,20 +235,15 @@ pub fn trigger_graceful_restart_and_exit(
     }
 }
 
-/// 唤起独立的微澜偏好设置中心图形界面并派生收割线程避免僵尸进程残留
+/// 唤起独立的微澜偏好设置中心图形界面（在独立进程组分离运行，供短生命周期 CLI 启动路径使用）
+///
+/// # Errors
+/// 当拉起设置中心二进制进程失败时返回对应 I/O 错误。
 pub fn launch_settings_gui() -> Result<(), DaemonError> {
     info!("[微澜守护进程] 正在拉起独立的偏好设置中心 (waylan-settings)...");
     let mut cmd = build_settings_command();
     cmd.stdin(Stdio::null());
-    let mut child = cmd.spawn()?;
-    if let Err(e) = std::thread::Builder::new()
-        .name("waylan-settings-reaper".to_string())
-        .spawn(move || {
-            let _ = child.wait();
-        })
-    {
-        warn!("[微澜守护进程 警告] 创建设置界面子进程收割线程失败: {}", e);
-    }
+    let _child = cmd.spawn()?;
     Ok(())
 }
 

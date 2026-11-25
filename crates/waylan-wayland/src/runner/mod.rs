@@ -26,7 +26,8 @@ use self::globals::{bind_session_v1_globals, bind_session_v2_globals};
 use self::poll::run_session_loop_step;
 use crate::error::WaylandRunnerError;
 use crate::session_common::{
-    SessionSetupOptions, SessionSetupTargets, WaylandSessionLifecycle, apply_session_setup,
+    HostReloadHook, SessionSetupOptions, SessionSetupTargets, WaylandSessionLifecycle,
+    apply_session_setup,
 };
 use crate::session_v1::{WaylanV1Session, WaylandV1SurfaceContext, WaylandV1WatcherContext};
 use crate::session_v2::WaylanV2Session;
@@ -113,6 +114,11 @@ pub fn reload_wayland_session<S: WaylandSessionLifecycle>(session: &mut S) {
     session
         .renderer_mut()
         .apply_ui_config(&cfg.ui, cfg.ui.theme);
+    if let Some(hook) = session.watcher_ref().host_reload_hook.as_ref()
+        && hook(&cfg)
+    {
+        return;
+    }
     if !session.runtime().core.engine.raw_input().is_empty() {
         session.refresh_surface();
     }
@@ -132,6 +138,7 @@ pub struct WaylandSessionOptions<'a> {
     pub exit_requested: Option<Arc<AtomicBool>>,
     pub loop_wakeup: Option<LoopWakeup>,
     pub voice_provider: Option<Box<dyn VoiceProvider>>,
+    pub on_host_reload: Option<HostReloadHook>,
 }
 
 /// 复用 V2 会话失败后回收的运行时状态降级拉起 V1 会话
@@ -154,6 +161,7 @@ fn run_v1_fallback_session(
             last_watched_mtime: returned_session.watcher.last_watched_mtime,
             exit_requested,
             loop_wakeup,
+            host_reload_hook: returned_session.watcher.host_reload_hook,
             reload_callback: Some(Box::new(reload_wayland_session)),
             ..Default::default()
         },
@@ -239,6 +247,7 @@ pub fn run_wayland_session(opts: WaylandSessionOptions<'_>) -> Result<(), Waylan
         exit_requested: opts.exit_requested.clone(),
         loop_wakeup: opts.loop_wakeup.clone(),
         voice_provider: opts.voice_provider,
+        on_host_reload: opts.on_host_reload,
     };
 
     if prefer_v2 {

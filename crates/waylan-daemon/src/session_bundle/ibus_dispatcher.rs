@@ -8,7 +8,7 @@
 use crate::error::DaemonError;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use log::info;
 use waylan_algo::AlgoEngine;
@@ -19,9 +19,8 @@ use waylan_ibus::{
     run_ibus_session,
 };
 
-use crate::desktop::{
-    GnomeExtensionIntent, gnome_extension_intent, sync_gnome_extension_state_async,
-};
+use super::{HostReloadBridge, HostReloadBridgeOptions, build_voice_provider};
+use crate::desktop::sync_gnome_extension_state_async;
 use crate::system::{ShutdownCoordinator, SubprocessManager};
 use crate::tray::TrayService;
 
@@ -30,22 +29,26 @@ pub struct IbusDispatchOptions<'a> {
     pub engine: AlgoEngine,
     pub cfg: &'a AppConfig,
     pub is_ibus_arg: bool,
-    pub should_spawn_tray: bool,
     pub watched_paths: Vec<PathBuf>,
     pub initial_mtime: Option<waylan_sys::FileSignature>,
     pub tray: Option<&'a TrayService>,
+    pub subprocess_manager: Arc<SubprocessManager>,
+    pub settings_running: Arc<AtomicBool>,
     pub coordinator: ShutdownCoordinator,
 }
 
 /// 宿主 IBus 菜单项外部动作处理器
 struct DaemonIbusMenuHandler {
     subprocess_manager: Arc<SubprocessManager>,
+    settings_running: Arc<AtomicBool>,
     coordinator: ShutdownCoordinator,
 }
 
 impl IbusMenuActionHandler for DaemonIbusMenuHandler {
-    fn open_settings(&self, settings_running: &Arc<AtomicBool>) {
-        self.subprocess_manager.launch_settings(settings_running);
+    fn open_settings(&self, _unused_flag: &Arc<AtomicBool>) {
+        // 统一使用会话唯一的 settings_running 与 SubprocessManager，消除托盘菜单与 IBus 菜单双头重入风险
+        self.subprocess_manager
+            .launch_settings(&self.settings_running);
     }
 
     fn view_log(&self) {
@@ -67,58 +70,21 @@ impl IbusMenuActionHandler for DaemonIbusMenuHandler {
 
 /// 宿主 IBus 配置热重载与 GNOME 桌面集成变迁驱动器
 struct DaemonIbusConfigReloader {
-    /// 当前生效的扩展意图：是否隐藏顶栏原生输入源指示器
-    hide_indicator: AtomicBool,
-    /// 当前生效的扩展意图：是否由扩展渲染微澜自定义候选框
-    custom_candidate_view: AtomicBool,
-    /// 待锁守卫释放后执行的桌面集成外部命令标记
-    pending_sync: AtomicBool,
-}
-
-impl DaemonIbusConfigReloader {
-    /// 写入最新扩展意图并返回是否发生变迁
-    ///
-    /// 两项职责必须一起比较：只监听独占输入源会让"候选框模式"的改动静默丢失。
-    fn update_intent(&self, intent: GnomeExtensionIntent) -> bool {
-        let prev_hide = self
-            .hide_indicator
-            .swap(intent.hide_indicator, Ordering::AcqRel);
-        let prev_view = self
-            .custom_candidate_view
-            .swap(intent.custom_candidate_view, Ordering::AcqRel);
-        prev_hide != intent.hide_indicator || prev_view != intent.custom_candidate_view
-    }
-
-    /// 读取当前生效的扩展意图
-    fn current_intent(&self) -> GnomeExtensionIntent {
-        GnomeExtensionIntent {
-            hide_indicator: self.hide_indicator.load(Ordering::Acquire),
-            custom_candidate_view: self.custom_candidate_view.load(Ordering::Acquire),
-        }
-    }
+    bridge: HostReloadBridge,
 }
 
 impl IbusConfigReloader for DaemonIbusConfigReloader {
     fn reload(&self, core: &mut IbusSessionCore) -> bool {
         let new_cfg = AppConfig::load_or_create();
-        if super::should_restart_for_tray_change(&new_cfg, core.has_tray(), true) {
+        if self.bridge.handle_reload(&new_cfg, false, false) {
             return true;
         }
-
         core.runtime_mut().reload_config(&new_cfg);
-        if self.update_intent(gnome_extension_intent(&new_cfg)) {
-            // 标记待在锁守卫释放后的 post_reload 中安全执行桌面集成外部命令
-            self.pending_sync.store(true, Ordering::Release);
-        }
         false
     }
 
     fn post_reload(&self) {
-        if self.pending_sync.swap(false, Ordering::AcqRel) {
-            let intent = self.current_intent();
-            crate::desktop::ensure_gnome_input_source_registered(intent.hide_indicator);
-            crate::desktop::sync_gnome_hide_indicator_extension(intent);
-        }
+        self.bridge.flush_pending_desktop_sync();
     }
 }
 
@@ -128,23 +94,15 @@ fn build_ibus_session_core(
     tray: Option<&TrayService>,
     initial_cfg: &AppConfig,
 ) -> IbusSessionCore {
-    let mut session_core = IbusSessionCore::new(engine).with_voice_provider(Box::new(
-        waylan_voice::VoiceInteractionManager::new(initial_cfg.voice.clone()),
-    ));
+    let mut session_core = IbusSessionCore::new(engine);
+    if let Some(voice) = build_voice_provider(initial_cfg) {
+        session_core = session_core.with_voice_provider(voice);
+    }
     if let Some(tray) = tray {
         session_core.attach_tray(tray.shared_flags().clone(), Some(tray.icon_notifier()));
     }
     session_core.runtime_mut().apply_initial_config(initial_cfg);
     session_core
-}
-
-/// 构建宿主侧 IBus 配置热重载驱动器（以启动期配置作为变迁比较基线）
-fn build_config_reloader(intent: GnomeExtensionIntent) -> Arc<DaemonIbusConfigReloader> {
-    Arc::new(DaemonIbusConfigReloader {
-        hide_indicator: AtomicBool::new(intent.hide_indicator),
-        custom_candidate_view: AtomicBool::new(intent.custom_candidate_view),
-        pending_sync: AtomicBool::new(false),
-    })
 }
 
 /// 构建 IBus 会话停机协调器，串联宿主停机标志、事件循环唤醒与优雅重启回调
@@ -161,26 +119,36 @@ fn build_ibus_coordinator(coordinator: &ShutdownCoordinator) -> IbusShutdownCoor
 
 /// 运行 IBus 会话并统一收敛异常退出与停机退出码
 pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), DaemonError> {
+    // 仅当托盘服务真实完成 D-Bus 会话注册时才隐藏 IBus 原生菜单，避免 DBus 连不上时两头无菜单
+    let tray_ready = opts.tray.is_some_and(TrayService::is_dbus_ready);
     info!(
         "[微澜守护进程] 启用 IBus / D-Bus 输入法引擎会话 (展示形态: {}, 原生指示器属性上报就绪)。",
-        if opts.should_spawn_tray {
+        if tray_ready {
             "形态 B 专属彩色托盘"
         } else {
             "形态 A 原生顶栏"
         }
     );
 
-    let initial_intent = gnome_extension_intent(opts.cfg);
-    // 启动即后台对齐一次扩展加载状态：扩展可能因系统升级、用户在扩展管理器中手动关闭或首次
-    // 安装而与配置脱节，原实现只在配置值变化时才同步，会让脱节状态永久保留。
-    sync_gnome_extension_state_async(initial_intent);
+    let reload_bridge = HostReloadBridge::new(HostReloadBridgeOptions {
+        cfg: opts.cfg,
+        has_tray: tray_ready,
+        use_ibus_backend: true,
+        coordinator: opts.coordinator.clone(),
+        tray_sync: opts.tray.map(TrayService::sync_handle),
+    });
+    // 启动即后台对齐一次扩展加载状态：扩展可能因系统升级或用户在扩展管理器中手动关闭而脱节
+    sync_gnome_extension_state_async(reload_bridge.current_intent());
     let session_core = build_ibus_session_core(opts.engine, opts.tray, opts.cfg);
 
     let menu_handler = Arc::new(DaemonIbusMenuHandler {
-        subprocess_manager: Arc::new(SubprocessManager::new(opts.coordinator.flag())),
+        subprocess_manager: opts.subprocess_manager,
+        settings_running: opts.settings_running,
         coordinator: opts.coordinator.clone(),
     });
-    let config_reloader = build_config_reloader(initial_intent);
+    let config_reloader = Arc::new(DaemonIbusConfigReloader {
+        bridge: reload_bridge,
+    });
     let ibus_coordinator = build_ibus_coordinator(&opts.coordinator);
 
     let ibus_res = run_ibus_session(IbusSessionOptions {
@@ -190,10 +158,7 @@ pub fn dispatch_ibus_session(opts: IbusDispatchOptions<'_>) -> Result<(), Daemon
         initial_mtime: opts.initial_mtime,
         reload_requested: opts.tray.as_ref().map(|t| t.reload_flag()),
         coordinator: ibus_coordinator,
-        // 菜单承载权归"当家的托盘"：专属彩色托盘在跑时由它承载 9 项菜单，抑制引擎属性上报以免重复；
-        // 专属托盘未启用时（enable_tray=never 或非 GNOME 宿主）必须发出属性树，否则 IBus /
-        // GNOME 原生指示器菜单里只剩系统通用项，微澜功能无从触达。
-        suppress_properties: opts.should_spawn_tray,
+        suppress_properties: tray_ready,
         menu_handler: Some(menu_handler),
         config_reloader: Some(config_reloader),
     });

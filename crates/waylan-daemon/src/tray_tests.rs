@@ -15,6 +15,8 @@ fn test_tray_mode_toggle() {
         reload_requested,
         coordinator,
         icon_update_tx,
+        icons: Arc::new(RwLock::new(resolve_tray_icons(&AppConfig::default()))),
+        dbus_ready: Arc::new(AtomicBool::new(false)),
         join_handle: None,
     };
 
@@ -35,6 +37,7 @@ fn test_tray_menu_layout_and_event() {
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, icon_update_rx) = sync_channel::<()>(8);
+    let subprocess_manager = Arc::new(SubprocessManager::new(Arc::clone(&exit_requested)));
     let coordinator = ShutdownCoordinator::from_parts(exit_requested, None);
     let menu = DBusMenu::new(DBusMenuOptions {
         shared_flags: shared_flags.clone(),
@@ -42,6 +45,7 @@ fn test_tray_menu_layout_and_event() {
         coordinator,
         settings_running: Arc::new(AtomicBool::new(false)),
         icon_update_tx,
+        subprocess_manager,
     });
 
     let (_rev, (_parent_id, _props, items)) = menu.get_layout(0, -1, vec![]);
@@ -84,6 +88,7 @@ fn test_tray_menu_exit_event() {
     let reload_requested = Arc::new(AtomicBool::new(false));
     let exit_requested = Arc::new(AtomicBool::new(false));
     let (icon_update_tx, _icon_update_rx) = sync_channel::<()>(8);
+    let subprocess_manager = Arc::new(SubprocessManager::new(Arc::clone(&exit_requested)));
     let coordinator = ShutdownCoordinator::from_parts(Arc::clone(&exit_requested), None);
     let menu = DBusMenu::new(DBusMenuOptions {
         shared_flags,
@@ -91,6 +96,7 @@ fn test_tray_menu_exit_event() {
         coordinator,
         settings_running: Arc::new(AtomicBool::new(false)),
         icon_update_tx,
+        subprocess_manager,
     });
 
     assert!(!exit_requested.load(Ordering::Relaxed));

@@ -40,11 +40,21 @@ pub fn build_settings_command() -> Command {
     cmd
 }
 
+/// 外部子进程退场治理策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildExitPolicy {
+    /// 守护进程退出时终止并收割该附属子进程（发送 SIGTERM/SIGKILL 并等待退出）
+    KillOnExit,
+    /// 用户自主打开的独立交互应用（如偏好设置中心、编辑器），守护进程重启/退出时不强杀，仅做末次非阻塞收割后脱管
+    DetachOnExit,
+}
+
 /// 被纳管的外部子进程条目
 pub(crate) struct TrackedChild {
     pub(crate) child: Child,
     pub(crate) running_guard: Option<Arc<AtomicBool>>,
     pub(crate) name: &'static str,
+    pub(crate) exit_policy: ChildExitPolicy,
 }
 
 impl TrackedChild {
@@ -82,17 +92,31 @@ fn reap_exited_children(children: &Mutex<Vec<TrackedChild>>) {
     });
 }
 
-/// 收到退出信号后，主动终止所有存活子进程并收割其退出状态（先取出列表释放互斥锁，避免持锁期间阻塞 wait）
+/// 收到退出信号后按退场策略清理子进程：强管控子进程收割退出，用户独立交互应用保留存活防误杀未保存工作
 fn terminate_all_children(children: &Mutex<Vec<TrackedChild>>) {
     let mut pending = std::mem::take(&mut *children.lock());
     for tracked in pending.iter_mut() {
-        info!(
-            "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
-            tracked.name
-        );
-        let _ = tracked.child.kill();
-        let _ = tracked.child.wait();
-        tracked.mark_finished();
+        match tracked.exit_policy {
+            ChildExitPolicy::KillOnExit => {
+                info!(
+                    "[进程治理] 正在终止被纳管的外部子进程 [{}]...",
+                    tracked.name
+                );
+                let _ = tracked.child.kill();
+                let _ = tracked.child.wait();
+                tracked.mark_finished();
+            }
+            ChildExitPolicy::DetachOnExit => {
+                if let Ok(Some(_)) = tracked.child.try_wait() {
+                    tracked.mark_finished();
+                } else {
+                    info!(
+                        "[进程治理] 守护进程即将退场，已将外部交互进程 [{}] 转交桌面会话继续存活",
+                        tracked.name
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -147,13 +171,25 @@ impl SubprocessManager {
         }
     }
 
-    /// 注册纳管新启动的外部子进程
+    /// 注册纳管新启动的外部子进程（默认按 `KillOnExit` 退场回收）
     pub fn track(&self, child: Child, running_guard: Option<Arc<AtomicBool>>, name: &'static str) {
+        self.track_with_policy(child, running_guard, name, ChildExitPolicy::KillOnExit);
+    }
+
+    /// 按显式退场策略注册纳管外部子进程
+    pub fn track_with_policy(
+        &self,
+        child: Child,
+        running_guard: Option<Arc<AtomicBool>>,
+        name: &'static str,
+        exit_policy: ChildExitPolicy,
+    ) {
         let mut lock = self.children.lock();
         lock.push(TrackedChild {
             child,
             running_guard,
             name,
+            exit_policy,
         });
     }
 
@@ -171,7 +207,12 @@ impl SubprocessManager {
 
         match cmd.spawn() {
             Ok(child) => {
-                self.track(child, Some(Arc::clone(settings_running)), "偏好设置界面");
+                self.track_with_policy(
+                    child,
+                    Some(Arc::clone(settings_running)),
+                    "偏好设置界面",
+                    ChildExitPolicy::DetachOnExit,
+                );
             }
             Err(e) => {
                 log::warn!(
@@ -221,7 +262,7 @@ fn try_spawn_viewer(mut cmd: Command, tracker: &SubprocessManager, desc: &'stati
     #[cfg(unix)]
     cmd.process_group(0);
     if let Ok(child) = cmd.spawn() {
-        tracker.track(child, None, desc);
+        tracker.track_with_policy(child, None, desc, ChildExitPolicy::DetachOnExit);
         true
     } else {
         false

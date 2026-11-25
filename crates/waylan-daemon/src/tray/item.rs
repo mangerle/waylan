@@ -1,6 +1,8 @@
 use crate::config::{AppConfig, env_var_non_empty};
 use log::{info, warn};
+use parking_lot::RwLock;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use waylan_sys::LoopWakeup;
 use zbus::OwnedObjectPath;
@@ -13,6 +15,14 @@ type ToolTipData = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 use waylan_core::state::SharedInputFlags;
 pub use waylan_sys::assets::{detect_default_assets_path, resolve_icon_path_or_name};
 
+/// 解析得到的系统托盘图标配置与资源路径
+pub(crate) struct ResolvedTrayIcons {
+    pub(crate) theme_path: String,
+    pub(crate) icon_zh: String,
+    pub(crate) icon_en: String,
+    pub(crate) icon_en_caps: String,
+}
+
 /// 系统托盘状态项实现 (StatusNotifierItem)
 #[derive(Clone)]
 pub struct StatusNotifierItem {
@@ -20,24 +30,10 @@ pub struct StatusNotifierItem {
     pub(crate) shared_flags: SharedInputFlags,
     /// 图标与状态刷新通知发送端
     pub(crate) icon_update_tx: SyncSender<()>,
-    /// 自定义图标主题目录
-    pub(crate) icon_theme_path: String,
-    /// 自定义中文图标名称
-    pub(crate) icon_zh: String,
-    /// 自定义英文图标名称
-    pub(crate) icon_en: String,
-    /// 自定义英文大写图标名称
-    pub(crate) icon_en_caps: String,
+    /// 图标主题目录与各状态图标名称（支持配置热重载实时更新）
+    pub(crate) icons: Arc<RwLock<ResolvedTrayIcons>>,
     /// 事件循环唤醒通道
     pub(crate) loop_wakeup: Option<LoopWakeup>,
-}
-
-/// 解析得到的系统托盘图标配置与资源路径
-struct ResolvedTrayIcons {
-    theme_path: String,
-    icon_zh: String,
-    icon_en: String,
-    icon_en_caps: String,
 }
 
 /// 托盘状态图标的名称解析输入参数包
@@ -95,7 +91,7 @@ fn resolve_state_icon(theme_path: &str, has_custom_theme: bool, spec: TrayIconSp
 }
 
 /// 解析系统环境变量与应用配置中的托盘图标主题路径及各状态图标名称
-fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
+pub(crate) fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
     let (icon_theme_path, has_custom_theme) = resolve_icon_theme_path(config);
 
     let env_zh = env_var_non_empty("WAYLAN_ICON_ZH");
@@ -145,22 +141,32 @@ fn resolve_tray_icons(config: &AppConfig) -> ResolvedTrayIcons {
 
 impl StatusNotifierItem {
     /// 构造 `StatusNotifierItem` 托盘服务对象
-    ///
-    /// 图标名与提示文案在构造期从配置一次性读取，运行期变更依赖配置热重载重新装配。
+    #[cfg(test)]
     pub(crate) fn new(
         shared_flags: SharedInputFlags,
         icon_update_tx: SyncSender<()>,
         config: &AppConfig,
         loop_wakeup: Option<LoopWakeup>,
     ) -> Self {
-        let icons = resolve_tray_icons(config);
+        Self::with_shared_icons(
+            shared_flags,
+            icon_update_tx,
+            Arc::new(RwLock::new(resolve_tray_icons(config))),
+            loop_wakeup,
+        )
+    }
+
+    /// 使用共享的图标解析状态构造托盘服务对象（支持配置热重载即时替换图标）
+    pub(crate) fn with_shared_icons(
+        shared_flags: SharedInputFlags,
+        icon_update_tx: SyncSender<()>,
+        icons: Arc<RwLock<ResolvedTrayIcons>>,
+        loop_wakeup: Option<LoopWakeup>,
+    ) -> Self {
         Self {
             shared_flags,
             icon_update_tx,
-            icon_theme_path: icons.theme_path,
-            icon_zh: icons.icon_zh,
-            icon_en: icons.icon_en,
-            icon_en_caps: icons.icon_en_caps,
+            icons,
             loop_wakeup,
         }
     }
@@ -195,19 +201,20 @@ impl StatusNotifierItem {
     /// 图标主题额外搜索目录 (IconThemePath)
     #[zbus(property)]
     pub(crate) fn icon_theme_path(&self) -> String {
-        self.icon_theme_path.clone()
+        self.icons.read().theme_path.clone()
     }
 
     /// 图标名称（根据中英文与 CapsLock 大写状态动态切换，支持自定义图标）
     #[zbus(property)]
     pub(crate) fn icon_name(&self) -> String {
         let snap = self.shared_flags.snapshot();
+        let icons = self.icons.read();
         if snap.is_caps_locked {
-            self.icon_en_caps.clone()
+            icons.icon_en_caps.clone()
         } else if snap.is_chinese {
-            self.icon_zh.clone()
+            icons.icon_zh.clone()
         } else {
-            self.icon_en.clone()
+            icons.icon_en.clone()
         }
     }
 

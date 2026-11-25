@@ -2,15 +2,15 @@ pub(crate) mod item;
 pub(crate) mod menu;
 
 use crate::config::AppConfig;
-use crate::system::ShutdownCoordinator;
+use crate::system::{ShutdownCoordinator, SubprocessManager};
+use item::{ResolvedTrayIcons, resolve_tray_icons};
 use log::{debug, info, warn};
 use menu::{DBusMenu, DBusMenuOptions};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::process;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::Duration;
@@ -22,14 +22,33 @@ use zbus::connection::{Builder, Connection};
 
 pub use item::StatusNotifierItem;
 
+/// 可跨线程克隆的托盘图标热重载同步句柄
+#[derive(Clone)]
+pub struct TraySyncHandle {
+    icons: Arc<RwLock<ResolvedTrayIcons>>,
+    icon_update_tx: SyncSender<()>,
+}
+
+impl TraySyncHandle {
+    /// 依据最新配置更新托盘图标名称/主题路径，并触发一次 D-Bus `NewIcon` 信号刷新
+    pub fn sync_config(&self, config: &AppConfig) {
+        *self.icons.write() = resolve_tray_icons(config);
+        let _ = self.icon_update_tx.try_send(());
+    }
+}
+
 /// 托盘后台事件循环参数包
 struct TrayLoopParams {
-    config: AppConfig,
+    icons: Arc<RwLock<ResolvedTrayIcons>>,
     shared_flags: SharedInputFlags,
     reload_requested: Arc<AtomicBool>,
     coordinator: ShutdownCoordinator,
+    subprocess_manager: Arc<SubprocessManager>,
+    settings_running: Arc<AtomicBool>,
     icon_update_tx: SyncSender<()>,
     icon_update_rx: Receiver<()>,
+    dbus_ready: Arc<AtomicBool>,
+    ready_tx: SyncSender<bool>,
 }
 
 /// 系统托盘服务控制器
@@ -37,24 +56,33 @@ struct TrayLoopParams {
 /// # 设计原理
 /// - **实现初衷**：在现代 Linux Wayland 任务栏（Waybar/KDE/GNOME）呈现常驻输入法托盘，提供状态展示与快捷菜单。
 /// - **核心优势**：通过 D-Bus StatusNotifierItem 与 DBusMenu 规范集成，支持右键菜单、平滑重启与即时中英切换。
-/// - **代价与局限**：依赖 D-Bus 用户会话总线，若当前环境无 DBus 则自动优雅降级。
+/// - **代价与局限**：依赖 D-Bus 用户会话总线，若当前环境无 DBus 则自动优雅降级并向调用方汇报真实就绪态。
 pub struct TrayService {
     shared_flags: SharedInputFlags,
     reload_requested: Arc<AtomicBool>,
     coordinator: ShutdownCoordinator,
     icon_update_tx: SyncSender<()>,
+    icons: Arc<RwLock<ResolvedTrayIcons>>,
+    dbus_ready: Arc<AtomicBool>,
     join_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl TrayService {
-    /// 使用停机协调器启动后台系统托盘常驻服务（从磁盘加载配置）
+    /// 使用停机协调器启动后台系统托盘常驻服务（独立运行时/测试便捷入口）
     pub fn spawn(coordinator: ShutdownCoordinator) -> Self {
         let config = AppConfig::load_or_create();
-        Self::spawn_with_config(&config, coordinator)
+        let subprocess_manager = Arc::new(SubprocessManager::new(coordinator.flag()));
+        let settings_running = Arc::new(AtomicBool::new(false));
+        Self::spawn_with_config(&config, coordinator, subprocess_manager, settings_running)
     }
 
-    /// 使用已加载的配置与停机协调器启动后台系统托盘常驻服务（消除重复磁盘配置解析）
-    pub fn spawn_with_config(config: &AppConfig, coordinator: ShutdownCoordinator) -> Self {
+    /// 使用共享配置、协调器与会话唯一子进程管理器启动后台系统托盘常驻服务
+    pub fn spawn_with_config(
+        config: &AppConfig,
+        coordinator: ShutdownCoordinator,
+        subprocess_manager: Arc<SubprocessManager>,
+        settings_running: Arc<AtomicBool>,
+    ) -> Self {
         let shared_flags = SharedInputFlags::new(
             config.pinyin.init_chinese,
             config.pinyin.traditional_chinese,
@@ -63,14 +91,21 @@ impl TrayService {
         );
         let reload_requested = Arc::new(AtomicBool::new(false));
         let (icon_update_tx, icon_update_rx) = mpsc::sync_channel::<()>(64);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<bool>(1);
+        let icons = Arc::new(RwLock::new(resolve_tray_icons(config)));
+        let dbus_ready = Arc::new(AtomicBool::new(false));
 
         let params = TrayLoopParams {
-            config: config.clone(),
+            icons: Arc::clone(&icons),
             shared_flags: shared_flags.clone(),
             reload_requested: Arc::clone(&reload_requested),
             coordinator: coordinator.clone(),
+            subprocess_manager,
+            settings_running,
             icon_update_tx: icon_update_tx.clone(),
             icon_update_rx,
+            dbus_ready: Arc::clone(&dbus_ready),
+            ready_tx,
         };
 
         let join_handle = match thread::Builder::new()
@@ -78,7 +113,14 @@ impl TrayService {
             .spawn(move || {
                 Self::run_dbus_loop(params);
             }) {
-            Ok(handle) => Some(handle),
+            Ok(handle) => {
+                // 等待托盘 D-Bus 会话建连结果（短窗口 400ms），避免连不上 DBus 时仍误抑制 IBus 原生菜单
+                let ready = ready_rx
+                    .recv_timeout(Duration::from_millis(400))
+                    .unwrap_or(false);
+                dbus_ready.store(ready, Ordering::Release);
+                Some(handle)
+            }
             Err(e) => {
                 warn!(
                     "[系统托盘 警告] 创建托盘后台线程失败，已降级为无托盘模式: {}",
@@ -93,7 +135,24 @@ impl TrayService {
             reload_requested,
             coordinator,
             icon_update_tx,
+            icons,
+            dbus_ready,
             join_handle,
+        }
+    }
+
+    /// 托盘 D-Bus 服务是否已成功连接总线并导出对象
+    #[must_use]
+    pub fn is_dbus_ready(&self) -> bool {
+        self.dbus_ready.load(Ordering::Acquire)
+    }
+
+    /// 克隆可传递给宿主热重载桥接器的轻量托盘图标同步句柄
+    #[must_use]
+    pub fn sync_handle(&self) -> TraySyncHandle {
+        TraySyncHandle {
+            icons: Arc::clone(&self.icons),
+            icon_update_tx: self.icon_update_tx.clone(),
         }
     }
 
@@ -138,18 +197,19 @@ impl TrayService {
     /// 初始化 StatusNotifierItem 与 DBusMenu 实例
     fn init_tray_objects(params: &TrayLoopParams) -> (StatusNotifierItem, DBusMenu) {
         let loop_wakeup = params.coordinator.loop_wakeup();
-        let sni = StatusNotifierItem::new(
+        let sni = StatusNotifierItem::with_shared_icons(
             params.shared_flags.clone(),
             params.icon_update_tx.clone(),
-            &params.config,
+            Arc::clone(&params.icons),
             loop_wakeup,
         );
         let menu = DBusMenu::new(DBusMenuOptions {
             shared_flags: params.shared_flags.clone(),
             reload_requested: params.reload_requested.clone(),
             coordinator: params.coordinator.clone(),
-            settings_running: Arc::new(AtomicBool::new(false)),
+            settings_running: Arc::clone(&params.settings_running),
             icon_update_tx: params.icon_update_tx.clone(),
+            subprocess_manager: Arc::clone(&params.subprocess_manager),
         });
         (sni, menu)
     }
@@ -338,9 +398,13 @@ impl TrayService {
         let item_service = format!("org.kde.StatusNotifierItem-{}-1", pid);
 
         let Some(conn) = Self::connect_dbus_session(sni.clone(), menu, &item_service) else {
+            params.dbus_ready.store(false, Ordering::Release);
+            let _ = params.ready_tx.try_send(false);
             return;
         };
 
+        params.dbus_ready.store(true, Ordering::Release);
+        let _ = params.ready_tx.try_send(true);
         Self::register_to_watcher(&conn, &item_service);
         Self::run_tray_event_loop(params, sni, conn);
     }

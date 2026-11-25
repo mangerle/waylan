@@ -25,10 +25,15 @@ pub use waylan_sys::fs_watcher::*;
 /// 会话热重载回调闭包契约
 pub type SessionReloadCallback<S> = Box<dyn FnMut(&mut S) + Send>;
 
+/// 宿主级热重载扩展钩子：接收磁盘最新配置，若发生影响宿主进程的变更（如托盘显示模式改变需优雅重启）返回 `true`
+pub type HostReloadHook = Arc<dyn Fn(&AppConfig) -> bool + Send + Sync>;
+
 /// Wayland 外部环境监控与会话生命周期协调器（统合 V1 与 V2 镜像结构）
 pub struct WaylandWatcherContext<S> {
     /// 外部注入的配置与词库热重载回调函数
     pub reload_callback: Option<SessionReloadCallback<S>>,
+    /// 外部宿主级配置同步与托盘形态变更检测钩子
+    pub host_reload_hook: Option<HostReloadHook>,
     /// 监控外部进程修改的配置文件与词库路径列表
     pub watched_paths: Vec<PathBuf>,
     /// 上次记录的被监控文件最新状态签名
@@ -45,6 +50,7 @@ impl<S> Default for WaylandWatcherContext<S> {
     fn default() -> Self {
         Self {
             reload_callback: None,
+            host_reload_hook: None,
             watched_paths: Vec::new(),
             last_watched_mtime: None,
             inotify_watcher: None,
@@ -66,6 +72,7 @@ pub struct SessionSetupOptions<'a> {
     pub exit_requested: Option<Arc<AtomicBool>>,
     pub loop_wakeup: Option<LoopWakeup>,
     pub voice_provider: Option<Box<dyn VoiceProvider>>,
+    pub on_host_reload: Option<HostReloadHook>,
 }
 
 /// 会话装配目标上下文（运行时、渲染器、监控上下文与热重载回调的可变借用集合）
@@ -106,6 +113,7 @@ pub fn apply_session_setup<S: 'static>(
     runtime.set_voice_provider(opts.voice_provider);
     watcher.exit_requested = opts.exit_requested;
     watcher.loop_wakeup = opts.loop_wakeup;
+    watcher.host_reload_hook = opts.on_host_reload;
     watcher.reload_callback = Some(Box::new(reload_cb));
     runtime.apply_initial_config(opts.cfg);
 }
