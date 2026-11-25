@@ -11,6 +11,7 @@ mod offline;
 mod traits;
 
 pub use cloud::{CloudVoiceRecognizer, encode_pcm_to_wav, test_cloud_profile_connection};
+pub(crate) use offline::is_offline_model_dir_complete;
 pub use offline::{OfflineVoiceRecognizer, resolve_asr_model_dir};
 pub use traits::{MockVoiceRecognizer, VoiceRecognizer};
 

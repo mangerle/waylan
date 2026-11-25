@@ -19,6 +19,7 @@ use waylan_core::OfflineModelType;
 use super::archive::extract_tar_bz2_safely;
 use super::importer::{builtin_models_dir, copy_dir_all, user_models_dir};
 use crate::error::VoiceError;
+use crate::recognizer::is_offline_model_dir_complete;
 
 /// 模型压缩包最大允许下载体积（2 GiB），防止异常/恶意响应耗尽本地磁盘
 const MAX_MODEL_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -135,38 +136,9 @@ pub fn is_preset_model_installed(meta: &OnlineAsrModelMeta) -> bool {
         candidate_dirs.push(builtin_dir.join("asr").join(meta.dir_name));
     }
 
-    candidate_dirs.iter().any(|dest| {
-        if !dest.is_dir() {
-            return false;
-        }
-        match meta.model_type {
-            OfflineModelType::SenseVoice => {
-                (dest.join("model.int8.onnx").exists() || dest.join("model.onnx").exists())
-                    && dest.join("tokens.txt").exists()
-            }
-            OfflineModelType::Qwen3Asr => {
-                (dest.join("conv_frontend.int8.onnx").exists()
-                    || dest.join("conv_frontend.onnx").exists())
-                    && (dest.join("encoder.int8.onnx").exists()
-                        || dest.join("encoder.onnx").exists())
-                    && (dest.join("decoder.int8.onnx").exists()
-                        || dest.join("decoder.onnx").exists())
-            }
-            OfflineModelType::FireRedAsr2 => {
-                (dest.join("model.int8.onnx").exists()
-                    || dest.join("model.onnx").exists()
-                    || dest.join("encoder.int8.onnx").exists())
-                    && dest.join("tokens.txt").exists()
-            }
-            OfflineModelType::FunAsrNano => {
-                (dest.join("encoder_adaptor.int8.onnx").exists()
-                    || dest.join("encoder_adaptor.onnx").exists())
-                    && (dest.join("llm.int8.onnx").exists() || dest.join("llm.onnx").exists())
-                    && (dest.join("embedding.int8.onnx").exists()
-                        || dest.join("embedding.onnx").exists())
-            }
-        }
-    })
+    candidate_dirs
+        .iter()
+        .any(|dest| is_offline_model_dir_complete(dest, meta.model_type))
 }
 
 /// 格式化传输速率字符串（例如：12.5 MB/s 或 850 KB/s）

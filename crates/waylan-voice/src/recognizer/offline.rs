@@ -158,6 +158,16 @@ fn detect_offline_files(path: &Path, model_type: OfflineModelType) -> Option<Det
     }
 }
 
+/// 校验离线 ASR 模型目录对指定模型架构是否文件完整
+///
+/// # 设计原理
+/// - **实现初衷**：与运行期 [`detect_offline_files`] 共享同一套权重文件探测规则，消除下载器与加载器两套校验标准漂移风险。
+/// - **核心优势**：保证安装状态判定与离线识别器真实可加载状态严格一致。
+/// - **代价与局限**：需对目录内候选文件名执行少量元数据 `exists()` 探测。
+pub(crate) fn is_offline_model_dir_complete(path: &Path, model_type: OfflineModelType) -> bool {
+    path.is_dir() && detect_offline_files(path, model_type).is_some()
+}
+
 /// 根据探测到的模型文件配置并创建 sherpa-onnx 离线识别器
 fn create_offline_recognizer(
     detected: &DetectedOfflineModel,
@@ -412,5 +422,40 @@ mod tests {
         assert!(OfflineModelType::Qwen3Asr.has_native_punctuation());
         assert!(!OfflineModelType::FireRedAsr2.has_native_punctuation());
         assert_eq!(OfflineModelType::default(), OfflineModelType::SenseVoice);
+    }
+
+    #[test]
+    fn test_is_offline_model_dir_complete_matches_all_architectures() {
+        let dir = tempfile::tempdir().unwrap();
+        let sv_dir = dir.path().join("sensevoice");
+        std::fs::create_dir_all(&sv_dir).unwrap();
+        assert!(!is_offline_model_dir_complete(
+            &sv_dir,
+            OfflineModelType::SenseVoice
+        ));
+        std::fs::write(sv_dir.join("model.int8.onnx"), b"stub").unwrap();
+        assert!(!is_offline_model_dir_complete(
+            &sv_dir,
+            OfflineModelType::SenseVoice
+        ));
+        std::fs::write(sv_dir.join("tokens.txt"), b"stub").unwrap();
+        assert!(is_offline_model_dir_complete(
+            &sv_dir,
+            OfflineModelType::SenseVoice
+        ));
+
+        let fr_dir = dir.path().join("firered");
+        std::fs::create_dir_all(&fr_dir).unwrap();
+        std::fs::write(fr_dir.join("tokens.txt"), b"stub").unwrap();
+        std::fs::write(fr_dir.join("encoder.onnx"), b"stub").unwrap();
+        assert!(!is_offline_model_dir_complete(
+            &fr_dir,
+            OfflineModelType::FireRedAsr2
+        ));
+        std::fs::write(fr_dir.join("decoder.onnx"), b"stub").unwrap();
+        assert!(is_offline_model_dir_complete(
+            &fr_dir,
+            OfflineModelType::FireRedAsr2
+        ));
     }
 }
