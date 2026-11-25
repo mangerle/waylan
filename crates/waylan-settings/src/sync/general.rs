@@ -4,7 +4,7 @@ use crate::SettingsWindow;
 use waylan_core::config::{
     AppConfig, CandidateDensity, CandidateIndexStyle, CandidateOrientation, CandidateThemePreset,
     CandidateWindowMode, DesktopConfig, FuzzyPinyinRules, PageKeys, PinyinConfig, ShortcutConfig,
-    SwitchKey, TrayDisplayMode, UiConfig, UiIndexEnum,
+    SwitchKey, TrayDisplayMode, UiConfig, UiIndexEnum, normalize_shortcut_text,
 };
 
 /// 同步常规输入、按键习惯与外观排版属性至 Slint 界面属性
@@ -69,22 +69,12 @@ fn update_shortcuts(window: &SettingsWindow, shortcuts: &mut ShortcutConfig) {
         bracket: window.get_page_keys_bracket(),
         comma_period: window.get_page_keys_comma_period(),
     };
-    shortcuts.traditional_shortcut = sanitize_shortcut_string(window.get_traditional_shortcut());
+    shortcuts.traditional_shortcut = normalize_shortcut_text(&window.get_traditional_shortcut());
     shortcuts.full_width_char_shortcut =
-        sanitize_shortcut_string(window.get_full_width_char_shortcut());
+        normalize_shortcut_text(&window.get_full_width_char_shortcut());
     shortcuts.full_width_punct_shortcut =
-        sanitize_shortcut_string(window.get_full_width_punct_shortcut());
+        normalize_shortcut_text(&window.get_full_width_punct_shortcut());
     shortcuts.shift_select_second = window.get_shift_select_second();
-}
-
-/// 快捷键字符串规整处理（统一将空值与 `disabled` 归一化为「已禁用」）
-fn sanitize_shortcut_string(val: slint::SharedString) -> String {
-    let s = val.trim();
-    if s.is_empty() || s.eq_ignore_ascii_case("disabled") || s == "已禁用" {
-        "已禁用".to_string()
-    } else {
-        s.to_string()
-    }
 }
 
 /// 同步候选框外观排版与主题渲染参数

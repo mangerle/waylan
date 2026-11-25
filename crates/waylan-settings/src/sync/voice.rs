@@ -356,10 +356,12 @@ pub(super) fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppCon
     cfg.voice.enabled = window.get_voice_enabled();
 
     // 连续听写开关快捷键 (Toggle)
-    cfg.voice.toggle_shortcut = normalize_shortcut_value(&window.get_toggle_shortcut());
+    cfg.voice.toggle_shortcut =
+        waylan_core::config::normalize_shortcut_text(&window.get_toggle_shortcut());
 
     // 长按对讲机快捷键 (Push-to-Talk)
-    cfg.voice.push_to_talk_shortcut = normalize_shortcut_value(&window.get_push_to_talk_shortcut());
+    cfg.voice.push_to_talk_shortcut =
+        waylan_core::config::normalize_shortcut_text(&window.get_push_to_talk_shortcut());
 
     // 阶段一 AFE 前端增强
     cfg.voice.afe.enabled = window.get_afe_enabled();
@@ -390,19 +392,6 @@ pub(super) fn update_voice_from_window(window: &SettingsWindow, cfg: &mut AppCon
         VoiceVisualEffect::from_ui_index(window.get_voice_visual_effect_index());
 
     update_voice_models_from_window(window, cfg);
-}
-
-/// 将界面上的快捷键文本归一化为配置可存储的标准取值
-///
-/// 设计意图：空值与 `disabled` 两种「未启用」的表述在界面与配置中并不统一，
-/// 此处集中收敛为唯一哨兵值「已禁用」，避免同一判定规则散落在多个读取点而产生漂移。
-fn normalize_shortcut_value(raw: &str) -> String {
-    let trimmed = raw.trim().to_string();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("disabled") || trimmed == "已禁用" {
-        "已禁用".to_string()
-    } else {
-        trimmed
-    }
 }
 
 /// 从 Slint 界面属性读取模型选择并持久化至配置

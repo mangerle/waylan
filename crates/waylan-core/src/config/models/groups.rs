@@ -149,47 +149,73 @@ pub struct ShortcutConfig {
     pub shift_select_second: bool,
 }
 
+/// 将快捷键文本归一化为标准存储格式（空值与 `disabled` 统一收敛为「已禁用」）
+pub fn normalize_shortcut_text(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("disabled") || trimmed == "已禁用" {
+        "已禁用".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 根据历史枚举别名表将旧版快捷键配置字符串平稳迁移为新格式
+fn deserialize_shortcut_with_aliases<'de, D>(
+    deserializer: D,
+    aliases: &[(&str, &str)],
+) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    let trimmed = raw.trim();
+    if let Some((_, mapped)) = aliases.iter().find(|(old, _)| *old == trimmed) {
+        return Ok((*mapped).to_string());
+    }
+    Ok(normalize_shortcut_text(trimmed))
+}
+
 fn deserialize_traditional_shortcut<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
-    let normalized = match s.trim() {
-        "CtrlShiftF" => "Ctrl + Shift + F".to_string(),
-        "CtrlAltF" => "Ctrl + Alt + F".to_string(),
-        "CtrlShiftT" => "Ctrl + Shift + T".to_string(),
-        "Disabled" => "已禁用".to_string(),
-        other => other.to_string(),
-    };
-    Ok(normalized)
+    deserialize_shortcut_with_aliases(
+        deserializer,
+        &[
+            ("CtrlShiftF", "Ctrl + Shift + F"),
+            ("CtrlAltF", "Ctrl + Alt + F"),
+            ("CtrlShiftT", "Ctrl + Shift + T"),
+            ("Disabled", "已禁用"),
+        ],
+    )
 }
 
 fn deserialize_full_width_char_shortcut<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
-    let normalized = match s.trim() {
-        "ShiftSpace" => "Shift + Space".to_string(),
-        "CtrlShiftSpace" => "Ctrl + Shift + Space".to_string(),
-        "Disabled" => "已禁用".to_string(),
-        other => other.to_string(),
-    };
-    Ok(normalized)
+    deserialize_shortcut_with_aliases(
+        deserializer,
+        &[
+            ("ShiftSpace", "Shift + Space"),
+            ("CtrlShiftSpace", "Ctrl + Shift + Space"),
+            ("Disabled", "已禁用"),
+        ],
+    )
 }
 
 fn deserialize_full_width_punct_shortcut<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
-    let normalized = match s.trim() {
-        "CtrlPeriod" => "Ctrl + .".to_string(),
-        "AltPeriod" => "Alt + .".to_string(),
-        "Disabled" => "已禁用".to_string(),
-        other => other.to_string(),
-    };
-    Ok(normalized)
+    deserialize_shortcut_with_aliases(
+        deserializer,
+        &[
+            ("CtrlPeriod", "Ctrl + ."),
+            ("AltPeriod", "Alt + ."),
+            ("Disabled", "已禁用"),
+        ],
+    )
 }
 
 impl Default for ShortcutConfig {

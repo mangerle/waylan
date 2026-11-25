@@ -175,6 +175,30 @@ pub struct CloudAsrConfig {
     pub model: String,
 }
 
+impl CloudAsrConfig {
+    /// 规整云端服务终端 URL 与模型名称的空白及默认值兜底
+    pub(crate) fn sanitize_endpoint_and_model(endpoint: &mut String, model: &mut String) {
+        let trimmed_ep = endpoint.trim();
+        if trimmed_ep.is_empty() {
+            *endpoint = "https://api.openai.com/v1/audio/transcriptions".to_string();
+        } else if trimmed_ep.len() != endpoint.len() {
+            *endpoint = trimmed_ep.to_string();
+        }
+
+        let trimmed_model = model.trim();
+        if trimmed_model.is_empty() {
+            *model = "whisper-1".to_string();
+        } else if trimmed_model.len() != model.len() {
+            *model = trimmed_model.to_string();
+        }
+    }
+
+    /// 规整云端语音识别配置字段边界
+    pub fn sanitize(&mut self) {
+        Self::sanitize_endpoint_and_model(&mut self.endpoint, &mut self.model);
+    }
+}
+
 impl Default for CloudAsrConfig {
     fn default() -> Self {
         Self {
@@ -384,6 +408,21 @@ impl Default for VoiceConfig {
 }
 
 impl VoiceConfig {
+    /// 校验并钳制语音子配置数值边界，防止非法线程数、NaN 阈值或空白终端地址传入运行时
+    pub fn sanitize(&mut self) {
+        self.vad.silence_timeout_ms = self.vad.silence_timeout_ms.clamp(200, 5000);
+        self.vad.speech_threshold = if self.vad.speech_threshold.is_finite() {
+            self.vad.speech_threshold.clamp(0.01, 0.99)
+        } else {
+            0.5
+        };
+        self.offline.num_threads = self.offline.num_threads.clamp(1, 32);
+        self.cloud.sanitize();
+        for profile in &mut self.cloud_profiles {
+            CloudAsrConfig::sanitize_endpoint_and_model(&mut profile.endpoint, &mut profile.model);
+        }
+    }
+
     /// 解析当前激活的云端 Profile 标识（当 `selected_asr` 为 `"cloud:<id>"` 时返回 `<id>`）
     pub fn active_cloud_profile_id(&self) -> Option<&str> {
         self.selected_asr

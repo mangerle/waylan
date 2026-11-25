@@ -50,20 +50,32 @@ pub fn sync_gnome_indicator_mode(intent: GnomeExtensionIntent) {
     });
 }
 
-/// 调用系统原生对话框 (zenity) 选择外部词库文件（具备超时保护）
-pub fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -> Option<PathBuf> {
+/// 统一执行 `zenity` 对话框子进程（含超时保护、取消/异常退出区分与结果类型校验）
+fn run_zenity_picker(args: &[String], expect_dir: bool) -> Option<PathBuf> {
     let mut cmd = Command::new("zenity");
-    cmd.arg("--file-selection")
-        .arg(format!(
-            "--file-filter={} | {}",
-            filter_desc, filter_patterns
-        ))
-        .arg("--file-filter=所有文件 (*.*) | *")
-        .arg(format!("--title={}", title));
+    cmd.args(args);
 
-    let output = run_command_with_timeout(cmd, DEFAULT_DIALOG_TIMEOUT).ok()?;
+    let output = match run_command_with_timeout(cmd, DEFAULT_DIALOG_TIMEOUT) {
+        Ok(out) => out,
+        Err(e) => {
+            log::warn!("[偏好设置 警告] 启动或等待 zenity 对话框失败: {e}");
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        // zenity 退出码 1 为用户主动取消，5 为自动超时关闭；其余非 0 状态码记录告警便于排障
+        if let Some(code) = output.status.code()
+            && code != 1
+            && code != 5
+        {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!(
+                "[偏好设置 警告] zenity 对话框异常退出 (code={}): {}",
+                code,
+                stderr.trim()
+            );
+        }
         return None;
     }
 
@@ -73,29 +85,49 @@ pub fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -
     }
 
     let path = PathBuf::from(&selected_str);
-    if path.is_file() { Some(path) } else { None }
+    let valid = if expect_dir {
+        path.is_dir()
+    } else {
+        path.is_file()
+    };
+    valid.then_some(path)
+}
+
+/// 在独立后台线程中异步执行 `zenity` 选择器并通知回调，防止阻塞 Slint 渲染主循环
+fn spawn_zenity_picker<F>(
+    thread_name: &str,
+    picker: impl FnOnce() -> Option<PathBuf> + Send + 'static,
+    on_selected: F,
+) where
+    F: FnOnce(Option<PathBuf>) + Send + 'static,
+{
+    if let Err(e) = std::thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(move || on_selected(picker()))
+    {
+        log::warn!("[偏好设置 警告] 派发 Zenity 选择器线程失败 ({thread_name}): {e}");
+    }
+}
+
+/// 调用系统原生对话框 (zenity) 选择外部词库文件（具备超时保护）
+pub fn pick_file_dialog(title: &str, filter_desc: &str, filter_patterns: &str) -> Option<PathBuf> {
+    let args = vec![
+        "--file-selection".to_string(),
+        format!("--file-filter={} | {}", filter_desc, filter_patterns),
+        "--file-filter=所有文件 (*.*) | *".to_string(),
+        format!("--title={}", title),
+    ];
+    run_zenity_picker(&args, false)
 }
 
 /// 调用系统原生对话框 (zenity) 选择外部目录（具备超时保护）
 pub fn pick_directory_dialog(title: &str) -> Option<PathBuf> {
-    let mut cmd = Command::new("zenity");
-    cmd.arg("--file-selection")
-        .arg("--directory")
-        .arg(format!("--title={}", title));
-
-    let output = run_command_with_timeout(cmd, DEFAULT_DIALOG_TIMEOUT).ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let selected_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if selected_str.is_empty() {
-        return None;
-    }
-
-    let path = PathBuf::from(&selected_str);
-    if path.is_dir() { Some(path) } else { None }
+    let args = vec![
+        "--file-selection".to_string(),
+        "--directory".to_string(),
+        format!("--title={}", title),
+    ];
+    run_zenity_picker(&args, true)
 }
 
 /// 异步调用系统原生对话框 (zenity) 选择外部文件，并通过回调接收路径结果（不阻塞当前 UI 线程）
@@ -107,16 +139,11 @@ pub fn pick_file_dialog_async<F>(
 ) where
     F: FnOnce(Option<PathBuf>) + Send + 'static,
 {
-    let spawn_res = std::thread::Builder::new()
-        .name("zenity-file-picker".to_string())
-        .spawn(move || {
-            let path = pick_file_dialog(title, filter_desc, filter_patterns);
-            on_selected(path);
-        });
-
-    if let Err(e) = spawn_res {
-        log::warn!("[偏好设置 警告] 派发 Zenity 文件选择线程失败: {}", e);
-    }
+    spawn_zenity_picker(
+        "zenity-file-picker",
+        move || pick_file_dialog(title, filter_desc, filter_patterns),
+        on_selected,
+    );
 }
 
 /// 异步调用系统原生对话框 (zenity) 选择外部目录（不阻塞当前 UI 线程）
@@ -124,14 +151,9 @@ pub fn pick_directory_dialog_async<F>(title: &'static str, on_selected: F)
 where
     F: FnOnce(Option<PathBuf>) + Send + 'static,
 {
-    let spawn_res = std::thread::Builder::new()
-        .name("zenity-dir-picker".to_string())
-        .spawn(move || {
-            let path = pick_directory_dialog(title);
-            on_selected(path);
-        });
-
-    if let Err(e) = spawn_res {
-        log::warn!("[偏好设置 警告] 派发 Zenity 目录选择线程失败: {}", e);
-    }
+    spawn_zenity_picker(
+        "zenity-dir-picker",
+        move || pick_directory_dialog(title),
+        on_selected,
+    );
 }

@@ -37,11 +37,10 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// 校验并钳制配置参数边界，防止手工修改出非法数值引发除零或渲染异常
+    /// 校验并钳制配置参数边界，防止手工修改出非法数值引发除零、线程爆炸或渲染异常
     pub fn sanitize(&mut self) {
         self.ui.sanitize();
-        self.voice.vad.silence_timeout_ms = self.voice.vad.silence_timeout_ms.clamp(200, 5000);
-        self.voice.vad.speech_threshold = self.voice.vad.speech_threshold.clamp(0.01, 0.99);
+        self.voice.sanitize();
     }
 
     /// 候选框是否交由微澜自定义渲染
@@ -222,8 +221,17 @@ mod tests {
         assert_eq!(cfg.ui.font_size, 24.0);
 
         cfg.ui.font_size = f32::NAN;
+        cfg.voice.offline.num_threads = 0;
+        cfg.voice.vad.speech_threshold = f32::NAN;
+        cfg.voice.cloud.endpoint = "   ".to_string();
         cfg.sanitize();
         assert_eq!(cfg.ui.font_size, 15.0);
+        assert_eq!(cfg.voice.offline.num_threads, 1);
+        assert_eq!(cfg.voice.vad.speech_threshold, 0.5);
+        assert_eq!(
+            cfg.voice.cloud.endpoint,
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
     }
 
     #[test]
