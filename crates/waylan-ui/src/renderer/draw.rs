@@ -52,68 +52,40 @@ pub fn draw_card_background_at(pixmap: &mut Pixmap, theme: &UiTheme, params: Car
     }
 }
 
-/// 构建圆角卡片背景的矢量路径（依次描出上、右、下、左四条边与四角圆弧）
-fn build_card_background_path(params: &CardBackgroundParams) -> Option<Path> {
-    let r = params.radius;
+/// 构建带圆角矩形边界的安全矢量路径（自动将半径钳制在宽高的一半以内，杜绝路径反转）
+fn build_rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let r = r.max(0.0).min(w * 0.5).min(h * 0.5);
     let mut pb = PathBuilder::new();
-    pb.move_to(params.x + r, params.y);
-    pb.line_to(params.x + params.width - r, params.y);
-    pb.quad_to(
-        params.x + params.width,
-        params.y,
-        params.x + params.width,
-        params.y + r,
-    );
-    pb.line_to(params.x + params.width, params.y + params.height - r);
-    pb.quad_to(
-        params.x + params.width,
-        params.y + params.height,
-        params.x + params.width - r,
-        params.y + params.height,
-    );
-    pb.line_to(params.x + r, params.y + params.height);
-    pb.quad_to(
-        params.x,
-        params.y + params.height,
-        params.x,
-        params.y + params.height - r,
-    );
-    pb.line_to(params.x, params.y + r);
-    pb.quad_to(params.x, params.y, params.x + r, params.y);
+    pb.move_to(x + r, y);
+    pb.line_to(x + w - r, y);
+    pb.quad_to(x + w, y, x + w, y + r);
+    pb.line_to(x + w, y + h - r);
+    pb.quad_to(x + w, y + h, x + w - r, y + h);
+    pb.line_to(x + r, y + h);
+    pb.quad_to(x, y + h, x, y + h - r);
+    pb.line_to(x, y + r);
+    pb.quad_to(x, y, x + r, y);
     pb.close();
     pb.finish()
 }
 
+/// 构建圆角卡片背景的矢量路径
+fn build_card_background_path(params: &CardBackgroundParams) -> Option<Path> {
+    build_rounded_rect_path(
+        params.x,
+        params.y,
+        params.width,
+        params.height,
+        params.radius,
+    )
+}
+
 /// 绘制圆角矩形填充
 pub fn draw_rounded_rect(pixmap: &mut Pixmap, params: RoundedRectParams, color: Color) {
-    let mut pb = PathBuilder::new();
-    pb.move_to(params.x + params.r, params.y);
-    pb.line_to(params.x + params.w - params.r, params.y);
-    pb.quad_to(
-        params.x + params.w,
-        params.y,
-        params.x + params.w,
-        params.y + params.r,
-    );
-    pb.line_to(params.x + params.w, params.y + params.h - params.r);
-    pb.quad_to(
-        params.x + params.w,
-        params.y + params.h,
-        params.x + params.w - params.r,
-        params.y + params.h,
-    );
-    pb.line_to(params.x + params.r, params.y + params.h);
-    pb.quad_to(
-        params.x,
-        params.y + params.h,
-        params.x,
-        params.y + params.h - params.r,
-    );
-    pb.line_to(params.x, params.y + params.r);
-    pb.quad_to(params.x, params.y, params.x + params.r, params.y);
-    pb.close();
-
-    if let Some(path) = pb.finish() {
+    if let Some(path) = build_rounded_rect_path(params.x, params.y, params.w, params.h, params.r) {
         let mut paint = Paint::default();
         paint.set_color(color.to_tiny_skia());
         paint.anti_alias = true;

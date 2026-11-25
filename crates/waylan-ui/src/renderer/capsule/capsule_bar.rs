@@ -294,25 +294,29 @@ fn render_candidate_item(
     pixmap: &mut Pixmap,
     params: CandidateItemParams,
 ) {
-    if params.is_selected {
-        draw_selected_candidate_item(renderer, pixmap, &params);
-    } else {
-        draw_plain_candidate_item(renderer, pixmap, &params);
-    }
-}
-
-/// 绘制选中态候选词条目（高亮胶囊底色叠加高亮配色文本）
-fn draw_selected_candidate_item(
-    renderer: &mut CandidateBoxRenderer,
-    pixmap: &mut Pixmap,
-    params: &CandidateItemParams<'_>,
-) {
     let s = params.scale;
     let item = params.item;
+    let is_selected = params.is_selected;
 
-    let badge_y = draw_selected_item_highlight(pixmap, &renderer.theme, params);
+    let (text_x, icon_y, index_color, text_color, index_gap) = if is_selected {
+        let badge_y = draw_selected_item_highlight(pixmap, &renderer.theme, &params);
+        (
+            item.start_x + 8.0 * s,
+            badge_y + 8.5 * s,
+            renderer.theme.highlight_text,
+            renderer.theme.highlight_text,
+            3.0 * s,
+        )
+    } else {
+        (
+            item.start_x,
+            (params.bar_height - 11.0 * s) / 2.0,
+            renderer.theme.index_text,
+            renderer.theme.candidate_text,
+            4.0 * s,
+        )
+    };
 
-    let text_x = item.start_x + 8.0 * s;
     draw_candidate_index(
         renderer,
         pixmap,
@@ -321,19 +325,19 @@ fn draw_selected_candidate_item(
             x: text_x,
             baseline_y: params.baseline_y,
             font_size: params.font_size,
-            color: renderer.theme.highlight_text,
+            color: index_color,
         },
     );
 
-    let mut content_x = text_x + item.index_width + 3.0 * s;
+    let mut content_x = text_x + item.index_width + index_gap;
     if item.is_expandable {
         draw_calendar_icon(
             pixmap,
             &renderer.theme,
             &CalendarIconParams {
                 x: content_x,
-                y: badge_y + 8.5 * s,
-                is_selected: true,
+                y: icon_y,
+                is_selected,
                 scale: s,
             },
         );
@@ -348,7 +352,7 @@ fn draw_selected_candidate_item(
             x: content_x,
             y: params.baseline_y,
             size: params.font_size,
-            color: renderer.theme.highlight_text,
+            color: text_color,
         },
     );
 }
@@ -375,54 +379,4 @@ fn draw_selected_item_highlight(
         theme.highlight_badge,
     );
     badge_y
-}
-
-/// 绘制普通态候选词条目（无底色，使用常规配色）
-fn draw_plain_candidate_item(
-    renderer: &mut CandidateBoxRenderer,
-    pixmap: &mut Pixmap,
-    params: &CandidateItemParams<'_>,
-) {
-    let s = params.scale;
-    let item = params.item;
-
-    draw_candidate_index(
-        renderer,
-        pixmap,
-        &CandidateIndexDrawParams {
-            index_str: &item.index_str,
-            x: item.start_x,
-            baseline_y: params.baseline_y,
-            font_size: params.font_size,
-            color: renderer.theme.index_text,
-        },
-    );
-
-    let mut content_x = item.start_x + item.index_width + 4.0 * s;
-    if item.is_expandable {
-        let icon_y = (params.bar_height - 11.0 * s) / 2.0;
-        draw_calendar_icon(
-            pixmap,
-            &renderer.theme,
-            &CalendarIconParams {
-                x: content_x,
-                y: icon_y,
-                is_selected: false,
-                scale: s,
-            },
-        );
-        content_x += item.icon_width;
-    }
-
-    let display_text = renderer.display_text(params.cand);
-    renderer.draw_text(
-        pixmap,
-        DrawTextOptions {
-            text: &display_text,
-            x: content_x,
-            y: params.baseline_y,
-            size: params.font_size,
-            color: renderer.theme.candidate_text,
-        },
-    );
 }

@@ -354,3 +354,35 @@ fn test_candidate_text_formatting_special_comments_preserved() {
         "纠错提示在 show_pinyin_comment=false 时应常驻展示"
     );
 }
+
+#[test]
+fn test_grid_expanded_width_accounts_for_pinyin_comment() {
+    let mut renderer_plain = CandidateBoxRenderer::new(UiTheme::light());
+    renderer_plain.style.show_pinyin_comment = false;
+
+    let mut renderer_comment = CandidateBoxRenderer::new(UiTheme::light());
+    renderer_comment.style.show_pinyin_comment = true;
+
+    let state = CandidateBoxState {
+        visible: true,
+        expansion: waylan_core::CandidateExpansion::Grid { selected_index: 0 },
+        grid_candidates: vec![
+            Candidate::new("测试词条", "ce'shi'ci'tiao", 100).with_comment("[ce'shi'ci'tiao]"),
+        ],
+        ..Default::default()
+    };
+
+    let pix_plain = renderer_plain
+        .render(&state)
+        .expect("普通网格面板应渲染成功");
+    let pix_comment = renderer_comment
+        .render(&state)
+        .expect("带拼音注释的网格面板应渲染成功");
+
+    assert!(
+        pix_comment.width() > pix_plain.width(),
+        "开启拼音注释时网格列宽必须计入注释宽度 (plain={}, comment={})",
+        pix_plain.width(),
+        pix_comment.width()
+    );
+}

@@ -81,18 +81,21 @@ fn measure_grid_col_widths(
 ) -> [f32; GRID_COLS] {
     let font_size = renderer.font_size * s;
     let index_font_size = font_size * 0.85;
-    let mut col_widths = [40.0 * s; GRID_COLS];
+    let show_comment = renderer.style.show_pinyin_comment;
+    let mut index_widths = [0.0f32; GRID_COLS];
+    for (col, slot) in index_widths.iter_mut().enumerate() {
+        let num_str = renderer.index_label(col);
+        if !num_str.is_empty() {
+            *slot = renderer.measure_text(&num_str, index_font_size);
+        }
+    }
 
+    let mut col_widths = [40.0 * s; GRID_COLS];
     for (idx, cand) in candidates.iter().take(MAX_GRID_CAPACITY).enumerate() {
         let col = idx % GRID_COLS;
-        let text_w = renderer.measure_text(&cand.text, font_size);
-        let num_str = renderer.index_label(col);
-        let num_w = if num_str.is_empty() {
-            0.0
-        } else {
-            renderer.measure_text(&num_str, index_font_size)
-        };
-        let item_w = num_w + 6.0 * s + text_w + 14.0 * s;
+        let display_text = super::layout::format_candidate_text(cand, show_comment);
+        let text_w = renderer.measure_text(&display_text, font_size);
+        let item_w = index_widths[col] + 6.0 * s + text_w + 14.0 * s;
         if item_w > col_widths[col] {
             col_widths[col] = item_w;
         }
