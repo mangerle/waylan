@@ -1,8 +1,6 @@
 use crate::surface::CursorRect;
 use crate::surface::interaction::CursorRectUpdateParams;
 use log::{debug, info, trace};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsFd;
 use std::time::{SystemTime, UNIX_EPOCH};
 use waylan_ui::CandidateHitTarget;
@@ -147,21 +145,7 @@ fn handle_grab_keymap(
         "[Wayland v2 键盘抓取] 收到键盘映射配置: format={:?}, 大小={} 字节",
         format, size
     );
-    if let Ok(mut file) = fd.try_clone().map(File::from) {
-        let read_len = (size as usize).min(1024 * 1024);
-        let mut buf = vec![0u8; read_len];
-        let read_ok = file.read_exact(&mut buf).is_ok();
-        let _ = file.seek(SeekFrom::Start(0));
-        if read_ok {
-            let text = String::from_utf8_lossy(&buf);
-            state
-                .runtime
-                .core
-                .keymap_layout_mut()
-                .update_from_xkb_text(text.trim_end_matches('\0'));
-            debug!("[Wayland v2 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
-        }
-    }
+    crate::session_common::sync_xkb_keymap_from_fd(&mut state.runtime, fd, size, "v2");
     if let Some(ref vk) = state.protocol.virtual_keyboard {
         vk.keymap(u32::from(format), fd.as_fd(), size);
         state.protocol.has_virtual_keymap = true;

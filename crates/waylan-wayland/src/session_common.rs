@@ -5,12 +5,15 @@
 //! - **核心优势**：将热重载检测、原子状态同步与修饰键掩码判定收敛为单一真相源（Single Source of Truth）。
 //! - **代价与局限**：具体文件监控与候选框装配已解耦至 `watcher` 与 `surface::state_builder` 独立模块。
 
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 
-use log::info;
+use log::{debug, info};
 use waylan_core::input::{MOD_CAPS, ModifierState, update_modifier_masks};
 use waylan_core::{AppConfig, InputMode, SharedInputFlags, VoiceProvider};
 use waylan_engine::ImeRuntime;
@@ -259,6 +262,31 @@ pub fn has_ctrl_or_alt_state(mods_depressed: u32, phys_mods: u8) -> bool {
 #[inline]
 pub fn is_caps_locked_state(mods_locked: u32) -> bool {
     (mods_locked & MOD_CAPS) != 0
+}
+
+/// 从 Wayland keymap 共享文件描述符读取 XKB 文本并同步到运行时键盘字符布局（V1/V2 通用）
+pub fn sync_xkb_keymap_from_fd(runtime: &mut ImeRuntime, fd: &OwnedFd, size: u32, label: &str) {
+    if size == 0 {
+        return;
+    }
+    let Ok(mut file) = fd.try_clone().map(File::from) else {
+        return;
+    };
+    let read_len = (size as usize).min(1024 * 1024);
+    let mut buf = Vec::with_capacity(read_len.min(64 * 1024));
+    let read_res = (&mut file).take(read_len as u64).read_to_end(&mut buf);
+    let _ = file.seek(SeekFrom::Start(0));
+    if read_res.is_ok() && !buf.is_empty() {
+        let text = String::from_utf8_lossy(&buf);
+        runtime
+            .core
+            .keymap_layout_mut()
+            .update_from_xkb_text(text.trim_end_matches('\0'));
+        debug!(
+            "[Wayland {} 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。",
+            label
+        );
+    }
 }
 
 #[cfg(test)]

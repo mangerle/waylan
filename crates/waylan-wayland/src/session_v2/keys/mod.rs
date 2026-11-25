@@ -6,13 +6,12 @@ use super::{WaylanV2Frontend, WaylanV2Session};
 
 pub(crate) use repeat::{drive_key_repeat, next_poll_timeout_ms};
 
-/// 处理单个硬件按键事件并返回 (是否被输入法消费, 本次直接上屏文本)
-pub(crate) fn process_key_event(
+/// 仅向统一运行时分发单个硬件按键事件（不触发连击计时器重写）
+pub(super) fn dispatch_key_to_runtime(
     session: &mut WaylanV2Session,
     key: u32,
     is_press: bool,
 ) -> (bool, Option<String>) {
-    // 1. 全权委托统一运行时 ImeRuntime 处理（通过组合子前端上下文实现安全不相交借用）
     let is_password = session.focus.is_password_context;
     let surrounding = session.focus.surrounding_text.as_ref();
     let mut frontend = WaylanV2Frontend::new(
@@ -21,7 +20,7 @@ pub(crate) fn process_key_event(
         session.qhandle.as_ref(),
     );
 
-    let outcome = session.runtime.process_key_event(
+    session.runtime.process_key_event(
         &mut frontend,
         waylan_engine::ProcessKeyEventParams {
             key,
@@ -30,7 +29,17 @@ pub(crate) fn process_key_event(
             surrounding_text: surrounding,
             inline_preedit: true,
         },
-    );
+    )
+}
+
+/// 处理单个硬件按键事件并返回 (是否被输入法消费, 本次直接上屏文本)
+pub(crate) fn process_key_event(
+    session: &mut WaylanV2Session,
+    key: u32,
+    is_press: bool,
+) -> (bool, Option<String>) {
+    // 1. 全权委托统一运行时 ImeRuntime 处理（通过组合子前端上下文实现安全不相交借用）
+    let outcome = dispatch_key_to_runtime(session, key, is_press);
 
     // 2. 按键长按连击跟踪处理
     if !is_press {

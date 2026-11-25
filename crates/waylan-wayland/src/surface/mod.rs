@@ -103,7 +103,12 @@ impl CandidateSurfaceManager {
         self.renderer.set_scale(self.fractional_scale);
     }
 
-    /// 设置精确分数缩放比例（如 1.25、1.5、1.75），渲染器按真实物理密度光栅化确保高分屏字体锐利
+    /// 设置精确分数缩放比例（如 1.25、1.5、1.75）
+    ///
+    /// # 设计原理
+    /// - 当前未启用 `wp_viewporter` 目标尺寸裁剪协议，Wayland 仅通过整数 `wl_surface.set_buffer_scale` 提交；
+    ///   因此渲染器必须与提交的整数缩放 `self.scale` 保持严格一致（超采样后由合成器等比缩放），
+    ///   否则会出现 1.25x 光栅化却按 2x 缩放提交导致候选框被缩小或裁边的错配。
     pub fn set_fractional_scale(&mut self, scale: f32) {
         let clamped = if scale.is_finite() {
             scale.clamp(0.5, 4.0)
@@ -112,7 +117,7 @@ impl CandidateSurfaceManager {
         };
         self.fractional_scale = clamped;
         self.scale = clamped.ceil().max(1.0) as i32;
-        self.renderer.set_scale(clamped);
+        self.renderer.set_scale(self.scale as f32);
     }
 
     /// 按 `wp_fractional_scale_v1` 协议的 1/120 单位设置分数缩放（例如 150 表示 125%，180 表示 150%）
@@ -123,10 +128,10 @@ impl CandidateSurfaceManager {
         }
     }
 
-    /// 计算当前候选框在当前分数缩放下的逻辑尺寸（供多屏边缘防出屏计算使用）
+    /// 计算当前候选框在当前有效缓冲缩放下的逻辑尺寸（供多屏边缘防出屏计算使用）
     #[inline]
     pub fn logical_size(&self) -> (u32, u32) {
-        let s = self.fractional_scale.max(0.5);
+        let s = self.scale.max(1) as f32;
         let w = ((self.current_size.0 as f32) / s).ceil().max(0.0) as u32;
         let h = ((self.current_size.1 as f32) / s).ceil().max(0.0) as u32;
         (w, h)
@@ -266,7 +271,7 @@ impl CandidateSurfaceManager {
         }
     }
 
-    /// 渲染候选框状态并将其通过 wl_shm 共享内存池挂载提交至 Wayland wl_surface
+    /// 渲染候选框状态并将其通过 wl_shm 共享内存池挂载提交至 Wayland wl_surface，返回是否实际提交了新缓冲
     pub fn commit_to_wayland<S>(
         &mut self,
         state: &CandidateBoxState,
@@ -274,24 +279,25 @@ impl CandidateSurfaceManager {
         surface: Option<&WlSurface>,
         qhandle: Option<&QueueHandle<S>>,
         active_buffer: &mut Option<WlBuffer>,
-    ) where
+    ) -> bool
+    where
         S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
     {
         if !state.visible || state.candidates.is_empty() {
             self.hide_wayland_surface(surface, active_buffer);
-            return;
+            return false;
         }
         let was_active = self.is_visible && active_buffer.is_some();
         let Some((width, height, _, cache_hit)) = self.renderer.render_rgba_with_hit(state) else {
             self.hide_wayland_surface(surface, active_buffer);
-            return;
+            return false;
         };
         // 若帧指纹命中且表面已处于激活挂载态且尺寸未变，跳过 SHM swizzle 拷贝与重复 Wayland 提交
         if cache_hit && was_active && self.current_size == (width, height) {
-            return;
+            return false;
         }
         if !self.prepare_rendered_slot(width, height) {
-            return;
+            return false;
         }
 
         let scale = self.scale.max(1);
@@ -312,7 +318,7 @@ impl CandidateSurfaceManager {
             let stride = (width as i32).saturating_mul(4);
 
             let Some(ref mut slot) = self.shm_slots[self.current_slot] else {
-                return;
+                return false;
             };
             let is_slot_busy = slot.is_busy;
             let buffer = Self::acquire_slot_buffer(slot, shm, qh, (aligned_w, aligned_h, stride));
@@ -334,7 +340,9 @@ impl CandidateSurfaceManager {
             surf.damage(0, 0, logical_w, logical_h);
             surf.commit();
             *active_buffer = Some(buffer);
+            return true;
         }
+        false
     }
 
     /// 轮转选取可用于本次渲染的共享内存槽位下标（优先选取非 busy 或尚未分配的槽位）

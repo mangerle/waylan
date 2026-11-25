@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::super::WaylanV2Session;
-use super::process_key_event;
+use super::dispatch_key_to_runtime;
 
 /// 根据本次按键消费状态与连击设置更新连击计时器
 pub(super) fn update_key_repeat(session: &mut WaylanV2Session, key: u32, consumed: bool) {
@@ -46,7 +46,7 @@ pub(crate) fn drive_key_repeat(session: &mut WaylanV2Session) {
 
     let now = Instant::now();
     if now >= next_fire {
-        let (consumed, _) = process_key_event(session, key, true);
+        let (consumed, _) = dispatch_key_to_runtime(session, key, true);
         if consumed && !session.runtime.core.engine.raw_input().is_empty() {
             let interval_ms = (1000 / rate.max(1)).max(10) as u64;
             session.keyboard.repeat_state = Some((key, now + Duration::from_millis(interval_ms)));

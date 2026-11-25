@@ -49,19 +49,36 @@ impl ShmSlot {
     /// # Errors
     /// 当调用内核 `set_len` 调整底层文件长度失败时返回系统 I/O 错误。
     pub(crate) fn ensure_capacity(&mut self, required_bytes: usize) -> std::io::Result<()> {
+        const SHRINK_TRIGGER_CAP: usize = 4 * 1024 * 1024;
+        const SHRINK_TARGET_CAP: usize = 512 * 1024;
+
         if self.capacity < required_bytes {
             let new_cap = required_bytes
                 .max(self.capacity.saturating_mul(2))
                 .max(64 * 1024);
-            self.mmap = None;
-            self.file.set_len(new_cap as u64)?;
-            self.capacity = new_cap;
-            // SAFETY: 当前槽位独占底层共享文件句柄，旧映射已先清空，扩容后建立新映射是安全的
-            self.mmap = unsafe { MmapMut::map_mut(&self.file).ok() };
+            self.resize_backing(new_cap)?;
+        } else if self.capacity > SHRINK_TRIGGER_CAP
+            && required_bytes <= SHRINK_TARGET_CAP
+            && !self.is_busy
+        {
+            if let Some((pool, _)) = self.pool.take() {
+                pool.destroy();
+            }
+            self.resize_backing(SHRINK_TARGET_CAP)?;
         } else if self.mmap.is_none() {
             // SAFETY: 底层文件容量满足要求且无活跃映射，重新建立可变内存映射是安全的
             self.mmap = unsafe { MmapMut::map_mut(&self.file).ok() };
         }
+        Ok(())
+    }
+
+    /// 调整匿名共享内存文件长度并重建内存映射
+    fn resize_backing(&mut self, new_cap: usize) -> std::io::Result<()> {
+        self.mmap = None;
+        self.file.set_len(new_cap as u64)?;
+        self.capacity = new_cap;
+        // SAFETY: 当前槽位独占底层共享文件句柄，旧映射已先清空，调整大小后建立新映射是安全的
+        self.mmap = unsafe { MmapMut::map_mut(&self.file).ok() };
         Ok(())
     }
 

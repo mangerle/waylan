@@ -168,19 +168,19 @@ fn test_zero_copy_slot_mmap_writing() {
 #[test]
 fn test_fractional_scale_125_and_150_support() {
     let mut manager = CandidateSurfaceManager::new();
-    // 150 / 120 = 1.25 (125% 分数缩放)
+    // 150 / 120 = 1.25 (125% 分数缩放 -> 对齐整数超采样缓冲缩放 2x)
     manager.set_fractional_scale_120(150);
     assert!((manager.fractional_scale - 1.25).abs() < 0.001);
     assert_eq!(manager.scale, 2);
-    assert!((manager.renderer.scale - 1.25).abs() < 0.001);
+    assert!((manager.renderer.scale - 2.0).abs() < 0.001);
 
-    // 180 / 120 = 1.50 (150% 分数缩放)
+    // 180 / 120 = 1.50 (150% 分数缩放 -> 对齐整数超采样缓冲缩放 2x)
     manager.set_fractional_scale_120(180);
     assert!((manager.fractional_scale - 1.5).abs() < 0.001);
     assert_eq!(manager.scale, 2);
 
     manager.current_size = (300, 75);
-    assert_eq!(manager.logical_size(), (200, 50));
+    assert_eq!(manager.logical_size(), (150, 38));
 }
 
 #[test]

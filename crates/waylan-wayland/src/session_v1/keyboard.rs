@@ -1,30 +1,15 @@
 //! V1 协议键盘事件分发与协议交互实现
 
-use std::fs::File;
-use std::io::Read;
-
-use log::debug;
 use wayland_client::protocol::wl_keyboard::{Event as KeyboardEvent, KeyState, WlKeyboard};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
 use crate::protocol_v1::input_method_v1::zwp_input_method_context_v1::ZwpInputMethodContextV1;
-use crate::session_common::WaylandSessionLifecycle;
+use crate::session_common::{WaylandSessionLifecycle, sync_xkb_keymap_from_fd};
 use crate::session_v1::{WaylanV1Frontend, WaylanV1Session};
 
 /// 处理 XKB 键盘字符布局映射同步
 fn handle_v1_keymap(state: &mut WaylanV1Session, fd: std::os::fd::OwnedFd, size: u32) {
-    let mut file = File::from(fd);
-    let read_len = (size as usize).min(1024 * 1024);
-    let mut buf = vec![0u8; read_len];
-    if file.read_exact(&mut buf).is_ok() {
-        let text = String::from_utf8_lossy(&buf);
-        state
-            .runtime
-            .core
-            .keymap_layout_mut()
-            .update_from_xkb_text(text.trim_end_matches('\0'));
-        debug!("[Wayland v1 键盘抓取] 成功从 XKB Keymap 动态同步键盘字符布局映射。");
-    }
+    sync_xkb_keymap_from_fd(&mut state.runtime, &fd, size, "v1");
 }
 
 /// V1 键盘按键事件参数对象

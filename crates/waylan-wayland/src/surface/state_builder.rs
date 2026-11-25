@@ -27,12 +27,13 @@ pub struct CandidateSurfaceCommitParams<'a, S> {
     pub active_buffer: &'a mut Option<WlBuffer>,
 }
 
-/// 提交候选框状态至 Wayland 表面并更新活跃缓冲区（采用参数对象收敛入参）
+/// 提交候选框状态至 Wayland 表面并更新活跃缓冲区（采用参数对象收敛入参），返回是否实际提交了新缓冲
 pub fn commit_candidate_surface<S>(
     surface_manager: &mut CandidateSurfaceManager,
     box_state: &CandidateBoxState,
     params: CandidateSurfaceCommitParams<'_, S>,
-) where
+) -> bool
+where
     S: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
 {
     surface_manager.commit_to_wayland(
@@ -41,7 +42,7 @@ pub fn commit_candidate_surface<S>(
         params.popup_wl_surface,
         params.qhandle,
         params.active_buffer,
-    );
+    )
 }
 
 /// V1 LayerSurface 提交与布局更新所需的目标上下文
@@ -67,9 +68,13 @@ pub fn commit_v1_layer_surface<S>(
         qhandle: params.qhandle,
         active_buffer: params.active_buffer,
     };
-    commit_candidate_surface(surface_manager, box_state, commit_params);
+    let committed = commit_candidate_surface(surface_manager, box_state, commit_params);
 
-    if let Some(layer_surf) = params.layer_surface {
+    if committed
+        && box_state.visible
+        && !box_state.candidates.is_empty()
+        && let Some(layer_surf) = params.layer_surface
+    {
         let scale = surface_manager.scale.max(1) as u32;
         let (phys_w, phys_h) = surface_manager.current_size;
         let logical_w = (phys_w / scale).max(1);
