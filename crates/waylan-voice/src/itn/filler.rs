@@ -5,6 +5,72 @@
 //! - **核心优势**：单遍线性扫描与上下文保护规则结合，保护合法指示代词（如“这个文件”），避免过度清洗。
 //! - **代价与局限**：针对跨长标点的远距离重复词采用滑动窗口有限消解。
 
+/// 孤立句首语气词集合
+const FILLER_ISOLATED: &[char] = &['呃', '啊', '嗯', '哦', '哎', '诶'];
+
+/// 标点前后固定短语与复读词映射表（有序匹配）
+const PHRASE_REPLACEMENTS: &[(&str, &str)] = &[
+    // 标点后孤立语气词
+    ("，呃，", "，"),
+    ("，呃 ", "，"),
+    ("。呃，", "。"),
+    ("，啊，", "，"),
+    ("，啊 ", "，"),
+    ("。啊，", "。"),
+    ("，嗯，", "，"),
+    ("，嗯 ", "，"),
+    ("。嗯，", "。"),
+    ("，哦，", "，"),
+    ("，哦 ", "，"),
+    ("。哦，", "。"),
+    ("，哎，", "，"),
+    ("，哎 ", "，"),
+    ("。哎，", "。"),
+    ("，诶，", "，"),
+    ("，诶 ", "，"),
+    ("。诶，", "。"),
+    // 口吃与复读消解
+    ("这、这个", "这个"),
+    ("这，这个", "这个"),
+    ("这个、这个", "这个"),
+    ("那个、那个", "那个"),
+    ("那、那个", "那个"),
+    ("那，那个", "那个"),
+    ("我、我", "我"),
+    ("我，我", "我"),
+];
+
+/// 单遍切片扫描剔除句首孤立语气词及紧跟分隔符（零 O(N) 字节搬移）
+fn strip_leading_fillers(mut rest: &str) -> &str {
+    for &ch in FILLER_ISOLATED {
+        while let Some(after_filler) = rest.strip_prefix(ch) {
+            rest = after_filler;
+            while let Some(after_sep) = rest.strip_prefix(['，', ',', '、', ' ']) {
+                rest = after_sep;
+            }
+        }
+    }
+    rest
+}
+
+/// 单遍映射扫描替换固定短语模式
+fn apply_phrase_table(input: &str, rules: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while !rest.is_empty() {
+        if let Some((pattern, replacement)) =
+            rules.iter().find(|(pat, _)| rest.starts_with(pat)).copied()
+        {
+            out.push_str(replacement);
+            rest = &rest[pattern.len()..];
+        } else if let Some(ch) = rest.chars().next() {
+            out.push(ch);
+            rest = &rest[ch.len_utf8()..];
+        }
+    }
+    out
+}
+
 /// 口语停顿语气词与结巴消除
 ///
 /// # 核心规则
@@ -16,66 +82,24 @@ pub fn filter_filler_words(input: &str) -> String {
         return String::new();
     }
 
-    let mut s = input.to_string();
-
-    // 1. 过滤句首孤立语气词（如“呃，”、“啊，”、“嗯，”、“哦，”）
-    let filler_isolated = ['呃', '啊', '嗯', '哦', '哎', '诶'];
-    for &ch in &filler_isolated {
-        while s.starts_with(ch) {
-            s.remove(0);
-            while s.starts_with('，')
-                || s.starts_with(',')
-                || s.starts_with('、')
-                || s.starts_with(' ')
-            {
-                s.remove(0);
-            }
-        }
-    }
-
-    // 2. 标点符号后的孤立语气词（如“，呃，”、“，啊，”、“，那个，要不”）
-    for &ch in &filler_isolated {
-        s = s.replace(&format!("，{}，", ch), "，");
-        s = s.replace(&format!("，{} ", ch), "，");
-        s = s.replace(&format!("。{}，", ch), "。");
-    }
-
-    // 3. 口吃与复读消解（如“这、这个” -> “这个”，“我、我” -> “我”）
-    s = s.replace("这、这个", "这个");
-    s = s.replace("这，这个", "这个");
-    s = s.replace("这个、这个", "这个");
-    s = s.replace("那个、那个", "那个");
-    s = s.replace("那、那个", "那个");
-    s = s.replace("那，那个", "那个");
-    s = s.replace("我、我", "我");
-    s = s.replace("我，我", "我");
-
-    // 消除紧密相邻单字结巴（“我我” -> “我”，“这这” -> “这”）
-    s = deduplicate_adjacent_stutter(&s);
-
-    // 4. 代词口头禅消解（仅在前后被标点截断且非后接名词时剔除）
-    s = s.replace("，那个，", "，");
-    s = s.replace("，这个，", "，");
-
-    s
+    let trimmed = strip_leading_fillers(input);
+    let after_phrases = apply_phrase_table(trimmed, PHRASE_REPLACEMENTS);
+    let after_stutter = deduplicate_adjacent_stutter(&after_phrases);
+    apply_phrase_table(&after_stutter, &[("，那个，", "，"), ("，这个，", "，")])
 }
 
 /// 消除紧邻的单字口吃复读（如“我我觉得” -> “我觉得”）
 fn deduplicate_adjacent_stutter(input: &str) -> String {
-    let stutter_chars = ['我', '你', '他', '她', '它', '这', '那', '就'];
-    let chars: Vec<char> = input.chars().collect();
+    const STUTTER_CHARS: &[char] = &['我', '你', '他', '她', '它', '这', '那', '就'];
     let mut out = String::with_capacity(input.len());
-    let mut i = 0;
+    let mut prev: Option<char> = None;
 
-    while i < chars.len() {
-        let ch = chars[i];
-        out.push(ch);
-        if stutter_chars.contains(&ch) {
-            while i + 1 < chars.len() && chars[i + 1] == ch {
-                i += 1;
-            }
+    for ch in input.chars() {
+        if prev == Some(ch) && STUTTER_CHARS.contains(&ch) {
+            continue;
         }
-        i += 1;
+        out.push(ch);
+        prev = Some(ch);
     }
 
     out

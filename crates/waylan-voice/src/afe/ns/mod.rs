@@ -14,8 +14,25 @@ pub use deepfilter::{DeepFilterSuppressor, resolve_ns_model_path};
 pub use gtcrn::{GtcrnSuppressor, resolve_gtcrn_model_path};
 pub use rnnoise::RnnoiseSuppressor;
 
+use std::collections::VecDeque;
+
 use log::info;
 use waylan_core::{AudioFrontEndConfig, NsEngineType};
+
+/// 从降噪输出环形队列按顺序取出样本回写到就地切片中；冷启动不足部分以静音补齐，避免与旧采样拼接产生时域爆音
+pub(super) fn drain_output_queue(queue: &mut VecDeque<f32>, samples: &mut [f32]) {
+    let needed = samples.len();
+    let available = queue.len().min(needed);
+    for (dst, src) in samples[..available]
+        .iter_mut()
+        .zip(queue.drain(..available))
+    {
+        *dst = src;
+    }
+    if available < needed {
+        samples[available..].fill(0.0);
+    }
+}
 
 /// 人声降噪引擎统一 Trait 抽象
 pub trait NoiseSuppressor: Send {
@@ -182,7 +199,6 @@ mod tests {
         }
 
         suppressor.reset();
-        assert!(suppressor.in_buf.is_empty());
         assert!(suppressor.out_queue.is_empty());
     }
 }

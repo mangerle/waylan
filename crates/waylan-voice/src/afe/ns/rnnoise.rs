@@ -4,7 +4,9 @@
 //! - **实现初衷**：利用轻量级循环神经网络模型在 48kHz 下实时滤除背景平稳与突发杂音；
 //! - **采样适配**：内建 16kHz 与 48kHz 之间的 3 倍双向线性插值与均值抗混叠重采样状态机。
 
-use super::NoiseSuppressor;
+use std::collections::VecDeque;
+
+use super::{NoiseSuppressor, drain_output_queue};
 
 /// 内置纯 Rust RNNoise 降噪器（基于 `nnnoiseless`）
 pub struct RnnoiseSuppressor {
@@ -13,9 +15,9 @@ pub struct RnnoiseSuppressor {
     /// 上一个 16kHz 采样点，用于 1:3 线性插值
     last_16k_sample: f32,
     /// 累积待送入 48kHz 降噪网络的缓冲区（满 480 点处理一帧）
-    pub(crate) in_48k_buf: Vec<f32>,
+    pub(crate) in_48k_buf: VecDeque<f32>,
     /// 降噪完毕已转换回 16kHz 的暂存队列
-    pub(crate) out_16k_queue: Vec<f32>,
+    pub(crate) out_16k_queue: VecDeque<f32>,
     /// 用于送入 process_frame 的输入帧缓冲 (480 点)
     frame_in: [f32; nnnoiseless::DenoiseState::FRAME_SIZE],
     /// 用于接收 process_frame 的输出帧缓冲 (480 点)
@@ -34,8 +36,8 @@ impl RnnoiseSuppressor {
         Self {
             denoiser,
             last_16k_sample: 0.0,
-            in_48k_buf: Vec::with_capacity(1024),
-            out_16k_queue: Vec::with_capacity(1024),
+            in_48k_buf: VecDeque::with_capacity(1024),
+            out_16k_queue: VecDeque::with_capacity(1024),
             frame_in: [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE],
             frame_out: [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE],
         }
@@ -47,9 +49,9 @@ impl RnnoiseSuppressor {
             let s_prev = self.last_16k_sample;
             // 3 倍插值：s_prev + 1/3*(s - s_prev), s_prev + 2/3*(s - s_prev), s
             let delta = s - s_prev;
-            self.in_48k_buf.push(s_prev + delta * (1.0 / 3.0));
-            self.in_48k_buf.push(s_prev + delta * (2.0 / 3.0));
-            self.in_48k_buf.push(s);
+            self.in_48k_buf.push_back(s_prev + delta * (1.0 / 3.0));
+            self.in_48k_buf.push_back(s_prev + delta * (2.0 / 3.0));
+            self.in_48k_buf.push_back(s);
             self.last_16k_sample = s;
         }
     }
@@ -59,9 +61,13 @@ impl RnnoiseSuppressor {
         let frame_size = nnnoiseless::DenoiseState::FRAME_SIZE;
 
         while self.in_48k_buf.len() >= frame_size {
-            // 拷贝 480 个样本并放缩至 16-bit 浮点范围 [-32768, 32767]
-            for (i, target) in self.frame_in.iter_mut().enumerate() {
-                *target = self.in_48k_buf[i] * 32767.0;
+            // 拷贝并消费 480 个样本，放缩至 16-bit 浮点范围 [-32768, 32767]
+            for (target, sample) in self
+                .frame_in
+                .iter_mut()
+                .zip(self.in_48k_buf.drain(..frame_size))
+            {
+                *target = sample * 32767.0;
             }
 
             // 神经网络帧级推理
@@ -69,16 +75,13 @@ impl RnnoiseSuppressor {
                 .denoiser
                 .process_frame(&mut self.frame_out, &self.frame_in);
 
-            // 移除已消费的 480 个 48kHz 采样点
-            self.in_48k_buf.drain(0..frame_size);
-
             // 3:1 抗混叠均值下采样回到 16kHz（480 点 -> 160 点）
             let out_16k_samples = frame_size / 3;
             for i in 0..out_16k_samples {
                 let idx = i * 3;
                 let sum = self.frame_out[idx] + self.frame_out[idx + 1] + self.frame_out[idx + 2];
                 let downsampled = (sum / 3.0) / 32767.0;
-                self.out_16k_queue.push(downsampled.clamp(-1.0, 1.0));
+                self.out_16k_queue.push_back(downsampled.clamp(-1.0, 1.0));
             }
         }
     }
@@ -109,18 +112,7 @@ impl NoiseSuppressor for RnnoiseSuppressor {
         self.process_available_frames();
 
         // 3. 从降噪完成队列写回对应长度样本
-        let needed = samples.len();
-        if self.out_16k_queue.len() >= needed {
-            // 队列中有充足的降噪样本，按序写入
-            samples.copy_from_slice(&self.out_16k_queue[..needed]);
-            self.out_16k_queue.drain(0..needed);
-        } else {
-            // 初始冷启动期间队列尚未排满，将已有样本填入，不足部分以静音垫底，严禁残留原始样本拼接导致时域阶跃爆音
-            let available = self.out_16k_queue.len();
-            samples[..available].copy_from_slice(&self.out_16k_queue[..available]);
-            samples[available..].fill(0.0);
-            self.out_16k_queue.clear();
-        }
+        drain_output_queue(&mut self.out_16k_queue, samples);
     }
 
     fn reset(&mut self) {

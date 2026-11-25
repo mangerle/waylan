@@ -56,9 +56,10 @@ impl LinearResampler {
             return;
         }
 
-        // 若输入采样率恰好等于目标采样率，无需插值，直接拷贝
+        // 若输入采样率恰好等于目标采样率，无需插值，直接拷贝并刷新末采样状态
         if (self.src_rate - self.target_rate).abs() < 1.0 {
             out.extend_from_slice(input);
+            self.last_sample = *input.last().unwrap_or(&0.0);
             return;
         }
 
@@ -342,8 +343,8 @@ fn build_capture_pipeline(
 ) -> CapturePipeline {
     CapturePipeline {
         resampler: LinearResampler::new(native_sample_rate, TARGET_SAMPLE_RATE),
-        mono_buf: Vec::with_capacity(1024),
-        resampled_buf: Vec::with_capacity(1024),
+        mono_buf: Vec::with_capacity(4096),
+        resampled_buf: Vec::with_capacity(4096),
         pcm_sender,
         recycle_receiver,
         dropped_chunks,
@@ -378,7 +379,9 @@ impl CapturePipeline {
         if channels > 1 {
             let ch = channels as usize;
             let frames = data.len() / ch;
-            self.mono_buf.reserve(frames);
+            if self.mono_buf.capacity() < frames {
+                self.mono_buf.reserve(frames - self.mono_buf.capacity());
+            }
             for i in 0..frames {
                 let mut sum = 0.0;
                 for c in 0..ch {
@@ -387,7 +390,9 @@ impl CapturePipeline {
                 self.mono_buf.push(sum / channels as f32);
             }
         } else {
-            self.mono_buf.reserve(data.len());
+            if self.mono_buf.capacity() < data.len() {
+                self.mono_buf.reserve(data.len() - self.mono_buf.capacity());
+            }
             for &sample in data {
                 self.mono_buf.push(converter(sample));
             }
@@ -409,8 +414,8 @@ impl CapturePipeline {
                     {
                         recycled.clear();
                         self.resampled_buf = recycled;
-                    } else {
-                        self.resampled_buf.reserve(1024);
+                    } else if self.resampled_buf.capacity() < 4096 {
+                        self.resampled_buf.reserve(4096);
                     }
                 }
                 Err(std::sync::mpsc::TrySendError::Full(chunk)) => {

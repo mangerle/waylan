@@ -4,16 +4,17 @@
 //! - **实现初衷**：以 523KB 的轻量权重在端侧提供针对各类稳态白噪与混响声的深度抑制；
 //! - **原生流式**：直接在 16kHz 单声道 PCM 浮点音频流上运行。
 
-use log::{info, warn};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use super::NoiseSuppressor;
+use log::{info, warn};
+
+use super::{NoiseSuppressor, drain_output_queue};
 
 /// 基于 sherpa-onnx 原生驱动的 SOTA 级 GTCRN 卷积循环深度降噪器 (523KB)
 pub struct GtcrnSuppressor {
     denoiser: Option<sherpa_onnx::OnlineSpeechDenoiser>,
-    pub(crate) in_buf: Vec<f32>,
-    pub(crate) out_queue: Vec<f32>,
+    pub(crate) out_queue: VecDeque<f32>,
 }
 
 impl GtcrnSuppressor {
@@ -47,8 +48,7 @@ impl GtcrnSuppressor {
 
         Self {
             denoiser,
-            in_buf: Vec::with_capacity(1600),
-            out_queue: Vec::with_capacity(1600),
+            out_queue: VecDeque::with_capacity(1600),
         }
     }
 }
@@ -75,24 +75,13 @@ impl NoiseSuppressor for GtcrnSuppressor {
             self.out_queue.extend(denoised.samples);
         }
 
-        let needed = samples.len();
-        if self.out_queue.len() >= needed {
-            samples.copy_from_slice(&self.out_queue[..needed]);
-            self.out_queue.drain(..needed);
-        } else {
-            // 初始冷启动期间队列尚未排满，将已有样本填入，不足部分以静音垫底，严禁残留原始样本拼接导致时域阶跃爆音
-            let available = self.out_queue.len();
-            samples[..available].copy_from_slice(&self.out_queue[..available]);
-            samples[available..].fill(0.0);
-            self.out_queue.clear();
-        }
+        drain_output_queue(&mut self.out_queue, samples);
     }
 
     fn reset(&mut self) {
         if let Some(ref denoiser) = self.denoiser {
             denoiser.reset();
         }
-        self.in_buf.clear();
         self.out_queue.clear();
     }
 }

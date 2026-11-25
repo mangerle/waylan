@@ -18,7 +18,6 @@ pub use agc::DigitalAgc;
 pub use hpf::HighPassFilter;
 pub use ns::{NoiseSuppressor, create_noise_suppressor};
 
-use log::debug;
 use waylan_core::AudioFrontEndConfig;
 
 /// 音频前端预处理全流水线控制器
@@ -73,11 +72,6 @@ impl AudioFrontEndPipeline {
         if self.enable_agc {
             self.agc.process(samples);
         }
-
-        debug!(
-            "[音频前端] 完成 {} 个采样点的就地音频增强处理",
-            samples.len()
-        );
     }
 
     /// 重置整条流水线的所有滤波器与循环状态

@@ -152,11 +152,11 @@ fn handle_start_command(
     };
     state.visualizer.reset();
 
-    let (pcm_tx, pcm_rx) = sync_channel::<Vec<f32>>(32);
-    let (recycle_tx, recycle_rx) = sync_channel::<Vec<f32>>(32);
-    // 预填充 8 块空闲缓冲区至回收池，使录音首帧即零堆分配
-    for _ in 0..8 {
-        let _ = recycle_tx.try_send(Vec::with_capacity(1024));
+    let (pcm_tx, pcm_rx) = sync_channel::<Vec<f32>>(64);
+    let (recycle_tx, recycle_rx) = sync_channel::<Vec<f32>>(64);
+    // 预填充 16 块空闲缓冲区至回收池，覆盖常规音频周期，使录音首帧与稳态均零堆分配
+    for _ in 0..16 {
+        let _ = recycle_tx.try_send(Vec::with_capacity(4096));
     }
 
     let capture = match AudioCapture::start_with_device_and_recycle(
