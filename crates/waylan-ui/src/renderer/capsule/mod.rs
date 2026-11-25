@@ -9,6 +9,6 @@
 mod capsule_bar;
 mod voice_capsule;
 
-pub use capsule_bar::{CapsuleBarParams, render_capsule_bar};
+pub use capsule_bar::{CapsuleBarParams, render_capsule_bar, render_capsule_bar_into};
 pub(crate) use voice_capsule::has_active_time_animation;
 pub use voice_capsule::render_voice_capsule_bar;

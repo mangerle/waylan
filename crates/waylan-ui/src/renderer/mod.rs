@@ -12,23 +12,28 @@ mod snapshot;
 pub mod style;
 
 use crate::theme::{Color, UiTheme};
-use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache};
+use cosmic_text::{Buffer, CacheKey, FontSystem, Metrics, SwashCache};
 use expanded::{ExpandedCardRenderParams, render_expanded_popup_card};
 use font::FontManager;
 use glyph_blend::blend_swash_image;
 use layout::{CandidateHitTarget, HitRegion, format_candidate_text};
 use measure_cache::{TextMeasureCache, TextShapeParams};
 use snapshot::{LastRenderSnapshot, compute_state_fingerprint, compute_theme_hash};
+use std::collections::HashSet;
 use std::path::Path;
 use style::RendererStyle;
 use tiny_skia::Pixmap;
 use waylan_core::config::UiConfig;
 use waylan_core::{Candidate, CandidateBoxState, CandidateBoxView, ThemeMode, VoiceBoxState};
 
+/// SwashCache 字形位图集合的安全容量上限（超过后轮转重置，防止生僻字与彩色 Emoji 长期驻留导致 OOM）
+const MAX_SWASH_CACHE_KEYS: usize = 2048;
+
 /// cosmic-text 文本布局与字形光栅化状态机
 struct TextEngineState {
     font_system: FontSystem,
     swash_cache: SwashCache,
+    swash_keys: HashSet<CacheKey>,
     buffer: Buffer,
     measure_cache: TextMeasureCache,
 }
@@ -82,6 +87,7 @@ impl CandidateBoxRenderer {
             text_engine: TextEngineState {
                 font_system,
                 swash_cache,
+                swash_keys: HashSet::with_capacity(256),
                 buffer,
                 measure_cache: TextMeasureCache::new(),
             },
@@ -172,6 +178,7 @@ impl CandidateBoxRenderer {
     /// 清空字形光栅化与排版测量缓存
     pub fn clear_glyph_cache(&mut self) {
         self.text_engine.swash_cache = SwashCache::new();
+        self.text_engine.swash_keys.clear();
         self.text_engine.measure_cache.clear();
         self.last_render_snapshot = None;
     }
@@ -205,9 +212,14 @@ impl CandidateBoxRenderer {
 
         let x_round = x.round() as i32;
         let y_round = y.round() as i32;
+        if self.text_engine.swash_keys.len() >= MAX_SWASH_CACHE_KEYS {
+            self.text_engine.swash_cache = SwashCache::new();
+            self.text_engine.swash_keys.clear();
+        }
         for glyph in &entry.glyphs {
             let px = x_round + glyph.x;
             let py = y_round + glyph.y;
+            self.text_engine.swash_keys.insert(glyph.cache_key);
             if let Some(img) = self
                 .text_engine
                 .swash_cache
@@ -315,21 +327,23 @@ impl CandidateBoxRenderer {
         }
     }
 
-    /// 渲染语音听写胶囊栏并同步更新命中区域
+    /// 渲染语音听写胶囊栏并同步更新命中区域（复用 `hit_regions` 缓冲区）
     fn render_voice_capsule(&mut self, voice: &VoiceBoxState) -> Option<Pixmap> {
-        let mut regions = Vec::with_capacity(4);
+        let mut regions = std::mem::take(&mut self.hit_regions);
+        regions.clear();
         let pix = capsule::render_voice_capsule_bar(self, voice, &mut regions);
         self.hit_regions = regions;
         pix
     }
 
-    /// 渲染 5 行大网格候选面板并同步更新命中区域
+    /// 渲染 5 行大网格候选面板并同步更新命中区域（复用 `hit_regions` 缓冲区）
     fn render_grid_expanded(
         &mut self,
         grid_candidates: &[Candidate],
         selected_index: usize,
     ) -> Option<Pixmap> {
-        let mut regions = Vec::with_capacity(36);
+        let mut regions = std::mem::take(&mut self.hit_regions);
+        regions.clear();
         let pix =
             grid::render_grid_expanded_panel(self, grid_candidates, selected_index, &mut regions);
         self.hit_regions = regions;
@@ -340,8 +354,10 @@ impl CandidateBoxRenderer {
     fn render_capsule_with_popup(&mut self, state: &CandidateBoxState) -> Option<Pixmap> {
         let geom = self.calculate_geometry(state)?;
         let mut pixmap = self.allocate_pixmap(geom.canvas_w, geom.canvas_h)?;
+        let mut regions = std::mem::take(&mut self.hit_regions);
+        regions.clear();
 
-        let mut regions = capsule::render_capsule_bar(
+        capsule::render_capsule_bar_into(
             self,
             &mut pixmap,
             state,
@@ -354,6 +370,7 @@ impl CandidateBoxRenderer {
                 font_size: geom.font_size,
                 scale: geom.scale,
             },
+            &mut regions,
         );
 
         if geom.has_active_sub {

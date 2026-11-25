@@ -30,6 +30,19 @@ pub fn render_capsule_bar(
     state: &CandidateBoxState,
     params: CapsuleBarParams,
 ) -> Vec<HitRegion> {
+    let mut regions = Vec::with_capacity(params.measured_items.len() + 1);
+    render_capsule_bar_into(renderer, pixmap, state, params, &mut regions);
+    regions
+}
+
+/// 渲染单行胶囊候选条并将交互点击区域追加写入外部复用切片（消除每帧堆分配）
+pub fn render_capsule_bar_into(
+    renderer: &mut CandidateBoxRenderer,
+    pixmap: &mut Pixmap,
+    state: &CandidateBoxState,
+    params: CapsuleBarParams,
+    regions: &mut Vec<HitRegion>,
+) {
     let s = params.scale;
 
     // 绘制胶囊外层卡片圆角背景
@@ -50,7 +63,6 @@ pub fn render_capsule_bar(
         },
     );
 
-    let mut regions = Vec::with_capacity(params.measured_items.len() + 1);
     render_capsule_candidates(
         renderer,
         pixmap,
@@ -63,11 +75,9 @@ pub fn render_capsule_bar(
             font_size: params.font_size,
             scale: s,
         },
-        &mut regions,
+        regions,
     );
-    draw_capsule_dropdown(pixmap, &renderer.theme, &params, &mut regions);
-
-    regions
+    draw_capsule_dropdown(pixmap, &renderer.theme, &params, regions);
 }
 
 /// 绘制胶囊候选条外层圆角卡片背景
